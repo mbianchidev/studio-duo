@@ -68,4 +68,3 @@ private:
 };
 }
 START_JUCE_APPLICATION(studio::StudioDuoApplication)
-START_JUCE_APPLICATION(studio::StudioDuoApplication)
