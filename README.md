@@ -72,6 +72,8 @@ open "build/StudioDuo_artefacts/Release/Studio Duo.app"
 | Trim selected clip start to playhead | `[` |
 | Trim selected clip end to playhead | `]` |
 | Delete selected clip | `Delete` or `Backspace` |
+| Zoom timeline out/in | `Command/Ctrl+-` / `Command/Ctrl++` |
+| Reset timeline zoom | `Command/Ctrl+0` |
 
 Use **I/O** to select audio devices. Arm an audio track before recording. Drag
 clips to move them on the beat grid. Use **SCAN** in the plugin catalog to probe
@@ -96,13 +98,17 @@ remain as a ghost outline. The command bar above the timeline exposes trim
 left, split, trim right, and delete actions. Clicking the selected clip or its
 track places the playhead without dropping clip selection, so the command bar
 and shortcuts act at that cursor. Drag a clip vertically to move it to another
-audio track while preserving its source and edit history.
+audio track while preserving its source and edit history. The ghost keeps a
+subtle copy of the original waveform visible under an edge-trim preview.
 
 Recording draws a live waveform from lock-free peak buckets. Stopping creates
 and flushes the WAV before adding its clip; the inspector shows the saved WAV
 filename and the status bar reports the completed file. The waveform baseline
 is visible immediately in a full-width recording region, and either **STOP REC**
 or **STOP** finalizes capture and stops transport through the same path.
+
+Use the **-**, **100%**, and **+** timeline controls, the zoom shortcuts, or
+Command/Ctrl+mouse-wheel to zoom while keeping the playhead centered.
 
 ## Documentation
 

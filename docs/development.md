@@ -99,7 +99,9 @@ model stores source length separately, prevents trims outside available audio,
 and restores all three edit values through undo. The timeline keeps the
 original rectangle as a dashed ghost while previewing move and trim edits.
 Cursor trims preserve the selected clip while the playhead is repositioned on
-the same track; `[` trims the start and `]` trims the end.
+the same track; `[` trims the start and `]` trims the end. The ghost renders the
+same deterministic waveform at reduced opacity so removed material remains
+legible during the gesture.
 
 Clip move commands capture the original track, clip index, and timeline
 position. Horizontal drags change time; vertical drags transfer the same clip
@@ -127,6 +129,11 @@ non-destructive clip. Dropped-sample conditions remain visible warnings but do
 not hide an otherwise valid recording. The live clip is created visually at
 record start, always draws a baseline, and uses square-root peak scaling so
 quiet input remains visible.
+
+The live recording overlay is rendered independently from saved clip iteration,
+so it also appears in an empty project. Both transport stop and record-toggle
+stop use the UI recording-session ID as the source of truth, stop transport
+first, then flush and attach the WAV.
 
 On macOS, CMake applies an ad-hoc signature with the stable designated
 requirement `dev.mbianchi.studioduo`. This keeps the TCC microphone grant tied
