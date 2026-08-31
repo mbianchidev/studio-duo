@@ -607,6 +607,12 @@ void TimelineComponent::showContextMenu(const juce::MouseEvent& event)
     if (project == nullptr)
         return;
 
+    const auto tracks = visibleTracks();
+    const auto trackIndex = trackIndexAt(event.position.y);
+    const auto* clickedTrack = trackIndex >= 0 && trackIndex < static_cast<int>(tracks.size())
+        ? tracks[static_cast<std::size_t>(trackIndex)]
+        : nullptr;
+
     if (event.position.x >= trackHeaderWidth && onSeek)
         onSeek(xToSeconds(event.position.x));
 
@@ -626,64 +632,125 @@ void TimelineComponent::showContextMenu(const juce::MouseEvent& event)
 
     if (!hitClip)
     {
-        const auto trackIndex = trackIndexAt(event.position.y);
-        const auto tracks = visibleTracks();
-        if (trackIndex >= 0 && trackIndex < static_cast<int>(tracks.size()))
+        if (clickedTrack != nullptr)
         {
-            const auto& track = *tracks[static_cast<std::size_t>(trackIndex)];
-            if (track.id != selectedTrackId)
+            if (clickedTrack->id != selectedTrackId)
             {
-                selectedTrackId = track.id;
+                selectedTrackId = clickedTrack->id;
                 selectedClipId.clear();
                 if (onTrackSelected)
-                    onTrackSelected(track.id);
+                    onTrackSelected(clickedTrack->id);
             }
         }
     }
 
-    const auto hasClip = selectedClipId.isNotEmpty();
     juce::PopupMenu menu;
-
-    juce::PopupMenu::Item trimStart("Trim start to playhead");
-    trimStart.shortcutKeyDescription = "[";
-    trimStart.isEnabled = hasClip;
-    trimStart.action = [this]
+    if (event.position.x < trackHeaderWidth && clickedTrack != nullptr)
     {
-        if (onTrimStartSelected)
-            onTrimStartSelected();
-    };
-    menu.addItem(std::move(trimStart));
+        const auto trackId = clickedTrack->id;
 
-    juce::PopupMenu::Item split("Split at playhead");
-    split.shortcutKeyDescription = "S";
-    split.isEnabled = hasClip;
-    split.action = [this]
-    {
-        if (onSplitSelected)
-            onSplitSelected();
-    };
-    menu.addItem(std::move(split));
+        juce::PopupMenu::Item mute(clickedTrack->muted ? "Unmute track" : "Mute track");
+        mute.action = [this, trackId]
+        {
+            if (onTrackMute)
+                onTrackMute(trackId);
+        };
+        menu.addItem(std::move(mute));
 
-    juce::PopupMenu::Item trimEnd("Trim end to playhead");
-    trimEnd.shortcutKeyDescription = "]";
-    trimEnd.isEnabled = hasClip;
-    trimEnd.action = [this]
-    {
-        if (onTrimEndSelected)
-            onTrimEndSelected();
-    };
-    menu.addItem(std::move(trimEnd));
+        juce::PopupMenu::Item solo(clickedTrack->solo ? "Unsolo track" : "Solo track");
+        solo.action = [this, trackId]
+        {
+            if (onTrackSolo)
+                onTrackSolo(trackId);
+        };
+        menu.addItem(std::move(solo));
 
-    menu.addSeparator();
-    juce::PopupMenu::Item remove("Delete clip");
-    remove.shortcutKeyDescription = "Delete";
-    remove.isEnabled = hasClip;
-    remove.action = [this]
+        if (clickedTrack->type == TrackType::audio)
+        {
+            juce::PopupMenu::Item arm(clickedTrack->armed ? "Disarm track" : "Arm track");
+            arm.action = [this, trackId]
+            {
+                if (onTrackArm)
+                    onTrackArm(trackId);
+            };
+            menu.addItem(std::move(arm));
+        }
+
+        const auto hasVersions = std::any_of(project->tracks.cbegin(),
+                                             project->tracks.cend(),
+                                             [clickedTrack](const auto& candidate)
+        {
+            return candidate.parentTrackId == clickedTrack->id;
+        });
+        if (hasVersions)
+        {
+            juce::PopupMenu::Item collapse(clickedTrack->versionsCollapsed
+                                                ? "Expand versions"
+                                                : "Collapse versions");
+            collapse.action = [this, trackId]
+            {
+                if (onToggleTrackVersions)
+                    onToggleTrackVersions(trackId);
+            };
+            menu.addItem(std::move(collapse));
+        }
+
+        menu.addSeparator();
+        juce::PopupMenu::Item deleteTrack("Delete track");
+        deleteTrack.shortcutKeyDescription = "Delete";
+        deleteTrack.isEnabled = clickedTrack->type != TrackType::master;
+        deleteTrack.action = [this, trackId]
+        {
+            if (onDeleteTrack)
+                onDeleteTrack(trackId);
+        };
+        menu.addItem(std::move(deleteTrack));
+    }
+    else
     {
-        if (onDeleteSelected)
-            onDeleteSelected();
-    };
-    menu.addItem(std::move(remove));
+        const auto hasClip = selectedClipId.isNotEmpty();
+
+        juce::PopupMenu::Item trimStart("Trim start to playhead");
+        trimStart.shortcutKeyDescription = "[";
+        trimStart.isEnabled = hasClip;
+        trimStart.action = [this]
+        {
+            if (onTrimStartSelected)
+                onTrimStartSelected();
+        };
+        menu.addItem(std::move(trimStart));
+
+        juce::PopupMenu::Item split("Split at playhead");
+        split.shortcutKeyDescription = "S";
+        split.isEnabled = hasClip;
+        split.action = [this]
+        {
+            if (onSplitSelected)
+                onSplitSelected();
+        };
+        menu.addItem(std::move(split));
+
+        juce::PopupMenu::Item trimEnd("Trim end to playhead");
+        trimEnd.shortcutKeyDescription = "]";
+        trimEnd.isEnabled = hasClip;
+        trimEnd.action = [this]
+        {
+            if (onTrimEndSelected)
+                onTrimEndSelected();
+        };
+        menu.addItem(std::move(trimEnd));
+
+        menu.addSeparator();
+        juce::PopupMenu::Item remove("Delete clip");
+        remove.shortcutKeyDescription = "Delete";
+        remove.isEnabled = hasClip;
+        remove.action = [this]
+        {
+            if (onDeleteSelected)
+                onDeleteSelected();
+        };
+        menu.addItem(std::move(remove));
+    }
 
     const auto screenPosition = event.getScreenPosition();
     menu.showMenuAsync(juce::PopupMenu::Options()

@@ -32,6 +32,7 @@ public:
     std::function<void(const juce::String&)> onTrackSolo;
     std::function<void(const juce::String&)> onTrackArm;
     std::function<void(const juce::String&)> onToggleTrackVersions;
+    std::function<void(const juce::String&)> onDeleteTrack;
     std::function<void()> onAddTrack;
     std::function<void(const juce::String&, const juce::String&)> onClipSelected;
     std::function<void(const juce::String&, const juce::String&, double)> onClipMoved;

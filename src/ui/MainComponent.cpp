@@ -29,6 +29,7 @@ public:
     }
 
     std::function<void(const juce::String&)> onTrackSelected;
+    std::function<void(const juce::String&, float)> onPanChanged;
 
     void paint(juce::Graphics& graphics) override
     {
@@ -61,8 +62,8 @@ public:
                                     juce::Justification::centred,
                                     1);
 
-            const auto faderTop = strip.getY() + 44;
-            const auto faderHeight = strip.getHeight() - 82;
+            const auto faderTop = strip.getY() + 46;
+            const auto faderHeight = strip.getHeight() - 112;
             graphics.setColour(juce::Colour(StudioColours::window));
             graphics.fillRoundedRectangle(static_cast<float>(strip.getCentreX() - 3),
                                           static_cast<float>(faderTop),
@@ -92,22 +93,71 @@ public:
             graphics.setFont(10.5f);
             graphics.drawText(state.trimEnd(),
                               strip.getX() + 8,
-                              strip.getBottom() - 26,
+                              strip.getY() + 25,
                               strip.getWidth() - 16,
                               18,
                               juce::Justification::centred);
 
-            const auto panText = std::abs(track.pan) < 0.005f
+            const auto panValue = track.id == draggingPanTrack
+                ? dragPreviewPan
+                : track.pan;
+            const auto panText = std::abs(panValue) < 0.005f
                 ? juce::String("C")
-                : juce::String(static_cast<int>(std::round(std::abs(track.pan) * 100.0f)))
-                    + (track.pan < 0.0f ? "% L" : "% R");
+                : juce::String(static_cast<int>(std::round(std::abs(panValue) * 100.0f)))
+                    + (panValue < 0.0f ? "% L" : "% R");
             graphics.setColour(juce::Colour(StudioColours::secondaryText));
             graphics.setFont(juce::Font(juce::FontOptions(9.0f)));
-            graphics.drawText(juce::String(track.volumeDecibels, 1) + " dB  |  " + panText,
+            graphics.drawText(juce::String(track.volumeDecibels, 1) + " dB",
                               strip.getX() + 6,
-                              strip.getBottom() - 44,
+                              faderTop + faderHeight + 2,
                               strip.getWidth() - 12,
                               16,
+                              juce::Justification::centred);
+
+            const juce::Point<float> panCentre(static_cast<float>(strip.getCentreX()),
+                                               static_cast<float>(strip.getBottom() - 35));
+            constexpr auto panRadius = 12.0f;
+            graphics.setColour(juce::Colour(StudioColours::window));
+            graphics.fillEllipse(panCentre.x - panRadius,
+                                 panCentre.y - panRadius,
+                                 panRadius * 2.0f,
+                                 panRadius * 2.0f);
+            graphics.setColour(std::abs(panValue) < 0.005f
+                                   ? juce::Colour(StudioColours::secondaryText)
+                                   : track.colour);
+            graphics.drawEllipse(panCentre.x - panRadius,
+                                 panCentre.y - panRadius,
+                                 panRadius * 2.0f,
+                                 panRadius * 2.0f,
+                                 1.5f);
+            const auto angle = juce::jmap(panValue,
+                                          -1.0f,
+                                          1.0f,
+                                          -juce::MathConstants<float>::pi * 0.75f,
+                                          juce::MathConstants<float>::pi * 0.75f);
+            const juce::Point<float> marker(
+                panCentre.x + std::sin(angle) * 8.0f,
+                panCentre.y - std::cos(angle) * 8.0f);
+            graphics.drawLine(panCentre.x, panCentre.y, marker.x, marker.y, 2.0f);
+            graphics.setFont(juce::Font(juce::FontOptions(8.0f, juce::Font::bold)));
+            graphics.drawText("L",
+                              static_cast<int>(panCentre.x - 30.0f),
+                              static_cast<int>(panCentre.y - 8.0f),
+                              12,
+                              16,
+                              juce::Justification::centred);
+            graphics.drawText("R",
+                              static_cast<int>(panCentre.x + 18.0f),
+                              static_cast<int>(panCentre.y - 8.0f),
+                              12,
+                              16,
+                              juce::Justification::centred);
+            graphics.setColour(juce::Colour(StudioColours::secondaryText));
+            graphics.drawText(panText,
+                              strip.getX() + 6,
+                              strip.getBottom() - 18,
+                              strip.getWidth() - 12,
+                              14,
                               juce::Justification::centred);
 
             x += stripWidth + gap;
@@ -150,8 +200,72 @@ public:
             if (track.parentTrackId.isEmpty())
                 mixerTracks.push_back(&track);
 
-        if (index >= 0 && index < static_cast<int>(mixerTracks.size()) && onTrackSelected)
-            onTrackSelected(mixerTracks[static_cast<std::size_t>(index)]->id);
+        if (index < 0 || index >= static_cast<int>(mixerTracks.size()))
+            return;
+
+        const auto* track = mixerTracks[static_cast<std::size_t>(index)];
+        if (onTrackSelected)
+            onTrackSelected(track->id);
+
+        const juce::Rectangle<int> strip(14 + index * (stripWidth + gap),
+                                         34,
+                                         stripWidth,
+                                         getHeight() - 44);
+        if (event.position.y >= static_cast<float>(strip.getBottom() - 60))
+        {
+            draggingPanTrack = track->id;
+            dragStartY = event.position.y;
+            dragStartPan = track->pan;
+            dragPreviewPan = track->pan;
+        }
+    }
+
+    void mouseDrag(const juce::MouseEvent& event) override
+    {
+        if (draggingPanTrack.isEmpty())
+            return;
+
+        dragPreviewPan = juce::jlimit(-1.0f,
+                                      1.0f,
+                                      dragStartPan + (dragStartY - event.position.y) / 80.0f);
+        repaint();
+    }
+
+    void mouseUp(const juce::MouseEvent&) override
+    {
+        if (draggingPanTrack.isEmpty())
+            return;
+
+        const auto trackId = draggingPanTrack;
+        const auto value = dragPreviewPan;
+        draggingPanTrack.clear();
+        if (onPanChanged)
+            onPanChanged(trackId, value);
+        repaint();
+    }
+
+    void mouseDoubleClick(const juce::MouseEvent& event) override
+    {
+        if (project == nullptr || event.position.y < 34.0f)
+            return;
+
+        constexpr auto stripWidth = 112;
+        constexpr auto gap = 8;
+        const auto index = static_cast<int>((event.position.x - 14.0f) / (stripWidth + gap));
+        std::vector<const Track*> mixerTracks;
+        for (const auto& track : project->tracks)
+            if (track.parentTrackId.isEmpty())
+                mixerTracks.push_back(&track);
+        if (index < 0 || index >= static_cast<int>(mixerTracks.size()))
+            return;
+
+        const juce::Rectangle<int> strip(14 + index * (stripWidth + gap),
+                                         34,
+                                         stripWidth,
+                                         getHeight() - 44);
+        if (event.position.y >= static_cast<float>(strip.getBottom() - 60)
+            && onPanChanged)
+            onPanChanged(mixerTracks[static_cast<std::size_t>(index)]->id, 0.0f);
     }
 
 private:
@@ -159,6 +273,10 @@ private:
     juce::String selectedTrack;
     float leftPeak = 0.0f;
     float rightPeak = 0.0f;
+    juce::String draggingPanTrack;
+    float dragStartY = 0.0f;
+    float dragStartPan = 0.0f;
+    float dragPreviewPan = 0.0f;
 };
 
 class MainComponent::InsertPanel final : public juce::Component
@@ -567,6 +685,11 @@ MainComponent::MainComponent()
             state.versionsCollapsed = !state.versionsCollapsed;
         });
     };
+    timeline.onDeleteTrack = [this](const auto& trackId)
+    {
+        selectTrack(trackId);
+        deleteSelectedTrack();
+    };
     timeline.onAddTrack = [this] { addAudioTrack(); };
     timeline.onClipSelected = [this](const auto& trackId, const auto& clipId)
     {
@@ -603,6 +726,17 @@ MainComponent::MainComponent()
     mixer = std::make_unique<MixerPanel>();
     mixer->setProject(&project);
     mixer->onTrackSelected = [this](const auto& trackId) { selectTrack(trackId); };
+    mixer->onPanChanged = [this](const auto& trackId, float pan)
+    {
+        const auto* track = project.findTrack(trackId);
+        if (track == nullptr)
+            return;
+
+        const auto before = TrackMixState::fromTrack(*track);
+        auto after = before;
+        after.pan = juce::jlimit(-1.0f, 1.0f, pan);
+        perform(std::make_unique<SetTrackMixCommand>(trackId, before, after));
+    };
     mixer->addKeyListener(this);
     addAndMakeVisible(*mixer);
 
@@ -666,7 +800,7 @@ void MainComponent::paint(juce::Graphics& graphics)
     graphics.drawHorizontalLine(header.getBottom() - 1, 0.0f, static_cast<float>(getWidth()));
 
     const auto bodyTop = 76;
-    const auto mixerTop = getHeight() - 204;
+    const auto mixerTop = getHeight() - 248;
     graphics.setColour(juce::Colour(StudioColours::panel));
     graphics.fillRect(0, bodyTop, 286, mixerTop - bodyTop);
     graphics.fillRect(getWidth() - 250, bodyTop, 250, mixerTop - bodyTop);
@@ -715,7 +849,7 @@ void MainComponent::resized()
     auto bounds = getLocalBounds();
     auto header = bounds.removeFromTop(76);
     auto status = bounds.removeFromBottom(28);
-    auto mixerBounds = bounds.removeFromBottom(176);
+    auto mixerBounds = bounds.removeFromBottom(220);
     auto left = bounds.removeFromLeft(286);
     auto right = bounds.removeFromRight(250);
 
@@ -931,7 +1065,10 @@ bool MainComponent::keyPressed(const juce::KeyPress& key)
     if (key.getKeyCode() == juce::KeyPress::deleteKey
         || key.getKeyCode() == juce::KeyPress::backspaceKey)
     {
-        deleteSelectedClip();
+        if (selectedClipId.isNotEmpty())
+            deleteSelectedClip();
+        else
+            deleteSelectedTrack();
         return true;
     }
 
@@ -1380,8 +1517,15 @@ void MainComponent::deleteSelectedTrack()
     }
 
     const auto trackToDelete = selectedTrackId;
+    const auto preferredSelection = selected->parentTrackId;
     if (!perform(std::make_unique<RemoveTrackCommand>(trackToDelete)))
         return;
+
+    if (preferredSelection.isNotEmpty() && project.findTrack(preferredSelection) != nullptr)
+    {
+        selectTrack(preferredSelection);
+        return;
+    }
 
     const auto next = std::find_if(project.tracks.cbegin(), project.tracks.cend(), [](const auto& track)
     {
