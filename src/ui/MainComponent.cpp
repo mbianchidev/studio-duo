@@ -316,12 +316,7 @@ MainComponent::MainComponent()
     undoButton.onClick = [this] { undo(); };
     redoButton.onClick = [this] { redo(); };
     playButton.onClick = [this] { togglePlayback(); };
-    stopButton.onClick = [this]
-    {
-        if (audioEngine.isRecording())
-            finishRecording();
-        audioEngine.stop();
-    };
+    stopButton.onClick = [this] { stopTransportAndRecording(); };
     recordButton.onClick = [this] { toggleRecording(); };
     addTrackButton.onClick = [this] { addAudioTrack(); };
     importButton.onClick = [this] { beginImportAudio(); };
@@ -519,9 +514,12 @@ MainComponent::MainComponent()
     {
         selectClip(trackId, clipId);
     };
-    timeline.onClipMoved = [this](const auto& clipId, double start)
+    timeline.onClipMoved = [this](const auto& clipId, const auto& destinationTrackId, double start)
     {
-        perform(std::make_unique<MoveClipCommand>(clipId, start));
+        if (perform(std::make_unique<MoveClipCommand>(clipId,
+                                                      start,
+                                                      destinationTrackId)))
+            selectClip(destinationTrackId, clipId);
     };
     timeline.onClipTrimmed = [this](const auto& clipId,
                                     double start,
@@ -1145,13 +1143,30 @@ void MainComponent::toggleRecording()
     setStatus("Recording " + track->name + ". Press REC or STOP to finish.");
 }
 
+void MainComponent::stopTransportAndRecording()
+{
+    if (audioEngine.isRecording())
+        finishRecording();
+    else
+        audioEngine.stop();
+
+    recordButton.setButtonText("REC");
+    recordButton.setColour(juce::TextButton::buttonColourId,
+                           juce::Colour(StudioColours::raised));
+    timeline.clearRecordingPreview();
+}
+
 void MainComponent::finishRecording()
 {
+    recordButton.setButtonText("REC");
+    recordButton.setColour(juce::TextButton::buttonColourId,
+                           juce::Colour(StudioColours::raised));
+    timeline.clearRecordingPreview();
+
     auto* track = project.findTrack(activeRecordingTrackId);
     const auto recording = audioEngine.stopRecording();
     audioEngine.stop();
     activeRecordingTrackId.clear();
-    timeline.clearRecordingPreview();
     if (recording.result.failed())
     {
         showError("Recording warning", recording.result.getErrorMessage());

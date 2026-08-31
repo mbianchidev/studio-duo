@@ -66,7 +66,9 @@ private:
 class MoveClipCommand final : public ProjectCommand
 {
 public:
-    MoveClipCommand(juce::String clipToMove, double destinationSeconds);
+    MoveClipCommand(juce::String clipToMove,
+                    double destinationSeconds,
+                    juce::String destinationTrackId = {});
 
     [[nodiscard]] juce::String name() const override;
     bool perform(Project& project, juce::String& error) override;
@@ -74,8 +76,11 @@ public:
 
 private:
     juce::String clipId;
+    juce::String newTrackId;
+    juce::String oldTrackId;
     double newStartSeconds = 0.0;
     double oldStartSeconds = 0.0;
+    std::size_t oldClipIndex = 0;
     bool capturedOriginal = false;
 };
 

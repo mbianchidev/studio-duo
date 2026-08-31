@@ -118,6 +118,20 @@ void commandHistory()
            error.toRawUTF8());
     expect(project.findClip(clipId)->startSeconds == 2.0, "Move clip command updates its start.");
 
+    const auto destinationTrackId = project.tracks[1].id;
+    expect(history.perform(std::make_unique<studio::MoveClipCommand>(clipId,
+                                                                    2.5,
+                                                                    destinationTrackId),
+                           project,
+                           error),
+           error.toRawUTF8());
+    expect(project.findTrackContainingClip(clipId)->id == destinationTrackId,
+           "Move clip command transfers audio to another track.");
+    expect(history.undo(project), "Cross-track clip move can be undone.");
+    expect(project.findTrackContainingClip(clipId)->id == project.tracks.front().id
+               && project.findClip(clipId)->startSeconds == 2.0,
+           "Undo restores the original track and position.");
+
     expect(history.perform(std::make_unique<studio::TrimClipCommand>(clipId, 3.0, 1.0, 7.0),
                            project,
                            error),

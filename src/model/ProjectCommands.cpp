@@ -137,8 +137,11 @@ void AddClipCommand::undo(Project& project)
         }), track->clips.end());
 }
 
-MoveClipCommand::MoveClipCommand(juce::String clipToMove, double destinationSeconds)
+MoveClipCommand::MoveClipCommand(juce::String clipToMove,
+                                 double destinationSeconds,
+                                 juce::String destinationTrackId)
     : clipId(std::move(clipToMove)),
+      newTrackId(std::move(destinationTrackId)),
       newStartSeconds(std::max(0.0, destinationSeconds))
 {
 }
@@ -150,8 +153,29 @@ juce::String MoveClipCommand::name() const
 
 bool MoveClipCommand::perform(Project& project, juce::String& error)
 {
-    auto* clip = project.findClip(clipId);
-    if (clip == nullptr)
+    auto* sourceTrack = project.findTrackContainingClip(clipId);
+    if (sourceTrack == nullptr)
+    {
+        error = "The clip to move no longer exists.";
+        return false;
+    }
+
+    auto* destinationTrack = newTrackId.isEmpty()
+        ? sourceTrack
+        : project.findTrack(newTrackId);
+    if (destinationTrack == nullptr || destinationTrack->type != TrackType::audio)
+    {
+        error = "Audio clips can only be moved to an audio track.";
+        return false;
+    }
+
+    const auto sourceIterator = std::find_if(sourceTrack->clips.begin(),
+                                             sourceTrack->clips.end(),
+                                             [this](const auto& candidate)
+    {
+        return candidate.id == clipId;
+    });
+    if (sourceIterator == sourceTrack->clips.end())
     {
         error = "The clip to move no longer exists.";
         return false;
@@ -159,18 +183,56 @@ bool MoveClipCommand::perform(Project& project, juce::String& error)
 
     if (!capturedOriginal)
     {
-        oldStartSeconds = clip->startSeconds;
+        oldTrackId = sourceTrack->id;
+        oldClipIndex = static_cast<std::size_t>(std::distance(sourceTrack->clips.begin(),
+                                                              sourceIterator));
+        oldStartSeconds = sourceIterator->startSeconds;
+        if (newTrackId.isEmpty())
+            newTrackId = sourceTrack->id;
         capturedOriginal = true;
     }
 
-    clip->startSeconds = newStartSeconds;
+    if (sourceTrack == destinationTrack)
+    {
+        sourceIterator->startSeconds = newStartSeconds;
+        return true;
+    }
+
+    auto movedClip = *sourceIterator;
+    movedClip.startSeconds = newStartSeconds;
+    sourceTrack->clips.erase(sourceIterator);
+    destinationTrack->clips.push_back(std::move(movedClip));
     return true;
 }
 
 void MoveClipCommand::undo(Project& project)
 {
-    if (auto* clip = project.findClip(clipId))
-        clip->startSeconds = oldStartSeconds;
+    auto* currentTrack = project.findTrackContainingClip(clipId);
+    auto* originalTrack = project.findTrack(oldTrackId);
+    if (currentTrack == nullptr || originalTrack == nullptr)
+        return;
+
+    const auto iterator = std::find_if(currentTrack->clips.begin(),
+                                       currentTrack->clips.end(),
+                                       [this](const auto& candidate)
+    {
+        return candidate.id == clipId;
+    });
+    if (iterator == currentTrack->clips.end())
+        return;
+
+    if (currentTrack == originalTrack)
+    {
+        iterator->startSeconds = oldStartSeconds;
+        return;
+    }
+
+    auto movedClip = *iterator;
+    movedClip.startSeconds = oldStartSeconds;
+    currentTrack->clips.erase(iterator);
+    const auto index = std::min(oldClipIndex, originalTrack->clips.size());
+    originalTrack->clips.insert(originalTrack->clips.begin() + static_cast<std::ptrdiff_t>(index),
+                                std::move(movedClip));
 }
 
 TrimClipCommand::TrimClipCommand(juce::String clipToTrim,

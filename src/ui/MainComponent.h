@@ -45,6 +45,7 @@ private:
     void exportMixTo(const juce::File& destination);
     void togglePlayback();
     void toggleRecording();
+    void stopTransportAndRecording();
     void finishRecording();
     void addAudioTrack();
     void duplicateSelectedTrack();

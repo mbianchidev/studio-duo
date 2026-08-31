@@ -31,7 +31,7 @@ public:
     std::function<void(const juce::String&)> onTrackArm;
     std::function<void()> onAddTrack;
     std::function<void(const juce::String&, const juce::String&)> onClipSelected;
-    std::function<void(const juce::String&, double)> onClipMoved;
+    std::function<void(const juce::String&, const juce::String&, double)> onClipMoved;
     std::function<void(const juce::String&, double, double, double)> onClipTrimmed;
     std::function<void(double)> onSeek;
 
@@ -58,6 +58,7 @@ private:
 
     [[nodiscard]] std::vector<Hit> clipHits() const;
     [[nodiscard]] int trackIndexAt(float y) const noexcept;
+    [[nodiscard]] float trackY(const juce::String& trackId) const noexcept;
     [[nodiscard]] double xToSeconds(float x) const noexcept;
     [[nodiscard]] float secondsToX(double seconds) const noexcept;
 
@@ -65,6 +66,8 @@ private:
     juce::String selectedTrackId;
     juce::String selectedClipId;
     juce::String draggedClipId;
+    juce::String dragOriginalTrackId;
+    juce::String dragPreviewTrackId;
     juce::String recordingTrackId;
     double playheadSeconds = 0.0;
     double recordingStartSeconds = 0.0;

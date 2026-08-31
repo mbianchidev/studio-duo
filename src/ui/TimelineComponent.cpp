@@ -209,6 +209,7 @@ void TimelineComponent::paint(juce::Graphics& graphics)
             graphics.fillPath(dashedOutline);
 
             bounds.setX(secondsToX(dragPreviewStart));
+            bounds.setY(trackY(dragPreviewTrackId) + 12.0f);
             bounds.setWidth(static_cast<float>(std::max(20.0,
                                                         dragPreviewDuration
                                                             * pixelsPerSecond)));
@@ -229,7 +230,7 @@ void TimelineComponent::paint(juce::Graphics& graphics)
                 const juce::Rectangle<float> preview(
                     secondsToX(recordingStartSeconds),
                     static_cast<float>(y),
-                    static_cast<float>(std::max(20.0, recordingDurationSeconds * pixelsPerSecond)),
+                    static_cast<float>(std::max(96.0, recordingDurationSeconds * pixelsPerSecond)),
                     trackHeight - 24.0f);
                 graphics.setColour(juce::Colour(StudioColours::orange).withAlpha(0.72f));
                 graphics.fillRoundedRectangle(preview, 5.0f);
@@ -374,6 +375,8 @@ void TimelineComponent::mouseDown(const juce::MouseEvent& event)
         selectedTrackId = hit.trackId;
         selectedClipId = hit.clipId;
         draggedClipId = hit.clipId;
+        dragOriginalTrackId = hit.trackId;
+        dragPreviewTrackId = hit.trackId;
         dragStartX = event.position.x;
         if (const auto* clip = project != nullptr ? project->findClip(hit.clipId) : nullptr)
         {
@@ -430,6 +433,16 @@ void TimelineComponent::mouseDrag(const juce::MouseEvent& event)
     {
         const auto unsnapped = std::max(0.0, dragOriginalStart + deltaSeconds);
         dragPreviewStart = std::round(unsnapped / beat) * beat;
+
+        const auto targetTrackIndex = trackIndexAt(event.position.y);
+        if (project != nullptr
+            && targetTrackIndex >= 0
+            && targetTrackIndex < static_cast<int>(project->tracks.size()))
+        {
+            const auto& targetTrack = project->tracks[static_cast<std::size_t>(targetTrackIndex)];
+            if (targetTrack.type == TrackType::audio)
+                dragPreviewTrackId = targetTrack.id;
+        }
     }
     else if (dragMode == DragMode::trimStart)
     {
@@ -469,7 +482,11 @@ void TimelineComponent::mouseUp(const juce::MouseEvent&)
         if (dragMode == DragMode::move
             && std::abs(dragPreviewStart - dragOriginalStart) > 0.0001
             && onClipMoved)
-            onClipMoved(draggedClipId, dragPreviewStart);
+            onClipMoved(draggedClipId, dragPreviewTrackId, dragPreviewStart);
+        else if (dragMode == DragMode::move
+                 && dragPreviewTrackId != dragOriginalTrackId
+                 && onClipMoved)
+            onClipMoved(draggedClipId, dragPreviewTrackId, dragPreviewStart);
         else if ((dragMode == DragMode::trimStart || dragMode == DragMode::trimEnd)
                  && (std::abs(dragPreviewStart - dragOriginalStart) > 0.0001
                      || std::abs(dragPreviewDuration - dragOriginalDuration) > 0.0001)
@@ -481,6 +498,8 @@ void TimelineComponent::mouseUp(const juce::MouseEvent&)
     }
 
     draggedClipId.clear();
+    dragOriginalTrackId.clear();
+    dragPreviewTrackId.clear();
     dragMode = DragMode::none;
     repaint();
 }
@@ -509,6 +528,24 @@ std::vector<TimelineComponent::Hit> TimelineComponent::clipHits() const
 int TimelineComponent::trackIndexAt(float y) const noexcept
 {
     return y < rulerHeight ? -1 : static_cast<int>((y - rulerHeight) / trackHeight);
+}
+
+float TimelineComponent::trackY(const juce::String& trackId) const noexcept
+{
+    if (project == nullptr)
+        return static_cast<float>(rulerHeight);
+
+    const auto iterator = std::find_if(project->tracks.cbegin(),
+                                       project->tracks.cend(),
+                                       [&trackId](const auto& track)
+    {
+        return track.id == trackId;
+    });
+    if (iterator == project->tracks.cend())
+        return static_cast<float>(rulerHeight);
+
+    const auto index = static_cast<int>(std::distance(project->tracks.cbegin(), iterator));
+    return static_cast<float>(rulerHeight + index * trackHeight);
 }
 
 double TimelineComponent::xToSeconds(float x) const noexcept
