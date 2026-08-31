@@ -116,6 +116,13 @@ Track creation, duplication, and deletion are typed commands. Duplication
 regenerates the track, clip, and insert IDs so later edits never alias the
 source track. The master track is protected from duplicate and delete actions.
 
+Recording creates flat-model child tracks with a stable `parentTrackId` and
+monotonic version number. They remain ordinary audio tracks for commands and
+engine mixing, but the timeline places them immediately below the parent and
+can hide them using the parent's persisted collapse state. Parent rows draw a
+subtle aggregate of child clips. Deleting a parent removes and restores the
+whole group atomically through undo.
+
 Audio tracks persist their first hardware input, mono/stereo mode, and software
 monitoring state. The lock-free recorder copies only those selected callback
 channels into its FIFO. Monitoring is mixed after timeline playback and before
@@ -136,6 +143,10 @@ stop use the UI recording-session ID as the source of truth, stop transport
 first, then stop accepting input immediately. WAV draining and flush run on a
 dedicated finalizer thread; the completed result is posted back to the message
 thread to attach the clip.
+
+Space, the transport Stop button, and Stop Rec all enter the same recording
+finalization path. A timer invariant also finalizes any active recording whose
+transport is no longer running.
 
 Timeline popup gestures first place the playhead, preserve or update clip
 selection, then show action items with shortcut descriptions. Zoom controls,

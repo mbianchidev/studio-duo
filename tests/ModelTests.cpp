@@ -44,6 +44,12 @@ void serializationRoundTrip()
     insert.format = "VST3";
     project.tracks.front().inserts.push_back(insert);
 
+    studio::Track version;
+    version.name = "v1";
+    version.parentTrackId = project.tracks.front().id;
+    version.versionNumber = 1;
+    project.tracks.insert(project.tracks.begin() + 1, version);
+
     juce::String error;
     const auto decoded = studio::Project::fromVar(project.toVar(), error);
 
@@ -60,6 +66,10 @@ void serializationRoundTrip()
                && decoded->tracks.front().stereoInput
                && decoded->tracks.front().inputMonitoring,
            "Track input routing survives serialization.");
+    expect(decoded.has_value()
+               && decoded->tracks[1].parentTrackId == decoded->tracks.front().id
+               && decoded->tracks[1].versionNumber == 1,
+           "Grouped recording versions survive serialization.");
     expect(decoded.has_value()
                && decoded->tracks.front().inserts.front().bridgeMode
                       == studio::PluginBridgeMode::sandboxed,
