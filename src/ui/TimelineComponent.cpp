@@ -34,6 +34,16 @@ void TimelineComponent::setPlayheadSeconds(double seconds)
     repaint(std::min(oldX, newX) - 3, 0, std::abs(newX - oldX) + 7, getHeight());
 }
 
+void TimelineComponent::setViewportPosition(int horizontalPosition)
+{
+    const auto newPosition = std::max(0, horizontalPosition);
+    if (newPosition == viewportPositionX)
+        return;
+
+    viewportPositionX = newPosition;
+    repaint();
+}
+
 void TimelineComponent::setRecordingPreview(juce::String trackId,
                                             double startSeconds,
                                             double durationSeconds,
@@ -91,7 +101,7 @@ void TimelineComponent::paint(juce::Graphics& graphics)
     graphics.fillAll(juce::Colour(StudioColours::window));
     graphics.setColour(juce::Colour(StudioColours::panel));
     graphics.fillRect(0, 0, getWidth(), rulerHeight);
-    graphics.fillRect(0, 0, trackHeaderWidth, getHeight());
+    graphics.fillRect(viewportPositionX, 0, trackHeaderWidth, getHeight());
 
     if (project == nullptr)
         return;
@@ -129,10 +139,10 @@ void TimelineComponent::paint(juce::Graphics& graphics)
         const auto selected = track.id == selectedTrackId;
 
         graphics.setColour(juce::Colour(selected ? 0xff22272b : 0xff15181b));
-        graphics.fillRect(0, y, trackHeaderWidth, trackHeight);
+        graphics.fillRect(viewportPositionX, y, trackHeaderWidth, trackHeight);
         graphics.setColour(juce::Colour(StudioColours::border));
         graphics.drawHorizontalLine(y + trackHeight - 1, 0.0f, static_cast<float>(getWidth()));
-        graphics.drawVerticalLine(trackHeaderWidth - 1,
+        graphics.drawVerticalLine(viewportPositionX + trackHeaderWidth - 1,
                                   static_cast<float>(y),
                                   static_cast<float>(y + trackHeight));
 
@@ -147,35 +157,41 @@ void TimelineComponent::paint(juce::Graphics& graphics)
         {
             juce::Path disclosure;
             if (track.versionsCollapsed)
-                disclosure.addTriangle(7.0f, static_cast<float>(y + 21),
-                                       7.0f, static_cast<float>(y + 31),
-                                       14.0f, static_cast<float>(y + 26));
+                disclosure.addTriangle(static_cast<float>(viewportPositionX + 7),
+                                       static_cast<float>(y + 21),
+                                       static_cast<float>(viewportPositionX + 7),
+                                       static_cast<float>(y + 31),
+                                       static_cast<float>(viewportPositionX + 14),
+                                       static_cast<float>(y + 26));
             else
-                disclosure.addTriangle(5.0f, static_cast<float>(y + 22),
-                                       15.0f, static_cast<float>(y + 22),
-                                       10.0f, static_cast<float>(y + 30));
+                disclosure.addTriangle(static_cast<float>(viewportPositionX + 5),
+                                       static_cast<float>(y + 22),
+                                       static_cast<float>(viewportPositionX + 15),
+                                       static_cast<float>(y + 22),
+                                       static_cast<float>(viewportPositionX + 10),
+                                       static_cast<float>(y + 30));
             graphics.setColour(juce::Colour(StudioColours::secondaryText));
             graphics.fillPath(disclosure);
         }
 
         const auto indent = childTrack ? 16 : children > 0 ? 8 : 0;
         graphics.setColour(track.colour);
-        graphics.fillRect(12 + indent, y + 17, 4, 42);
+        graphics.fillRect(viewportPositionX + 12 + indent, y + 17, 4, 42);
         graphics.setColour(juce::Colour(StudioColours::text));
         graphics.setFont(14.0f);
         graphics.drawText(track.name,
-                          26 + indent,
+                          viewportPositionX + 26 + indent,
                           y + 12,
                           trackHeaderWidth - 38 - indent,
                           24,
                           juce::Justification::centredLeft);
 
-        const auto drawControl = [&graphics, y](int x,
+        const auto drawControl = [&graphics, y, this](int x,
                                                 const juce::String& label,
                                                 bool active,
                                                 juce::Colour activeColour)
         {
-            const juce::Rectangle<float> bounds(static_cast<float>(x),
+            const juce::Rectangle<float> bounds(static_cast<float>(viewportPositionX + x),
                                                 static_cast<float>(y + 48),
                                                 28.0f,
                                                 24.0f);
@@ -199,7 +215,7 @@ void TimelineComponent::paint(juce::Graphics& graphics)
                 + (track.stereoInput ? "+" + juce::String(track.inputChannel + 2) : juce::String())
             : trackTypeToString(track.type).toUpperCase();
         graphics.drawText(routingLabel,
-                          128,
+                          viewportPositionX + 128,
                           y + 48,
                           40,
                           24,
@@ -210,7 +226,7 @@ void TimelineComponent::paint(juce::Graphics& graphics)
             graphics.setColour(juce::Colour(StudioColours::secondaryText));
             graphics.setFont(juce::Font(juce::FontOptions(9.0f)));
             graphics.drawText(juce::String(children) + " TAKES",
-                              128,
+                              viewportPositionX + 128,
                               y + 12,
                               40,
                               24,
@@ -220,17 +236,29 @@ void TimelineComponent::paint(juce::Graphics& graphics)
 
     const auto addTrackY = rulerHeight + static_cast<int>(tracks.size()) * trackHeight;
     graphics.setColour(juce::Colour(StudioColours::panel));
-    graphics.fillRect(0, addTrackY, trackHeaderWidth, addTrackHeight);
+    graphics.fillRect(viewportPositionX, addTrackY, trackHeaderWidth, addTrackHeight);
     graphics.setColour(juce::Colour(StudioColours::border));
-    graphics.drawRect(10, addTrackY + 7, trackHeaderWidth - 20, addTrackHeight - 14, 1);
+    graphics.drawRect(viewportPositionX + 10,
+                      addTrackY + 7,
+                      trackHeaderWidth - 20,
+                      addTrackHeight - 14,
+                      1);
     graphics.setColour(juce::Colour(StudioColours::text));
     graphics.setFont(juce::Font(juce::FontOptions(11.0f, juce::Font::bold)));
     graphics.drawText("+ ADD AUDIO TRACK",
-                      14,
+                      viewportPositionX + 14,
                       addTrackY + 7,
                       trackHeaderWidth - 28,
                       addTrackHeight - 14,
                       juce::Justification::centred);
+
+    graphics.saveState();
+    graphics.excludeClipRegion({
+        viewportPositionX,
+        0,
+        trackHeaderWidth,
+        getHeight()
+    });
 
     for (std::size_t visibleIndex = 0; visibleIndex < tracks.size(); ++visibleIndex)
     {
@@ -389,6 +417,7 @@ void TimelineComponent::paint(juce::Graphics& graphics)
     juce::Path marker;
     marker.addTriangle(playheadX - 5.0f, 0.0f, playheadX + 5.0f, 0.0f, playheadX, 8.0f);
     graphics.fillPath(marker);
+    graphics.restoreState();
 }
 
 void TimelineComponent::mouseDown(const juce::MouseEvent& event)
@@ -399,7 +428,9 @@ void TimelineComponent::mouseDown(const juce::MouseEvent& event)
         return;
     }
 
-    if (project != nullptr && event.position.x < trackHeaderWidth)
+    const auto inTrackHeader = event.position.x >= static_cast<float>(viewportPositionX)
+        && event.position.x < static_cast<float>(viewportPositionX + trackHeaderWidth);
+    if (project != nullptr && inTrackHeader)
     {
         const auto tracks = visibleTracks();
         const auto addTrackY = rulerHeight + static_cast<int>(tracks.size()) * trackHeight;
@@ -418,7 +449,7 @@ void TimelineComponent::mouseDown(const juce::MouseEvent& event)
             const auto localY = static_cast<int>(event.position.y)
                 - rulerHeight
                 - trackIndex * trackHeight;
-            const auto x = static_cast<int>(event.position.x);
+            const auto x = static_cast<int>(event.position.x) - viewportPositionX;
             const auto hasVersions = std::any_of(project->tracks.cbegin(),
                                                  project->tracks.cend(),
                                                  [&track](const auto& candidate)
@@ -448,6 +479,13 @@ void TimelineComponent::mouseDown(const juce::MouseEvent& event)
                 repaint();
                 return;
             }
+
+            selectedTrackId = track.id;
+            selectedClipId.clear();
+            if (onTrackSelected)
+                onTrackSelected(track.id);
+            repaint();
+            return;
         }
     }
 
@@ -500,7 +538,7 @@ void TimelineComponent::mouseDown(const juce::MouseEvent& event)
         }
     }
 
-    if (event.position.x >= trackHeaderWidth && onSeek)
+    if (!inTrackHeader && onSeek)
         onSeek(xToSeconds(event.position.x));
     repaint();
 }
@@ -613,7 +651,9 @@ void TimelineComponent::showContextMenu(const juce::MouseEvent& event)
         ? tracks[static_cast<std::size_t>(trackIndex)]
         : nullptr;
 
-    if (event.position.x >= trackHeaderWidth && onSeek)
+    const auto inTrackHeader = event.position.x >= static_cast<float>(viewportPositionX)
+        && event.position.x < static_cast<float>(viewportPositionX + trackHeaderWidth);
+    if (!inTrackHeader && onSeek)
         onSeek(xToSeconds(event.position.x));
 
     auto hitClip = false;
@@ -645,7 +685,7 @@ void TimelineComponent::showContextMenu(const juce::MouseEvent& event)
     }
 
     juce::PopupMenu menu;
-    if (event.position.x < trackHeaderWidth && clickedTrack != nullptr)
+    if (inTrackHeader && clickedTrack != nullptr)
     {
         const auto trackId = clickedTrack->id;
 

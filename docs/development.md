@@ -175,6 +175,12 @@ selection, then show action items with shortcut descriptions. Zoom controls,
 keyboard shortcuts, and modified mouse-wheel input all use the same clamped
 pixels-per-second value and keep the playhead centered.
 
+The timeline component receives the viewport's horizontal position and paints
+track headers at that offset, while clips and grid content remain in timeline
+coordinates. The UI timer follows an active playhead with a right-side margin,
+grows the view during long recordings, and rewinds a completed transport before
+starting playback again.
+
 On macOS, CMake applies an ad-hoc signature with the stable designated
 requirement `dev.mbianchi.studioduo`. This keeps the TCC microphone grant tied
 to the app identity instead of the changing binary hash during local rebuilds.

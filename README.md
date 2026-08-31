@@ -126,6 +126,11 @@ Use the **-**, **100%**, and **+** timeline controls, the zoom shortcuts, or
 Command/Ctrl+mouse-wheel to zoom while keeping the playhead centered. The
 percentage button reflects the current zoom and resets it when clicked.
 
+During playback and recording, the arrangement follows the playhead before it
+reaches the right edge. Track headers remain pinned on the left while the
+timeline scrolls. Pressing Play after the project reaches its end rewinds and
+starts again instead of remaining at the terminal position.
+
 Two-finger click or right-click the timeline to move the playhead and open the
 clip context menu. Trim start, split, trim end, and delete show their keyboard
 shortcuts alongside each action, and the menu opens at the gesture point.

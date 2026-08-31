@@ -782,6 +782,7 @@ MainComponent::MainComponent()
     {
         if (project.hasActivePluginInserts())
         {
+            playAfterRuntimeTransition = audioEngine.isPlaying();
             audioEngine.pause();
             audioEngine.forcePluginRuntimeReload(project, pluginRuntimeRequests());
             setStatus("Playhead moved. Resetting sandbox pipelines...");
@@ -1008,6 +1009,7 @@ void MainComponent::resized()
     insertPanel->setBounds(inspector);
 
     updateTimelineSize();
+    timeline.setViewportPosition(timelineViewport.getViewPositionX());
 }
 
 void MainComponent::timerCallback()
@@ -1026,7 +1028,8 @@ void MainComponent::timerCallback()
                                        project.tempo,
                                        project.timeSignatureNumerator),
                           juce::dontSendNotification);
-    playButton.setButtonText(audioEngine.isPlaying() ? "PAUSE" : "PLAY");
+    const auto playing = audioEngine.isPlaying();
+    playButton.setButtonText(playing ? "PAUSE" : "PLAY");
     const auto recording = activeRecordingTrackId.isNotEmpty();
     recordButton.setButtonText(recording ? "STOP REC" : "REC");
     recordButton.setColour(juce::TextButton::buttonColourId,
@@ -1077,6 +1080,33 @@ void MainComponent::timerCallback()
                       + juce::String(duration, 1)
                       + " s. Press STOP REC or STOP to finish.");
         updateTimelineSize();
+    }
+
+    auto viewportX = timelineViewport.getViewPositionX();
+    if (playing || recording)
+    {
+        const auto playheadX = static_cast<int>(timeline.xForSeconds(position));
+        const auto headerWidth = static_cast<int>(timeline.xForSeconds(0.0));
+        const auto visibleLeft = viewportX + headerWidth + 48;
+        const auto visibleRight = viewportX + timelineViewport.getWidth() - 96;
+        if (playheadX > visibleRight)
+            viewportX = juce::jmax(0,
+                                   playheadX
+                                       - static_cast<int>(timelineViewport.getWidth() * 0.68));
+        else if (playheadX < visibleLeft)
+            viewportX = juce::jmax(0, playheadX - headerWidth - 48);
+        timelineViewport.setViewPosition(viewportX,
+                                         timelineViewport.getViewPositionY());
+        viewportX = timelineViewport.getViewPositionX();
+    }
+    timeline.setViewportPosition(viewportX);
+
+    if (playAfterRuntimeTransition
+        && !audioEngine.pluginRuntimeTransitionPending()
+        && !recordingFinalizationInProgress)
+    {
+        playAfterRuntimeTransition = false;
+        audioEngine.play();
     }
 
     auto* device = deviceManager.getCurrentAudioDevice();
@@ -1473,8 +1503,24 @@ void MainComponent::togglePlayback()
         return;
     }
 
+    if (audioEngine.positionSeconds() >= project.lengthSeconds() - 0.001)
+    {
+        audioEngine.seekSeconds(0.0);
+        timeline.setPlayheadSeconds(0.0);
+        timelineViewport.setViewPosition(0, timelineViewport.getViewPositionY());
+        timeline.setViewportPosition(0);
+        if (project.hasActivePluginInserts())
+        {
+            playAfterRuntimeTransition = true;
+            audioEngine.forcePluginRuntimeReload(project, pluginRuntimeRequests());
+            setStatus("Rewinding and resetting sandbox pipelines...");
+            return;
+        }
+    }
+
     if (audioEngine.pluginRuntimeTransitionPending())
     {
+        playAfterRuntimeTransition = true;
         setStatus("Waiting for sandboxed plugins to become ready.", true);
         return;
     }
@@ -1537,6 +1583,7 @@ void MainComponent::toggleRecording()
 
 void MainComponent::stopTransportAndRecording()
 {
+    playAfterRuntimeTransition = false;
     audioEngine.stop();
     if (activeRecordingTrackId.isNotEmpty() || audioEngine.isRecording())
         finishRecording();
@@ -2020,6 +2067,7 @@ void MainComponent::zoomTimeline(double factor, bool reset)
     timelineViewport.setViewPosition(juce::jmax(0,
                                                playheadX - timelineViewport.getWidth() / 2),
                                      timelineViewport.getViewPositionY());
+    timeline.setViewportPosition(timelineViewport.getViewPositionX());
 }
 
 void MainComponent::projectChanged(bool writeRecovery, bool markDirty)

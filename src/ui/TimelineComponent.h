@@ -16,6 +16,7 @@ public:
     void setProject(const Project* projectToDisplay);
     void setSelection(juce::String trackId, juce::String clipId);
     void setPlayheadSeconds(double seconds);
+    void setViewportPosition(int horizontalPosition);
     void setRecordingPreview(juce::String trackId,
                              double startSeconds,
                              double durationSeconds,
@@ -91,6 +92,7 @@ private:
     double recordingDurationSeconds = 0.0;
     std::vector<float> recordingPeaks;
     double pixelsPerSecond = 96.0;
+    int viewportPositionX = 0;
     double dragOriginalStart = 0.0;
     double dragOriginalSourceOffset = 0.0;
     double dragOriginalDuration = 0.0;

@@ -91,6 +91,7 @@ private:
     bool dirty = false;
     bool statusIsError = false;
     bool recordingFinalizationInProgress = false;
+    bool playAfterRuntimeTransition = false;
     bool updatingInputControls = false;
     juce::String inputConfigurationSignature;
     std::uint64_t lastRuntimeCatalogRevision = 0;
