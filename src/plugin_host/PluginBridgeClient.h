@@ -2,6 +2,7 @@
 
 #include "PluginBridgeProtocol.h"
 
+#include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_events/juce_events.h>
 
 #include <array>
@@ -18,6 +19,10 @@ public:
     ~PluginBridgeClient() override;
 
     juce::Result start();
+    juce::Result startPlugin(const juce::PluginDescription& description,
+                             double sampleRate,
+                             int blockSize,
+                             const juce::MemoryBlock& state = {});
     void stop();
     void processBlock(juce::AudioBuffer<float>& audio) noexcept;
 
@@ -28,6 +33,10 @@ private:
     void handleMessageFromWorker(const juce::MemoryBlock& message) override;
     void handleConnectionLost() override;
     juce::Result createSharedFile();
+    juce::Result startInternal(const juce::PluginDescription* description,
+                               double sampleRate,
+                               int blockSize,
+                               const juce::MemoryBlock& state);
 
     juce::File sharedFile;
     std::unique_ptr<juce::MemoryMappedFile> mapping;

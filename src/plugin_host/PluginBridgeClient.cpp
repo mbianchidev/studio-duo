@@ -13,7 +13,28 @@ PluginBridgeClient::~PluginBridgeClient()
 
 juce::Result PluginBridgeClient::start()
 {
+    return startInternal(nullptr, 48000.0, 512, {});
+}
+
+juce::Result PluginBridgeClient::startPlugin(const juce::PluginDescription& description,
+                                             double pluginSampleRate,
+                                             int blockSize,
+                                             const juce::MemoryBlock& state)
+{
+    return startInternal(&description, pluginSampleRate, blockSize, state);
+}
+
+juce::Result PluginBridgeClient::startInternal(const juce::PluginDescription* description,
+                                               double pluginSampleRate,
+                                               int blockSize,
+                                               const juce::MemoryBlock& state)
+{
     stop();
+
+    if (pluginSampleRate <= 0.0
+        || blockSize <= 0
+        || blockSize > PluginBridgeSharedState::maxBlockSize)
+        return juce::Result::fail("Plugin bridge received invalid audio settings.");
 
     if (const auto result = createSharedFile(); result.failed())
         return result;
@@ -31,6 +52,11 @@ juce::Result PluginBridgeClient::start()
     juce::MemoryBlock request;
     juce::MemoryOutputStream stream(request, true);
     stream.writeString(sharedFile.getFullPathName());
+    stream.writeString(description != nullptr ? description->createXml()->toString()
+                                              : juce::String());
+    stream.writeString(state.toBase64Encoding());
+    stream.writeDouble(pluginSampleRate);
+    stream.writeInt(blockSize);
     if (!sendMessageToWorker(request))
     {
         stop();

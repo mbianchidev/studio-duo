@@ -298,6 +298,15 @@ juce::File PluginCatalog::dataDirectory() const
     return catalogDirectory;
 }
 
+std::optional<juce::PluginDescription> PluginCatalog::descriptionForIdentifier(
+    const juce::String& identifier) const
+{
+    auto description = knownPlugins.getTypeForIdentifierString(identifier);
+    if (description == nullptr)
+        return std::nullopt;
+    return *description;
+}
+
 void PluginCatalog::run()
 {
     const auto force = forceNextScan.exchange(false, std::memory_order_acq_rel);

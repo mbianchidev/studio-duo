@@ -39,6 +39,8 @@ public:
     [[nodiscard]] std::uint64_t revision() const noexcept;
     [[nodiscard]] juce::StringArray availableFormats() const;
     [[nodiscard]] juce::File dataDirectory() const;
+    [[nodiscard]] std::optional<juce::PluginDescription> descriptionForIdentifier(
+        const juce::String& identifier) const;
 
     static bool matchesQuery(const PluginCatalogEntry& entry, const juce::String& query)
     {
