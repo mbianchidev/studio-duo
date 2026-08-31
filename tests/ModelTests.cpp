@@ -106,6 +106,25 @@ void commandHistory()
     expect(history.redo(project, error), error.toRawUTF8());
     expect(project.findTrack(extraTrackId) != nullptr, "Redo restores the added track.");
 
+    expect(history.perform(std::make_unique<studio::RenameTrackCommand>(extraTrackId,
+                                                                        "Lead Guitar"),
+                           project,
+                           error),
+           error.toRawUTF8());
+    expect(project.findTrack(extraTrackId)->name == "Lead Guitar",
+           "Rename track command updates the track label.");
+    expect(history.undo(project), "Track rename can be undone.");
+    expect(project.findTrack(extraTrackId)->name == "Added Track",
+           "Undo restores the previous track label.");
+    expect(history.redo(project, error), error.toRawUTF8());
+    expect(project.findTrack(extraTrackId)->name == "Lead Guitar",
+           "Redo restores the edited track label.");
+    error.clear();
+    expect(!history.perform(std::make_unique<studio::RenameTrackCommand>(extraTrackId, "   "),
+                            project,
+                            error),
+           "Track names cannot be empty.");
+
     studio::Track versionTrack;
     versionTrack.name = "v1";
     versionTrack.parentTrackId = extraTrackId;

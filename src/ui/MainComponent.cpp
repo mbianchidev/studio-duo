@@ -6,6 +6,50 @@
 
 namespace studio
 {
+namespace
+{
+class TrackColourSelector final : public juce::ColourSelector,
+                                  private juce::ChangeListener
+{
+public:
+    TrackColourSelector(juce::Colour initial,
+                        std::function<void(juce::Colour)> previewCallback,
+                        std::function<void(juce::Colour, juce::Colour)> commitCallback)
+        : juce::ColourSelector(showColourAtTop
+                                   | editableColour
+                                   | showSliders
+                                   | showColourspace),
+          initialColour(initial),
+          preview(std::move(previewCallback)),
+          commit(std::move(commitCallback))
+    {
+        setName("Track colour");
+        setSize(320, 400);
+        setCurrentColour(initialColour, juce::dontSendNotification);
+        addChangeListener(this);
+    }
+
+    ~TrackColourSelector() override
+    {
+        removeChangeListener(this);
+        const auto selected = getCurrentColour();
+        if (selected != initialColour && commit)
+            commit(initialColour, selected);
+    }
+
+private:
+    void changeListenerCallback(juce::ChangeBroadcaster*) override
+    {
+        if (preview)
+            preview(getCurrentColour());
+    }
+
+    juce::Colour initialColour;
+    std::function<void(juce::Colour)> preview;
+    std::function<void(juce::Colour, juce::Colour)> commit;
+};
+}
+
 class MainComponent::MixerPanel final : public juce::Component
 {
 public:
@@ -602,6 +646,31 @@ MainComponent::MainComponent()
 
     addAndMakeVisible(inspectorName);
     inspectorName.setFont(juce::Font(juce::FontOptions(17.0f, juce::Font::bold)));
+    inspectorName.setEditable(false, true, false);
+    inspectorName.setTooltip("Double-click to rename the selected audio track");
+    inspectorName.onTextChange = [this]
+    {
+        if (updatingTrackName || selectedClipId.isNotEmpty())
+            return;
+
+        const auto* track = project.findTrack(selectedTrackId);
+        if (track == nullptr || track->type != TrackType::audio)
+            return;
+
+        const auto replacement = inspectorName.getText().trim();
+        if (replacement.isEmpty())
+        {
+            updatingTrackName = true;
+            inspectorName.setText(track->name, juce::dontSendNotification);
+            updatingTrackName = false;
+            setStatus("A track name cannot be empty.", true);
+            return;
+        }
+        if (replacement == track->name)
+            return;
+
+        perform(std::make_unique<RenameTrackCommand>(track->id, replacement));
+    };
     addAndMakeVisible(inspectorDetails);
     inspectorDetails.setColour(juce::Label::textColourId, juce::Colour(StudioColours::secondaryText));
 
@@ -2007,7 +2076,11 @@ void MainComponent::updateInspector()
 
     if (track == nullptr)
     {
+        updatingTrackName = true;
         inspectorName.setText("No selection", juce::dontSendNotification);
+        updatingTrackName = false;
+        inspectorName.setEditable(false, false, false);
+        inspectorName.setTooltip({});
         inspectorDetails.setText({}, juce::dontSendNotification);
         volumeSlider.setEnabled(false);
         panSlider.setEnabled(false);
@@ -2025,7 +2098,14 @@ void MainComponent::updateInspector()
         return;
     }
 
+    const auto canRenameTrack = clip == nullptr && track->type == TrackType::audio;
+    updatingTrackName = true;
     inspectorName.setText(clip != nullptr ? clip->name : track->name, juce::dontSendNotification);
+    updatingTrackName = false;
+    inspectorName.setEditable(false, canRenameTrack, false);
+    inspectorName.setTooltip(canRenameTrack
+                                 ? "Double-click to rename this audio track"
+                                 : juce::String());
     inspectorDetails.setText(clip != nullptr
                                  ? juce::String(clip->durationSeconds, 2)
                                      + " s  |  "
@@ -2055,6 +2135,13 @@ void MainComponent::updateInspector()
     armButton.setColour(juce::TextButton::buttonColourId,
                         juce::Colour(track->armed ? StudioColours::orange : StudioColours::raised));
     armButton.setButtonText(track->armed ? "ARMED" : "ARM");
+    const auto colourButtonBackground = track->type == TrackType::audio
+        ? track->colour
+        : juce::Colour(StudioColours::raised);
+    trackColourButton.setColour(juce::TextButton::buttonColourId,
+                                colourButtonBackground);
+    trackColourButton.setColour(juce::TextButton::textColourOffId,
+                                colourButtonBackground.contrasting());
     stereoInputButton.setToggleState(track->stereoInput, juce::dontSendNotification);
     monitorButton.setToggleState(track->inputMonitoring, juce::dontSendNotification);
     monitorButton.setButtonText(track->inputMonitoring ? "MONITOR ON" : "MONITOR");
@@ -2136,7 +2223,7 @@ void MainComponent::showTrackColourMenu()
         item.action = [this, trackId = track->id, colour = choice.colour]
         {
             const auto* current = project.findTrack(trackId);
-            if (current == nullptr)
+            if (current == nullptr || current->colour == colour)
                 return;
 
             const auto before = TrackMixState::fromTrack(*current);
@@ -2146,6 +2233,56 @@ void MainComponent::showTrackColourMenu()
         };
         menu.addItem(std::move(item));
     }
+
+    menu.addSeparator();
+    juce::PopupMenu::Item customItem("Custom colour...");
+    customItem.action = [safe = juce::Component::SafePointer<MainComponent>(this),
+                         trackId = track->id,
+                         initialColour = track->colour]
+    {
+        if (safe == nullptr)
+            return;
+
+        auto selector = std::make_unique<TrackColourSelector>(
+            initialColour,
+            [safe, trackId](juce::Colour previewColour)
+            {
+                if (safe == nullptr)
+                    return;
+                auto* previewTrack = safe->project.findTrack(trackId);
+                if (previewTrack == nullptr)
+                    return;
+
+                previewTrack->colour = previewColour;
+                safe->timeline.repaint();
+                safe->mixer->repaint();
+                if (safe->selectedTrackId == trackId)
+                {
+                    safe->trackColourButton.setColour(juce::TextButton::buttonColourId,
+                                                      previewColour);
+                    safe->trackColourButton.setColour(juce::TextButton::textColourOffId,
+                                                      previewColour.contrasting());
+                }
+            },
+            [safe, trackId](juce::Colour initial, juce::Colour selected)
+            {
+                if (safe == nullptr)
+                    return;
+                const auto* current = safe->project.findTrack(trackId);
+                if (current == nullptr)
+                    return;
+
+                auto before = TrackMixState::fromTrack(*current);
+                before.colour = initial;
+                auto after = before;
+                after.colour = selected;
+                safe->perform(std::make_unique<SetTrackMixCommand>(trackId, before, after));
+            });
+        juce::CallOutBox::launchAsynchronously(std::move(selector),
+                                               safe->trackColourButton.getScreenBounds(),
+                                               nullptr);
+    };
+    menu.addItem(std::move(customItem));
 
     menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(trackColourButton));
 }

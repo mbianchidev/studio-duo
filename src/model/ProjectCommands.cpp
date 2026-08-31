@@ -120,6 +120,47 @@ void AddTrackCommand::undo(Project& project)
     }), project.tracks.end());
 }
 
+RenameTrackCommand::RenameTrackCommand(juce::String trackToRename,
+                                       juce::String replacementName)
+    : trackId(std::move(trackToRename)),
+      newName(std::move(replacementName).trim())
+{
+}
+
+juce::String RenameTrackCommand::name() const
+{
+    return "Rename track";
+}
+
+bool RenameTrackCommand::perform(Project& project, juce::String& error)
+{
+    auto* track = project.findTrack(trackId);
+    if (track == nullptr)
+    {
+        error = "The track to rename no longer exists.";
+        return false;
+    }
+    if (newName.isEmpty())
+    {
+        error = "A track name cannot be empty.";
+        return false;
+    }
+
+    if (!capturedOriginal)
+    {
+        oldName = track->name;
+        capturedOriginal = true;
+    }
+    track->name = newName;
+    return true;
+}
+
+void RenameTrackCommand::undo(Project& project)
+{
+    if (auto* track = project.findTrack(trackId))
+        track->name = oldName;
+}
+
 AddClipCommand::AddClipCommand(juce::String destinationTrackId, AudioClip clipToAdd)
     : trackId(std::move(destinationTrackId)),
       clip(std::move(clipToAdd))

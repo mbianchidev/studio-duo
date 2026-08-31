@@ -49,6 +49,22 @@ private:
     std::size_t insertionIndex = 0;
 };
 
+class RenameTrackCommand final : public ProjectCommand
+{
+public:
+    RenameTrackCommand(juce::String trackToRename, juce::String replacementName);
+
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    juce::String trackId;
+    juce::String newName;
+    juce::String oldName;
+    bool capturedOriginal = false;
+};
+
 class AddClipCommand final : public ProjectCommand
 {
 public:

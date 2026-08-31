@@ -100,6 +100,7 @@ private:
     bool recordingFinalizationInProgress = false;
     bool playAfterRuntimeTransition = false;
     bool updatingInputControls = false;
+    bool updatingTrackName = false;
     juce::String inputConfigurationSignature;
     std::uint64_t lastRuntimeCatalogRevision = 0;
 

@@ -106,8 +106,10 @@ The track inspector selects the hardware input, chooses mono or adjacent-channel
 stereo capture, and enables software monitoring. Monitoring is off by default
 to avoid accidental feedback. Gain defaults to `0.0 dB`, accepts signed decimal
 entry, and uses a rotary control. Pan defaults to `Center` and displays `% L` or
-`% R`. **COLOR** opens an undoable track palette. Every lower mixer strip also
-has a draggable L/R pan knob; double-click it to return to center.
+`% R`. Double-click the inspector track name to rename it. **COLOR** offers
+quick palette choices plus an HSV/RGB custom picker; name and color changes are
+persistent and undoable. Every lower mixer strip also has a draggable L/R pan
+knob; double-click it to return to center.
 
 Selected clips show edge handles. Drag the body to move a clip, the left edge
 to change its timeline start and source offset, or the right edge to shorten or

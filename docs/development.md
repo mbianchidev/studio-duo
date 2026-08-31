@@ -168,6 +168,10 @@ selected audio track supplies the single fallback target.
 Track creation, duplication, and deletion are typed commands. Duplication
 regenerates the track, clip, and insert IDs so later edits never alias the
 source track. The master track is protected from duplicate and delete actions.
+Track labels are edited through a typed rename command that rejects blank names
+and participates in undo/redo. Track colors use the existing mix-state command;
+the inspector provides palette shortcuts and a full HSV/RGB selector with live
+preview before one final undoable color change is recorded.
 
 Recording creates flat-model child tracks with a stable `parentTrackId` and
 monotonic version number. They remain ordinary audio tracks for commands and
