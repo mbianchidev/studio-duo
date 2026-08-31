@@ -153,6 +153,8 @@ struct TrackMixState
     int inputChannel = 0;
     bool stereoInput = false;
     bool inputMonitoring = false;
+    bool versionsCollapsed = false;
+    juce::Colour colour { 0xffdd5b3f };
 
     static TrackMixState fromTrack(const Track& track);
 };

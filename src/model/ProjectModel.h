@@ -66,6 +66,9 @@ struct Track
 {
     juce::String id { juce::Uuid().toString() };
     juce::String name { "Audio" };
+    juce::String parentTrackId;
+    int versionNumber = 0;
+    bool versionsCollapsed = false;
     TrackType type = TrackType::audio;
     float volumeDecibels = 0.0f;
     float pan = 0.0f;

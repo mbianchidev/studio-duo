@@ -31,6 +31,7 @@ public:
     std::function<void(const juce::String&)> onTrackMute;
     std::function<void(const juce::String&)> onTrackSolo;
     std::function<void(const juce::String&)> onTrackArm;
+    std::function<void(const juce::String&)> onToggleTrackVersions;
     std::function<void()> onAddTrack;
     std::function<void(const juce::String&, const juce::String&)> onClipSelected;
     std::function<void(const juce::String&, const juce::String&, double)> onClipMoved;
@@ -66,6 +67,7 @@ private:
     };
 
     [[nodiscard]] std::vector<Hit> clipHits() const;
+    [[nodiscard]] std::vector<const Track*> visibleTracks() const;
     [[nodiscard]] int trackIndexAt(float y) const noexcept;
     [[nodiscard]] float trackY(const juce::String& trackId) const noexcept;
     [[nodiscard]] double xToSeconds(float x) const noexcept;

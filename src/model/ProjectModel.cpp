@@ -162,6 +162,9 @@ juce::var Track::toVar() const
     auto object = std::make_unique<juce::DynamicObject>();
     object->setProperty("id", id);
     object->setProperty("name", name);
+    object->setProperty("parentTrackId", parentTrackId);
+    object->setProperty("versionNumber", versionNumber);
+    object->setProperty("versionsCollapsed", versionsCollapsed);
     object->setProperty("type", trackTypeToString(type));
     object->setProperty("volumeDecibels", volumeDecibels);
     object->setProperty("pan", pan);
@@ -197,6 +200,9 @@ std::optional<Track> Track::fromVar(const juce::var& value, juce::String& error)
     Track track;
     track.id = object->getProperty("id").toString();
     track.name = object->getProperty("name").toString();
+    track.parentTrackId = object->getProperty("parentTrackId").toString();
+    track.versionNumber = juce::jmax(0, integerProperty(*object, "versionNumber", 0));
+    track.versionsCollapsed = booleanProperty(*object, "versionsCollapsed", false);
 
     const auto type = trackTypeFromString(object->getProperty("type").toString());
     if (!type.has_value())

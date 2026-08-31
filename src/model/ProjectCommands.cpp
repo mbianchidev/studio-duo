@@ -79,6 +79,29 @@ bool AddTrackCommand::perform(Project& project, juce::String& error)
         return false;
     }
 
+    if (track.parentTrackId.isNotEmpty())
+    {
+        const auto parent = std::find_if(project.tracks.begin(),
+                                         project.tracks.end(),
+                                         [this](const auto& candidate)
+        {
+            return candidate.id == track.parentTrackId;
+        });
+        if (parent == project.tracks.end() || parent->type != TrackType::audio)
+        {
+            error = "A version lane requires an existing audio parent track.";
+            return false;
+        }
+
+        auto insertion = parent + 1;
+        while (insertion != project.tracks.end()
+               && insertion->parentTrackId == track.parentTrackId)
+            ++insertion;
+        insertionIndex = static_cast<std::size_t>(std::distance(project.tracks.begin(), insertion));
+        project.tracks.insert(insertion, track);
+        return true;
+    }
+
     const auto master = std::find_if(project.tracks.begin(), project.tracks.end(), [](const auto& candidate)
     {
         return candidate.type == TrackType::master;
@@ -420,7 +443,9 @@ TrackMixState TrackMixState::fromTrack(const Track& track)
         track.armed,
         track.inputChannel,
         track.stereoInput,
-        track.inputMonitoring
+        track.inputMonitoring,
+        track.versionsCollapsed,
+        track.colour
     };
 }
 
@@ -467,6 +492,8 @@ void SetTrackMixCommand::apply(Track& track, const TrackMixState& state)
     track.inputChannel = state.inputChannel;
     track.stereoInput = state.stereoInput;
     track.inputMonitoring = state.inputMonitoring;
+    track.versionsCollapsed = state.versionsCollapsed;
+    track.colour = state.colour;
 }
 
 AddPluginInsertCommand::AddPluginInsertCommand(juce::String destinationTrackId,

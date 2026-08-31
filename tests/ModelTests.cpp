@@ -86,6 +86,25 @@ void commandHistory()
     expect(history.redo(project, error), error.toRawUTF8());
     expect(project.findTrack(extraTrackId) != nullptr, "Redo restores the added track.");
 
+    studio::Track versionTrack;
+    versionTrack.name = "v1";
+    versionTrack.parentTrackId = extraTrackId;
+    versionTrack.versionNumber = 1;
+    const auto versionTrackId = versionTrack.id;
+    expect(history.perform(std::make_unique<studio::AddTrackCommand>(versionTrack),
+                           project,
+                           error),
+           error.toRawUTF8());
+    const auto parentIterator = std::find_if(project.tracks.cbegin(),
+                                             project.tracks.cend(),
+                                             [&extraTrackId](const auto& track)
+    {
+        return track.id == extraTrackId;
+    });
+    expect(parentIterator + 1 != project.tracks.cend()
+               && (parentIterator + 1)->id == versionTrackId,
+           "Version lanes are inserted directly below their parent.");
+
     auto duplicate = std::make_unique<studio::DuplicateTrackCommand>(extraTrackId);
     auto* duplicatePointer = duplicate.get();
     expect(history.perform(std::move(duplicate), project, error), error.toRawUTF8());

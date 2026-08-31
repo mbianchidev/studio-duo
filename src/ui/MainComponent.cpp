@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <numeric>
 
 namespace studio
 {
@@ -41,6 +42,9 @@ public:
 
         for (const auto& track : project->tracks)
         {
+            if (track.parentTrackId.isNotEmpty())
+                continue;
+
             const juce::Rectangle<int> strip(x, 34, stripWidth, getHeight() - 44);
             const auto selected = track.id == selectedTrack;
             graphics.setColour(juce::Colour(selected ? 0xff292e32 : StudioColours::raised));
@@ -93,6 +97,19 @@ public:
                               18,
                               juce::Justification::centred);
 
+            const auto panText = std::abs(track.pan) < 0.005f
+                ? juce::String("C")
+                : juce::String(static_cast<int>(std::round(std::abs(track.pan) * 100.0f)))
+                    + (track.pan < 0.0f ? "% L" : "% R");
+            graphics.setColour(juce::Colour(StudioColours::secondaryText));
+            graphics.setFont(juce::Font(juce::FontOptions(9.0f)));
+            graphics.drawText(juce::String(track.volumeDecibels, 1) + " dB  |  " + panText,
+                              strip.getX() + 6,
+                              strip.getBottom() - 44,
+                              strip.getWidth() - 12,
+                              16,
+                              juce::Justification::centred);
+
             x += stripWidth + gap;
         }
 
@@ -128,8 +145,13 @@ public:
         constexpr auto stripWidth = 112;
         constexpr auto gap = 8;
         const auto index = static_cast<int>((event.position.x - 14.0f) / (stripWidth + gap));
-        if (index >= 0 && index < static_cast<int>(project->tracks.size()) && onTrackSelected)
-            onTrackSelected(project->tracks[static_cast<std::size_t>(index)].id);
+        std::vector<const Track*> mixerTracks;
+        for (const auto& track : project->tracks)
+            if (track.parentTrackId.isEmpty())
+                mixerTracks.push_back(&track);
+
+        if (index >= 0 && index < static_cast<int>(mixerTracks.size()) && onTrackSelected)
+            onTrackSelected(mixerTracks[static_cast<std::size_t>(index)]->id);
     }
 
 private:
@@ -301,6 +323,7 @@ MainComponent::MainComponent()
     configureButton(muteButton, "Mute selected track");
     configureButton(soloButton, "Solo selected track");
     configureButton(armButton, "Arm selected track for recording");
+    configureButton(trackColourButton, "Change selected track colour");
     configureButton(stereoInputButton, "Capture this input and the following input as stereo");
     configureButton(monitorButton, "Monitor the selected track input through Studio Duo");
     configureButton(splitClipButton, "Split the selected clip at the playhead");
@@ -337,6 +360,7 @@ MainComponent::MainComponent()
     {
         changeSelectedTrackState([](auto& state) { state.armed = !state.armed; });
     };
+    trackColourButton.onClick = [this] { showTrackColourMenu(); };
     stereoInputButton.onClick = [this]
     {
         changeSelectedTrackState([](auto& state) { state.stereoInput = !state.stereoInput; });
@@ -436,8 +460,28 @@ MainComponent::MainComponent()
         slider.addKeyListener(this);
     };
     configureInspectorSlider(volumeSlider, -60.0, 12.0, 0.1);
+    volumeSlider.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
+    volumeSlider.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 76, 24);
+    volumeSlider.setDoubleClickReturnValue(true, 0.0);
+    volumeSlider.setNumDecimalPlacesToDisplay(1);
     volumeSlider.setTextValueSuffix(" dB");
     configureInspectorSlider(panSlider, -1.0, 1.0, 0.01);
+    panSlider.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
+    panSlider.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 76, 24);
+    panSlider.setDoubleClickReturnValue(true, 0.0);
+    panSlider.textFromValueFunction = [](double value)
+    {
+        if (std::abs(value) < 0.005)
+            return juce::String("Center");
+        return juce::String(static_cast<int>(std::round(std::abs(value) * 100.0)))
+            + (value < 0.0 ? "% L" : "% R");
+    };
+    panSlider.valueFromTextFunction = [](const juce::String& text)
+    {
+        const auto value = juce::jlimit(0.0, 100.0, static_cast<double>(text.getFloatValue())) / 100.0;
+        return text.containsIgnoreCase("L") ? -value
+                                            : text.containsIgnoreCase("R") ? value : 0.0;
+    };
 
     volumeSlider.onDragStart = [this]
     {
@@ -514,6 +558,14 @@ MainComponent::MainComponent()
     {
         selectTrack(trackId);
         changeSelectedTrackState([](auto& state) { state.armed = !state.armed; });
+    };
+    timeline.onToggleTrackVersions = [this](const auto& trackId)
+    {
+        selectTrack(trackId);
+        changeSelectedTrackState([](auto& state)
+        {
+            state.versionsCollapsed = !state.versionsCollapsed;
+        });
     };
     timeline.onAddTrack = [this] { addAudioTrack(); };
     timeline.onClipSelected = [this](const auto& trackId, const auto& clipId)
@@ -729,16 +781,18 @@ void MainComponent::resized()
     stereoInputButton.setBounds(inputToggles.removeFromLeft(94).reduced(2));
     monitorButton.setBounds(inputToggles.removeFromLeft(100).reduced(2));
     inspector.removeFromTop(12);
-    volumeLabel.setBounds(inspector.removeFromTop(20));
-    volumeSlider.setBounds(inspector.removeFromTop(36));
-    inspector.removeFromTop(12);
-    panLabel.setBounds(inspector.removeFromTop(20));
-    panSlider.setBounds(inspector.removeFromTop(36));
-    inspector.removeFromTop(20);
+    auto mixLabels = inspector.removeFromTop(20);
+    volumeLabel.setBounds(mixLabels.removeFromLeft(109));
+    panLabel.setBounds(mixLabels);
+    auto mixControls = inspector.removeFromTop(96);
+    volumeSlider.setBounds(mixControls.removeFromLeft(109).reduced(5, 0));
+    panSlider.setBounds(mixControls.reduced(5, 0));
+    inspector.removeFromTop(14);
     auto toggles = inspector.removeFromTop(34);
-    muteButton.setBounds(toggles.removeFromLeft(68).reduced(2));
-    soloButton.setBounds(toggles.removeFromLeft(68).reduced(2));
-    armButton.setBounds(toggles.removeFromLeft(68).reduced(2));
+    muteButton.setBounds(toggles.removeFromLeft(52).reduced(2));
+    soloButton.setBounds(toggles.removeFromLeft(52).reduced(2));
+    armButton.setBounds(toggles.removeFromLeft(52).reduced(2));
+    trackColourButton.setBounds(toggles.removeFromLeft(52).reduced(2));
     inspector.removeFromTop(20);
     insertPanel->setBounds(inspector);
 
@@ -747,6 +801,14 @@ void MainComponent::resized()
 
 void MainComponent::timerCallback()
 {
+    if (activeRecordingTrackId.isNotEmpty()
+        && !audioEngine.isPlaying()
+        && !recordingFinalizationInProgress)
+    {
+        finishRecording();
+        return;
+    }
+
     const auto position = audioEngine.positionSeconds();
     timeline.setPlayheadSeconds(position);
     positionLabel.setText(positionText(position,
@@ -1122,6 +1184,12 @@ void MainComponent::exportMixTo(const juce::File& destination)
 
 void MainComponent::togglePlayback()
 {
+    if (activeRecordingTrackId.isNotEmpty())
+    {
+        stopTransportAndRecording();
+        return;
+    }
+
     audioEngine.isPlaying() ? audioEngine.pause() : audioEngine.play();
 }
 
@@ -1139,19 +1207,7 @@ void MainComponent::toggleRecording()
         return;
     }
 
-    auto* track = recordingTrack();
-    if (track == nullptr)
-    {
-        const auto* selected = project.findTrack(selectedTrackId);
-        if (selected != nullptr && selected->type == TrackType::audio)
-        {
-            const auto before = TrackMixState::fromTrack(*selected);
-            auto after = before;
-            after.armed = true;
-            if (perform(std::make_unique<SetTrackMixCommand>(selected->id, before, after)))
-                track = project.findTrack(selectedTrackId);
-        }
-    }
+    auto* track = createRecordingVersionTrack();
 
     if (track == nullptr)
     {
@@ -1174,6 +1230,8 @@ void MainComponent::toggleRecording()
                                                    track->stereoInput ? 2 : 1);
     if (result.failed())
     {
+        commandStack.undo(project);
+        projectChanged();
         showError("Recording unavailable", result.getErrorMessage());
         return;
     }
@@ -1481,6 +1539,7 @@ void MainComponent::updateInspector()
         muteButton.setEnabled(false);
         soloButton.setEnabled(false);
         armButton.setEnabled(false);
+        trackColourButton.setEnabled(false);
         splitClipButton.setEnabled(false);
         deleteClipButton.setEnabled(false);
         trimClipStartButton.setEnabled(false);
@@ -1503,6 +1562,7 @@ void MainComponent::updateInspector()
     muteButton.setEnabled(track->type != TrackType::master || !track->muted);
     soloButton.setEnabled(track->type != TrackType::master);
     armButton.setEnabled(track->type == TrackType::audio);
+    trackColourButton.setEnabled(track->type == TrackType::audio);
     splitClipButton.setEnabled(clip != nullptr);
     deleteClipButton.setEnabled(clip != nullptr);
     trimClipStartButton.setEnabled(clip != nullptr);
@@ -1568,6 +1628,51 @@ void MainComponent::refreshInputControls()
                                        juce::dontSendNotification);
     updatingInputControls = false;
     updateInspector();
+}
+
+void MainComponent::showTrackColourMenu()
+{
+    const auto* track = project.findTrack(selectedTrackId);
+    if (track == nullptr || track->type != TrackType::audio)
+        return;
+
+    struct ColourChoice
+    {
+        const char* name;
+        juce::Colour colour;
+    };
+    const std::array choices {
+        ColourChoice { "Ember", juce::Colour(0xffdd5b3f) },
+        ColourChoice { "Amber", juce::Colour(0xffd99a42) },
+        ColourChoice { "Mint", juce::Colour(0xff78c6a3) },
+        ColourChoice { "Steel", juce::Colour(0xff7da9d9) },
+        ColourChoice { "Violet", juce::Colour(0xffb47ac4) },
+        ColourChoice { "Rose", juce::Colour(0xffd9799b) },
+        ColourChoice { "Cyan", juce::Colour(0xff67c7d4) },
+        ColourChoice { "Slate", juce::Colour(0xff8f969c) }
+    };
+
+    juce::PopupMenu menu;
+    for (const auto& choice : choices)
+    {
+        juce::PopupMenu::Item item(choice.name);
+        item.colour = choice.colour;
+        item.isTicked = track->colour == choice.colour;
+        item.action = [this, trackId = track->id, colour = choice.colour]
+        {
+            const auto* current = project.findTrack(trackId);
+            if (current == nullptr)
+                return;
+
+            const auto before = TrackMixState::fromTrack(*current);
+            auto after = before;
+            after.colour = colour;
+            perform(std::make_unique<SetTrackMixCommand>(trackId, before, after));
+        };
+        menu.addItem(std::move(item));
+    }
+
+    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(trackColourButton));
 }
 
 void MainComponent::updateInputMonitoring()
@@ -1664,6 +1769,55 @@ void MainComponent::changeSelectedTrackState(const std::function<void(TrackMixSt
     auto after = before;
     change(after);
     perform(std::make_unique<SetTrackMixCommand>(track->id, before, after));
+}
+
+Track* MainComponent::createRecordingVersionTrack()
+{
+    auto* source = project.findTrack(selectedTrackId);
+    if (source == nullptr || source->type != TrackType::audio)
+        source = recordingTrack();
+    if (source == nullptr)
+        return nullptr;
+
+    auto* parent = source->parentTrackId.isNotEmpty()
+        ? project.findTrack(source->parentTrackId)
+        : source;
+    if (parent == nullptr || parent->type != TrackType::audio)
+        return nullptr;
+
+    const auto versionNumber = std::accumulate(
+        project.tracks.cbegin(),
+        project.tracks.cend(),
+        0,
+        [parent](int maximum, const auto& track)
+        {
+            return track.parentTrackId == parent->id
+                ? std::max(maximum, track.versionNumber)
+                : maximum;
+        })
+        + 1;
+
+    parent->versionsCollapsed = false;
+
+    Track version;
+    version.name = "v" + juce::String(versionNumber);
+    version.parentTrackId = parent->id;
+    version.versionNumber = versionNumber;
+    version.type = TrackType::audio;
+    version.volumeDecibels = 0.0f;
+    version.pan = 0.0f;
+    version.armed = true;
+    version.inputChannel = parent->inputChannel;
+    version.stereoInput = parent->stereoInput;
+    version.inputMonitoring = parent->inputMonitoring;
+    version.colour = parent->colour;
+
+    const auto versionId = version.id;
+    if (!perform(std::make_unique<AddTrackCommand>(version)))
+        return nullptr;
+
+    selectTrack(versionId);
+    return project.findTrack(versionId);
 }
 
 Track* MainComponent::recordingTrack()

@@ -81,7 +81,7 @@ int TimelineComponent::preferredWidth(int minimumWidth) const
 
 int TimelineComponent::preferredHeight(int minimumHeight) const
 {
-    const auto trackCount = project != nullptr ? static_cast<int>(project->tracks.size()) : 0;
+    const auto trackCount = static_cast<int>(visibleTracks().size());
     return std::max(minimumHeight,
                     rulerHeight + trackCount * trackHeight + addTrackHeight);
 }
@@ -121,9 +121,10 @@ void TimelineComponent::paint(juce::Graphics& graphics)
         }
     }
 
-    for (std::size_t index = 0; index < project->tracks.size(); ++index)
+    const auto tracks = visibleTracks();
+    for (std::size_t index = 0; index < tracks.size(); ++index)
     {
-        const auto& track = project->tracks[index];
+        const auto& track = *tracks[index];
         const auto y = rulerHeight + static_cast<int>(index) * trackHeight;
         const auto selected = track.id == selectedTrackId;
 
@@ -135,14 +136,37 @@ void TimelineComponent::paint(juce::Graphics& graphics)
                                   static_cast<float>(y),
                                   static_cast<float>(y + trackHeight));
 
+        const auto childTrack = track.parentTrackId.isNotEmpty();
+        const auto children = static_cast<int>(std::count_if(project->tracks.cbegin(),
+                                                             project->tracks.cend(),
+                                                             [&track](const auto& candidate)
+        {
+            return candidate.parentTrackId == track.id;
+        }));
+        if (children > 0)
+        {
+            juce::Path disclosure;
+            if (track.versionsCollapsed)
+                disclosure.addTriangle(7.0f, static_cast<float>(y + 21),
+                                       7.0f, static_cast<float>(y + 31),
+                                       14.0f, static_cast<float>(y + 26));
+            else
+                disclosure.addTriangle(5.0f, static_cast<float>(y + 22),
+                                       15.0f, static_cast<float>(y + 22),
+                                       10.0f, static_cast<float>(y + 30));
+            graphics.setColour(juce::Colour(StudioColours::secondaryText));
+            graphics.fillPath(disclosure);
+        }
+
+        const auto indent = childTrack ? 16 : children > 0 ? 8 : 0;
         graphics.setColour(track.colour);
-        graphics.fillRect(12, y + 17, 4, 42);
+        graphics.fillRect(12 + indent, y + 17, 4, 42);
         graphics.setColour(juce::Colour(StudioColours::text));
         graphics.setFont(14.0f);
         graphics.drawText(track.name,
-                          26,
+                          26 + indent,
                           y + 12,
-                          trackHeaderWidth - 38,
+                          trackHeaderWidth - 38 - indent,
                           24,
                           juce::Justification::centredLeft);
 
@@ -180,9 +204,21 @@ void TimelineComponent::paint(juce::Graphics& graphics)
                           40,
                           24,
                           juce::Justification::centredRight);
+
+        if (children > 0)
+        {
+            graphics.setColour(juce::Colour(StudioColours::secondaryText));
+            graphics.setFont(juce::Font(juce::FontOptions(9.0f)));
+            graphics.drawText(juce::String(children) + " TAKES",
+                              128,
+                              y + 12,
+                              40,
+                              24,
+                              juce::Justification::centredRight);
+        }
     }
 
-    const auto addTrackY = rulerHeight + static_cast<int>(project->tracks.size()) * trackHeight;
+    const auto addTrackY = rulerHeight + static_cast<int>(tracks.size()) * trackHeight;
     graphics.setColour(juce::Colour(StudioColours::panel));
     graphics.fillRect(0, addTrackY, trackHeaderWidth, addTrackHeight);
     graphics.setColour(juce::Colour(StudioColours::border));
@@ -278,15 +314,16 @@ void TimelineComponent::paint(juce::Graphics& graphics)
 
     if (recordingTrackId.isNotEmpty())
     {
-        const auto iterator = std::find_if(project->tracks.cbegin(),
-                                           project->tracks.cend(),
-                                           [this](const auto& track)
+        const auto visible = visibleTracks();
+        const auto iterator = std::find_if(visible.cbegin(),
+                                           visible.cend(),
+                                           [this](const auto* track)
         {
-            return track.id == recordingTrackId;
+            return track->id == recordingTrackId;
         });
-        if (iterator != project->tracks.cend())
+        if (iterator != visible.cend())
         {
-            const auto index = static_cast<int>(std::distance(project->tracks.cbegin(), iterator));
+            const auto index = static_cast<int>(std::distance(visible.cbegin(), iterator));
             const auto y = rulerHeight + index * trackHeight + 12;
             const juce::Rectangle<float> preview(
                 secondsToX(recordingStartSeconds),
@@ -357,7 +394,8 @@ void TimelineComponent::mouseDown(const juce::MouseEvent& event)
 
     if (project != nullptr && event.position.x < trackHeaderWidth)
     {
-        const auto addTrackY = rulerHeight + static_cast<int>(project->tracks.size()) * trackHeight;
+        const auto tracks = visibleTracks();
+        const auto addTrackY = rulerHeight + static_cast<int>(tracks.size()) * trackHeight;
         if (event.position.y >= static_cast<float>(addTrackY)
             && event.position.y < static_cast<float>(addTrackY + addTrackHeight))
         {
@@ -367,13 +405,24 @@ void TimelineComponent::mouseDown(const juce::MouseEvent& event)
         }
 
         const auto trackIndex = trackIndexAt(event.position.y);
-        if (trackIndex >= 0 && trackIndex < static_cast<int>(project->tracks.size()))
+        if (trackIndex >= 0 && trackIndex < static_cast<int>(tracks.size()))
         {
-            const auto& track = project->tracks[static_cast<std::size_t>(trackIndex)];
+            const auto& track = *tracks[static_cast<std::size_t>(trackIndex)];
             const auto localY = static_cast<int>(event.position.y)
                 - rulerHeight
                 - trackIndex * trackHeight;
             const auto x = static_cast<int>(event.position.x);
+            const auto hasVersions = std::any_of(project->tracks.cbegin(),
+                                                 project->tracks.cend(),
+                                                 [&track](const auto& candidate)
+            {
+                return candidate.parentTrackId == track.id;
+            });
+            if (x < 22 && hasVersions && onToggleTrackVersions)
+            {
+                onToggleTrackVersions(track.id);
+                return;
+            }
             if (localY >= 44 && localY <= 76)
             {
                 if (x >= 22 && x <= 58 && onTrackMute)
@@ -431,9 +480,10 @@ void TimelineComponent::mouseDown(const juce::MouseEvent& event)
     }
 
     const auto trackIndex = trackIndexAt(event.position.y);
-    if (project != nullptr && trackIndex >= 0 && trackIndex < static_cast<int>(project->tracks.size()))
+    const auto tracks = visibleTracks();
+    if (trackIndex >= 0 && trackIndex < static_cast<int>(tracks.size()))
     {
-        const auto clickedTrackId = project->tracks[static_cast<std::size_t>(trackIndex)].id;
+        const auto clickedTrackId = tracks[static_cast<std::size_t>(trackIndex)]->id;
         if (clickedTrackId != selectedTrackId)
         {
             selectedTrackId = clickedTrackId;
@@ -465,9 +515,10 @@ void TimelineComponent::mouseDrag(const juce::MouseEvent& event)
         const auto targetTrackIndex = trackIndexAt(event.position.y);
         if (project != nullptr
             && targetTrackIndex >= 0
-            && targetTrackIndex < static_cast<int>(project->tracks.size()))
+            && targetTrackIndex < static_cast<int>(visibleTracks().size()))
         {
-            const auto& targetTrack = project->tracks[static_cast<std::size_t>(targetTrackIndex)];
+            const auto tracks = visibleTracks();
+            const auto& targetTrack = *tracks[static_cast<std::size_t>(targetTrackIndex)];
             if (targetTrack.type == TrackType::audio)
                 dragPreviewTrackId = targetTrack.id;
         }
@@ -569,9 +620,10 @@ void TimelineComponent::showContextMenu(const juce::MouseEvent& event)
     if (!hitClip)
     {
         const auto trackIndex = trackIndexAt(event.position.y);
-        if (trackIndex >= 0 && trackIndex < static_cast<int>(project->tracks.size()))
+        const auto tracks = visibleTracks();
+        if (trackIndex >= 0 && trackIndex < static_cast<int>(tracks.size()))
         {
-            const auto& track = project->tracks[static_cast<std::size_t>(trackIndex)];
+            const auto& track = *tracks[static_cast<std::size_t>(trackIndex)];
             if (track.id != selectedTrackId)
             {
                 selectedTrackId = track.id;
@@ -642,9 +694,10 @@ std::vector<TimelineComponent::Hit> TimelineComponent::clipHits() const
     if (project == nullptr)
         return hits;
 
-    for (std::size_t trackIndex = 0; trackIndex < project->tracks.size(); ++trackIndex)
+    const auto tracks = visibleTracks();
+    for (std::size_t trackIndex = 0; trackIndex < tracks.size(); ++trackIndex)
     {
-        const auto& track = project->tracks[trackIndex];
+        const auto& track = *tracks[trackIndex];
         const auto y = rulerHeight + static_cast<int>(trackIndex) * trackHeight + 12;
         for (const auto& clip : track.clips)
         {
@@ -657,6 +710,26 @@ std::vector<TimelineComponent::Hit> TimelineComponent::clipHits() const
     return hits;
 }
 
+std::vector<const Track*> TimelineComponent::visibleTracks() const
+{
+    std::vector<const Track*> result;
+    if (project == nullptr)
+        return result;
+
+    result.reserve(project->tracks.size());
+    for (const auto& track : project->tracks)
+    {
+        if (track.parentTrackId.isNotEmpty())
+        {
+            const auto* parent = project->findTrack(track.parentTrackId);
+            if (parent != nullptr && parent->versionsCollapsed)
+                continue;
+        }
+        result.push_back(&track);
+    }
+    return result;
+}
+
 int TimelineComponent::trackIndexAt(float y) const noexcept
 {
     return y < rulerHeight ? -1 : static_cast<int>((y - rulerHeight) / trackHeight);
@@ -667,16 +740,17 @@ float TimelineComponent::trackY(const juce::String& trackId) const noexcept
     if (project == nullptr)
         return static_cast<float>(rulerHeight);
 
-    const auto iterator = std::find_if(project->tracks.cbegin(),
-                                       project->tracks.cend(),
-                                       [&trackId](const auto& track)
+    const auto tracks = visibleTracks();
+    const auto iterator = std::find_if(tracks.cbegin(),
+                                       tracks.cend(),
+                                       [&trackId](const auto* track)
     {
-        return track.id == trackId;
+        return track->id == trackId;
     });
-    if (iterator == project->tracks.cend())
+    if (iterator == tracks.cend())
         return static_cast<float>(rulerHeight);
 
-    const auto index = static_cast<int>(std::distance(project->tracks.cbegin(), iterator));
+    const auto index = static_cast<int>(std::distance(tracks.cbegin(), iterator));
     return static_cast<float>(rulerHeight + index * trackHeight);
 }
 

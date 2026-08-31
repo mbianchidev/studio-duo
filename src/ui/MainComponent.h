@@ -64,11 +64,13 @@ private:
     void updateInspector();
     void refreshInputControls();
     void updateInputMonitoring();
+    void showTrackColourMenu();
     void updateTimelineSize();
     void zoomTimeline(double factor, bool reset = false);
     void projectChanged(bool writeRecovery = true, bool markDirty = true);
     bool perform(std::unique_ptr<ProjectCommand> command);
     void changeSelectedTrackState(const std::function<void(TrackMixState&)>& change);
+    Track* createRecordingVersionTrack();
     Track* recordingTrack();
     void setStatus(const juce::String& message, bool error = false);
     void showError(const juce::String& title, const juce::String& message);
@@ -126,6 +128,7 @@ private:
     juce::TextButton muteButton { "MUTE" };
     juce::TextButton soloButton { "SOLO" };
     juce::TextButton armButton { "ARM" };
+    juce::TextButton trackColourButton { "COLOR" };
     juce::TextButton splitClipButton { "SPLIT @ PLAYHEAD" };
     juce::TextButton deleteClipButton { "DELETE CLIP" };
     juce::TextButton trimClipStartButton { "TRIM LEFT [" };
