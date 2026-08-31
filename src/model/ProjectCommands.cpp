@@ -659,35 +659,64 @@ juce::String RemoveTrackCommand::name() const
 
 bool RemoveTrackCommand::perform(Project& project, juce::String& error)
 {
-    const auto iterator = std::find_if(project.tracks.begin(), project.tracks.end(), [this](const auto& candidate)
-    {
-        return candidate.id == trackId;
-    });
-    if (iterator == project.tracks.end())
-    {
-        error = "The track to remove no longer exists.";
-        return false;
-    }
-    if (iterator->type == TrackType::master)
-    {
-        error = "The master track cannot be removed.";
-        return false;
-    }
-
     if (!capturedOriginal)
     {
-        removedTrack = *iterator;
-        removalIndex = static_cast<std::size_t>(std::distance(project.tracks.begin(), iterator));
+        const auto iterator = std::find_if(project.tracks.begin(),
+                                           project.tracks.end(),
+                                           [this](const auto& candidate)
+        {
+            return candidate.id == trackId;
+        });
+        if (iterator == project.tracks.end())
+        {
+            error = "The track to remove no longer exists.";
+            return false;
+        }
+        if (iterator->type == TrackType::master)
+        {
+            error = "The master track cannot be removed.";
+            return false;
+        }
+
+        for (std::size_t index = 0; index < project.tracks.size(); ++index)
+        {
+            const auto& candidate = project.tracks[index];
+            if (candidate.id == trackId
+                || (iterator->parentTrackId.isEmpty()
+                    && candidate.parentTrackId == trackId))
+                removedTracks.emplace_back(index, candidate);
+        }
         capturedOriginal = true;
     }
-    project.tracks.erase(iterator);
+
+    const auto oldSize = project.tracks.size();
+    project.tracks.erase(std::remove_if(project.tracks.begin(),
+                                        project.tracks.end(),
+                                        [this](const auto& candidate)
+    {
+        return std::any_of(removedTracks.cbegin(),
+                           removedTracks.cend(),
+                           [&candidate](const auto& removed)
+        {
+            return removed.second.id == candidate.id;
+        });
+    }), project.tracks.end());
+
+    if (project.tracks.size() == oldSize)
+    {
+        error = "The track group to remove no longer exists.";
+        return false;
+    }
     return true;
 }
 
 void RemoveTrackCommand::undo(Project& project)
 {
-    const auto index = std::min(removalIndex, project.tracks.size());
-    project.tracks.insert(project.tracks.begin() + static_cast<std::ptrdiff_t>(index), removedTrack);
+    for (const auto& [originalIndex, track] : removedTracks)
+    {
+        const auto index = std::min(originalIndex, project.tracks.size());
+        project.tracks.insert(project.tracks.begin() + static_cast<std::ptrdiff_t>(index), track);
+    }
 }
 
 DuplicateTrackCommand::DuplicateTrackCommand(juce::String trackToDuplicate)

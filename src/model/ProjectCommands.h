@@ -3,6 +3,7 @@
 #include "ProjectModel.h"
 
 #include <memory>
+#include <utility>
 #include <vector>
 
 namespace studio
@@ -241,8 +242,7 @@ public:
 
 private:
     juce::String trackId;
-    Track removedTrack;
-    std::size_t removalIndex = 0;
+    std::vector<std::pair<std::size_t, Track>> removedTracks;
     bool capturedOriginal = false;
 };
 

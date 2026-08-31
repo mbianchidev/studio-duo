@@ -104,6 +104,17 @@ void commandHistory()
     expect(parentIterator + 1 != project.tracks.cend()
                && (parentIterator + 1)->id == versionTrackId,
            "Version lanes are inserted directly below their parent.");
+    expect(history.perform(std::make_unique<studio::RemoveTrackCommand>(extraTrackId),
+                           project,
+                           error),
+           error.toRawUTF8());
+    expect(project.findTrack(extraTrackId) == nullptr
+               && project.findTrack(versionTrackId) == nullptr,
+           "Removing a parent track removes its grouped versions.");
+    expect(history.undo(project), "Removing a track group can be undone.");
+    expect(project.findTrack(extraTrackId) != nullptr
+               && project.findTrack(versionTrackId) != nullptr,
+           "Undo restores the parent and version lanes.");
 
     auto duplicate = std::make_unique<studio::DuplicateTrackCommand>(extraTrackId);
     auto* duplicatePointer = duplicate.get();
