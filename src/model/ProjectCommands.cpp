@@ -485,4 +485,121 @@ PluginInsert* SetPluginBypassCommand::find(Project& project) const
     });
     return iterator == track->inserts.end() ? nullptr : &*iterator;
 }
+
+RemoveTrackCommand::RemoveTrackCommand(juce::String trackToRemove)
+    : trackId(std::move(trackToRemove))
+{
+}
+
+juce::String RemoveTrackCommand::name() const
+{
+    return "Remove track";
+}
+
+bool RemoveTrackCommand::perform(Project& project, juce::String& error)
+{
+    const auto iterator = std::find_if(project.tracks.begin(), project.tracks.end(), [this](const auto& candidate)
+    {
+        return candidate.id == trackId;
+    });
+    if (iterator == project.tracks.end())
+    {
+        error = "The track to remove no longer exists.";
+        return false;
+    }
+    if (iterator->type == TrackType::master)
+    {
+        error = "The master track cannot be removed.";
+        return false;
+    }
+
+    if (!capturedOriginal)
+    {
+        removedTrack = *iterator;
+        removalIndex = static_cast<std::size_t>(std::distance(project.tracks.begin(), iterator));
+        capturedOriginal = true;
+    }
+    project.tracks.erase(iterator);
+    return true;
+}
+
+void RemoveTrackCommand::undo(Project& project)
+{
+    const auto index = std::min(removalIndex, project.tracks.size());
+    project.tracks.insert(project.tracks.begin() + static_cast<std::ptrdiff_t>(index), removedTrack);
+}
+
+DuplicateTrackCommand::DuplicateTrackCommand(juce::String trackToDuplicate)
+    : sourceTrackId(std::move(trackToDuplicate))
+{
+}
+
+juce::String DuplicateTrackCommand::name() const
+{
+    return "Duplicate track";
+}
+
+bool DuplicateTrackCommand::perform(Project& project, juce::String& error)
+{
+    if (!createdDuplicate)
+    {
+        const auto* source = project.findTrack(sourceTrackId);
+        if (source == nullptr)
+        {
+            error = "The track to duplicate no longer exists.";
+            return false;
+        }
+        if (source->type == TrackType::master)
+        {
+            error = "The master track cannot be duplicated.";
+            return false;
+        }
+
+        duplicatedTrack = *source;
+        duplicatedTrack.id = juce::Uuid().toString();
+        duplicatedTrack.name = source->name + " Copy";
+        duplicatedTrack.armed = false;
+        for (auto& clip : duplicatedTrack.clips)
+            clip.id = juce::Uuid().toString();
+        for (auto& insert : duplicatedTrack.inserts)
+            insert.id = juce::Uuid().toString();
+
+        const auto sourceIterator = std::find_if(project.tracks.cbegin(),
+                                                 project.tracks.cend(),
+                                                 [this](const auto& candidate)
+        {
+            return candidate.id == sourceTrackId;
+        });
+        insertionIndex = static_cast<std::size_t>(std::distance(project.tracks.cbegin(),
+                                                                 sourceIterator))
+            + 1;
+        createdDuplicate = true;
+    }
+
+    if (project.findTrack(duplicatedTrack.id) != nullptr)
+    {
+        error = "The duplicated track already exists.";
+        return false;
+    }
+
+    const auto index = std::min(insertionIndex, project.tracks.size());
+    project.tracks.insert(project.tracks.begin() + static_cast<std::ptrdiff_t>(index),
+                          duplicatedTrack);
+    return true;
+}
+
+void DuplicateTrackCommand::undo(Project& project)
+{
+    project.tracks.erase(std::remove_if(project.tracks.begin(),
+                                        project.tracks.end(),
+                                        [this](const auto& candidate)
+    {
+        return candidate.id == duplicatedTrack.id;
+    }), project.tracks.end());
+}
+
+const juce::String& DuplicateTrackCommand::duplicatedTrackId() const noexcept
+{
+    return duplicatedTrack.id;
+}
 }

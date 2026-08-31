@@ -296,6 +296,8 @@ MainComponent::MainComponent()
     configureButton(metronomeButton, "Toggle the metronome");
     configureButton(addTrackButton, "Add an audio track");
     configureButton(importButton, "Import WAV, AIFF, FLAC, or MP3 audio");
+    configureButton(duplicateTrackButton, "Duplicate the selected track and its edits");
+    configureButton(deleteTrackButton, "Delete the selected track");
     configureButton(muteButton, "Mute selected track");
     configureButton(soloButton, "Solo selected track");
     configureButton(armButton, "Arm selected track for recording");
@@ -317,6 +319,8 @@ MainComponent::MainComponent()
     recordButton.onClick = [this] { toggleRecording(); };
     addTrackButton.onClick = [this] { addAudioTrack(); };
     importButton.onClick = [this] { beginImportAudio(); };
+    duplicateTrackButton.onClick = [this] { duplicateSelectedTrack(); };
+    deleteTrackButton.onClick = [this] { deleteSelectedTrack(); };
     muteButton.onClick = [this]
     {
         changeSelectedTrackState([](auto& state) { state.muted = !state.muted; });
@@ -635,6 +639,10 @@ void MainComponent::resized()
     addTrackButton.setBounds(sessionPanel.removeFromTop(34));
     sessionPanel.removeFromTop(8);
     importButton.setBounds(sessionPanel.removeFromTop(34));
+    sessionPanel.removeFromTop(8);
+    duplicateTrackButton.setBounds(sessionPanel.removeFromTop(34));
+    sessionPanel.removeFromTop(8);
+    deleteTrackButton.setBounds(sessionPanel.removeFromTop(34));
     sessionPanel.removeFromTop(18);
     pluginBrowser->setBounds(sessionPanel);
 
@@ -1075,6 +1083,47 @@ void MainComponent::addAudioTrack()
     const auto trackId = track.id;
     if (perform(std::make_unique<AddTrackCommand>(track)))
         selectTrack(trackId);
+}
+
+void MainComponent::duplicateSelectedTrack()
+{
+    const auto* selected = project.findTrack(selectedTrackId);
+    if (selected == nullptr || selected->type == TrackType::master)
+    {
+        setStatus("Select a non-master track to duplicate.", true);
+        return;
+    }
+
+    auto command = std::make_unique<DuplicateTrackCommand>(selectedTrackId);
+    auto* commandPointer = command.get();
+    if (perform(std::move(command)))
+        selectTrack(commandPointer->duplicatedTrackId());
+}
+
+void MainComponent::deleteSelectedTrack()
+{
+    const auto* selected = project.findTrack(selectedTrackId);
+    if (selected == nullptr || selected->type == TrackType::master)
+    {
+        setStatus("Select a non-master track to delete.", true);
+        return;
+    }
+    if (audioEngine.isRecording() && activeRecordingTrackId == selectedTrackId)
+    {
+        setStatus("Stop recording before deleting its track.", true);
+        return;
+    }
+
+    const auto trackToDelete = selectedTrackId;
+    if (!perform(std::make_unique<RemoveTrackCommand>(trackToDelete)))
+        return;
+
+    const auto next = std::find_if(project.tracks.cbegin(), project.tracks.cend(), [](const auto& track)
+    {
+        return track.type != TrackType::master;
+    });
+    selectTrack(next != project.tracks.cend() ? next->id
+                                              : project.tracks.back().id);
 }
 
 void MainComponent::addPluginToSelectedTrack(const PluginCatalogEntry& entry)

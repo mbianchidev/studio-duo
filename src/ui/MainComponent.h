@@ -47,6 +47,8 @@ private:
     void toggleRecording();
     void finishRecording();
     void addAudioTrack();
+    void duplicateSelectedTrack();
+    void deleteSelectedTrack();
     void addPluginToSelectedTrack(const PluginCatalogEntry& entry);
     void splitSelectedClip();
     void deleteSelectedClip();
@@ -97,6 +99,8 @@ private:
 
     juce::TextButton addTrackButton { "+ AUDIO TRACK" };
     juce::TextButton importButton { "IMPORT AUDIO" };
+    juce::TextButton duplicateTrackButton { "DUPLICATE TRACK" };
+    juce::TextButton deleteTrackButton { "DELETE TRACK" };
 
     juce::Label inspectorName;
     juce::Label inspectorDetails;

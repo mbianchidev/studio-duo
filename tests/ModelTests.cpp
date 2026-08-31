@@ -75,6 +75,22 @@ void commandHistory()
     expect(history.redo(project, error), error.toRawUTF8());
     expect(project.findTrack(extraTrackId) != nullptr, "Redo restores the added track.");
 
+    auto duplicate = std::make_unique<studio::DuplicateTrackCommand>(extraTrackId);
+    auto* duplicatePointer = duplicate.get();
+    expect(history.perform(std::move(duplicate), project, error), error.toRawUTF8());
+    const auto duplicateId = duplicatePointer->duplicatedTrackId();
+    expect(project.findTrack(duplicateId) != nullptr, "Duplicate track command creates a track.");
+    expect(project.findTrack(duplicateId)->id != extraTrackId,
+           "Duplicated tracks receive a stable independent ID.");
+
+    expect(history.perform(std::make_unique<studio::RemoveTrackCommand>(duplicateId),
+                           project,
+                           error),
+           error.toRawUTF8());
+    expect(project.findTrack(duplicateId) == nullptr, "Remove track command deletes a track.");
+    expect(history.undo(project), "Remove track command can be undone.");
+    expect(project.findTrack(duplicateId) != nullptr, "Undo restores the removed track.");
+
     studio::AudioClip clip;
     clip.name = "Take 1";
     clip.durationSeconds = 8.0;
