@@ -36,6 +36,7 @@ private:
     PluginCatalog& catalog;
     juce::TextEditor search;
     juce::TextButton scanButton { "SCAN" };
+    juce::TextButton addButton { "ADD" };
     juce::Label statusLabel;
     juce::ListBox list { "Plugin catalog", this };
     double progressValue = 0.0;
@@ -43,6 +44,7 @@ private:
     std::vector<PluginCatalogEntry> allEntries;
     std::vector<PluginCatalogEntry> filteredEntries;
     std::uint64_t lastRevision = 0;
+    int selectedRow = -1;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PluginBrowserComponent)
 };

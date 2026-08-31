@@ -59,6 +59,13 @@ plugin when its worker disconnects or times out. The worker remains reusable
 for the app session so repeated scans do not leave terminated child processes
 waiting to be reaped.
 
+Tracks persist ordered plugin insert records independently from plugin
+availability. Each record keeps the standard plugin identifier, format, vendor,
+version, source identifier, bridge mode, bypass state, reported latency, and
+relative opaque-state reference. This lets missing plugins survive project
+exchange and lets the upcoming DSP bridge activate the same model without a
+schema rewrite.
+
 Project saves use a `.studioduo` directory package. Session data is written to
 a new generation before `manifest.json` is atomically replaced. The latest
 complete state is also copied to `recovery/latest.json`.

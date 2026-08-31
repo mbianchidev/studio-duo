@@ -24,6 +24,17 @@ PluginBrowserComponent::PluginBrowserComponent(PluginCatalog& catalogToDisplay)
             catalog.startScan(false);
     };
 
+    addAndMakeVisible(addButton);
+    addButton.setTooltip("Add the selected plugin to the selected track");
+    addButton.setEnabled(false);
+    addButton.onClick = [this]
+    {
+        if (selectedRow >= 0
+            && selectedRow < static_cast<int>(filteredEntries.size())
+            && onPluginActivated)
+            onPluginActivated(filteredEntries[static_cast<std::size_t>(selectedRow)]);
+    };
+
     addAndMakeVisible(statusLabel);
     statusLabel.setColour(juce::Label::textColourId, juce::Colour(StudioColours::secondaryText));
     statusLabel.setFont(juce::Font(juce::FontOptions(10.5f)));
@@ -68,6 +79,8 @@ void PluginBrowserComponent::resized()
     bounds.removeFromTop(24);
     auto controls = bounds.removeFromTop(30);
     scanButton.setBounds(controls.removeFromRight(64));
+    controls.removeFromRight(6);
+    addButton.setBounds(controls.removeFromRight(52));
     controls.removeFromRight(6);
     search.setBounds(controls);
     bounds.removeFromTop(7);
@@ -133,6 +146,10 @@ void PluginBrowserComponent::paintListBoxItem(int row,
 
 void PluginBrowserComponent::selectedRowsChanged(int lastRowSelected)
 {
+    selectedRow = lastRowSelected;
+    addButton.setEnabled(selectedRow >= 0
+                         && selectedRow < static_cast<int>(filteredEntries.size()));
+
     if (lastRowSelected < 0 || lastRowSelected >= static_cast<int>(filteredEntries.size()))
         return;
 
@@ -178,6 +195,8 @@ void PluginBrowserComponent::rebuildFilter()
             filteredEntries.push_back(entry);
 
     list.updateContent();
+    selectedRow = -1;
+    addButton.setEnabled(false);
     list.repaint();
 }
 }
