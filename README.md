@@ -77,6 +77,11 @@ installed VST3 and Audio Unit plugins outside the main process. Select a catalog
 entry and choose **ADD** to attach its bridge-ready insert record to the selected
 track.
 
+Each timeline track header has **M**, **S**, and **R** controls for mute, solo,
+and record arm. Use either **+ AUDIO TRACK** control to add tracks. Pressing
+**REC** with an unarmed audio track selected arms it automatically and starts
+transport; press **REC** or **STOP** to finish the take.
+
 ## Documentation
 
 - [Product and technical design](docs/design.md)
