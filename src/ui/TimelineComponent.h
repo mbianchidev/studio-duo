@@ -16,7 +16,10 @@ public:
     void setProject(const Project* projectToDisplay);
     void setSelection(juce::String trackId, juce::String clipId);
     void setPlayheadSeconds(double seconds);
-    void setRecordingPreview(juce::String trackId, double startSeconds, double durationSeconds);
+    void setRecordingPreview(juce::String trackId,
+                             double startSeconds,
+                             double durationSeconds,
+                             std::vector<float> waveformPeaks);
     void clearRecordingPreview();
     void setPixelsPerSecond(double pixels);
     [[nodiscard]] int preferredWidth(int minimumWidth) const;
@@ -66,6 +69,7 @@ private:
     double playheadSeconds = 0.0;
     double recordingStartSeconds = 0.0;
     double recordingDurationSeconds = 0.0;
+    std::vector<float> recordingPeaks;
     double pixelsPerSecond = 96.0;
     double dragOriginalStart = 0.0;
     double dragOriginalSourceOffset = 0.0;

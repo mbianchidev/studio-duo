@@ -36,11 +36,13 @@ void TimelineComponent::setPlayheadSeconds(double seconds)
 
 void TimelineComponent::setRecordingPreview(juce::String trackId,
                                             double startSeconds,
-                                            double durationSeconds)
+                                            double durationSeconds,
+                                            std::vector<float> waveformPeaks)
 {
     recordingTrackId = std::move(trackId);
     recordingStartSeconds = std::max(0.0, startSeconds);
     recordingDurationSeconds = std::max(0.0, durationSeconds);
+    recordingPeaks = std::move(waveformPeaks);
     repaint();
 }
 
@@ -48,6 +50,7 @@ void TimelineComponent::clearRecordingPreview()
 {
     recordingTrackId.clear();
     recordingDurationSeconds = 0.0;
+    recordingPeaks.clear();
     repaint();
 }
 
@@ -192,6 +195,19 @@ void TimelineComponent::paint(juce::Graphics& graphics)
         auto bounds = hit.bounds;
         if (draggedClipId == hit.clipId)
         {
+            graphics.setColour(clip->colour.withAlpha(0.16f));
+            graphics.fillRoundedRectangle(hit.bounds, 5.0f);
+            graphics.setColour(juce::Colours::white.withAlpha(0.28f));
+            const float dashLengths[] { 4.0f, 4.0f };
+            juce::Path originalShape;
+            originalShape.addRoundedRectangle(hit.bounds, 5.0f);
+            juce::Path dashedOutline;
+            juce::PathStrokeType(1.0f).createDashedStroke(dashedOutline,
+                                                          originalShape,
+                                                          dashLengths,
+                                                          2);
+            graphics.fillPath(dashedOutline);
+
             bounds.setX(secondsToX(dragPreviewStart));
             bounds.setWidth(static_cast<float>(std::max(20.0,
                                                         dragPreviewDuration
@@ -219,6 +235,36 @@ void TimelineComponent::paint(juce::Graphics& graphics)
                 graphics.fillRoundedRectangle(preview, 5.0f);
                 graphics.setColour(juce::Colours::white);
                 graphics.drawRoundedRectangle(preview, 5.0f, 1.5f);
+
+                if (!recordingPeaks.empty())
+                {
+                    const auto columns = juce::jmax(1,
+                                                    juce::jmin(static_cast<int>(recordingPeaks.size()),
+                                                               static_cast<int>(preview.getWidth()) - 12));
+                    const auto centre = preview.getCentreY() + 6.0f;
+                    const auto maximumHeight = preview.getHeight() * 0.32f;
+                    graphics.setColour(juce::Colours::white.withAlpha(0.55f));
+                    for (int column = 0; column < columns; ++column)
+                    {
+                        const auto peakIndex = static_cast<std::size_t>(
+                            static_cast<double>(column)
+                            / static_cast<double>(columns)
+                            * static_cast<double>(recordingPeaks.size()));
+                        const auto peak = juce::jlimit(0.0f,
+                                                       1.0f,
+                                                       recordingPeaks[std::min(peakIndex,
+                                                                               recordingPeaks.size() - 1)]);
+                        const auto x = preview.getX()
+                            + 6.0f
+                            + static_cast<float>(column)
+                                / static_cast<float>(columns)
+                                * (preview.getWidth() - 12.0f);
+                        graphics.drawVerticalLine(static_cast<int>(x),
+                                                  centre - peak * maximumHeight,
+                                                  centre + peak * maximumHeight);
+                    }
+                }
+
                 graphics.setFont(juce::Font(juce::FontOptions(12.0f, juce::Font::bold)));
                 graphics.drawText("RECORDING  " + juce::String(recordingDurationSeconds, 1) + " s",
                                   preview.toNearestInt().withHeight(24).reduced(8, 0),

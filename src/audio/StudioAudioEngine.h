@@ -20,6 +20,7 @@ public:
         juce::Result result { juce::Result::ok() };
         juce::File file;
         double durationSeconds = 0.0;
+        juce::String warning;
     };
 
     StudioAudioEngine();
@@ -43,6 +44,7 @@ public:
     [[nodiscard]] float rightPeak() const noexcept;
     [[nodiscard]] double currentSampleRate() const noexcept;
     [[nodiscard]] double recordingDurationSeconds() const noexcept;
+    [[nodiscard]] std::vector<float> recordingWaveform() const;
 
     juce::Result startRecording(const juce::File& destination,
                                 int firstInputChannel,
@@ -87,11 +89,14 @@ private:
         void push(const float* const* inputs, int inputChannels, int samples) noexcept;
         [[nodiscard]] bool isActive() const noexcept;
         [[nodiscard]] double capturedDurationSeconds() const noexcept;
+        [[nodiscard]] std::vector<float> waveform() const;
 
     private:
         void run() override;
 
         static constexpr int capacitySamples = 1 << 20;
+        static constexpr int waveformBucketSamples = 2048;
+        static constexpr std::size_t waveformCapacity = 65536;
         juce::AbstractFifo fifo { capacitySamples };
         juce::AudioBuffer<float> ringBuffer { 2, capacitySamples };
         std::unique_ptr<juce::AudioFormatWriter> writer;
@@ -103,6 +108,12 @@ private:
         double recordingSampleRate = 48000.0;
         int recordingChannels = 1;
         int recordingFirstInputChannel = 0;
+        std::array<std::atomic<float>, waveformCapacity> waveformPeaks {};
+        std::atomic<std::uint64_t> waveformSequence { 0 };
+        std::atomic<float> partialWaveformPeak { 0.0f };
+        std::atomic<int> partialWaveformSamples { 0 };
+        float waveformPeakAccumulator = 0.0f;
+        int waveformSamplesInBucket = 0;
     };
 
     std::optional<RenderSnapshot> buildSnapshot(const Project& project,

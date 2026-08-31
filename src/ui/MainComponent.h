@@ -119,6 +119,8 @@ private:
     juce::TextButton muteButton { "MUTE" };
     juce::TextButton soloButton { "SOLO" };
     juce::TextButton armButton { "ARM" };
+    juce::TextButton splitClipButton { "SPLIT @ PLAYHEAD" };
+    juce::TextButton deleteClipButton { "DELETE CLIP" };
 
     juce::Viewport timelineViewport;
     TimelineComponent timeline;

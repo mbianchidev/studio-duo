@@ -303,6 +303,8 @@ MainComponent::MainComponent()
     configureButton(armButton, "Arm selected track for recording");
     configureButton(stereoInputButton, "Capture this input and the following input as stereo");
     configureButton(monitorButton, "Monitor the selected track input through Studio Duo");
+    configureButton(splitClipButton, "Split the selected clip at the playhead");
+    configureButton(deleteClipButton, "Delete the selected clip");
 
     newButton.onClick = [this] { createNewProject(); };
     openButton.onClick = [this] { beginOpenProject(); };
@@ -343,6 +345,8 @@ MainComponent::MainComponent()
     {
         changeSelectedTrackState([](auto& state) { state.inputMonitoring = !state.inputMonitoring; });
     };
+    splitClipButton.onClick = [this] { splitSelectedClip(); };
+    deleteClipButton.onClick = [this] { deleteSelectedClip(); };
 
     loopButton.setToggleState(project.loopEnabled, juce::dontSendNotification);
     loopButton.onClick = [this]
@@ -689,7 +693,11 @@ void MainComponent::resized()
     auto inspector = right.reduced(16, 42);
     inspectorName.setBounds(inspector.removeFromTop(28));
     inspectorDetails.setBounds(inspector.removeFromTop(24));
-    inspector.removeFromTop(12);
+    inspector.removeFromTop(6);
+    auto clipActions = inspector.removeFromTop(30);
+    splitClipButton.setBounds(clipActions.removeFromLeft(118).reduced(2));
+    deleteClipButton.setBounds(clipActions.removeFromLeft(96).reduced(2));
+    inspector.removeFromTop(8);
     inputLabel.setBounds(inspector.removeFromTop(20));
     inputSelector.setBounds(inspector.removeFromTop(30));
     inspector.removeFromTop(6);
@@ -733,7 +741,8 @@ void MainComponent::timerCallback()
         const auto duration = audioEngine.recordingDurationSeconds();
         timeline.setRecordingPreview(activeRecordingTrackId,
                                      recordingStartSeconds,
-                                     duration);
+                                     duration,
+                                     audioEngine.recordingWaveform());
         setStatus("Recording "
                       + juce::String(duration, 1)
                       + " s. Press STOP REC or STOP to finish.");
@@ -1122,9 +1131,12 @@ void MainComponent::finishRecording()
         return;
     }
 
-    if (track == nullptr || recording.durationSeconds <= 0.0)
+    if (track == nullptr
+        || recording.durationSeconds <= 0.0
+        || !recording.file.existsAsFile()
+        || recording.file.getSize() <= 44)
     {
-        setStatus("Recording stopped without audio.", true);
+        setStatus("Recording stopped without a valid WAV file.", true);
         return;
     }
 
@@ -1139,7 +1151,15 @@ void MainComponent::finishRecording()
 
     if (perform(std::make_unique<AddClipCommand>(track->id, clip)))
         selectClip(track->id, clipId);
-    setStatus("Recorded " + juce::String(recording.durationSeconds, 2) + " seconds.");
+    const auto savedMessage = "Saved "
+        + recording.file.getFileName()
+        + " ("
+        + juce::String(recording.durationSeconds, 2)
+        + " s).";
+    setStatus(recording.warning.isNotEmpty()
+                  ? savedMessage + " " + recording.warning
+                  : savedMessage,
+              recording.warning.isNotEmpty());
 }
 
 void MainComponent::addAudioTrack()
@@ -1310,6 +1330,8 @@ void MainComponent::updateInspector()
         muteButton.setEnabled(false);
         soloButton.setEnabled(false);
         armButton.setEnabled(false);
+        splitClipButton.setEnabled(false);
+        deleteClipButton.setEnabled(false);
         inputSelector.setEnabled(false);
         stereoInputButton.setEnabled(false);
         monitorButton.setEnabled(false);
@@ -1318,7 +1340,9 @@ void MainComponent::updateInspector()
 
     inspectorName.setText(clip != nullptr ? clip->name : track->name, juce::dontSendNotification);
     inspectorDetails.setText(clip != nullptr
-                                 ? juce::String(clip->durationSeconds, 2) + " s  |  " + track->name
+                                 ? juce::String(clip->durationSeconds, 2)
+                                     + " s  |  "
+                                     + clip->sourceFile.getFileName()
                                  : trackTypeToString(track->type).toUpperCase(),
                              juce::dontSendNotification);
     volumeSlider.setEnabled(true);
@@ -1326,6 +1350,8 @@ void MainComponent::updateInspector()
     muteButton.setEnabled(track->type != TrackType::master || !track->muted);
     soloButton.setEnabled(track->type != TrackType::master);
     armButton.setEnabled(track->type == TrackType::audio);
+    splitClipButton.setEnabled(clip != nullptr);
+    deleteClipButton.setEnabled(clip != nullptr);
     inputSelector.setEnabled(track->type == TrackType::audio);
     stereoInputButton.setEnabled(track->type == TrackType::audio
                                  && track->inputChannel + 1 < inputSelector.getNumItems());

@@ -56,6 +56,13 @@ juce::Result StudioAudioEngine::LockFreeRecorder::start(const juce::File& destin
     samplesWritten.store(0, std::memory_order_relaxed);
     samplesDropped.store(0, std::memory_order_relaxed);
     samplesCaptured.store(0, std::memory_order_relaxed);
+    waveformSequence.store(0, std::memory_order_relaxed);
+    partialWaveformPeak.store(0.0f, std::memory_order_relaxed);
+    partialWaveformSamples.store(0, std::memory_order_relaxed);
+    waveformPeakAccumulator = 0.0f;
+    waveformSamplesInBucket = 0;
+    for (auto& peak : waveformPeaks)
+        peak.store(0.0f, std::memory_order_relaxed);
     accepting.store(true, std::memory_order_release);
     startThread();
     return juce::Result::ok();
@@ -85,9 +92,9 @@ StudioAudioEngine::RecordingResult StudioAudioEngine::LockFreeRecorder::stop()
 
     const auto dropped = samplesDropped.load(std::memory_order_acquire);
     if (dropped > 0)
-        result.result = juce::Result::fail("Recording stopped after dropping "
-                                           + juce::String(dropped)
-                                           + " samples because disk writing fell behind.");
+        result.warning = "Dropped "
+            + juce::String(dropped)
+            + " samples because disk writing fell behind.";
 
     return result;
 }
@@ -126,6 +133,31 @@ void StudioAudioEngine::LockFreeRecorder::push(const float* const* inputs,
     copyRegion(start2, size2, size1);
     fifo.finishedWrite(size1 + size2);
     samplesCaptured.fetch_add(size1 + size2, std::memory_order_relaxed);
+
+    for (int sample = 0; sample < writable; ++sample)
+    {
+        auto peak = 0.0f;
+        for (int channel = 0; channel < recordingChannels; ++channel)
+        {
+            const auto sourceChannel = recordingFirstInputChannel + channel;
+            if (sourceChannel < inputChannels && inputs[sourceChannel] != nullptr)
+                peak = std::max(peak, std::abs(inputs[sourceChannel][sample]));
+        }
+
+        waveformPeakAccumulator = std::max(waveformPeakAccumulator, peak);
+        if (++waveformSamplesInBucket == waveformBucketSamples)
+        {
+            const auto sequence = waveformSequence.load(std::memory_order_relaxed);
+            waveformPeaks[sequence % waveformCapacity].store(waveformPeakAccumulator,
+                                                              std::memory_order_relaxed);
+            waveformSequence.store(sequence + 1, std::memory_order_release);
+            waveformPeakAccumulator = 0.0f;
+            waveformSamplesInBucket = 0;
+        }
+    }
+
+    partialWaveformPeak.store(waveformPeakAccumulator, std::memory_order_relaxed);
+    partialWaveformSamples.store(waveformSamplesInBucket, std::memory_order_release);
 }
 
 bool StudioAudioEngine::LockFreeRecorder::isActive() const noexcept
@@ -137,6 +169,23 @@ double StudioAudioEngine::LockFreeRecorder::capturedDurationSeconds() const noex
 {
     return static_cast<double>(samplesCaptured.load(std::memory_order_relaxed))
         / recordingSampleRate;
+}
+
+std::vector<float> StudioAudioEngine::LockFreeRecorder::waveform() const
+{
+    const auto sequence = waveformSequence.load(std::memory_order_acquire);
+    const auto count = static_cast<std::size_t>(std::min<std::uint64_t>(sequence,
+                                                                       waveformCapacity));
+    const auto first = sequence - count;
+    std::vector<float> peaks;
+    peaks.reserve(count + 1);
+    for (std::size_t index = 0; index < count; ++index)
+        peaks.push_back(waveformPeaks[(first + index) % waveformCapacity].load(
+            std::memory_order_relaxed));
+
+    if (partialWaveformSamples.load(std::memory_order_acquire) > 0)
+        peaks.push_back(partialWaveformPeak.load(std::memory_order_relaxed));
+    return peaks;
 }
 
 void StudioAudioEngine::LockFreeRecorder::run()
@@ -294,6 +343,11 @@ double StudioAudioEngine::currentSampleRate() const noexcept
 double StudioAudioEngine::recordingDurationSeconds() const noexcept
 {
     return recorder.capturedDurationSeconds();
+}
+
+std::vector<float> StudioAudioEngine::recordingWaveform() const
+{
+    return recorder.waveform();
 }
 
 juce::Result StudioAudioEngine::startRecording(const juce::File& destination,
