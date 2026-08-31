@@ -108,7 +108,12 @@ is visible immediately in a full-width recording region, and either **STOP REC**
 or **STOP** finalizes capture and stops transport through the same path.
 
 Use the **-**, **100%**, and **+** timeline controls, the zoom shortcuts, or
-Command/Ctrl+mouse-wheel to zoom while keeping the playhead centered.
+Command/Ctrl+mouse-wheel to zoom while keeping the playhead centered. The
+percentage button reflects the current zoom and resets it when clicked.
+
+Two-finger click or right-click the timeline to move the playhead and open the
+clip context menu. Trim start, split, trim end, and delete show their keyboard
+shortcuts alongside each action.
 
 ## Documentation
 

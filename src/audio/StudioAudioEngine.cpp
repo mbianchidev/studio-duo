@@ -362,15 +362,15 @@ void StudioAudioEngine::stopRecordingAsync(std::function<void(RecordingResult)> 
         return;
 
     recorder.stopAccepting();
-    recordingFinalizer.addJob([this, completion = std::move(completion)]() mutable
+    recordingFinalizer.addJob([this, callback = std::move(completion)]() mutable
     {
-        auto result = recorder.finishStop();
+        auto recordingResult = recorder.finishStop();
         recordingFinalizing.store(false, std::memory_order_release);
         juce::MessageManager::callAsync(
-            [completion = std::move(completion), result = std::move(result)]() mutable
+            [finished = std::move(callback), completed = std::move(recordingResult)]() mutable
             {
-                if (completion)
-                    completion(std::move(result));
+                if (finished)
+                    finished(std::move(completed));
             });
     });
 }

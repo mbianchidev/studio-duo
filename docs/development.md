@@ -133,7 +133,14 @@ quiet input remains visible.
 The live recording overlay is rendered independently from saved clip iteration,
 so it also appears in an empty project. Both transport stop and record-toggle
 stop use the UI recording-session ID as the source of truth, stop transport
-first, then flush and attach the WAV.
+first, then stop accepting input immediately. WAV draining and flush run on a
+dedicated finalizer thread; the completed result is posted back to the message
+thread to attach the clip.
+
+Timeline popup gestures first place the playhead, preserve or update clip
+selection, then show action items with shortcut descriptions. Zoom controls,
+keyboard shortcuts, and modified mouse-wheel input all use the same clamped
+pixels-per-second value and keep the playhead centered.
 
 On macOS, CMake applies an ad-hoc signature with the stable designated
 requirement `dev.mbianchi.studioduo`. This keeps the TCC microphone grant tied
