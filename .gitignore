@@ -1,0 +1,12 @@
+/build*/
+/out/
+/.cache/
+/.idea/
+/.vscode/
+*.xcodeproj/
+*.xcworkspace/
+*.sln
+*.vcxproj*
+*.user
+.DS_Store
+Thumbs.db
