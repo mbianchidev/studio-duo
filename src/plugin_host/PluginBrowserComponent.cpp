@@ -145,6 +145,14 @@ void PluginBrowserComponent::selectedRowsChanged(int lastRowSelected)
     statusLabel.setText(description, juce::dontSendNotification);
 }
 
+void PluginBrowserComponent::listBoxItemDoubleClicked(int row, const juce::MouseEvent&)
+{
+    if (row >= 0
+        && row < static_cast<int>(filteredEntries.size())
+        && onPluginActivated)
+        onPluginActivated(filteredEntries[static_cast<std::size_t>(row)]);
+}
+
 void PluginBrowserComponent::timerCallback()
 {
     progressValue = catalog.progress();

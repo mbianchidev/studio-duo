@@ -43,6 +43,68 @@ juce::Colour colourProperty(const juce::DynamicObject& object,
 }
 }
 
+juce::var PluginInsert::toVar() const
+{
+    auto object = std::make_unique<juce::DynamicObject>();
+    object->setProperty("id", id);
+    object->setProperty("pluginIdentifier", pluginIdentifier);
+    object->setProperty("name", name);
+    object->setProperty("manufacturer", manufacturer);
+    object->setProperty("format", format);
+    object->setProperty("version", version);
+    object->setProperty("fileOrIdentifier", fileOrIdentifier);
+    object->setProperty("stateFile", stateFile);
+    object->setProperty("stateHash", stateHash);
+    object->setProperty("bridgeMode", pluginBridgeModeToString(bridgeMode));
+    object->setProperty("latencySamples", latencySamples);
+    object->setProperty("bypassed", bypassed);
+    object->setProperty("missing", missing);
+    return juce::var(object.release());
+}
+
+std::optional<PluginInsert> PluginInsert::fromVar(const juce::var& value, juce::String& error)
+{
+    const auto* object = requireObject(value, error, "Plugin insert");
+    if (object == nullptr)
+        return std::nullopt;
+
+    PluginInsert insert;
+    insert.id = object->getProperty("id").toString();
+    insert.pluginIdentifier = object->getProperty("pluginIdentifier").toString();
+    insert.name = object->getProperty("name").toString();
+    insert.manufacturer = object->getProperty("manufacturer").toString();
+    insert.format = object->getProperty("format").toString();
+    insert.version = object->getProperty("version").toString();
+    insert.fileOrIdentifier = object->getProperty("fileOrIdentifier").toString();
+    insert.stateFile = object->getProperty("stateFile").toString();
+    insert.stateHash = object->getProperty("stateHash").toString();
+    insert.latencySamples = juce::jmax(0, integerProperty(*object, "latencySamples", 0));
+    insert.bypassed = booleanProperty(*object, "bypassed", false);
+    insert.missing = booleanProperty(*object, "missing", false);
+
+    const auto bridgeMode = pluginBridgeModeFromString(object->getProperty("bridgeMode").toString());
+    if (!bridgeMode.has_value())
+    {
+        error = "Plugin insert contains an unsupported bridge mode.";
+        return std::nullopt;
+    }
+    insert.bridgeMode = *bridgeMode;
+
+    if (insert.id.isEmpty() || insert.pluginIdentifier.isEmpty() || insert.name.isEmpty())
+    {
+        error = "Plugin insert ID, plugin identifier, and name cannot be empty.";
+        return std::nullopt;
+    }
+
+    if (insert.stateFile.contains("..") || juce::File::isAbsolutePath(insert.stateFile))
+    {
+        error = "Plugin insert contains an unsafe state path.";
+        return std::nullopt;
+    }
+
+    return insert;
+}
+
 double AudioClip::endSeconds() const noexcept
 {
     return startSeconds + durationSeconds;
@@ -103,6 +165,12 @@ juce::var Track::toVar() const
     object->setProperty("armed", armed);
     object->setProperty("colour", colour.toString());
 
+    juce::Array<juce::var> insertValues;
+    insertValues.ensureStorageAllocated(static_cast<int>(inserts.size()));
+    for (const auto& insert : inserts)
+        insertValues.add(insert.toVar());
+    object->setProperty("inserts", juce::var(insertValues));
+
     juce::Array<juce::var> clipValues;
     clipValues.ensureStorageAllocated(static_cast<int>(clips.size()));
     for (const auto& clip : clips)
@@ -136,6 +204,25 @@ std::optional<Track> Track::fromVar(const juce::var& value, juce::String& error)
     track.solo = booleanProperty(*object, "solo", false);
     track.armed = booleanProperty(*object, "armed", false);
     track.colour = colourProperty(*object, "colour", juce::Colour(0xffdd5b3f));
+
+    const auto insertValues = object->getProperty("inserts");
+    if (!insertValues.isVoid())
+    {
+        if (!insertValues.isArray())
+        {
+            error = "Track inserts must be a JSON array.";
+            return std::nullopt;
+        }
+
+        for (const auto& insertValue : *insertValues.getArray())
+        {
+            auto insert = PluginInsert::fromVar(insertValue, error);
+            if (!insert.has_value())
+                return std::nullopt;
+
+            track.inserts.push_back(std::move(*insert));
+        }
+    }
 
     const auto clipValues = object->getProperty("clips");
     if (!clipValues.isArray())
@@ -351,6 +438,26 @@ std::optional<TrackType> trackTypeFromString(const juce::String& value)
     if (value == "aux") return TrackType::aux;
     if (value == "bus") return TrackType::bus;
     if (value == "master") return TrackType::master;
+    return std::nullopt;
+}
+
+juce::String pluginBridgeModeToString(PluginBridgeMode mode)
+{
+    switch (mode)
+    {
+        case PluginBridgeMode::sandboxed: return "sandboxed";
+        case PluginBridgeMode::araCompatibility: return "araCompatibility";
+        case PluginBridgeMode::trustedInProcess: return "trustedInProcess";
+    }
+
+    return "sandboxed";
+}
+
+std::optional<PluginBridgeMode> pluginBridgeModeFromString(const juce::String& value)
+{
+    if (value == "sandboxed") return PluginBridgeMode::sandboxed;
+    if (value == "araCompatibility") return PluginBridgeMode::araCompatibility;
+    if (value == "trustedInProcess") return PluginBridgeMode::trustedInProcess;
     return std::nullopt;
 }
 }

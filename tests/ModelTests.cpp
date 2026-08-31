@@ -30,6 +30,13 @@ void serializationRoundTrip()
     clip.durationSeconds = 3.25;
     project.tracks.front().clips.push_back(clip);
 
+    studio::PluginInsert insert;
+    insert.pluginIdentifier = "VST3-test-id";
+    insert.name = "Test Gate";
+    insert.manufacturer = "Studio Duo";
+    insert.format = "VST3";
+    project.tracks.front().inserts.push_back(insert);
+
     juce::String error;
     const auto decoded = studio::Project::fromVar(project.toVar(), error);
 
@@ -39,6 +46,12 @@ void serializationRoundTrip()
            "Tempo survives serialization.");
     expect(decoded.has_value() && decoded->tracks.front().clips.size() == 1,
            "Clips survive serialization.");
+    expect(decoded.has_value() && decoded->tracks.front().inserts.size() == 1,
+           "Plugin inserts survive serialization.");
+    expect(decoded.has_value()
+               && decoded->tracks.front().inserts.front().bridgeMode
+                      == studio::PluginBridgeMode::sandboxed,
+           "Plugin bridge mode survives serialization.");
 }
 
 void commandHistory()
@@ -70,6 +83,39 @@ void commandHistory()
     expect(project.tracks.front().clips.size() == 1, "Undo restores the original clip.");
     expect(history.redo(project, error), error.toRawUTF8());
     expect(project.tracks.front().clips.size() == 2, "Redo repeats the split.");
+
+    studio::PluginInsert insert;
+    insert.pluginIdentifier = "VST3-command-test";
+    insert.name = "Command Test";
+    insert.format = "VST3";
+    const auto insertId = insert.id;
+
+    expect(history.perform(std::make_unique<studio::AddPluginInsertCommand>(
+                               project.tracks.front().id,
+                               insert),
+                           project,
+                           error),
+           error.toRawUTF8());
+    expect(project.tracks.front().inserts.size() == 1, "Add insert command creates a slot.");
+
+    expect(history.perform(std::make_unique<studio::SetPluginBypassCommand>(
+                               project.tracks.front().id,
+                               insertId,
+                               true),
+                           project,
+                           error),
+           error.toRawUTF8());
+    expect(project.tracks.front().inserts.front().bypassed, "Bypass command updates the insert.");
+
+    expect(history.perform(std::make_unique<studio::RemovePluginInsertCommand>(
+                               project.tracks.front().id,
+                               insertId),
+                           project,
+                           error),
+           error.toRawUTF8());
+    expect(project.tracks.front().inserts.empty(), "Remove insert command removes the slot.");
+    expect(history.undo(project), "Remove insert command can be undone.");
+    expect(project.tracks.front().inserts.size() == 1, "Undo restores the plugin insert.");
 }
 
 void packagePersistence()

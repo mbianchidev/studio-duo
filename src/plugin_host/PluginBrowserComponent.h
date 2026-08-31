@@ -16,6 +16,8 @@ public:
     explicit PluginBrowserComponent(PluginCatalog& catalogToDisplay);
     ~PluginBrowserComponent() override;
 
+    std::function<void(const PluginCatalogEntry&)> onPluginActivated;
+
     void paint(juce::Graphics& graphics) override;
     void resized() override;
 
@@ -27,6 +29,7 @@ private:
                           int height,
                           bool selected) override;
     void selectedRowsChanged(int lastRowSelected) override;
+    void listBoxItemDoubleClicked(int row, const juce::MouseEvent&) override;
     void timerCallback() override;
     void rebuildFilter();
 

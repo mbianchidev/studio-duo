@@ -27,6 +27,7 @@ public:
 
 private:
     class MixerPanel;
+    class InsertPanel;
 
     void timerCallback() override;
     bool keyPressed(const juce::KeyPress& key) override;
@@ -46,6 +47,7 @@ private:
     void toggleRecording();
     void finishRecording();
     void addAudioTrack();
+    void addPluginToSelectedTrack(const PluginCatalogEntry& entry);
     void splitSelectedClip();
     void deleteSelectedClip();
     void undo();
@@ -110,6 +112,7 @@ private:
     std::unique_ptr<MixerPanel> mixer;
     PluginCatalog pluginCatalog;
     std::unique_ptr<PluginBrowserComponent> pluginBrowser;
+    std::unique_ptr<InsertPanel> insertPanel;
     juce::Label statusLabel;
     std::unique_ptr<juce::FileChooser> fileChooser;
     juce::TooltipWindow tooltipWindow { this, 700 };

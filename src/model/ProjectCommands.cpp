@@ -334,4 +334,155 @@ void SetTrackMixCommand::apply(Track& track, const TrackMixState& state)
     track.solo = state.solo;
     track.armed = state.armed;
 }
+
+AddPluginInsertCommand::AddPluginInsertCommand(juce::String destinationTrackId,
+                                               PluginInsert insertToAdd)
+    : trackId(std::move(destinationTrackId)),
+      insert(std::move(insertToAdd))
+{
+}
+
+juce::String AddPluginInsertCommand::name() const
+{
+    return "Add plugin insert";
+}
+
+bool AddPluginInsertCommand::perform(Project& project, juce::String& error)
+{
+    auto* track = project.findTrack(trackId);
+    if (track == nullptr)
+    {
+        error = "The destination track no longer exists.";
+        return false;
+    }
+
+    const auto duplicate = std::find_if(track->inserts.cbegin(), track->inserts.cend(), [this](const auto& candidate)
+    {
+        return candidate.id == insert.id;
+    });
+    if (duplicate != track->inserts.cend())
+    {
+        error = "A plugin insert with the same ID already exists.";
+        return false;
+    }
+
+    if (!capturedIndex)
+    {
+        insertionIndex = track->inserts.size();
+        capturedIndex = true;
+    }
+    insertionIndex = std::min(insertionIndex, track->inserts.size());
+    track->inserts.insert(track->inserts.begin() + static_cast<std::ptrdiff_t>(insertionIndex), insert);
+    return true;
+}
+
+void AddPluginInsertCommand::undo(Project& project)
+{
+    if (auto* track = project.findTrack(trackId))
+        track->inserts.erase(std::remove_if(track->inserts.begin(), track->inserts.end(), [this](const auto& candidate)
+        {
+            return candidate.id == insert.id;
+        }), track->inserts.end());
+}
+
+RemovePluginInsertCommand::RemovePluginInsertCommand(juce::String sourceTrackId,
+                                                     juce::String insertToRemove)
+    : trackId(std::move(sourceTrackId)),
+      insertId(std::move(insertToRemove))
+{
+}
+
+juce::String RemovePluginInsertCommand::name() const
+{
+    return "Remove plugin insert";
+}
+
+bool RemovePluginInsertCommand::perform(Project& project, juce::String& error)
+{
+    auto* track = project.findTrack(trackId);
+    if (track == nullptr)
+    {
+        error = "The source track no longer exists.";
+        return false;
+    }
+
+    const auto iterator = std::find_if(track->inserts.begin(), track->inserts.end(), [this](const auto& candidate)
+    {
+        return candidate.id == insertId;
+    });
+    if (iterator == track->inserts.end())
+    {
+        error = "The plugin insert no longer exists.";
+        return false;
+    }
+
+    if (!capturedOriginal)
+    {
+        removedInsert = *iterator;
+        removalIndex = static_cast<std::size_t>(std::distance(track->inserts.begin(), iterator));
+        capturedOriginal = true;
+    }
+    track->inserts.erase(iterator);
+    return true;
+}
+
+void RemovePluginInsertCommand::undo(Project& project)
+{
+    if (auto* track = project.findTrack(trackId))
+    {
+        const auto index = std::min(removalIndex, track->inserts.size());
+        track->inserts.insert(track->inserts.begin() + static_cast<std::ptrdiff_t>(index), removedInsert);
+    }
+}
+
+SetPluginBypassCommand::SetPluginBypassCommand(juce::String sourceTrackId,
+                                               juce::String insertToChange,
+                                               bool shouldBeBypassed)
+    : trackId(std::move(sourceTrackId)),
+      insertId(std::move(insertToChange)),
+      newBypassed(shouldBeBypassed)
+{
+}
+
+juce::String SetPluginBypassCommand::name() const
+{
+    return newBypassed ? "Bypass plugin insert" : "Enable plugin insert";
+}
+
+bool SetPluginBypassCommand::perform(Project& project, juce::String& error)
+{
+    auto* insert = find(project);
+    if (insert == nullptr)
+    {
+        error = "The plugin insert no longer exists.";
+        return false;
+    }
+
+    if (!capturedOriginal)
+    {
+        oldBypassed = insert->bypassed;
+        capturedOriginal = true;
+    }
+    insert->bypassed = newBypassed;
+    return true;
+}
+
+void SetPluginBypassCommand::undo(Project& project)
+{
+    if (auto* insert = find(project))
+        insert->bypassed = oldBypassed;
+}
+
+PluginInsert* SetPluginBypassCommand::find(Project& project) const
+{
+    auto* track = project.findTrack(trackId);
+    if (track == nullptr)
+        return nullptr;
+
+    const auto iterator = std::find_if(track->inserts.begin(), track->inserts.end(), [this](const auto& candidate)
+    {
+        return candidate.id == insertId;
+    });
+    return iterator == track->inserts.end() ? nullptr : &*iterator;
+}
 }

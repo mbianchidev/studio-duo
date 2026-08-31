@@ -17,6 +17,33 @@ enum class TrackType
     master
 };
 
+enum class PluginBridgeMode
+{
+    sandboxed,
+    araCompatibility,
+    trustedInProcess
+};
+
+struct PluginInsert
+{
+    juce::String id { juce::Uuid().toString() };
+    juce::String pluginIdentifier;
+    juce::String name;
+    juce::String manufacturer;
+    juce::String format;
+    juce::String version;
+    juce::String fileOrIdentifier;
+    juce::String stateFile;
+    juce::String stateHash;
+    PluginBridgeMode bridgeMode = PluginBridgeMode::sandboxed;
+    int latencySamples = 0;
+    bool bypassed = false;
+    bool missing = false;
+
+    [[nodiscard]] juce::var toVar() const;
+    static std::optional<PluginInsert> fromVar(const juce::var& value, juce::String& error);
+};
+
 struct AudioClip
 {
     juce::String id { juce::Uuid().toString() };
@@ -45,6 +72,7 @@ struct Track
     bool solo = false;
     bool armed = false;
     juce::Colour colour { 0xffdd5b3f };
+    std::vector<PluginInsert> inserts;
     std::vector<AudioClip> clips;
 
     [[nodiscard]] juce::var toVar() const;
@@ -82,4 +110,6 @@ public:
 
 juce::String trackTypeToString(TrackType type);
 std::optional<TrackType> trackTypeFromString(const juce::String& value);
+juce::String pluginBridgeModeToString(PluginBridgeMode mode);
+std::optional<PluginBridgeMode> pluginBridgeModeFromString(const juce::String& value);
 }

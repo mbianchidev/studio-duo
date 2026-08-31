@@ -139,6 +139,134 @@ private:
     float rightPeak = 0.0f;
 };
 
+class MainComponent::InsertPanel final : public juce::Component
+{
+public:
+    void setProject(const Project* value)
+    {
+        project = value;
+        repaint();
+    }
+
+    void setTrack(const juce::String& value)
+    {
+        trackId = value;
+        repaint();
+    }
+
+    std::function<void(const juce::String&, const juce::String&, bool)> onBypass;
+    std::function<void(const juce::String&, const juce::String&)> onRemove;
+
+    void paint(juce::Graphics& graphics) override
+    {
+        graphics.fillAll(juce::Colour(StudioColours::panel));
+        graphics.setColour(juce::Colour(StudioColours::secondaryText));
+        graphics.setFont(juce::Font(juce::FontOptions(10.5f, juce::Font::bold)));
+        graphics.drawText("INSERTS",
+                          0,
+                          0,
+                          getWidth(),
+                          20,
+                          juce::Justification::centredLeft);
+
+        const auto* track = project != nullptr ? project->findTrack(trackId) : nullptr;
+        if (track == nullptr || track->inserts.empty())
+        {
+            graphics.setColour(juce::Colour(StudioColours::secondaryText));
+            graphics.setFont(juce::Font(juce::FontOptions(11.0f)));
+            graphics.drawFittedText("Double-click a catalog plugin to add a sandboxed insert.",
+                                    0,
+                                    26,
+                                    getWidth(),
+                                    42,
+                                    juce::Justification::topLeft,
+                                    2);
+            return;
+        }
+
+        auto y = 24;
+        for (std::size_t index = 0; index < track->inserts.size(); ++index)
+        {
+            const auto& insert = track->inserts[index];
+            const juce::Rectangle<int> row(0, y, getWidth(), 48);
+            graphics.setColour(juce::Colour(insert.bypassed ? 0xff191c1f : StudioColours::raised));
+            graphics.fillRoundedRectangle(row.toFloat(), 4.0f);
+            graphics.setColour(juce::Colour(insert.missing ? StudioColours::orange
+                                                           : StudioColours::border));
+            graphics.drawRoundedRectangle(row.toFloat(), 4.0f, 1.0f);
+
+            graphics.setColour(juce::Colour(insert.bypassed ? StudioColours::secondaryText
+                                                            : StudioColours::text));
+            graphics.setFont(juce::Font(juce::FontOptions(11.5f, juce::Font::bold)));
+            graphics.drawFittedText(juce::String(static_cast<int>(index + 1)) + "  " + insert.name,
+                                    8,
+                                    y + 4,
+                                    getWidth() - 76,
+                                    18,
+                                    juce::Justification::centredLeft,
+                                    1);
+
+            juce::String detail = insert.missing ? "MISSING" : "SANDBOX";
+            detail += "  |  " + insert.format;
+            graphics.setColour(juce::Colour(insert.missing ? StudioColours::orange
+                                                           : StudioColours::green));
+            graphics.setFont(juce::Font(juce::FontOptions(9.0f)));
+            graphics.drawFittedText(detail,
+                                    8,
+                                    y + 24,
+                                    getWidth() - 76,
+                                    15,
+                                    juce::Justification::centredLeft,
+                                    1);
+
+            graphics.setColour(juce::Colour(insert.bypassed ? StudioColours::amber
+                                                            : StudioColours::secondaryText));
+            graphics.setFont(juce::Font(juce::FontOptions(9.0f, juce::Font::bold)));
+            graphics.drawText("BYP",
+                              getWidth() - 64,
+                              y,
+                              32,
+                              48,
+                              juce::Justification::centred);
+            graphics.setColour(juce::Colour(StudioColours::orange));
+            graphics.drawText("X",
+                              getWidth() - 30,
+                              y,
+                              30,
+                              48,
+                              juce::Justification::centred);
+            y += 54;
+        }
+    }
+
+    void mouseDown(const juce::MouseEvent& event) override
+    {
+        const auto* track = project != nullptr ? project->findTrack(trackId) : nullptr;
+        if (track == nullptr || event.position.y < 24.0f)
+            return;
+
+        const auto index = static_cast<int>((event.position.y - 24.0f) / 54.0f);
+        if (index < 0 || index >= static_cast<int>(track->inserts.size()))
+            return;
+
+        const auto& insert = track->inserts[static_cast<std::size_t>(index)];
+        if (event.position.x >= static_cast<float>(getWidth() - 30))
+        {
+            if (onRemove)
+                onRemove(track->id, insert.id);
+        }
+        else if (event.position.x >= static_cast<float>(getWidth() - 64))
+        {
+            if (onBypass)
+                onBypass(track->id, insert.id, !insert.bypassed);
+        }
+    }
+
+private:
+    const Project* project = nullptr;
+    juce::String trackId;
+};
+
 MainComponent::MainComponent()
 {
     setLookAndFeel(&theme);
@@ -351,7 +479,24 @@ MainComponent::MainComponent()
 
     pluginBrowser = std::make_unique<PluginBrowserComponent>(pluginCatalog);
     pluginBrowser->addKeyListener(this);
+    pluginBrowser->onPluginActivated = [this](const auto& entry)
+    {
+        addPluginToSelectedTrack(entry);
+    };
     addAndMakeVisible(*pluginBrowser);
+
+    insertPanel = std::make_unique<InsertPanel>();
+    insertPanel->setProject(&project);
+    insertPanel->onBypass = [this](const auto& trackId, const auto& insertId, bool bypassed)
+    {
+        perform(std::make_unique<SetPluginBypassCommand>(trackId, insertId, bypassed));
+    };
+    insertPanel->onRemove = [this](const auto& trackId, const auto& insertId)
+    {
+        perform(std::make_unique<RemovePluginInsertCommand>(trackId, insertId));
+    };
+    insertPanel->addKeyListener(this);
+    addAndMakeVisible(*insertPanel);
 
     addAndMakeVisible(statusLabel);
     statusLabel.setColour(juce::Label::textColourId, juce::Colour(StudioColours::secondaryText));
@@ -491,6 +636,8 @@ void MainComponent::resized()
     muteButton.setBounds(toggles.removeFromLeft(68).reduced(2));
     soloButton.setBounds(toggles.removeFromLeft(68).reduced(2));
     armButton.setBounds(toggles.removeFromLeft(68).reduced(2));
+    inspector.removeFromTop(20);
+    insertPanel->setBounds(inspector);
 
     updateTimelineSize();
 }
@@ -896,6 +1043,28 @@ void MainComponent::addAudioTrack()
         selectTrack(trackId);
 }
 
+void MainComponent::addPluginToSelectedTrack(const PluginCatalogEntry& entry)
+{
+    const auto* track = project.findTrack(selectedTrackId);
+    if (track == nullptr)
+    {
+        setStatus("Select a track before adding a plugin.", true);
+        return;
+    }
+
+    PluginInsert insert;
+    insert.pluginIdentifier = entry.identifier;
+    insert.name = entry.name;
+    insert.manufacturer = entry.manufacturer;
+    insert.format = entry.format;
+    insert.version = entry.version;
+    insert.fileOrIdentifier = entry.fileOrIdentifier;
+    insert.bridgeMode = PluginBridgeMode::sandboxed;
+
+    if (perform(std::make_unique<AddPluginInsertCommand>(track->id, insert)))
+        setStatus(entry.name + " added as a sandboxed insert model.");
+}
+
 void MainComponent::splitSelectedClip()
 {
     if (selectedClipId.isEmpty())
@@ -949,6 +1118,7 @@ void MainComponent::selectTrack(const juce::String& trackId)
     selectedClipId.clear();
     timeline.setSelection(selectedTrackId, selectedClipId);
     mixer->setSelection(selectedTrackId);
+    insertPanel->setTrack(selectedTrackId);
     updateInspector();
 }
 
@@ -958,6 +1128,7 @@ void MainComponent::selectClip(const juce::String& trackId, const juce::String& 
     selectedClipId = clipId;
     timeline.setSelection(selectedTrackId, selectedClipId);
     mixer->setSelection(selectedTrackId);
+    insertPanel->setTrack(selectedTrackId);
     updateInspector();
 }
 
@@ -1014,6 +1185,7 @@ void MainComponent::projectChanged(bool writeRecovery, bool markDirty)
 
     timeline.setProject(&project);
     mixer->setProject(&project);
+    insertPanel->setProject(&project);
     projectLabel.setText(project.name + (dirty ? " *" : ""), juce::dontSendNotification);
     loopButton.setToggleState(project.loopEnabled, juce::dontSendNotification);
     undoButton.setEnabled(commandStack.canUndo());

@@ -142,4 +142,58 @@ private:
     TrackMixState oldState;
     TrackMixState newState;
 };
+
+class AddPluginInsertCommand final : public ProjectCommand
+{
+public:
+    AddPluginInsertCommand(juce::String destinationTrackId, PluginInsert insertToAdd);
+
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    juce::String trackId;
+    PluginInsert insert;
+    std::size_t insertionIndex = 0;
+    bool capturedIndex = false;
+};
+
+class RemovePluginInsertCommand final : public ProjectCommand
+{
+public:
+    RemovePluginInsertCommand(juce::String sourceTrackId, juce::String insertToRemove);
+
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    juce::String trackId;
+    juce::String insertId;
+    PluginInsert removedInsert;
+    std::size_t removalIndex = 0;
+    bool capturedOriginal = false;
+};
+
+class SetPluginBypassCommand final : public ProjectCommand
+{
+public:
+    SetPluginBypassCommand(juce::String sourceTrackId,
+                           juce::String insertToChange,
+                           bool shouldBeBypassed);
+
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    PluginInsert* find(Project& project) const;
+
+    juce::String trackId;
+    juce::String insertId;
+    bool newBypassed = false;
+    bool oldBypassed = false;
+    bool capturedOriginal = false;
+};
 }
