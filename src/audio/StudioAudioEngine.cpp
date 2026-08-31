@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <span>
 
 namespace studio
 {
@@ -14,6 +15,17 @@ juce::AudioFormatWriterOptions writerOptions(double sampleRate, int channels)
         .withNumChannels(channels)
         .withBitsPerSample(24);
 }
+
+struct RecordingCallbackScope
+{
+    ~RecordingCallbackScope()
+    {
+        if (counter != nullptr)
+            counter->fetch_sub(1, std::memory_order_acq_rel);
+    }
+
+    std::atomic<int>* counter = nullptr;
+};
 }
 
 StudioAudioEngine::LockFreeRecorder::LockFreeRecorder()
@@ -47,16 +59,21 @@ juce::Result StudioAudioEngine::LockFreeRecorder::start(const juce::File& destin
     if (writer == nullptr)
         return juce::Result::fail("Could not create the WAV recording writer.");
 
+    if (ringBuffer == nullptr)
+        ringBuffer = std::make_unique<juce::AudioBuffer<float>>(2, capacitySamples);
+    if (recordingWaveform == nullptr)
+        recordingWaveform = std::make_unique<RecordingWaveform>();
+
     outputFile = destination;
     recordingSampleRate = newSampleRate;
     recordingChannels = juce::jlimit(1, 2, channels);
     recordingFirstInputChannel = juce::jmax(0, firstInputChannel);
     fifo.reset();
-    ringBuffer.clear();
+    ringBuffer->clear();
     samplesWritten.store(0, std::memory_order_relaxed);
     samplesDropped.store(0, std::memory_order_relaxed);
     samplesCaptured.store(0, std::memory_order_relaxed);
-    recordingWaveform.reset();
+    recordingWaveform->reset();
     accepting.store(true, std::memory_order_release);
     startThread();
     return juce::Result::ok();
@@ -129,9 +146,9 @@ void StudioAudioEngine::LockFreeRecorder::push(const float* const* inputs,
             const auto sourceChannel = recordingFirstInputChannel + channel;
             const auto* source = sourceChannel < inputChannels ? inputs[sourceChannel] : nullptr;
             if (source != nullptr)
-                ringBuffer.copyFrom(channel, destinationStart, source + sourceStart, count);
+                ringBuffer->copyFrom(channel, destinationStart, source + sourceStart, count);
             else
-                ringBuffer.clear(channel, destinationStart, count);
+                ringBuffer->clear(channel, destinationStart, count);
         }
     };
 
@@ -139,16 +156,27 @@ void StudioAudioEngine::LockFreeRecorder::push(const float* const* inputs,
     copyRegion(start2, size2, size1);
     fifo.finishedWrite(size1 + size2);
     samplesCaptured.fetch_add(size1 + size2, std::memory_order_relaxed);
-    recordingWaveform.push(inputs,
-                           inputChannels,
-                           recordingFirstInputChannel,
-                           recordingChannels,
-                           writable);
+    recordingWaveform->push(inputs,
+                            inputChannels,
+                            recordingFirstInputChannel,
+                            recordingChannels,
+                            writable);
+}
+
+void StudioAudioEngine::LockFreeRecorder::noteDroppedSamples(int samples) noexcept
+{
+    if (samples > 0)
+        samplesDropped.fetch_add(samples, std::memory_order_relaxed);
 }
 
 bool StudioAudioEngine::LockFreeRecorder::isActive() const noexcept
 {
     return accepting.load(std::memory_order_acquire);
+}
+
+int StudioAudioEngine::LockFreeRecorder::availableSamples() const noexcept
+{
+    return fifo.getFreeSpace();
 }
 
 double StudioAudioEngine::LockFreeRecorder::capturedDurationSeconds() const noexcept
@@ -159,7 +187,9 @@ double StudioAudioEngine::LockFreeRecorder::capturedDurationSeconds() const noex
 
 std::vector<float> StudioAudioEngine::LockFreeRecorder::waveform() const
 {
-    return recordingWaveform.snapshot();
+    return recordingWaveform != nullptr
+        ? recordingWaveform->snapshot()
+        : std::vector<float> {};
 }
 
 void StudioAudioEngine::LockFreeRecorder::run()
@@ -180,9 +210,9 @@ void StudioAudioEngine::LockFreeRecorder::run()
 
         bool writeSucceeded = true;
         if (writer != nullptr && size1 > 0)
-            writeSucceeded = writer->writeFromAudioSampleBuffer(ringBuffer, start1, size1);
+            writeSucceeded = writer->writeFromAudioSampleBuffer(*ringBuffer, start1, size1);
         if (writer != nullptr && size2 > 0)
-            writeSucceeded = writer->writeFromAudioSampleBuffer(ringBuffer, start2, size2)
+            writeSucceeded = writer->writeFromAudioSampleBuffer(*ringBuffer, start2, size2)
                 && writeSucceeded;
 
         if (!writeSucceeded)
@@ -228,6 +258,7 @@ void StudioAudioEngine::shutdown()
 {
     shuttingDown.store(true, std::memory_order_release);
     playing.store(false, std::memory_order_release);
+    recordingAccepting.store(false, std::memory_order_release);
 
     if (deviceManager != nullptr)
     {
@@ -235,9 +266,11 @@ void StudioAudioEngine::shutdown()
         deviceManager = nullptr;
     }
 
-    recorder.stopAccepting();
-    recordingFinalizer.removeAllJobs(false, 10000);
-    recorder.finishStop();
+    waitForRecordingCallbacks();
+    recordingFinalizer.removeAllJobs(false, -1);
+    if (activeRecorderCount.load(std::memory_order_acquire) > 0)
+        finishRecordingSession();
+    recordingFinalizing.store(false, std::memory_order_release);
     pluginRuntimeBuilder.removeAllJobs(false, -1);
 
     for (auto& graph : pluginRuntimeGraphs)
@@ -332,7 +365,7 @@ bool StudioAudioEngine::isPlaying() const noexcept
 
 bool StudioAudioEngine::isRecording() const noexcept
 {
-    return recorder.isActive();
+    return recordingAccepting.load(std::memory_order_acquire);
 }
 
 double StudioAudioEngine::positionSeconds() const noexcept
@@ -355,14 +388,22 @@ double StudioAudioEngine::currentSampleRate() const noexcept
     return sampleRate.load(std::memory_order_acquire);
 }
 
-double StudioAudioEngine::recordingDurationSeconds() const noexcept
+std::vector<StudioAudioEngine::RecordingProgress> StudioAudioEngine::recordingProgress() const
 {
-    return recorder.capturedDurationSeconds();
-}
-
-std::vector<float> StudioAudioEngine::recordingWaveform() const
-{
-    return recorder.waveform();
+    const auto count = activeRecorderCount.load(std::memory_order_acquire);
+    std::vector<RecordingProgress> progress;
+    progress.reserve(static_cast<std::size_t>(count));
+    for (int index = 0; index < count; ++index)
+    {
+        const auto& recorder = recorders[static_cast<std::size_t>(index)];
+        progress.push_back(recorder != nullptr
+                               ? RecordingProgress {
+                                   recorder->capturedDurationSeconds(),
+                                   recorder->waveform()
+                               }
+                               : RecordingProgress {});
+    }
+    return progress;
 }
 
 std::vector<StudioAudioEngine::PluginRuntimeStatus> StudioAudioEngine::pluginRuntimeStatuses() const
@@ -425,12 +466,17 @@ void StudioAudioEngine::forcePluginRuntimeReload(
     updateProject(project, std::move(pluginRequests));
 }
 
-juce::Result StudioAudioEngine::startRecording(const juce::File& destination,
-                                               int firstInputChannel,
-                                               int channels)
+juce::Result StudioAudioEngine::startRecording(const std::vector<RecordingRequest>& requests)
 {
     if (recordingFinalizing.load(std::memory_order_acquire))
         return juce::Result::fail("The previous recording is still finalizing.");
+    if (recordingAccepting.load(std::memory_order_acquire)
+        || activeRecorderCount.load(std::memory_order_acquire) > 0)
+        return juce::Result::fail("A recording is already in progress.");
+    if (requests.empty())
+        return juce::Result::fail("Arm at least one audio track before recording.");
+    if (requests.size() > maximumRecordingTracks)
+        return juce::Result::fail("Too many tracks are armed for one recording pass.");
 
     if (deviceManager == nullptr)
         return juce::Result::fail("No audio device is available.");
@@ -439,39 +485,127 @@ juce::Result StudioAudioEngine::startRecording(const juce::File& destination,
     if (device == nullptr || device->getActiveInputChannels().countNumberOfSetBits() == 0)
         return juce::Result::fail("Enable at least one audio input before recording.");
 
-    const auto activeInputs = device->getActiveInputChannels().countNumberOfSetBits();
-    const auto captureChannels = juce::jlimit(1, 2, channels);
-    if (firstInputChannel < 0 || firstInputChannel + captureChannels > activeInputs)
-        return juce::Result::fail("The selected track input is not enabled in audio I/O settings.");
+    const auto activeInputs = device->getActiveInputChannels();
+    for (std::size_t index = 0; index < requests.size(); ++index)
+    {
+        const auto& request = requests[index];
+        const auto captureChannels = juce::jlimit(1, 2, request.channels);
+        if (request.file.getFullPathName().isEmpty())
+            return juce::Result::fail("Every armed track needs a recording destination.");
+        if (request.firstInputChannel < 0)
+            return juce::Result::fail("Recording input channel numbers cannot be negative.");
+        for (int channel = 0; channel < captureChannels; ++channel)
+        {
+            if (!activeInputs[request.firstInputChannel + channel])
+            {
+                return juce::Result::fail(
+                    "An armed track uses an input that is not enabled in audio I/O settings.");
+            }
+        }
 
-    return recorder.start(destination,
-                          currentSampleRate(),
-                          captureChannels,
-                          firstInputChannel);
+        const auto duplicateDestination = std::any_of(
+            requests.cbegin(),
+            requests.cbegin() + static_cast<std::ptrdiff_t>(index),
+            [&request](const auto& earlier)
+            {
+                return earlier.file == request.file;
+            });
+        if (duplicateDestination)
+            return juce::Result::fail("Armed tracks must record to separate WAV files.");
+    }
+
+    for (std::size_t index = 0; index < requests.size(); ++index)
+    {
+        auto& recorder = recorders[index];
+        if (recorder == nullptr)
+            recorder = std::make_unique<LockFreeRecorder>();
+
+        const auto& request = requests[index];
+        const auto result = recorder->start(request.file,
+                                            currentSampleRate(),
+                                            request.channels,
+                                            request.firstInputChannel);
+        if (result.failed())
+        {
+            for (std::size_t started = 0; started < index; ++started)
+            {
+                recorders[started]->stop();
+                requests[started].file.deleteFile();
+            }
+            request.file.deleteFile();
+            return juce::Result::fail(
+                "Could not start recording track "
+                + juce::String(static_cast<int>(index + 1))
+                + ": "
+                + result.getErrorMessage());
+        }
+    }
+
+    activeRecorderCount.store(static_cast<int>(requests.size()), std::memory_order_release);
+    recordingAccepting.store(true, std::memory_order_release);
+    playing.store(true, std::memory_order_release);
+    return juce::Result::ok();
 }
 
-StudioAudioEngine::RecordingResult StudioAudioEngine::stopRecording()
+std::vector<StudioAudioEngine::RecordingResult> StudioAudioEngine::stopRecording()
 {
-    return recorder.stop();
+    recordingAccepting.store(false, std::memory_order_release);
+    playing.store(false, std::memory_order_release);
+    waitForRecordingCallbacks();
+    playheadSample.store(0, std::memory_order_release);
+    return finishRecordingSession();
 }
 
-void StudioAudioEngine::stopRecordingAsync(std::function<void(RecordingResult)> completion)
+void StudioAudioEngine::stopRecordingAsync(
+    std::function<void(std::vector<RecordingResult>)> completion)
 {
     if (recordingFinalizing.exchange(true, std::memory_order_acq_rel))
+    {
+        std::vector<RecordingResult> failure(1);
+        failure.front().result = juce::Result::fail("The recording is already finalizing.");
+        juce::MessageManager::callAsync(
+            [finished = std::move(completion), results = std::move(failure)]() mutable
+            {
+                if (finished)
+                    finished(std::move(results));
+            });
         return;
+    }
 
-    recorder.stopAccepting();
+    recordingAccepting.store(false, std::memory_order_release);
+    playing.store(false, std::memory_order_release);
     recordingFinalizer.addJob([this, callback = std::move(completion)]() mutable
     {
-        auto recordingResult = recorder.finishStop();
+        waitForRecordingCallbacks();
+        playheadSample.store(0, std::memory_order_release);
+        auto recordingResults = finishRecordingSession();
         recordingFinalizing.store(false, std::memory_order_release);
         juce::MessageManager::callAsync(
-            [finished = std::move(callback), completed = std::move(recordingResult)]() mutable
+            [finished = std::move(callback), completed = std::move(recordingResults)]() mutable
             {
                 if (finished)
                     finished(std::move(completed));
             });
     });
+}
+
+void StudioAudioEngine::waitForRecordingCallbacks() const noexcept
+{
+    while (recordingCallbacksInFlight.load(std::memory_order_acquire) > 0)
+        juce::Thread::sleep(1);
+}
+
+std::vector<StudioAudioEngine::RecordingResult> StudioAudioEngine::finishRecordingSession()
+{
+    const auto count = activeRecorderCount.exchange(0, std::memory_order_acq_rel);
+    for (int index = 0; index < count; ++index)
+        recorders[static_cast<std::size_t>(index)]->stopAccepting();
+
+    std::vector<RecordingResult> results;
+    results.reserve(static_cast<std::size_t>(count));
+    for (int index = 0; index < count; ++index)
+        results.push_back(recorders[static_cast<std::size_t>(index)]->finishStop());
+    return results;
 }
 
 std::optional<double> StudioAudioEngine::audioFileDuration(const juce::File& source, juce::String& error)
@@ -1353,7 +1487,36 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
                                                          int numSamples,
                                                          const juce::AudioIODeviceCallbackContext&)
 {
-    recorder.push(inputChannelData, numInputChannels, numSamples);
+    auto recordingBlockActive = false;
+    RecordingCallbackScope recordingScope;
+    if (recordingAccepting.load(std::memory_order_acquire))
+    {
+        recordingCallbacksInFlight.fetch_add(1, std::memory_order_acq_rel);
+        recordingScope.counter = &recordingCallbacksInFlight;
+        if (recordingAccepting.load(std::memory_order_acquire))
+        {
+            recordingBlockActive = true;
+            const auto recorderCount = activeRecorderCount.load(std::memory_order_acquire);
+            std::array<int, maximumRecordingTracks> freeSamples {};
+            for (int index = 0; index < recorderCount; ++index)
+            {
+                freeSamples[static_cast<std::size_t>(index)]
+                    = recorders[static_cast<std::size_t>(index)]->availableSamples();
+            }
+
+            const auto captureSamples = synchronizedCaptureSamples(
+                numSamples,
+                std::span<const int>(freeSamples.data(),
+                                     static_cast<std::size_t>(recorderCount)));
+            const auto droppedSamples = numSamples - captureSamples;
+            for (int index = 0; index < recorderCount; ++index)
+            {
+                auto& recorder = recorders[static_cast<std::size_t>(index)];
+                recorder->noteDroppedSamples(droppedSamples);
+                recorder->push(inputChannelData, numInputChannels, captureSamples);
+            }
+        }
+    }
 
     for (int channel = 0; channel < numOutputChannels; ++channel)
         if (outputChannelData[channel] != nullptr)
@@ -1368,7 +1531,9 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
 
     auto leftPeakValue = 0.0f;
     auto rightPeakValue = 0.0f;
-    if (playing.load(std::memory_order_acquire))
+    const auto recordingSessionPresent = activeRecorderCount.load(std::memory_order_acquire) > 0;
+    if (recordingBlockActive
+        || (!recordingSessionPresent && playing.load(std::memory_order_acquire)))
     {
         int snapshotIndex = 0;
         int runtimeIndex = 0;
@@ -1397,7 +1562,7 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
 
         auto& snapshot = snapshots[static_cast<std::size_t>(snapshotIndex)];
         auto position = playheadSample.load(std::memory_order_acquire);
-        const auto recordingActive = recorder.isActive();
+        const auto renderingRecording = recordingBlockActive;
         auto outputOffset = 0;
 
         while (outputOffset < numSamples)
@@ -1406,7 +1571,7 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
                 numSamples - outputOffset,
                 PluginBridgeSharedState::maxBlockSize);
 
-            if (position >= snapshot.lengthSamples && !recordingActive)
+            if (position >= snapshot.lengthSamples && !renderingRecording)
             {
                 playing.store(false, std::memory_order_release);
                 break;
@@ -1425,7 +1590,7 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
                     renderSourceBlock(source,
                                       position,
                                       samplesThisBlock,
-                                      !recordingActive && snapshot.loopEnabled,
+                                      !renderingRecording && snapshot.loopEnabled,
                                       snapshot.loopStartSample,
                                       snapshot.loopEndSample);
 
@@ -1516,7 +1681,7 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
                     float clickLeft = 0.0f;
                     float clickRight = 0.0f;
                     auto clickPosition = position + sample;
-                    if (!recordingActive
+                    if (!renderingRecording
                         && snapshot.loopEnabled
                         && clickPosition >= snapshot.loopEndSample)
                     {
@@ -1525,7 +1690,7 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
                             clickPosition = snapshot.loopStartSample
                                 + (clickPosition - snapshot.loopStartSample) % loopLength;
                     }
-                    if (recordingActive || clickPosition < snapshot.contentLengthSamples)
+                    if (renderingRecording || clickPosition < snapshot.contentLengthSamples)
                         addMetronome(snapshot, clickPosition, clickLeft, clickRight);
                     snapshot.clickBuffer.setSample(0, sample, clickLeft);
                     snapshot.clickBuffer.setSample(1, sample, clickRight);
@@ -1549,7 +1714,7 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
 
             position += samplesThisBlock;
             outputOffset += samplesThisBlock;
-            if (!recordingActive
+            if (!renderingRecording
                 && snapshot.loopEnabled
                 && position >= snapshot.loopEndSample)
             {
@@ -1558,7 +1723,7 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
                     position = snapshot.loopStartSample
                         + (position - snapshot.loopStartSample) % loopLength;
             }
-            else if (!recordingActive && position >= snapshot.lengthSamples)
+            else if (!renderingRecording && position >= snapshot.lengthSamples)
             {
                 position = snapshot.lengthSamples;
                 playing.store(false, std::memory_order_release);

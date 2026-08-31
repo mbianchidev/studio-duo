@@ -110,6 +110,7 @@ public:
     [[nodiscard]] const AudioClip* findClip(const juce::String& clipId) const;
     [[nodiscard]] Track* findTrackContainingClip(const juce::String& clipId);
     [[nodiscard]] const Track* findTrackContainingClip(const juce::String& clipId) const;
+    [[nodiscard]] std::vector<juce::String> armedAudioParentTrackIds() const;
     [[nodiscard]] double lengthSeconds() const noexcept;
     [[nodiscard]] bool hasActivePluginInserts() const noexcept;
     [[nodiscard]] juce::var toVar() const;

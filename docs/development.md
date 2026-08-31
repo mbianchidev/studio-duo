@@ -123,10 +123,11 @@ Clip move commands capture the original track, clip index, and timeline
 position. Horizontal drags change time; vertical drags transfer the same clip
 ID to another audio track. Undo restores both placement dimensions.
 
-Recording is associated with a stable track ID captured when the take starts,
-so changing the UI selection cannot move the resulting clip to another track.
-Starting a take auto-arms the selected audio track when necessary and starts
-transport at the clip start position.
+Recording resolves every armed audio or version lane to a unique parent track
+before capture starts. Each target snapshots its mono/stereo hardware input,
+version number, destination WAV, and parent ID, so selection and routing changes
+during the pass cannot redirect recorded audio. With no armed track, the
+selected audio track supplies the single fallback target.
 
 Track creation, duplication, and deletion are typed commands. Duplication
 regenerates the track, clip, and insert IDs so later edits never alias the
@@ -150,23 +151,23 @@ monitoring state. The lock-free recorder copies only those selected callback
 channels into its FIFO. Monitoring is mixed after timeline playback and before
 peak measurement without allocating, locking, or waiting on the audio callback.
 
-The recorder also reduces selected input samples into fixed 2048-sample peak
-buckets stored in a bounded lock-free array. The UI reads snapshots of those
-peaks to draw the growing take without touching the WAV writer or audio files.
-Stopping flushes the writer, verifies that the WAV exists, then creates the
-non-destructive clip. Dropped-sample conditions remain visible warnings but do
-not hide an otherwise valid recording. The live clip is created visually at
-record start, always draws a baseline, and uses square-root peak scaling so
-quiet input remains visible.
+Each target owns a lock-free recorder and writer thread. The audio callback uses
+the smallest available FIFO capacity across the active recorder set, so every
+WAV accepts or drops the same samples and remains sample-aligned. Each recorder
+also reduces its selected input into fixed 2048-sample peak buckets stored in a
+bounded lock-free array. The UI reads those snapshots to draw every growing take
+without touching WAV writers or audio files.
 
-The live recording overlay is rendered independently from saved clip iteration,
-so it also appears in an empty project. Both transport stop and record-toggle
-stop use the UI recording-session ID as the source of truth, stop transport
-first, then stop accepting input immediately. WAV draining and flush run on a
-dedicated finalizer thread; the completed result is posted back to the message
-thread to attach the clip.
+The live recording overlays are rendered independently from saved clip
+iteration, so they also appear in an empty project. Record start atomically
+publishes the prepared recorder set to the callback. Stop closes that shared
+gate, waits for an in-flight callback block, then drains and flushes every WAV
+on a dedicated finalizer thread.
 
-Space, the transport Stop button, and Stop Rec all enter the same recording
+The message thread verifies that every result exists and has the same duration,
+then adds all version lanes and clips through one undoable command. A partial or
+mismatched result leaves the project unchanged and reports where the capture
+files remain. Space, the transport Stop button, and Stop Rec all enter this
 finalization path. A timer invariant also finalizes any active recording whose
 transport is no longer running.
 

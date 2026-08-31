@@ -1014,7 +1014,7 @@ void MainComponent::resized()
 
 void MainComponent::timerCallback()
 {
-    if (activeRecordingTrackId.isNotEmpty()
+    if (!activeRecordingTargets.empty()
         && !audioEngine.isPlaying()
         && !recordingFinalizationInProgress)
     {
@@ -1030,7 +1030,7 @@ void MainComponent::timerCallback()
                           juce::dontSendNotification);
     const auto playing = audioEngine.isPlaying();
     playButton.setButtonText(playing ? "PAUSE" : "PLAY");
-    const auto recording = activeRecordingTrackId.isNotEmpty();
+    const auto recording = !activeRecordingTargets.empty();
     recordButton.setButtonText(recording ? "STOP REC" : "REC");
     recordButton.setColour(juce::TextButton::buttonColourId,
                            juce::Colour(recording ? StudioColours::orange
@@ -1071,12 +1071,26 @@ void MainComponent::timerCallback()
                                     audioEngine.pluginLateBlockCount());
     if (recording)
     {
-        const auto duration = audioEngine.recordingDurationSeconds();
-        timeline.setRecordingPreview(activeRecordingTrackId,
-                                     recordingStartSeconds,
-                                     duration,
-                                     audioEngine.recordingWaveform());
+        auto progress = audioEngine.recordingProgress();
+        std::vector<TimelineComponent::RecordingPreview> previews;
+        previews.reserve(activeRecordingTargets.size());
+        for (std::size_t index = 0; index < activeRecordingTargets.size(); ++index)
+        {
+            TimelineComponent::RecordingPreview preview;
+            preview.trackId = activeRecordingTargets[index].parentTrackId;
+            preview.startSeconds = recordingStartSeconds;
+            if (index < progress.size())
+            {
+                preview.durationSeconds = progress[index].durationSeconds;
+                preview.waveformPeaks = std::move(progress[index].waveform);
+            }
+            previews.push_back(std::move(preview));
+        }
+        const auto duration = progress.empty() ? 0.0 : progress.front().durationSeconds;
+        timeline.setRecordingPreviews(std::move(previews));
         setStatus("Recording "
+                      + juce::String(static_cast<int>(activeRecordingTargets.size()))
+                      + (activeRecordingTargets.size() == 1 ? " track, " : " tracks, ")
                       + juce::String(duration, 1)
                       + " s. Press STOP REC or STOP to finish.");
         updateTimelineSize();
@@ -1233,7 +1247,7 @@ bool MainComponent::keyPressed(const juce::KeyPress& key)
 
 void MainComponent::createNewProject()
 {
-    if (activeRecordingTrackId.isNotEmpty() || recordingFinalizationInProgress)
+    if (!activeRecordingTargets.empty() || recordingFinalizationInProgress)
     {
         setStatus("Stop and finalize the current recording before creating a project.", true);
         return;
@@ -1411,7 +1425,7 @@ void MainComponent::openProjectFrom(const juce::File& package)
         return;
     }
 
-    if (activeRecordingTrackId.isNotEmpty() || recordingFinalizationInProgress)
+    if (!activeRecordingTargets.empty() || recordingFinalizationInProgress)
     {
         setStatus("Stop and finalize the current recording before opening a project.", true);
         return;
@@ -1491,7 +1505,13 @@ void MainComponent::exportMixTo(const juce::File& destination)
 
 void MainComponent::togglePlayback()
 {
-    if (activeRecordingTrackId.isNotEmpty())
+    if (recordingFinalizationInProgress)
+    {
+        setStatus("Wait for the recorded WAVs to finish saving.", true);
+        return;
+    }
+
+    if (!activeRecordingTargets.empty())
     {
         stopTransportAndRecording();
         return;
@@ -1536,15 +1556,27 @@ void MainComponent::toggleRecording()
         return;
     }
 
-    if (activeRecordingTrackId.isNotEmpty())
+    if (!activeRecordingTargets.empty())
     {
         finishRecording();
         return;
     }
 
-    auto* track = createRecordingVersionTrack();
+    auto parentIds = project.armedAudioParentTrackIds();
+    if (parentIds.empty())
+    {
+        const auto* selected = project.findTrack(selectedTrackId);
+        if (selected != nullptr && selected->type == TrackType::audio)
+        {
+            const auto parentId = selected->parentTrackId.isNotEmpty()
+                ? selected->parentTrackId
+                : selected->id;
+            if (project.findTrack(parentId) != nullptr)
+                parentIds.push_back(parentId);
+        }
+    }
 
-    if (track == nullptr)
+    if (parentIds.empty())
     {
         showError("Recording unavailable", "Select an audio track or add a new one first.");
         return;
@@ -1554,44 +1586,79 @@ void MainComponent::toggleRecording()
         ? projectPackage.getChildFile("media")
         : juce::File::getSpecialLocation(juce::File::userMusicDirectory)
               .getChildFile("Studio Duo Recordings");
-    folder.createDirectory();
-    activeRecording = folder.getNonexistentChildFile(
-        "Recording-" + juce::Time::getCurrentTime().formatted("%Y%m%d-%H%M%S"),
-        ".wav",
-        false);
+    if (const auto folderResult = folder.createDirectory(); folderResult.failed())
+    {
+        showError("Recording unavailable", folderResult.getErrorMessage());
+        return;
+    }
 
-    const auto result = audioEngine.startRecording(activeRecording,
-                                                   track->inputChannel,
-                                                   track->stereoInput ? 2 : 1);
+    const auto timestamp = juce::Time::getCurrentTime().formatted("%Y%m%d-%H%M%S");
+    std::vector<ActiveRecordingTarget> targets;
+    std::vector<StudioAudioEngine::RecordingRequest> requests;
+    targets.reserve(parentIds.size());
+    requests.reserve(parentIds.size());
+    for (std::size_t index = 0; index < parentIds.size(); ++index)
+    {
+        const auto* parent = project.findTrack(parentIds[index]);
+        if (parent == nullptr)
+        {
+            showError("Recording unavailable", "An armed recording track is no longer available.");
+            return;
+        }
+
+        ActiveRecordingTarget target;
+        target.parentTrackId = parent->id;
+        target.versionTrack = makeRecordingVersionTrack(*parent);
+        const auto legalName = juce::File::createLegalFileName(parent->name);
+        target.file = folder.getNonexistentChildFile(
+            "Recording-"
+                + timestamp
+                + "-"
+                + juce::String(static_cast<int>(index + 1))
+                + "-"
+                + legalName,
+            ".wav",
+            false);
+        requests.push_back({
+            target.file,
+            parent->inputChannel,
+            parent->stereoInput ? 2 : 1
+        });
+        targets.push_back(std::move(target));
+    }
+
+    recordingStartSeconds = audioEngine.positionSeconds();
+    const auto result = audioEngine.startRecording(requests);
     if (result.failed())
     {
-        commandStack.undo(project);
-        projectChanged();
         showError("Recording unavailable", result.getErrorMessage());
         return;
     }
 
-    activeRecordingTrackId = track->id;
-    recordingStartSeconds = audioEngine.positionSeconds();
-    timeline.setRecordingPreview(activeRecordingTrackId,
-                                 recordingStartSeconds,
-                                 0.0,
-                                 { 0.0f });
-    audioEngine.play();
-    setStatus("Recording " + track->name + ". Press REC or STOP to finish.");
+    activeRecordingTargets = std::move(targets);
+    std::vector<TimelineComponent::RecordingPreview> previews;
+    previews.reserve(activeRecordingTargets.size());
+    for (const auto& target : activeRecordingTargets)
+        previews.push_back({ target.parentTrackId, recordingStartSeconds, 0.0, { 0.0f } });
+    timeline.setRecordingPreviews(std::move(previews));
+    setStatus("Recording "
+                  + juce::String(static_cast<int>(activeRecordingTargets.size()))
+                  + (activeRecordingTargets.size() == 1 ? " track." : " synchronized tracks.")
+                  + " Press REC or STOP to finish.");
 }
 
 void MainComponent::stopTransportAndRecording()
 {
     playAfterRuntimeTransition = false;
-    audioEngine.stop();
-    if (activeRecordingTrackId.isNotEmpty() || audioEngine.isRecording())
+    if (!activeRecordingTargets.empty() || audioEngine.isRecording())
         finishRecording();
+    else
+        audioEngine.stop();
 
     recordButton.setButtonText("REC");
     recordButton.setColour(juce::TextButton::buttonColourId,
                            juce::Colour(StudioColours::raised));
-    timeline.clearRecordingPreview();
+    timeline.clearRecordingPreviews();
     if (project.hasActivePluginInserts() && !recordingFinalizationInProgress)
         audioEngine.forcePluginRuntimeReload(project, pluginRuntimeRequests());
 }
@@ -1601,67 +1668,108 @@ void MainComponent::finishRecording()
     if (recordingFinalizationInProgress)
         return;
 
-    const auto trackId = activeRecordingTrackId;
-    if (trackId.isEmpty() && !audioEngine.isRecording())
+    if (activeRecordingTargets.empty() && !audioEngine.isRecording())
         return;
 
+    auto pendingTargets = std::move(activeRecordingTargets);
+    activeRecordingTargets.clear();
     recordingFinalizationInProgress = true;
-    audioEngine.stop();
     recordButton.setButtonText("REC");
     recordButton.setColour(juce::TextButton::buttonColourId,
                            juce::Colour(StudioColours::raised));
-    timeline.clearRecordingPreview();
-    activeRecordingTrackId.clear();
-    setStatus("Stopping capture and finalizing WAV...");
+    timeline.clearRecordingPreviews();
+    setStatus("Stopping capture and finalizing "
+                  + juce::String(static_cast<int>(pendingTargets.size()))
+                  + (pendingTargets.size() == 1 ? " WAV..." : " synchronized WAVs..."));
 
     audioEngine.stopRecordingAsync(
-        [safe = juce::Component::SafePointer<MainComponent>(this), trackId](auto recording) mutable
+        [safe = juce::Component::SafePointer<MainComponent>(this),
+         targets = std::move(pendingTargets)](auto recordings) mutable
         {
             if (safe != nullptr)
-                safe->completeRecording(trackId, std::move(recording));
+                safe->completeRecording(std::move(targets), std::move(recordings));
         });
 }
 
-void MainComponent::completeRecording(const juce::String& trackId,
-                                      StudioAudioEngine::RecordingResult recording)
+void MainComponent::completeRecording(
+    std::vector<ActiveRecordingTarget> targets,
+    std::vector<StudioAudioEngine::RecordingResult> recordings)
 {
     recordingFinalizationInProgress = false;
-    auto* track = project.findTrack(trackId);
-    if (recording.result.failed())
+    if (targets.size() != recordings.size() || recordings.empty())
     {
-        showError("Recording warning", recording.result.getErrorMessage());
+        showError("Recording failed", "The recording engine returned an incomplete multitrack take.");
         return;
     }
 
-    if (track == nullptr
-        || recording.durationSeconds <= 0.0
-        || !recording.file.existsAsFile()
-        || recording.file.getSize() <= 44)
+    const auto expectedDuration = recordings.front().durationSeconds;
+    const auto durationTolerance = 1.0 / audioEngine.currentSampleRate();
+    juce::String warning;
+    std::vector<Track> completedTracks;
+    completedTracks.reserve(targets.size());
+    juce::String firstClipId;
+    for (std::size_t index = 0; index < targets.size(); ++index)
     {
-        setStatus("Recording stopped without a valid WAV file.", true);
-        return;
+        auto& target = targets[index];
+        auto& recording = recordings[index];
+        const auto* parent = project.findTrack(target.parentTrackId);
+        if (recording.result.failed())
+        {
+            showError("Recording failed",
+                      recording.result.getErrorMessage()
+                          + " No take lanes were added; captured files remain in "
+                          + target.file.getParentDirectory().getFullPathName());
+            return;
+        }
+        if (parent == nullptr
+            || recording.durationSeconds <= 0.0
+            || !recording.file.existsAsFile()
+            || recording.file.getSize() <= 44)
+        {
+            showError("Recording failed",
+                      "A synchronized WAV is missing or empty. No take lanes were added; "
+                      "captured files remain in "
+                          + target.file.getParentDirectory().getFullPathName());
+            return;
+        }
+        if (std::abs(recording.durationSeconds - expectedDuration) > durationTolerance)
+        {
+            showError("Recording failed",
+                      "The captured WAV lengths do not match. No take lanes were added; "
+                      "captured files remain in "
+                          + target.file.getParentDirectory().getFullPathName());
+            return;
+        }
+
+        AudioClip clip;
+        clip.name = recording.file.getFileNameWithoutExtension();
+        clip.sourceFile = recording.file;
+        clip.startSeconds = recordingStartSeconds;
+        clip.durationSeconds = recording.durationSeconds;
+        clip.sourceLengthSeconds = recording.durationSeconds;
+        clip.colour = target.versionTrack.colour;
+        if (firstClipId.isEmpty())
+            firstClipId = clip.id;
+        target.versionTrack.clips.push_back(std::move(clip));
+        completedTracks.push_back(std::move(target.versionTrack));
+
+        if (warning.isEmpty() && recording.warning.isNotEmpty())
+            warning = recording.warning;
     }
 
-    AudioClip clip;
-    clip.name = recording.file.getFileNameWithoutExtension();
-    clip.sourceFile = recording.file;
-    clip.startSeconds = recordingStartSeconds;
-    clip.durationSeconds = recording.durationSeconds;
-    clip.sourceLengthSeconds = recording.durationSeconds;
-    clip.colour = track->colour;
-    const auto clipId = clip.id;
-
-    if (perform(std::make_unique<AddClipCommand>(track->id, clip)))
-        selectClip(track->id, clipId);
+    const auto firstTrackId = completedTracks.front().id;
+    if (!perform(std::make_unique<AddRecordingTakeCommand>(std::move(completedTracks))))
+        return;
+    selectClip(firstTrackId, firstClipId);
     const auto savedMessage = "Saved "
-        + recording.file.getFileName()
-        + " ("
-        + juce::String(recording.durationSeconds, 2)
+        + juce::String(static_cast<int>(recordings.size()))
+        + (recordings.size() == 1 ? " track (" : " synchronized tracks (")
+        + juce::String(expectedDuration, 2)
         + " s).";
-    setStatus(recording.warning.isNotEmpty()
-                  ? savedMessage + " " + recording.warning
+    setStatus(warning.isNotEmpty()
+                  ? savedMessage + " " + warning
                   : savedMessage,
-              recording.warning.isNotEmpty());
+              warning.isNotEmpty());
     if (project.hasActivePluginInserts())
         audioEngine.forcePluginRuntimeReload(project, pluginRuntimeRequests());
 }
@@ -1692,6 +1800,12 @@ void MainComponent::addAudioTrack()
 
 void MainComponent::duplicateSelectedTrack()
 {
+    if (!activeRecordingTargets.empty() || recordingFinalizationInProgress)
+    {
+        setStatus("Stop and finalize recording before duplicating tracks.", true);
+        return;
+    }
+
     const auto* selected = project.findTrack(selectedTrackId);
     if (selected == nullptr || selected->type == TrackType::master)
     {
@@ -1713,9 +1827,9 @@ void MainComponent::deleteSelectedTrack()
         setStatus("Select a non-master track to delete.", true);
         return;
     }
-    if (audioEngine.isRecording() && activeRecordingTrackId == selectedTrackId)
+    if (!activeRecordingTargets.empty() || recordingFinalizationInProgress)
     {
-        setStatus("Stop recording before deleting its track.", true);
+        setStatus("Stop and finalize recording before deleting tracks.", true);
         return;
     }
 
@@ -1831,6 +1945,12 @@ void MainComponent::deleteSelectedClip()
 
 void MainComponent::undo()
 {
+    if (!activeRecordingTargets.empty() || recordingFinalizationInProgress)
+    {
+        setStatus("Stop and finalize recording before undoing edits.", true);
+        return;
+    }
+
     if (!commandStack.undo(project))
         return;
 
@@ -1840,6 +1960,12 @@ void MainComponent::undo()
 
 void MainComponent::redo()
 {
+    if (!activeRecordingTargets.empty() || recordingFinalizationInProgress)
+    {
+        setStatus("Stop and finalize recording before redoing edits.", true);
+        return;
+    }
+
     juce::String error;
     if (!commandStack.redo(project, error))
     {
@@ -2156,53 +2282,33 @@ void MainComponent::changeSelectedTrackState(const std::function<void(TrackMixSt
     perform(std::make_unique<SetTrackMixCommand>(track->id, before, after));
 }
 
-Track* MainComponent::createRecordingVersionTrack()
+Track MainComponent::makeRecordingVersionTrack(const Track& parent) const
 {
-    auto* source = project.findTrack(selectedTrackId);
-    if (source == nullptr || source->type != TrackType::audio)
-        source = recordingTrack();
-    if (source == nullptr)
-        return nullptr;
-
-    auto* parent = source->parentTrackId.isNotEmpty()
-        ? project.findTrack(source->parentTrackId)
-        : source;
-    if (parent == nullptr || parent->type != TrackType::audio)
-        return nullptr;
-
     const auto versionNumber = std::accumulate(
         project.tracks.cbegin(),
         project.tracks.cend(),
         0,
-        [parent](int maximum, const auto& track)
+        [&parent](int maximum, const auto& track)
         {
-            return track.parentTrackId == parent->id
+            return track.parentTrackId == parent.id
                 ? std::max(maximum, track.versionNumber)
                 : maximum;
         })
         + 1;
 
-    parent->versionsCollapsed = false;
-
     Track version;
     version.name = "v" + juce::String(versionNumber);
-    version.parentTrackId = parent->id;
+    version.parentTrackId = parent.id;
     version.versionNumber = versionNumber;
     version.type = TrackType::audio;
     version.volumeDecibels = 0.0f;
     version.pan = 0.0f;
-    version.armed = true;
-    version.inputChannel = parent->inputChannel;
-    version.stereoInput = parent->stereoInput;
-    version.inputMonitoring = parent->inputMonitoring;
-    version.colour = parent->colour;
-
-    const auto versionId = version.id;
-    if (!perform(std::make_unique<AddTrackCommand>(version)))
-        return nullptr;
-
-    selectTrack(versionId);
-    return project.findTrack(versionId);
+    version.armed = false;
+    version.inputChannel = parent.inputChannel;
+    version.stereoInput = parent.stereoInput;
+    version.inputMonitoring = parent.inputMonitoring;
+    version.colour = parent.colour;
+    return version;
 }
 
 Track* MainComponent::recordingTrack()

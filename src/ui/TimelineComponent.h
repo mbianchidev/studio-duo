@@ -11,17 +11,22 @@ namespace studio
 class TimelineComponent final : public juce::Component
 {
 public:
+    struct RecordingPreview
+    {
+        juce::String trackId;
+        double startSeconds = 0.0;
+        double durationSeconds = 0.0;
+        std::vector<float> waveformPeaks;
+    };
+
     TimelineComponent();
 
     void setProject(const Project* projectToDisplay);
     void setSelection(juce::String trackId, juce::String clipId);
     void setPlayheadSeconds(double seconds);
     void setViewportPosition(int horizontalPosition);
-    void setRecordingPreview(juce::String trackId,
-                             double startSeconds,
-                             double durationSeconds,
-                             std::vector<float> waveformPeaks);
-    void clearRecordingPreview();
+    void setRecordingPreviews(std::vector<RecordingPreview> previews);
+    void clearRecordingPreviews();
     void setPixelsPerSecond(double pixels);
     [[nodiscard]] double getPixelsPerSecond() const noexcept;
     [[nodiscard]] float xForSeconds(double seconds) const noexcept;
@@ -86,11 +91,8 @@ private:
     juce::String draggedClipId;
     juce::String dragOriginalTrackId;
     juce::String dragPreviewTrackId;
-    juce::String recordingTrackId;
     double playheadSeconds = 0.0;
-    double recordingStartSeconds = 0.0;
-    double recordingDurationSeconds = 0.0;
-    std::vector<float> recordingPeaks;
+    std::vector<RecordingPreview> recordingPreviews;
     double pixelsPerSecond = 96.0;
     int viewportPositionX = 0;
     double dragOriginalStart = 0.0;

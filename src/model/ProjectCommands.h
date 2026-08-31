@@ -64,6 +64,21 @@ private:
     std::size_t insertionIndex = 0;
 };
 
+class AddRecordingTakeCommand final : public ProjectCommand
+{
+public:
+    explicit AddRecordingTakeCommand(std::vector<Track> tracksToAdd);
+
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    std::vector<Track> tracks;
+    std::vector<std::pair<juce::String, bool>> parentCollapseStates;
+    bool capturedOriginal = false;
+};
+
 class MoveClipCommand final : public ProjectCommand
 {
 public:

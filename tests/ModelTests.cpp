@@ -330,6 +330,104 @@ void liveRecordingWaveform()
     expect(peaks.size() == 1 && std::abs(peaks.front() - 0.8f) < 0.0001f,
            "Recording waveform captures the loudest selected input sample.");
 }
+
+void synchronizedRecordingCapture()
+{
+    const std::array freeSamples { 512, 256, 384 };
+    expect(studio::synchronizedCaptureSamples(512, freeSamples) == 256,
+           "Multitrack capture uses the smallest recorder capacity.");
+    expect(studio::synchronizedCaptureSamples(128, freeSamples) == 128,
+           "Multitrack capture never exceeds the callback block.");
+}
+
+void multitrackRecordingTargets()
+{
+    auto project = studio::Project::createDefault();
+    auto& first = project.tracks.front();
+    first.name = "Guitar left";
+    first.armed = true;
+    const auto firstId = first.id;
+
+    studio::Track firstVersion;
+    firstVersion.name = "v1";
+    firstVersion.parentTrackId = firstId;
+    firstVersion.versionNumber = 1;
+    firstVersion.armed = true;
+    project.tracks.insert(project.tracks.begin() + 1, firstVersion);
+
+    studio::Track second;
+    second.name = "Guitar right";
+    second.armed = true;
+    const auto secondId = second.id;
+    project.tracks.insert(project.tracks.end() - 1, second);
+
+    const auto targetIds = project.armedAudioParentTrackIds();
+    expect(targetIds.size() == 2, "Armed recording targets contain each parent once.");
+    expect(targetIds.size() == 2
+               && targetIds[0] == firstId
+               && targetIds[1] == secondId,
+           "Armed recording targets preserve project track order.");
+}
+
+void multitrackRecordingCommand()
+{
+    auto project = studio::Project::createDefault();
+    project.tracks.front().versionsCollapsed = true;
+    const auto firstParentId = project.tracks.front().id;
+
+    studio::Track secondParent;
+    secondParent.name = "Second mic";
+    secondParent.versionsCollapsed = true;
+    const auto secondParentId = secondParent.id;
+    project.tracks.insert(project.tracks.end() - 1, secondParent);
+
+    studio::Track firstTake;
+    firstTake.name = "v1";
+    firstTake.parentTrackId = firstParentId;
+    firstTake.versionNumber = 1;
+    studio::AudioClip firstClip;
+    firstClip.name = "First take";
+    firstClip.startSeconds = 3.5;
+    firstTake.clips.push_back(firstClip);
+    const auto firstTakeId = firstTake.id;
+
+    studio::Track secondTake;
+    secondTake.name = "v1";
+    secondTake.parentTrackId = secondParentId;
+    secondTake.versionNumber = 1;
+    studio::AudioClip secondClip;
+    secondClip.name = "Second take";
+    secondClip.startSeconds = 3.5;
+    secondTake.clips.push_back(secondClip);
+    const auto secondTakeId = secondTake.id;
+
+    studio::CommandStack history;
+    juce::String error;
+    std::vector<studio::Track> takes;
+    takes.push_back(firstTake);
+    takes.push_back(secondTake);
+    expect(history.perform(std::make_unique<studio::AddRecordingTakeCommand>(std::move(takes)),
+                           project,
+                           error),
+           error.toRawUTF8());
+    expect(project.findTrack(firstTakeId) != nullptr
+               && project.findTrack(secondTakeId) != nullptr,
+           "A multitrack recording adds every captured take.");
+    expect(!project.findTrack(firstParentId)->versionsCollapsed
+               && !project.findTrack(secondParentId)->versionsCollapsed,
+           "Recording expands every captured parent track.");
+    expect(history.undo(project), "A multitrack recording can be undone in one step.");
+    expect(project.findTrack(firstTakeId) == nullptr
+               && project.findTrack(secondTakeId) == nullptr,
+           "Undo removes every take from a multitrack recording.");
+    expect(project.findTrack(firstParentId)->versionsCollapsed
+               && project.findTrack(secondParentId)->versionsCollapsed,
+           "Undo restores parent lane collapse states.");
+    expect(history.redo(project, error), error.toRawUTF8());
+    expect(project.findTrack(firstTakeId) != nullptr
+               && project.findTrack(secondTakeId) != nullptr,
+           "Redo restores every take from a multitrack recording.");
+}
 }
 
 int main()
@@ -341,6 +439,9 @@ int main()
     pluginCatalogFiltering();
     pluginBridgeProtocol();
     liveRecordingWaveform();
+    synchronizedRecordingCapture();
+    multitrackRecordingTargets();
+    multitrackRecordingCommand();
 
     if (failures == 0)
     {

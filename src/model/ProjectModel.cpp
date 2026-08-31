@@ -356,6 +356,27 @@ const Track* Project::findTrackContainingClip(const juce::String& clipId) const
     return iterator == tracks.cend() ? nullptr : &*iterator;
 }
 
+std::vector<juce::String> Project::armedAudioParentTrackIds() const
+{
+    std::vector<juce::String> parentIds;
+    for (const auto& track : tracks)
+    {
+        if (track.type != TrackType::audio || !track.armed)
+            continue;
+
+        const auto parentId = track.parentTrackId.isNotEmpty()
+            ? track.parentTrackId
+            : track.id;
+        const auto* parent = findTrack(parentId);
+        if (parent == nullptr || parent->type != TrackType::audio)
+            continue;
+
+        if (std::find(parentIds.cbegin(), parentIds.cend(), parentId) == parentIds.cend())
+            parentIds.push_back(parentId);
+    }
+    return parentIds;
+}
+
 double Project::lengthSeconds() const noexcept
 {
     double length = 8.0;

@@ -160,6 +160,139 @@ void AddClipCommand::undo(Project& project)
         }), track->clips.end());
 }
 
+AddRecordingTakeCommand::AddRecordingTakeCommand(std::vector<Track> tracksToAdd)
+    : tracks(std::move(tracksToAdd))
+{
+}
+
+juce::String AddRecordingTakeCommand::name() const
+{
+    return tracks.size() == 1 ? "Record take" : "Record multitrack take";
+}
+
+bool AddRecordingTakeCommand::perform(Project& project, juce::String& error)
+{
+    if (tracks.empty())
+    {
+        error = "A recording take must contain at least one track.";
+        return false;
+    }
+
+    for (std::size_t index = 0; index < tracks.size(); ++index)
+    {
+        const auto& track = tracks[index];
+        const auto* parent = project.findTrack(track.parentTrackId);
+        if (track.type != TrackType::audio
+            || track.parentTrackId.isEmpty()
+            || parent == nullptr
+            || parent->type != TrackType::audio)
+        {
+            error = "Every recording take requires an existing audio parent track.";
+            return false;
+        }
+        if (track.versionNumber <= 0 || track.clips.size() != 1)
+        {
+            error = "Every recording take requires one version number and one audio clip.";
+            return false;
+        }
+        if (project.findTrack(track.id) != nullptr)
+        {
+            error = "A recording take track with the same ID already exists.";
+            return false;
+        }
+
+        for (std::size_t otherIndex = 0; otherIndex < tracks.size(); ++otherIndex)
+        {
+            if (index == otherIndex)
+                continue;
+
+            const auto& other = tracks[otherIndex];
+            if (track.id == other.id
+                || (track.parentTrackId == other.parentTrackId
+                    && track.versionNumber == other.versionNumber))
+            {
+                error = "Recording take tracks must have unique IDs and version numbers.";
+                return false;
+            }
+        }
+
+        const auto versionExists = std::any_of(
+            project.tracks.cbegin(),
+            project.tracks.cend(),
+            [&track](const auto& candidate)
+            {
+                return candidate.parentTrackId == track.parentTrackId
+                    && candidate.versionNumber == track.versionNumber;
+            });
+        if (versionExists)
+        {
+            error = "A recording take with the same version number already exists.";
+            return false;
+        }
+    }
+
+    if (!capturedOriginal)
+    {
+        for (const auto& track : tracks)
+        {
+            if (std::none_of(parentCollapseStates.cbegin(),
+                             parentCollapseStates.cend(),
+                             [&track](const auto& state)
+                             {
+                                 return state.first == track.parentTrackId;
+                             }))
+            {
+                parentCollapseStates.emplace_back(
+                    track.parentTrackId,
+                    project.findTrack(track.parentTrackId)->versionsCollapsed);
+            }
+        }
+        capturedOriginal = true;
+    }
+
+    for (const auto& track : tracks)
+    {
+        const auto parent = std::find_if(project.tracks.begin(),
+                                         project.tracks.end(),
+                                         [&track](const auto& candidate)
+        {
+            return candidate.id == track.parentTrackId;
+        });
+        auto insertion = parent + 1;
+        while (insertion != project.tracks.end()
+               && insertion->parentTrackId == track.parentTrackId)
+            ++insertion;
+        project.tracks.insert(insertion, track);
+    }
+
+    for (const auto& [parentId, ignored] : parentCollapseStates)
+        if (auto* parent = project.findTrack(parentId))
+            parent->versionsCollapsed = false;
+
+    return true;
+}
+
+void AddRecordingTakeCommand::undo(Project& project)
+{
+    project.tracks.erase(
+        std::remove_if(project.tracks.begin(),
+                       project.tracks.end(),
+                       [this](const auto& candidate)
+                       {
+                           return std::any_of(tracks.cbegin(),
+                                              tracks.cend(),
+                                              [&candidate](const auto& recorded)
+                                              {
+                                                  return candidate.id == recorded.id;
+                                              });
+                       }),
+        project.tracks.end());
+
+    for (const auto& [parentId, collapsed] : parentCollapseStates)
+        if (auto* parent = project.findTrack(parentId))
+            parent->versionsCollapsed = collapsed;
+}
+
 MoveClipCommand::MoveClipCommand(juce::String clipToMove,
                                  double destinationSeconds,
                                  juce::String destinationTrackId)

@@ -44,23 +44,20 @@ void TimelineComponent::setViewportPosition(int horizontalPosition)
     repaint();
 }
 
-void TimelineComponent::setRecordingPreview(juce::String trackId,
-                                            double startSeconds,
-                                            double durationSeconds,
-                                            std::vector<float> waveformPeaks)
+void TimelineComponent::setRecordingPreviews(std::vector<RecordingPreview> previews)
 {
-    recordingTrackId = std::move(trackId);
-    recordingStartSeconds = std::max(0.0, startSeconds);
-    recordingDurationSeconds = std::max(0.0, durationSeconds);
-    recordingPeaks = std::move(waveformPeaks);
+    for (auto& preview : previews)
+    {
+        preview.startSeconds = std::max(0.0, preview.startSeconds);
+        preview.durationSeconds = std::max(0.0, preview.durationSeconds);
+    }
+    recordingPreviews = std::move(previews);
     repaint();
 }
 
-void TimelineComponent::clearRecordingPreview()
+void TimelineComponent::clearRecordingPreviews()
 {
-    recordingTrackId.clear();
-    recordingDurationSeconds = 0.0;
-    recordingPeaks.clear();
+    recordingPreviews.clear();
     repaint();
 }
 
@@ -83,7 +80,9 @@ float TimelineComponent::xForSeconds(double seconds) const noexcept
 int TimelineComponent::preferredWidth(int minimumWidth) const
 {
     const auto projectSeconds = project != nullptr ? project->lengthSeconds() : 8.0;
-    const auto previewEnd = recordingStartSeconds + recordingDurationSeconds;
+    auto previewEnd = 0.0;
+    for (const auto& preview : recordingPreviews)
+        previewEnd = std::max(previewEnd, preview.startSeconds + preview.durationSeconds);
     const auto seconds = std::max(projectSeconds, previewEnd) + 8.0;
     return std::max(minimumWidth,
                     trackHeaderWidth + static_cast<int>(std::ceil(seconds * pixelsPerSecond)));
@@ -347,23 +346,24 @@ void TimelineComponent::paint(juce::Graphics& graphics)
                           juce::Justification::centredLeft);
     }
 
-    if (recordingTrackId.isNotEmpty())
+    const auto visible = visibleTracks();
+    for (const auto& recordingPreview : recordingPreviews)
     {
-        const auto visible = visibleTracks();
         const auto iterator = std::find_if(visible.cbegin(),
                                            visible.cend(),
-                                           [this](const auto* track)
+                                           [&recordingPreview](const auto* track)
         {
-            return track->id == recordingTrackId;
+            return track->id == recordingPreview.trackId;
         });
         if (iterator != visible.cend())
         {
             const auto index = static_cast<int>(std::distance(visible.cbegin(), iterator));
             const auto y = rulerHeight + index * trackHeight + 12;
             const juce::Rectangle<float> preview(
-                secondsToX(recordingStartSeconds),
+                secondsToX(recordingPreview.startSeconds),
                 static_cast<float>(y),
-                static_cast<float>(std::max(96.0, recordingDurationSeconds * pixelsPerSecond)),
+                static_cast<float>(std::max(96.0,
+                                            recordingPreview.durationSeconds * pixelsPerSecond)),
                 trackHeight - 24.0f);
             graphics.setColour(juce::Colour(StudioColours::orange).withAlpha(0.72f));
             graphics.fillRoundedRectangle(preview, 5.0f);
@@ -375,10 +375,12 @@ void TimelineComponent::paint(juce::Graphics& graphics)
                                         preview.getX() + 6.0f,
                                         preview.getRight() - 6.0f);
 
-            if (!recordingPeaks.empty())
+            if (!recordingPreview.waveformPeaks.empty())
             {
                 const auto columns = juce::jmax(1,
-                                                juce::jmin(static_cast<int>(recordingPeaks.size()),
+                                                juce::jmin(
+                                                    static_cast<int>(
+                                                        recordingPreview.waveformPeaks.size()),
                                                            static_cast<int>(preview.getWidth()) - 12));
                 const auto maximumHeight = preview.getHeight() * 0.32f;
                 graphics.setColour(juce::Colours::white.withAlpha(0.62f));
@@ -387,11 +389,14 @@ void TimelineComponent::paint(juce::Graphics& graphics)
                     const auto peakIndex = static_cast<std::size_t>(
                         static_cast<double>(column)
                         / static_cast<double>(columns)
-                        * static_cast<double>(recordingPeaks.size()));
+                        * static_cast<double>(
+                            recordingPreview.waveformPeaks.size()));
                     const auto peak = std::sqrt(juce::jlimit(
                         0.0f,
                         1.0f,
-                        recordingPeaks[std::min(peakIndex, recordingPeaks.size() - 1)]));
+                        recordingPreview.waveformPeaks[std::min(
+                           peakIndex,
+                           recordingPreview.waveformPeaks.size() - 1)]));
                     const auto x = preview.getX()
                         + 6.0f
                         + static_cast<float>(column)
@@ -405,7 +410,9 @@ void TimelineComponent::paint(juce::Graphics& graphics)
 
             graphics.setColour(juce::Colours::white);
             graphics.setFont(juce::Font(juce::FontOptions(12.0f, juce::Font::bold)));
-            graphics.drawText("RECORDING  " + juce::String(recordingDurationSeconds, 1) + " s",
+            graphics.drawText("RECORDING  "
+                                 + juce::String(recordingPreview.durationSeconds, 1)
+                                 + " s",
                               preview.toNearestInt().withHeight(24).reduced(8, 0),
                               juce::Justification::centredLeft);
         }

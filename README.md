@@ -11,7 +11,7 @@ optimized for modern metal production without making the core DAW unfamiliar.
 The repository now contains a working native C++20 and JUCE 9 application with:
 
 - CoreAudio/ASIO/WASAPI device selection, transport, metronome, looping, and
-  lock-free audio recording
+  sample-aligned lock-free multitrack audio recording
 - Audio import, playback, track arm/mute/solo, gain, pan, clip move, split,
   delete, undo, and redo
 - Out-of-process VST3 and Audio Unit discovery with a persistent searchable
@@ -87,17 +87,20 @@ loading, ready, missing, bypassed, crashed, and late-block states. Click a
 crashed insert status to reload its worker.
 
 Each timeline track header has **M**, **S**, and **R** controls for mute, solo,
-and record arm. Use either **+ AUDIO TRACK** control to add tracks. Pressing
-**REC** with an unarmed audio track selected arms it automatically and starts
-transport; press **REC** or **STOP** to finish the take. The session sidebar
+and record arm. Use either **+ AUDIO TRACK** control to add tracks. **REC**
+captures every armed audio parent from its configured mono or stereo hardware
+input into a separate sample-aligned WAV. If no track is armed, the selected
+audio track becomes the recording target for that pass. Press **REC** or
+**STOP** to finish all files at the same callback boundary. The session sidebar
 also duplicates or deletes the selected non-master track with full undo support.
 
-Each new take on an existing audio track is recorded to a grouped `v1`, `v2`,
-`v3`, ... child track directly below its parent. Version tracks retain normal
-arm, mute, solo, split, trim, move, and delete behavior. The parent can collapse
-the versions and shows their combined waveform/result. Two-finger/right-click
-the left track header for mute, solo, arm, collapse/expand, and group-aware
-delete actions.
+Each completed pass creates grouped `v1`, `v2`, `v3`, ... child tracks directly
+below every recorded parent. A multitrack pass enters the project as one
+undoable command, so every synchronized lane is added, undone, or redone
+together. Version tracks retain normal arm, mute, solo, split, trim, move, and
+delete behavior. The parent can collapse the versions and shows their combined
+waveform/result. Two-finger/right-click the left track header for mute, solo,
+arm, collapse/expand, and group-aware delete actions.
 
 The track inspector selects the hardware input, chooses mono or adjacent-channel
 stereo capture, and enables software monitoring. Monitoring is off by default

@@ -11,6 +11,7 @@
 #include <juce_audio_utils/juce_audio_utils.h>
 
 #include <memory>
+#include <vector>
 
 namespace studio
 {
@@ -28,6 +29,13 @@ public:
 private:
     class MixerPanel;
     class InsertPanel;
+
+    struct ActiveRecordingTarget
+    {
+        juce::String parentTrackId;
+        Track versionTrack;
+        juce::File file;
+    };
 
     void timerCallback() override;
     bool keyPressed(const juce::KeyPress& key) override;
@@ -47,8 +55,8 @@ private:
     void toggleRecording();
     void stopTransportAndRecording();
     void finishRecording();
-    void completeRecording(const juce::String& trackId,
-                           StudioAudioEngine::RecordingResult recording);
+    void completeRecording(std::vector<ActiveRecordingTarget> targets,
+                           std::vector<StudioAudioEngine::RecordingResult> recordings);
     void addAudioTrack();
     void duplicateSelectedTrack();
     void deleteSelectedTrack();
@@ -71,7 +79,7 @@ private:
     [[nodiscard]] std::vector<StudioAudioEngine::PluginRuntimeRequest> pluginRuntimeRequests() const;
     bool perform(std::unique_ptr<ProjectCommand> command);
     void changeSelectedTrackState(const std::function<void(TrackMixState&)>& change);
-    Track* createRecordingVersionTrack();
+    [[nodiscard]] Track makeRecordingVersionTrack(const Track& parent) const;
     Track* recordingTrack();
     void setStatus(const juce::String& message, bool error = false);
     void showError(const juce::String& title, const juce::String& message);
@@ -83,8 +91,7 @@ private:
     Project project { Project::createDefault() };
     CommandStack commandStack;
     juce::File projectPackage;
-    juce::File activeRecording;
-    juce::String activeRecordingTrackId;
+    std::vector<ActiveRecordingTarget> activeRecordingTargets;
     double recordingStartSeconds = 0.0;
     juce::String selectedTrackId;
     juce::String selectedClipId;

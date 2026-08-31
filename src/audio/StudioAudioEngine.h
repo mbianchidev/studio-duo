@@ -19,12 +19,27 @@ namespace studio
 class StudioAudioEngine final : private juce::AudioIODeviceCallback
 {
 public:
+    static constexpr std::size_t maximumRecordingTracks = 64;
+
     struct RecordingResult
     {
         juce::Result result { juce::Result::ok() };
         juce::File file;
         double durationSeconds = 0.0;
         juce::String warning;
+    };
+
+    struct RecordingRequest
+    {
+        juce::File file;
+        int firstInputChannel = 0;
+        int channels = 1;
+    };
+
+    struct RecordingProgress
+    {
+        double durationSeconds = 0.0;
+        std::vector<float> waveform;
     };
 
     struct PluginRuntimeRequest
@@ -82,19 +97,16 @@ public:
     [[nodiscard]] float leftPeak() const noexcept;
     [[nodiscard]] float rightPeak() const noexcept;
     [[nodiscard]] double currentSampleRate() const noexcept;
-    [[nodiscard]] double recordingDurationSeconds() const noexcept;
-    [[nodiscard]] std::vector<float> recordingWaveform() const;
+    [[nodiscard]] std::vector<RecordingProgress> recordingProgress() const;
     [[nodiscard]] std::vector<PluginRuntimeStatus> pluginRuntimeStatuses() const;
     [[nodiscard]] std::uint64_t pluginLateBlockCount() const noexcept;
     [[nodiscard]] bool pluginRuntimeTransitionPending() const;
     void forcePluginRuntimeReload(const Project& project,
                                   std::vector<PluginRuntimeRequest> pluginRequests);
 
-    juce::Result startRecording(const juce::File& destination,
-                                int firstInputChannel,
-                                int channels);
-    RecordingResult stopRecording();
-    void stopRecordingAsync(std::function<void(RecordingResult)> completion);
+    juce::Result startRecording(const std::vector<RecordingRequest>& requests);
+    std::vector<RecordingResult> stopRecording();
+    void stopRecordingAsync(std::function<void(std::vector<RecordingResult>)> completion);
     std::optional<double> audioFileDuration(const juce::File& source, juce::String& error);
     juce::Result renderToWav(const Project& project, const juce::File& destination, double sampleRate);
 
@@ -205,7 +217,9 @@ private:
         void stopAccepting() noexcept;
         RecordingResult finishStop();
         void push(const float* const* inputs, int inputChannels, int samples) noexcept;
+        void noteDroppedSamples(int samples) noexcept;
         [[nodiscard]] bool isActive() const noexcept;
+        [[nodiscard]] int availableSamples() const noexcept;
         [[nodiscard]] double capturedDurationSeconds() const noexcept;
         [[nodiscard]] std::vector<float> waveform() const;
 
@@ -214,7 +228,7 @@ private:
 
         static constexpr int capacitySamples = 1 << 20;
         juce::AbstractFifo fifo { capacitySamples };
-        juce::AudioBuffer<float> ringBuffer { 2, capacitySamples };
+        std::unique_ptr<juce::AudioBuffer<float>> ringBuffer;
         std::unique_ptr<juce::AudioFormatWriter> writer;
         std::atomic<bool> accepting { false };
         std::atomic<std::int64_t> samplesWritten { 0 };
@@ -224,7 +238,7 @@ private:
         double recordingSampleRate = 48000.0;
         int recordingChannels = 1;
         int recordingFirstInputChannel = 0;
-        RecordingWaveform recordingWaveform;
+        std::unique_ptr<RecordingWaveform> recordingWaveform;
     };
 
     std::optional<RenderSnapshot> buildSnapshot(const Project& project,
@@ -265,6 +279,8 @@ private:
                                                   int snapshotIndex,
                                                   int runtimeIndex) noexcept;
     int chooseWritableRuntime() const noexcept;
+    void waitForRecordingCallbacks() const noexcept;
+    std::vector<RecordingResult> finishRecordingSession();
     static void addMetronome(const RenderSnapshot& snapshot,
                              std::int64_t timelineSample,
                              float& left,
@@ -320,7 +336,10 @@ private:
     mutable juce::CriticalSection pluginStatusLock;
     std::vector<PluginRuntimeStatus> pluginStatuses;
     std::atomic<std::uint64_t> pluginLateBlocks { 0 };
-    LockFreeRecorder recorder;
+    std::array<std::unique_ptr<LockFreeRecorder>, maximumRecordingTracks> recorders;
+    std::atomic<int> activeRecorderCount { 0 };
+    std::atomic<bool> recordingAccepting { false };
+    mutable std::atomic<int> recordingCallbacksInFlight { 0 };
     juce::ThreadPool recordingFinalizer { 1 };
     std::atomic<bool> recordingFinalizing { false };
 
