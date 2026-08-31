@@ -36,6 +36,9 @@ set(STUDIO_DUO_MODEL_SOURCES
 )
 
 set(STUDIO_DUO_PLUGIN_SOURCES
+    src/plugin_host/PluginBridgeClient.cpp
+    src/plugin_host/PluginBridgeClient.h
+    src/plugin_host/PluginBridgeProtocol.h
     src/plugin_host/PluginCatalog.cpp
     src/plugin_host/PluginCatalog.h
 )
@@ -60,6 +63,8 @@ target_sources(
         src/audio/StudioAudioEngine.h
         src/plugin_host/PluginBrowserComponent.cpp
         src/plugin_host/PluginBrowserComponent.h
+        src/plugin_host/PluginBridgeWorker.cpp
+        src/plugin_host/PluginBridgeWorker.h
         src/plugin_host/PluginScanWorker.cpp
         src/plugin_host/PluginScanWorker.h
         src/ui/MainComponent.cpp

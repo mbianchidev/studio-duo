@@ -1,4 +1,5 @@
 #include "ui/MainComponent.h"
+#include "plugin_host/PluginBridgeWorker.h"
 #include "plugin_host/PluginScanWorker.h"
 
 #include <juce_gui_extra/juce_gui_extra.h>
@@ -25,6 +26,13 @@ public:
 
     void initialise(const juce::String& commandLine) override
     {
+        auto bridgeWorker = std::make_unique<PluginBridgeWorker>();
+        if (bridgeWorker->initialise(commandLine))
+        {
+            pluginBridgeWorker = std::move(bridgeWorker);
+            return;
+        }
+
         auto worker = std::make_unique<PluginScanWorker>();
         if (worker->initialise(commandLine))
         {
@@ -39,6 +47,7 @@ public:
     {
         mainWindow.reset();
         pluginScanWorker.reset();
+        pluginBridgeWorker.reset();
     }
 
     void systemRequestedQuit() override
@@ -75,6 +84,7 @@ private:
 
     std::unique_ptr<MainWindow> mainWindow;
     std::unique_ptr<PluginScanWorker> pluginScanWorker;
+    std::unique_ptr<PluginBridgeWorker> pluginBridgeWorker;
 };
 }
 START_JUCE_APPLICATION(studio::StudioDuoApplication)

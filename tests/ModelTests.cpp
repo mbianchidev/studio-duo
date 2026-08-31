@@ -1,5 +1,6 @@
 #include "model/ProjectCommands.h"
 #include "plugin_host/PluginCatalog.h"
+#include "plugin_host/PluginBridgeProtocol.h"
 #include "project_io/ProjectFile.h"
 
 #include <cmath>
@@ -154,6 +155,29 @@ void pluginCatalogFiltering()
     expect(!studio::PluginCatalog::matchesQuery(entry, "compressor"),
            "Plugin filter rejects unrelated terms.");
 }
+
+void pluginBridgeProtocol()
+{
+    studio::PluginBridgeSharedState state;
+    state.numChannels.store(2);
+    state.numSamples.store(4);
+    state.input[0][0] = 0.25f;
+    state.input[0][1] = -0.5f;
+    state.input[1][0] = 0.75f;
+    state.input[1][1] = -1.0f;
+    state.hostSequence.store(1, std::memory_order_release);
+
+    expect(studio::PluginBridgeProtocol::isValid(state), "Bridge protocol header is valid.");
+    expect(studio::PluginBridgeProtocol::processAvailableBlock(state),
+           "Bridge worker processes a published block.");
+    expect(state.workerSequence.load(std::memory_order_acquire) == 1,
+           "Bridge worker acknowledges the host sequence.");
+    expect(std::abs(state.output[0][0] - 0.25f) < 0.0001f
+               && std::abs(state.output[1][1] + 1.0f) < 0.0001f,
+           "Bridge transport preserves stereo samples.");
+    expect(!studio::PluginBridgeProtocol::processAvailableBlock(state),
+           "Bridge worker does not process the same block twice.");
+}
 }
 
 int main()
@@ -162,6 +186,7 @@ int main()
     commandHistory();
     packagePersistence();
     pluginCatalogFiltering();
+    pluginBridgeProtocol();
 
     if (failures == 0)
     {
