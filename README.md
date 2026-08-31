@@ -113,7 +113,7 @@ percentage button reflects the current zoom and resets it when clicked.
 
 Two-finger click or right-click the timeline to move the playhead and open the
 clip context menu. Trim start, split, trim end, and delete show their keyboard
-shortcuts alongside each action.
+shortcuts alongside each action, and the menu opens at the gesture point.
 
 ## Documentation
 
