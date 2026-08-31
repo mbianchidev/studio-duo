@@ -98,3 +98,7 @@ Recording is associated with a stable track ID captured when the take starts,
 so changing the UI selection cannot move the resulting clip to another track.
 Starting a take auto-arms the selected audio track when necessary and starts
 transport at the clip start position.
+
+Track creation, duplication, and deletion are typed commands. Duplication
+regenerates the track, clip, and insert IDs so later edits never alias the
+source track. The master track is protected from duplicate and delete actions.

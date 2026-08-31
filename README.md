@@ -80,7 +80,8 @@ track.
 Each timeline track header has **M**, **S**, and **R** controls for mute, solo,
 and record arm. Use either **+ AUDIO TRACK** control to add tracks. Pressing
 **REC** with an unarmed audio track selected arms it automatically and starts
-transport; press **REC** or **STOP** to finish the take.
+transport; press **REC** or **STOP** to finish the take. The session sidebar
+also duplicates or deletes the selected non-master track with full undo support.
 
 ## Documentation
 
