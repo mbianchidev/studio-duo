@@ -115,7 +115,6 @@ if(STUDIO_DUO_BUILD_TESTS)
         PRIVATE
             tests/ModelTests.cpp
             ${STUDIO_DUO_MODEL_SOURCES}
-            ${STUDIO_DUO_PLUGIN_SOURCES}
     )
 
     target_include_directories(StudioDuoTests PRIVATE src)
@@ -125,22 +124,13 @@ if(STUDIO_DUO_BUILD_TESTS)
         PRIVATE
             JUCE_USE_CURL=0
             JUCE_WEB_BROWSER=0
-            JUCE_PLUGINHOST_VST=0
-            JUCE_PLUGINHOST_VST3=1
             STUDIO_DUO_VERSION="${PROJECT_VERSION}"
     )
-
-    if(APPLE)
-        target_compile_definitions(StudioDuoTests PRIVATE JUCE_PLUGINHOST_AU=1)
-    else()
-        target_compile_definitions(StudioDuoTests PRIVATE JUCE_PLUGINHOST_AU=0)
-    endif()
 
     target_link_libraries(
         StudioDuoTests
         PRIVATE
             juce::juce_audio_formats
-            juce::juce_audio_processors
             juce::juce_data_structures
             juce::juce_graphics
         PUBLIC

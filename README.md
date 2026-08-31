@@ -14,6 +14,8 @@ The repository now contains a working native C++20 and JUCE 9 application with:
   lock-free audio recording
 - Audio import, playback, track arm/mute/solo, gain, pan, clip move, split,
   delete, undo, and redo
+- Out-of-process VST3 and Audio Unit discovery with a persistent searchable
+  catalog, timeout isolation, and crash blacklisting
 - A dark single-window arrangement, inspector, transport, and mixer workspace
 - Versioned `.studioduo` directory packages with generation-based saves and a
   recovery point
@@ -21,9 +23,10 @@ The repository now contains a working native C++20 and JUCE 9 application with:
 - Automated model, command-history, and project-persistence tests on macOS and
   Windows
 
-This is the first vertical slice, not the full 1.0 feature set. Plugin hosting,
-linked multitrack editing, MIDI, mastering, DAWproject exchange, and the bundled
-device suite remain on the accepted roadmap.
+This is the first vertical slice, not the full 1.0 feature set. Sandboxed DSP
+bridging and plugin inserts, linked multitrack editing, MIDI, mastering,
+DAWproject exchange, and the bundled device suite remain on the accepted
+roadmap.
 
 ## Build
 
@@ -62,7 +65,8 @@ open "build/StudioDuo_artefacts/Release/Studio Duo.app"
 | Delete selected clip | `Delete` or `Backspace` |
 
 Use **I/O** to select audio devices. Arm an audio track before recording. Drag
-clips to move them on the beat grid.
+clips to move them on the beat grid. Use **SCAN** in the plugin catalog to probe
+installed VST3 and Audio Unit plugins outside the main process.
 
 ## Documentation
 

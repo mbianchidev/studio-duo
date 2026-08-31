@@ -40,7 +40,21 @@ public:
     [[nodiscard]] juce::StringArray availableFormats() const;
     [[nodiscard]] juce::File dataDirectory() const;
 
-    static bool matchesQuery(const PluginCatalogEntry& entry, const juce::String& query);
+    static bool matchesQuery(const PluginCatalogEntry& entry, const juce::String& query)
+    {
+        const auto terms = juce::StringArray::fromTokens(query.toLowerCase(), " ", "");
+        const auto searchable = (entry.name + " "
+                                 + entry.manufacturer + " "
+                                 + entry.category + " "
+                                 + entry.format)
+                                    .toLowerCase();
+
+        for (const auto& term : terms)
+            if (term.isNotEmpty() && !searchable.contains(term))
+                return false;
+
+        return true;
+    }
 
 private:
     void run() override;

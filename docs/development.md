@@ -41,6 +41,24 @@ Versioned project model
 Project package I/O and audio engine
 ```
 
+Plugin discovery sits beside the main process boundary:
+
+```text
+Plugin browser and persistent catalog
+        |
+Per-plugin coordinator request
+        |
+Studio Duo scan worker process
+        |
+VST3 / Audio Unit metadata probe
+```
+
+The scanner launches the Studio Duo executable in worker mode, sends one plugin
+identifier at a time, enforces a 30-second response deadline, and blacklists a
+plugin when its worker disconnects or times out. The worker remains reusable
+for the app session so repeated scans do not leave terminated child processes
+waiting to be reaped.
+
 Project saves use a `.studioduo` directory package. Session data is written to
 a new generation before `manifest.json` is atomically replaced. The latest
 complete state is also copied to `recovery/latest.json`.

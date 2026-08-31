@@ -152,7 +152,6 @@ public:
 
     void scanFinished() override
     {
-        coordinator.reset();
     }
 
 private:
@@ -297,25 +296,6 @@ juce::StringArray PluginCatalog::availableFormats() const
 juce::File PluginCatalog::dataDirectory() const
 {
     return catalogDirectory;
-}
-
-bool PluginCatalog::matchesQuery(const PluginCatalogEntry& entry, const juce::String& query)
-{
-    const auto terms = juce::StringArray::fromTokens(query.toLowerCase(), " ", "");
-    for (const auto& term : terms)
-    {
-        if (term.isEmpty())
-            continue;
-
-        const auto searchable = (entry.name + " "
-                                 + entry.manufacturer + " "
-                                 + entry.category + " "
-                                 + entry.format)
-                                    .toLowerCase();
-        if (!searchable.contains(term))
-            return false;
-    }
-    return true;
 }
 
 void PluginCatalog::run()
