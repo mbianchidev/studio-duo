@@ -389,6 +389,8 @@ void TimelineComponent::mouseDown(const juce::MouseEvent& event)
 
         if (onClipSelected)
             onClipSelected(hit.trackId, hit.clipId);
+        if (onSeek)
+            onSeek(xToSeconds(event.position.x));
         repaint();
         return;
     }
@@ -396,10 +398,14 @@ void TimelineComponent::mouseDown(const juce::MouseEvent& event)
     const auto trackIndex = trackIndexAt(event.position.y);
     if (project != nullptr && trackIndex >= 0 && trackIndex < static_cast<int>(project->tracks.size()))
     {
-        selectedTrackId = project->tracks[static_cast<std::size_t>(trackIndex)].id;
-        selectedClipId.clear();
-        if (onTrackSelected)
-            onTrackSelected(selectedTrackId);
+        const auto clickedTrackId = project->tracks[static_cast<std::size_t>(trackIndex)].id;
+        if (clickedTrackId != selectedTrackId)
+        {
+            selectedTrackId = clickedTrackId;
+            selectedClipId.clear();
+            if (onTrackSelected)
+                onTrackSelected(selectedTrackId);
+        }
     }
 
     if (event.position.x >= trackHeaderWidth && onSeek)

@@ -305,6 +305,8 @@ MainComponent::MainComponent()
     configureButton(monitorButton, "Monitor the selected track input through Studio Duo");
     configureButton(splitClipButton, "Split the selected clip at the playhead");
     configureButton(deleteClipButton, "Delete the selected clip");
+    configureButton(trimClipStartButton, "Trim selected clip start to playhead ([)");
+    configureButton(trimClipEndButton, "Trim selected clip end to playhead (])");
 
     newButton.onClick = [this] { createNewProject(); };
     openButton.onClick = [this] { beginOpenProject(); };
@@ -347,6 +349,8 @@ MainComponent::MainComponent()
     };
     splitClipButton.onClick = [this] { splitSelectedClip(); };
     deleteClipButton.onClick = [this] { deleteSelectedClip(); };
+    trimClipStartButton.onClick = [this] { trimSelectedClipStartToPlayhead(); };
+    trimClipEndButton.onClick = [this] { trimSelectedClipEndToPlayhead(); };
 
     loopButton.setToggleState(project.loopEnabled, juce::dontSendNotification);
     loopButton.onClick = [this]
@@ -697,6 +701,10 @@ void MainComponent::resized()
     auto clipActions = inspector.removeFromTop(30);
     splitClipButton.setBounds(clipActions.removeFromLeft(118).reduced(2));
     deleteClipButton.setBounds(clipActions.removeFromLeft(96).reduced(2));
+    inspector.removeFromTop(4);
+    auto trimActions = inspector.removeFromTop(30);
+    trimClipStartButton.setBounds(trimActions.removeFromLeft(108).reduced(2));
+    trimClipEndButton.setBounds(trimActions.removeFromLeft(108).reduced(2));
     inspector.removeFromTop(8);
     inputLabel.setBounds(inspector.removeFromTop(20));
     inputSelector.setBounds(inspector.removeFromTop(30));
@@ -809,6 +817,18 @@ bool MainComponent::keyPressed(const juce::KeyPress& key)
     if (!command && key.getKeyCode() == 'S')
     {
         splitSelectedClip();
+        return true;
+    }
+
+    if (!command && key.getKeyCode() == '[')
+    {
+        trimSelectedClipStartToPlayhead();
+        return true;
+    }
+
+    if (!command && key.getKeyCode() == ']')
+    {
+        trimSelectedClipEndToPlayhead();
         return true;
     }
 
@@ -1260,6 +1280,51 @@ void MainComponent::splitSelectedClip()
     perform(std::make_unique<SplitClipCommand>(selectedClipId, audioEngine.positionSeconds()));
 }
 
+void MainComponent::trimSelectedClipStartToPlayhead()
+{
+    const auto* clip = project.findClip(selectedClipId);
+    if (clip == nullptr)
+    {
+        setStatus("Select a clip before trimming.", true);
+        return;
+    }
+
+    const auto cursor = audioEngine.positionSeconds();
+    if (cursor <= clip->startSeconds + 0.001 || cursor >= clip->endSeconds() - 0.001)
+    {
+        setStatus("Place the playhead inside the selected clip before trimming its start.", true);
+        return;
+    }
+
+    const auto removedDuration = cursor - clip->startSeconds;
+    perform(std::make_unique<TrimClipCommand>(clip->id,
+                                              cursor,
+                                              clip->sourceOffsetSeconds + removedDuration,
+                                              clip->durationSeconds - removedDuration));
+}
+
+void MainComponent::trimSelectedClipEndToPlayhead()
+{
+    const auto* clip = project.findClip(selectedClipId);
+    if (clip == nullptr)
+    {
+        setStatus("Select a clip before trimming.", true);
+        return;
+    }
+
+    const auto cursor = audioEngine.positionSeconds();
+    if (cursor <= clip->startSeconds + 0.001 || cursor >= clip->endSeconds() - 0.001)
+    {
+        setStatus("Place the playhead inside the selected clip before trimming its end.", true);
+        return;
+    }
+
+    perform(std::make_unique<TrimClipCommand>(clip->id,
+                                              clip->startSeconds,
+                                              clip->sourceOffsetSeconds,
+                                              cursor - clip->startSeconds));
+}
+
 void MainComponent::deleteSelectedClip()
 {
     if (selectedClipId.isEmpty())
@@ -1332,6 +1397,8 @@ void MainComponent::updateInspector()
         armButton.setEnabled(false);
         splitClipButton.setEnabled(false);
         deleteClipButton.setEnabled(false);
+        trimClipStartButton.setEnabled(false);
+        trimClipEndButton.setEnabled(false);
         inputSelector.setEnabled(false);
         stereoInputButton.setEnabled(false);
         monitorButton.setEnabled(false);
@@ -1352,6 +1419,8 @@ void MainComponent::updateInspector()
     armButton.setEnabled(track->type == TrackType::audio);
     splitClipButton.setEnabled(clip != nullptr);
     deleteClipButton.setEnabled(clip != nullptr);
+    trimClipStartButton.setEnabled(clip != nullptr);
+    trimClipEndButton.setEnabled(clip != nullptr);
     inputSelector.setEnabled(track->type == TrackType::audio);
     stereoInputButton.setEnabled(track->type == TrackType::audio
                                  && track->inputChannel + 1 < inputSelector.getNumItems());

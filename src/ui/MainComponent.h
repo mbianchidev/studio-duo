@@ -51,6 +51,8 @@ private:
     void deleteSelectedTrack();
     void addPluginToSelectedTrack(const PluginCatalogEntry& entry);
     void splitSelectedClip();
+    void trimSelectedClipStartToPlayhead();
+    void trimSelectedClipEndToPlayhead();
     void deleteSelectedClip();
     void undo();
     void redo();
@@ -121,6 +123,8 @@ private:
     juce::TextButton armButton { "ARM" };
     juce::TextButton splitClipButton { "SPLIT @ PLAYHEAD" };
     juce::TextButton deleteClipButton { "DELETE CLIP" };
+    juce::TextButton trimClipStartButton { "TRIM LEFT [" };
+    juce::TextButton trimClipEndButton { "TRIM RIGHT ]" };
 
     juce::Viewport timelineViewport;
     TimelineComponent timeline;
