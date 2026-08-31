@@ -63,6 +63,7 @@ private:
     void refreshInputControls();
     void updateInputMonitoring();
     void updateTimelineSize();
+    void zoomTimeline(double factor, bool reset = false);
     void projectChanged(bool writeRecovery = true, bool markDirty = true);
     bool perform(std::unique_ptr<ProjectCommand> command);
     void changeSelectedTrackState(const std::function<void(TrackMixState&)>& change);
@@ -126,6 +127,9 @@ private:
     juce::TextButton deleteClipButton { "DELETE CLIP" };
     juce::TextButton trimClipStartButton { "TRIM LEFT [" };
     juce::TextButton trimClipEndButton { "TRIM RIGHT ]" };
+    juce::TextButton zoomOutButton { "-" };
+    juce::TextButton zoomResetButton { "100%" };
+    juce::TextButton zoomInButton { "+" };
 
     juce::Viewport timelineViewport;
     TimelineComponent timeline;

@@ -22,6 +22,8 @@ public:
                              std::vector<float> waveformPeaks);
     void clearRecordingPreview();
     void setPixelsPerSecond(double pixels);
+    [[nodiscard]] double getPixelsPerSecond() const noexcept;
+    [[nodiscard]] float xForSeconds(double seconds) const noexcept;
     [[nodiscard]] int preferredWidth(int minimumWidth) const;
     [[nodiscard]] int preferredHeight(int minimumHeight) const;
 
@@ -34,11 +36,14 @@ public:
     std::function<void(const juce::String&, const juce::String&, double)> onClipMoved;
     std::function<void(const juce::String&, double, double, double)> onClipTrimmed;
     std::function<void(double)> onSeek;
+    std::function<void(double)> onZoomRequested;
 
     void paint(juce::Graphics& graphics) override;
     void mouseDown(const juce::MouseEvent& event) override;
     void mouseDrag(const juce::MouseEvent& event) override;
     void mouseUp(const juce::MouseEvent& event) override;
+    void mouseWheelMove(const juce::MouseEvent& event,
+                        const juce::MouseWheelDetails& wheel) override;
 
 private:
     struct Hit

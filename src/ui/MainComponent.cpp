@@ -307,6 +307,9 @@ MainComponent::MainComponent()
     configureButton(deleteClipButton, "Delete the selected clip");
     configureButton(trimClipStartButton, "Trim selected clip start to playhead ([)");
     configureButton(trimClipEndButton, "Trim selected clip end to playhead (])");
+    configureButton(zoomOutButton, "Zoom timeline out (Command/Ctrl+-)");
+    configureButton(zoomResetButton, "Reset timeline zoom (Command/Ctrl+0)");
+    configureButton(zoomInButton, "Zoom timeline in (Command/Ctrl++)");
 
     newButton.onClick = [this] { createNewProject(); };
     openButton.onClick = [this] { beginOpenProject(); };
@@ -346,6 +349,9 @@ MainComponent::MainComponent()
     deleteClipButton.onClick = [this] { deleteSelectedClip(); };
     trimClipStartButton.onClick = [this] { trimSelectedClipStartToPlayhead(); };
     trimClipEndButton.onClick = [this] { trimSelectedClipEndToPlayhead(); };
+    zoomOutButton.onClick = [this] { zoomTimeline(1.0 / 1.25); };
+    zoomResetButton.onClick = [this] { zoomTimeline(1.0, true); };
+    zoomInButton.onClick = [this] { zoomTimeline(1.25); };
 
     loopButton.setToggleState(project.loopEnabled, juce::dontSendNotification);
     loopButton.onClick = [this]
@@ -536,6 +542,7 @@ MainComponent::MainComponent()
         audioEngine.seekSeconds(seconds);
         timeline.setPlayheadSeconds(seconds);
     };
+    timeline.onZoomRequested = [this](double factor) { zoomTimeline(factor); };
 
     mixer = std::make_unique<MixerPanel>();
     mixer->setProject(&project);
@@ -659,6 +666,10 @@ void MainComponent::resized()
     statusLabel.setBounds(status.reduced(10, 0));
     mixer->setBounds(mixerBounds);
     auto editToolbar = bounds.removeFromTop(38).reduced(7, 4);
+    auto zoomControls = editToolbar.removeFromRight(132);
+    zoomOutButton.setBounds(zoomControls.removeFromLeft(36).reduced(2));
+    zoomResetButton.setBounds(zoomControls.removeFromLeft(60).reduced(2));
+    zoomInButton.setBounds(zoomControls.removeFromLeft(36).reduced(2));
     trimClipStartButton.setBounds(editToolbar.removeFromLeft(108).reduced(2));
     splitClipButton.setBounds(editToolbar.removeFromLeft(118).reduced(2));
     trimClipEndButton.setBounds(editToolbar.removeFromLeft(108).reduced(2));
@@ -739,7 +750,7 @@ void MainComponent::timerCallback()
                                        project.timeSignatureNumerator),
                           juce::dontSendNotification);
     playButton.setButtonText(audioEngine.isPlaying() ? "PAUSE" : "PLAY");
-    const auto recording = audioEngine.isRecording();
+    const auto recording = activeRecordingTrackId.isNotEmpty();
     recordButton.setButtonText(recording ? "STOP REC" : "REC");
     recordButton.setColour(juce::TextButton::buttonColourId,
                            juce::Colour(recording ? StudioColours::orange
@@ -812,6 +823,24 @@ bool MainComponent::keyPressed(const juce::KeyPress& key)
     if (command && key.getKeyCode() == 'Z')
     {
         shift ? redo() : undo();
+        return true;
+    }
+
+    if (command && key.getKeyCode() == '-')
+    {
+        zoomTimeline(1.0 / 1.25);
+        return true;
+    }
+
+    if (command && (key.getKeyCode() == '+' || key.getKeyCode() == '='))
+    {
+        zoomTimeline(1.25);
+        return true;
+    }
+
+    if (command && key.getKeyCode() == '0')
+    {
+        zoomTimeline(1.0, true);
         return true;
     }
 
@@ -1088,7 +1117,7 @@ void MainComponent::togglePlayback()
 
 void MainComponent::toggleRecording()
 {
-    if (audioEngine.isRecording())
+    if (activeRecordingTrackId.isNotEmpty())
     {
         finishRecording();
         return;
@@ -1145,10 +1174,9 @@ void MainComponent::toggleRecording()
 
 void MainComponent::stopTransportAndRecording()
 {
-    if (audioEngine.isRecording())
+    audioEngine.stop();
+    if (activeRecordingTrackId.isNotEmpty() || audioEngine.isRecording())
         finishRecording();
-    else
-        audioEngine.stop();
 
     recordButton.setButtonText("REC");
     recordButton.setColour(juce::TextButton::buttonColourId,
@@ -1164,8 +1192,8 @@ void MainComponent::finishRecording()
     timeline.clearRecordingPreview();
 
     auto* track = project.findTrack(activeRecordingTrackId);
-    const auto recording = audioEngine.stopRecording();
     audioEngine.stop();
+    const auto recording = audioEngine.stopRecording();
     activeRecordingTrackId.clear();
     if (recording.result.failed())
     {
@@ -1535,6 +1563,20 @@ void MainComponent::updateTimelineSize()
 
     timeline.setSize(timeline.preferredWidth(timelineViewport.getWidth()),
                      timeline.preferredHeight(timelineViewport.getHeight()));
+}
+
+void MainComponent::zoomTimeline(double factor, bool reset)
+{
+    const auto newPixelsPerSecond = reset
+        ? 96.0
+        : timeline.getPixelsPerSecond() * factor;
+    timeline.setPixelsPerSecond(newPixelsPerSecond);
+    updateTimelineSize();
+
+    const auto playheadX = static_cast<int>(timeline.xForSeconds(audioEngine.positionSeconds()));
+    timelineViewport.setViewPosition(juce::jmax(0,
+                                               playheadX - timelineViewport.getWidth() / 2),
+                                     timelineViewport.getViewPositionY());
 }
 
 void MainComponent::projectChanged(bool writeRecovery, bool markDirty)

@@ -60,6 +60,16 @@ void TimelineComponent::setPixelsPerSecond(double pixels)
     repaint();
 }
 
+double TimelineComponent::getPixelsPerSecond() const noexcept
+{
+    return pixelsPerSecond;
+}
+
+float TimelineComponent::xForSeconds(double seconds) const noexcept
+{
+    return secondsToX(seconds);
+}
+
 int TimelineComponent::preferredWidth(int minimumWidth) const
 {
     const auto projectSeconds = project != nullptr ? project->lengthSeconds() : 8.0;
@@ -192,11 +202,33 @@ void TimelineComponent::paint(juce::Graphics& graphics)
         if (clip == nullptr)
             continue;
 
+        const auto drawWaveform = [&graphics, clip](juce::Rectangle<float> waveformBounds,
+                                                    float alpha)
+        {
+            graphics.saveState();
+            graphics.reduceClipRegion(waveformBounds.toNearestInt().reduced(5));
+            const auto seed = static_cast<std::uint32_t>(clip->id.hashCode());
+            juce::Random random(seed);
+            const auto middle = waveformBounds.getCentreY() + 8.0f;
+            graphics.setColour(juce::Colours::white.withAlpha(alpha));
+            for (float x = waveformBounds.getX() + 8.0f;
+                 x < waveformBounds.getRight() - 4.0f;
+                 x += 4.0f)
+            {
+                const auto amplitude = random.nextFloat() * (waveformBounds.getHeight() * 0.23f);
+                graphics.drawVerticalLine(static_cast<int>(x),
+                                          middle - amplitude,
+                                          middle + amplitude);
+            }
+            graphics.restoreState();
+        };
+
         auto bounds = hit.bounds;
         if (draggedClipId == hit.clipId)
         {
             graphics.setColour(clip->colour.withAlpha(0.16f));
             graphics.fillRoundedRectangle(hit.bounds, 5.0f);
+            drawWaveform(hit.bounds, 0.12f);
             graphics.setColour(juce::Colours::white.withAlpha(0.28f));
             const float dashLengths[] { 4.0f, 4.0f };
             juce::Path originalShape;
@@ -213,68 +245,6 @@ void TimelineComponent::paint(juce::Graphics& graphics)
             bounds.setWidth(static_cast<float>(std::max(20.0,
                                                         dragPreviewDuration
                                                             * pixelsPerSecond)));
-        }
-
-        if (recordingTrackId.isNotEmpty())
-        {
-            const auto iterator = std::find_if(project->tracks.cbegin(),
-                                               project->tracks.cend(),
-                                               [this](const auto& track)
-            {
-                return track.id == recordingTrackId;
-            });
-            if (iterator != project->tracks.cend())
-            {
-                const auto index = static_cast<int>(std::distance(project->tracks.cbegin(), iterator));
-                const auto y = rulerHeight + index * trackHeight + 12;
-                const juce::Rectangle<float> preview(
-                    secondsToX(recordingStartSeconds),
-                    static_cast<float>(y),
-                    static_cast<float>(std::max(96.0, recordingDurationSeconds * pixelsPerSecond)),
-                    trackHeight - 24.0f);
-                graphics.setColour(juce::Colour(StudioColours::orange).withAlpha(0.72f));
-                graphics.fillRoundedRectangle(preview, 5.0f);
-                graphics.setColour(juce::Colours::white);
-                graphics.drawRoundedRectangle(preview, 5.0f, 1.5f);
-                const auto centre = preview.getCentreY() + 6.0f;
-                graphics.setColour(juce::Colours::white.withAlpha(0.24f));
-                graphics.drawHorizontalLine(static_cast<int>(centre),
-                                            preview.getX() + 6.0f,
-                                            preview.getRight() - 6.0f);
-
-                if (!recordingPeaks.empty())
-                {
-                    const auto columns = juce::jmax(1,
-                                                    juce::jmin(static_cast<int>(recordingPeaks.size()),
-                                                               static_cast<int>(preview.getWidth()) - 12));
-                    const auto maximumHeight = preview.getHeight() * 0.32f;
-                    graphics.setColour(juce::Colours::white.withAlpha(0.55f));
-                    for (int column = 0; column < columns; ++column)
-                    {
-                        const auto peakIndex = static_cast<std::size_t>(
-                            static_cast<double>(column)
-                            / static_cast<double>(columns)
-                            * static_cast<double>(recordingPeaks.size()));
-                        const auto peak = std::sqrt(juce::jlimit(
-                            0.0f,
-                            1.0f,
-                            recordingPeaks[std::min(peakIndex, recordingPeaks.size() - 1)]));
-                        const auto x = preview.getX()
-                            + 6.0f
-                            + static_cast<float>(column)
-                                / static_cast<float>(columns)
-                                * (preview.getWidth() - 12.0f);
-                        graphics.drawVerticalLine(static_cast<int>(x),
-                                                  centre - peak * maximumHeight,
-                                                  centre + peak * maximumHeight);
-                    }
-                }
-
-                graphics.setFont(juce::Font(juce::FontOptions(12.0f, juce::Font::bold)));
-                graphics.drawText("RECORDING  " + juce::String(recordingDurationSeconds, 1) + " s",
-                                  preview.toNearestInt().withHeight(24).reduced(8, 0),
-                                  juce::Justification::centredLeft);
-            }
         }
 
         const auto selected = hit.clipId == selectedClipId;
@@ -297,24 +267,76 @@ void TimelineComponent::paint(juce::Graphics& graphics)
                                           1.5f);
         }
 
-        graphics.saveState();
-        graphics.reduceClipRegion(bounds.toNearestInt().reduced(5));
-        const auto seed = static_cast<std::uint32_t>(clip->id.hashCode());
-        juce::Random random(seed);
-        const auto middle = bounds.getCentreY() + 8.0f;
-        graphics.setColour(juce::Colours::white.withAlpha(0.28f));
-        for (float x = bounds.getX() + 8.0f; x < bounds.getRight() - 4.0f; x += 4.0f)
-        {
-            const auto amplitude = random.nextFloat() * (bounds.getHeight() * 0.23f);
-            graphics.drawVerticalLine(static_cast<int>(x), middle - amplitude, middle + amplitude);
-        }
-        graphics.restoreState();
+        drawWaveform(bounds, 0.28f);
 
         graphics.setColour(juce::Colours::white);
         graphics.setFont(12.5f);
         graphics.drawText(clip->name,
                           bounds.toNearestInt().withHeight(24).reduced(8, 0),
                           juce::Justification::centredLeft);
+    }
+
+    if (recordingTrackId.isNotEmpty())
+    {
+        const auto iterator = std::find_if(project->tracks.cbegin(),
+                                           project->tracks.cend(),
+                                           [this](const auto& track)
+        {
+            return track.id == recordingTrackId;
+        });
+        if (iterator != project->tracks.cend())
+        {
+            const auto index = static_cast<int>(std::distance(project->tracks.cbegin(), iterator));
+            const auto y = rulerHeight + index * trackHeight + 12;
+            const juce::Rectangle<float> preview(
+                secondsToX(recordingStartSeconds),
+                static_cast<float>(y),
+                static_cast<float>(std::max(96.0, recordingDurationSeconds * pixelsPerSecond)),
+                trackHeight - 24.0f);
+            graphics.setColour(juce::Colour(StudioColours::orange).withAlpha(0.72f));
+            graphics.fillRoundedRectangle(preview, 5.0f);
+            graphics.setColour(juce::Colours::white);
+            graphics.drawRoundedRectangle(preview, 5.0f, 1.5f);
+            const auto centre = preview.getCentreY() + 6.0f;
+            graphics.setColour(juce::Colours::white.withAlpha(0.24f));
+            graphics.drawHorizontalLine(static_cast<int>(centre),
+                                        preview.getX() + 6.0f,
+                                        preview.getRight() - 6.0f);
+
+            if (!recordingPeaks.empty())
+            {
+                const auto columns = juce::jmax(1,
+                                                juce::jmin(static_cast<int>(recordingPeaks.size()),
+                                                           static_cast<int>(preview.getWidth()) - 12));
+                const auto maximumHeight = preview.getHeight() * 0.32f;
+                graphics.setColour(juce::Colours::white.withAlpha(0.62f));
+                for (int column = 0; column < columns; ++column)
+                {
+                    const auto peakIndex = static_cast<std::size_t>(
+                        static_cast<double>(column)
+                        / static_cast<double>(columns)
+                        * static_cast<double>(recordingPeaks.size()));
+                    const auto peak = std::sqrt(juce::jlimit(
+                        0.0f,
+                        1.0f,
+                        recordingPeaks[std::min(peakIndex, recordingPeaks.size() - 1)]));
+                    const auto x = preview.getX()
+                        + 6.0f
+                        + static_cast<float>(column)
+                            / static_cast<float>(columns)
+                            * (preview.getWidth() - 12.0f);
+                    graphics.drawVerticalLine(static_cast<int>(x),
+                                              centre - peak * maximumHeight,
+                                              centre + peak * maximumHeight);
+                }
+            }
+
+            graphics.setColour(juce::Colours::white);
+            graphics.setFont(juce::Font(juce::FontOptions(12.0f, juce::Font::bold)));
+            graphics.drawText("RECORDING  " + juce::String(recordingDurationSeconds, 1) + " s",
+                              preview.toNearestInt().withHeight(24).reduced(8, 0),
+                              juce::Justification::centredLeft);
+        }
     }
 
     const auto playheadX = secondsToX(playheadSeconds);
@@ -502,6 +524,18 @@ void TimelineComponent::mouseUp(const juce::MouseEvent&)
     dragPreviewTrackId.clear();
     dragMode = DragMode::none;
     repaint();
+}
+
+void TimelineComponent::mouseWheelMove(const juce::MouseEvent& event,
+                                       const juce::MouseWheelDetails& wheel)
+{
+    if ((event.mods.isCommandDown() || event.mods.isCtrlDown()) && onZoomRequested)
+    {
+        onZoomRequested(wheel.deltaY > 0.0f ? 1.2 : 1.0 / 1.2);
+        return;
+    }
+
+    juce::Component::mouseWheelMove(event, wheel);
 }
 
 std::vector<TimelineComponent::Hit> TimelineComponent::clipHits() const
