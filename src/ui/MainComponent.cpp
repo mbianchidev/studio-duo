@@ -1338,11 +1338,19 @@ void MainComponent::refreshInputControls()
     if (auto* device = deviceManager.getCurrentAudioDevice())
     {
         const auto names = device->getInputChannelNames();
+        const auto deviceName = device->getName().trim();
         for (int index = 0; index < names.size(); ++index)
-            inputSelector.addItem(names[index].isNotEmpty()
-                                      ? names[index]
-                                      : "Input " + juce::String(index + 1),
-                                  index + 1);
+        {
+            auto channelName = names[index].trim();
+            if (channelName.isEmpty() || channelName.containsOnly("0123456789"))
+                channelName = "Input " + juce::String(index + 1);
+
+            const auto displayName = deviceName.isNotEmpty()
+                    && !channelName.containsIgnoreCase(deviceName)
+                ? deviceName + " - " + channelName
+                : channelName;
+            inputSelector.addItem(displayName, index + 1);
+        }
     }
 
     if (inputSelector.getNumItems() == 0)
