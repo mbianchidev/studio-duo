@@ -66,6 +66,14 @@ relative opaque-state reference. This lets missing plugins survive project
 exchange and lets the upcoming DSP bridge activate the same model without a
 schema rewrite.
 
+The bridge transport maps a fixed-size file into the host and worker processes.
+The audio callback publishes only when the worker has consumed the prior input,
+then reads the previous completed output. It never allocates, locks, waits, or
+uses IPC. A late worker causes the client to reuse the last valid output, or
+silence before the first completed block, and increments a diagnostic counter.
+The current worker is a deterministic pass-through used to validate transport
+and lifecycle behavior before third-party plugin instances are activated.
+
 Project saves use a `.studioduo` directory package. Session data is written to
 a new generation before `manifest.json` is atomically replaced. The latest
 complete state is also copied to `recovery/latest.json`.

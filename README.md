@@ -18,6 +18,9 @@ The repository now contains a working native C++20 and JUCE 9 application with:
   catalog, timeout isolation, and crash blacklisting
 - Persistent per-track plugin insert chains with sandbox mode, bypass, removal,
   latency metadata, opaque state references, and missing-plugin preservation
+- A fixed one-block shared-memory bridge transport with lock-free sequence
+  counters, worker supervision, last-valid-output fallback, and late-block
+  diagnostics
 - A dark single-window arrangement, inspector, transport, and mixer workspace
 - Versioned `.studioduo` directory packages with generation-based saves and a
   recovery point
@@ -25,10 +28,10 @@ The repository now contains a working native C++20 and JUCE 9 application with:
 - Automated model, command-history, and project-persistence tests on macOS and
   Windows
 
-This is the first vertical slice, not the full 1.0 feature set. Activating
-inserts through the fixed-pipeline sandboxed DSP bridge, linked multitrack
-editing, MIDI, mastering, DAWproject exchange, and the bundled device suite
-remain on the accepted roadmap.
+This is the first vertical slice, not the full 1.0 feature set. Loading plugin
+instances inside the bridge worker, routing insert chains through it, linked
+multitrack editing, MIDI, mastering, DAWproject exchange, and the bundled
+device suite remain on the accepted roadmap.
 
 ## Build
 

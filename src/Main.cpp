@@ -1,8 +1,11 @@
 #include "ui/MainComponent.h"
+#include "plugin_host/PluginBridgeClient.h"
 #include "plugin_host/PluginBridgeWorker.h"
 #include "plugin_host/PluginScanWorker.h"
 
 #include <juce_gui_extra/juce_gui_extra.h>
+
+#include <cmath>
 
 namespace studio
 {
@@ -40,6 +43,13 @@ public:
             return;
         }
 
+        if (commandLine.contains("--bridge-self-test"))
+        {
+            bridgeSelfTest = std::make_unique<PluginBridgeClient>();
+            juce::MessageManager::callAsync([this] { runBridgeSelfTest(); });
+            return;
+        }
+
         mainWindow = std::make_unique<MainWindow>(getApplicationName());
     }
 
@@ -48,6 +58,7 @@ public:
         mainWindow.reset();
         pluginScanWorker.reset();
         pluginBridgeWorker.reset();
+        bridgeSelfTest.reset();
     }
 
     void systemRequestedQuit() override
@@ -60,6 +71,49 @@ public:
     }
 
 private:
+    void runBridgeSelfTest()
+    {
+        if (bridgeSelfTest == nullptr)
+        {
+            setApplicationReturnValue(1);
+            quit();
+            return;
+        }
+
+        const auto result = bridgeSelfTest->start();
+        if (result.failed())
+        {
+            juce::Logger::writeToLog("plugin.bridge.self-test: " + result.getErrorMessage());
+            setApplicationReturnValue(1);
+            quit();
+            return;
+        }
+
+        juce::AudioBuffer<float> firstBlock(2, 64);
+        for (int channel = 0; channel < firstBlock.getNumChannels(); ++channel)
+            juce::FloatVectorOperations::fill(firstBlock.getWritePointer(channel), 0.25f, 64);
+
+        bridgeSelfTest->processBlock(firstBlock);
+        bool passed = false;
+        for (int attempt = 0; attempt < 50 && !passed; ++attempt)
+        {
+            juce::Thread::sleep(2);
+            juce::AudioBuffer<float> nextBlock(2, 64);
+            for (int channel = 0; channel < nextBlock.getNumChannels(); ++channel)
+                juce::FloatVectorOperations::fill(nextBlock.getWritePointer(channel), -0.5f, 64);
+
+            bridgeSelfTest->processBlock(nextBlock);
+            passed = std::abs(nextBlock.getSample(0, 0) - 0.25f) < 0.0001f
+                && std::abs(nextBlock.getSample(1, 63) - 0.25f) < 0.0001f;
+        }
+
+        bridgeSelfTest->stop();
+        setApplicationReturnValue(passed ? 0 : 1);
+        if (!passed)
+            juce::Logger::writeToLog("plugin.bridge.self-test: timed out waiting for worker output");
+        quit();
+    }
+
     class MainWindow final : public juce::DocumentWindow
     {
     public:
@@ -85,6 +139,7 @@ private:
     std::unique_ptr<MainWindow> mainWindow;
     std::unique_ptr<PluginScanWorker> pluginScanWorker;
     std::unique_ptr<PluginBridgeWorker> pluginBridgeWorker;
+    std::unique_ptr<PluginBridgeClient> bridgeSelfTest;
 };
 }
 START_JUCE_APPLICATION(studio::StudioDuoApplication)

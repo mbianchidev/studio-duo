@@ -97,15 +97,22 @@ void PluginBridgeClient::processBlock(juce::AudioBuffer<float>& audio) noexcept
 
     if (workerSequence != lastOutputSequence)
     {
-        for (int channel = 0; channel < channels; ++channel)
+        const auto outputChannels = std::min(
+            static_cast<int>(sharedState->numChannels.load(std::memory_order_relaxed)),
+            PluginBridgeSharedState::maxChannels);
+        const auto outputSamples = std::min(
+            static_cast<int>(sharedState->numSamples.load(std::memory_order_relaxed)),
+            PluginBridgeSharedState::maxBlockSize);
+
+        for (int channel = 0; channel < outputChannels; ++channel)
         {
             const auto& source = sharedState->output[static_cast<std::size_t>(channel)];
             std::copy_n(source.begin(),
-                        samples,
+                        outputSamples,
                         lastValidOutput[static_cast<std::size_t>(channel)].begin());
         }
-        lastValidChannels = channels;
-        lastValidSamples = samples;
+        lastValidChannels = outputChannels;
+        lastValidSamples = outputSamples;
         lastOutputSequence = workerSequence;
     }
 
