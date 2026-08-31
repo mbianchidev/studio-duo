@@ -47,6 +47,8 @@ private:
     void toggleRecording();
     void stopTransportAndRecording();
     void finishRecording();
+    void completeRecording(const juce::String& trackId,
+                           StudioAudioEngine::RecordingResult recording);
     void addAudioTrack();
     void duplicateSelectedTrack();
     void deleteSelectedTrack();
@@ -85,6 +87,7 @@ private:
     juce::String selectedClipId;
     bool dirty = false;
     bool statusIsError = false;
+    bool recordingFinalizationInProgress = false;
     bool updatingInputControls = false;
     juce::String inputConfigurationSignature;
 

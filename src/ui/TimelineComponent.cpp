@@ -349,6 +349,12 @@ void TimelineComponent::paint(juce::Graphics& graphics)
 
 void TimelineComponent::mouseDown(const juce::MouseEvent& event)
 {
+    if (event.mods.isPopupMenu())
+    {
+        showContextMenu(event);
+        return;
+    }
+
     if (project != nullptr && event.position.x < trackHeaderWidth)
     {
         const auto addTrackY = rulerHeight + static_cast<int>(project->tracks.size()) * trackHeight;
@@ -536,6 +542,92 @@ void TimelineComponent::mouseWheelMove(const juce::MouseEvent& event,
     }
 
     juce::Component::mouseWheelMove(event, wheel);
+}
+
+void TimelineComponent::showContextMenu(const juce::MouseEvent& event)
+{
+    if (project == nullptr)
+        return;
+
+    if (event.position.x >= trackHeaderWidth && onSeek)
+        onSeek(xToSeconds(event.position.x));
+
+    auto hitClip = false;
+    for (const auto& hit : clipHits())
+    {
+        if (!hit.bounds.contains(event.position))
+            continue;
+
+        hitClip = true;
+        selectedTrackId = hit.trackId;
+        selectedClipId = hit.clipId;
+        if (onClipSelected)
+            onClipSelected(hit.trackId, hit.clipId);
+        break;
+    }
+
+    if (!hitClip)
+    {
+        const auto trackIndex = trackIndexAt(event.position.y);
+        if (trackIndex >= 0 && trackIndex < static_cast<int>(project->tracks.size()))
+        {
+            const auto& track = project->tracks[static_cast<std::size_t>(trackIndex)];
+            if (track.id != selectedTrackId)
+            {
+                selectedTrackId = track.id;
+                selectedClipId.clear();
+                if (onTrackSelected)
+                    onTrackSelected(track.id);
+            }
+        }
+    }
+
+    const auto hasClip = selectedClipId.isNotEmpty();
+    juce::PopupMenu menu;
+
+    juce::PopupMenu::Item trimStart("Trim start to playhead");
+    trimStart.shortcutKeyDescription = "[";
+    trimStart.isEnabled = hasClip;
+    trimStart.action = [this]
+    {
+        if (onTrimStartSelected)
+            onTrimStartSelected();
+    };
+    menu.addItem(std::move(trimStart));
+
+    juce::PopupMenu::Item split("Split at playhead");
+    split.shortcutKeyDescription = "S";
+    split.isEnabled = hasClip;
+    split.action = [this]
+    {
+        if (onSplitSelected)
+            onSplitSelected();
+    };
+    menu.addItem(std::move(split));
+
+    juce::PopupMenu::Item trimEnd("Trim end to playhead");
+    trimEnd.shortcutKeyDescription = "]";
+    trimEnd.isEnabled = hasClip;
+    trimEnd.action = [this]
+    {
+        if (onTrimEndSelected)
+            onTrimEndSelected();
+    };
+    menu.addItem(std::move(trimEnd));
+
+    menu.addSeparator();
+    juce::PopupMenu::Item remove("Delete clip");
+    remove.shortcutKeyDescription = "Delete";
+    remove.isEnabled = hasClip;
+    remove.action = [this]
+    {
+        if (onDeleteSelected)
+            onDeleteSelected();
+    };
+    menu.addItem(std::move(remove));
+
+    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this));
+    repaint();
 }
 
 std::vector<TimelineComponent::Hit> TimelineComponent::clipHits() const

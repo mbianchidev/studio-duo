@@ -543,6 +543,10 @@ MainComponent::MainComponent()
         timeline.setPlayheadSeconds(seconds);
     };
     timeline.onZoomRequested = [this](double factor) { zoomTimeline(factor); };
+    timeline.onSplitSelected = [this] { splitSelectedClip(); };
+    timeline.onTrimStartSelected = [this] { trimSelectedClipStartToPlayhead(); };
+    timeline.onTrimEndSelected = [this] { trimSelectedClipEndToPlayhead(); };
+    timeline.onDeleteSelected = [this] { deleteSelectedClip(); };
 
     mixer = std::make_unique<MixerPanel>();
     mixer->setProject(&project);
@@ -874,8 +878,11 @@ bool MainComponent::keyPressed(const juce::KeyPress& key)
 
 void MainComponent::createNewProject()
 {
-    if (audioEngine.isRecording())
-        finishRecording();
+    if (activeRecordingTrackId.isNotEmpty() || recordingFinalizationInProgress)
+    {
+        setStatus("Stop and finalize the current recording before creating a project.", true);
+        return;
+    }
 
     audioEngine.stop();
     project = Project::createDefault();
@@ -1049,8 +1056,11 @@ void MainComponent::openProjectFrom(const juce::File& package)
         return;
     }
 
-    if (audioEngine.isRecording())
-        finishRecording();
+    if (activeRecordingTrackId.isNotEmpty() || recordingFinalizationInProgress)
+    {
+        setStatus("Stop and finalize the current recording before opening a project.", true);
+        return;
+    }
     audioEngine.stop();
     project = std::move(*loaded);
     projectPackage = ProjectFile::normalisePackagePath(package);
@@ -1117,6 +1127,12 @@ void MainComponent::togglePlayback()
 
 void MainComponent::toggleRecording()
 {
+    if (recordingFinalizationInProgress)
+    {
+        setStatus("Wait for the previous WAV to finish saving.", true);
+        return;
+    }
+
     if (activeRecordingTrackId.isNotEmpty())
     {
         finishRecording();
@@ -1186,15 +1202,35 @@ void MainComponent::stopTransportAndRecording()
 
 void MainComponent::finishRecording()
 {
+    if (recordingFinalizationInProgress)
+        return;
+
+    const auto trackId = activeRecordingTrackId;
+    if (trackId.isEmpty() && !audioEngine.isRecording())
+        return;
+
+    recordingFinalizationInProgress = true;
+    audioEngine.stop();
     recordButton.setButtonText("REC");
     recordButton.setColour(juce::TextButton::buttonColourId,
                            juce::Colour(StudioColours::raised));
     timeline.clearRecordingPreview();
-
-    auto* track = project.findTrack(activeRecordingTrackId);
-    audioEngine.stop();
-    const auto recording = audioEngine.stopRecording();
     activeRecordingTrackId.clear();
+    setStatus("Stopping capture and finalizing WAV...");
+
+    audioEngine.stopRecordingAsync(
+        [safe = juce::Component::SafePointer<MainComponent>(this), trackId](auto recording) mutable
+        {
+            if (safe != nullptr)
+                safe->completeRecording(trackId, std::move(recording));
+        });
+}
+
+void MainComponent::completeRecording(const juce::String& trackId,
+                                      StudioAudioEngine::RecordingResult recording)
+{
+    recordingFinalizationInProgress = false;
+    auto* track = project.findTrack(trackId);
     if (recording.result.failed())
     {
         showError("Recording warning", recording.result.getErrorMessage());
@@ -1571,6 +1607,8 @@ void MainComponent::zoomTimeline(double factor, bool reset)
         ? 96.0
         : timeline.getPixelsPerSecond() * factor;
     timeline.setPixelsPerSecond(newPixelsPerSecond);
+    const auto percentage = static_cast<int>(std::round(timeline.getPixelsPerSecond() / 96.0 * 100.0));
+    zoomResetButton.setButtonText(juce::String(percentage) + "%");
     updateTimelineSize();
 
     const auto playheadX = static_cast<int>(timeline.xForSeconds(audioEngine.positionSeconds()));

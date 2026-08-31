@@ -64,10 +64,22 @@ juce::Result StudioAudioEngine::LockFreeRecorder::start(const juce::File& destin
 
 StudioAudioEngine::RecordingResult StudioAudioEngine::LockFreeRecorder::stop()
 {
+    stopAccepting();
+    return finishStop();
+}
+
+void StudioAudioEngine::LockFreeRecorder::stopAccepting() noexcept
+{
+    accepting.store(false, std::memory_order_release);
+    signalThreadShouldExit();
+}
+
+StudioAudioEngine::RecordingResult StudioAudioEngine::LockFreeRecorder::finishStop()
+{
     RecordingResult result;
     result.file = outputFile;
 
-    if (!accepting.exchange(false, std::memory_order_acq_rel) && !isThreadRunning())
+    if (!isThreadRunning() && writer == nullptr)
         return result;
 
     signalThreadShouldExit();
@@ -213,7 +225,9 @@ juce::Result StudioAudioEngine::initialise(juce::AudioDeviceManager& manager)
 
 void StudioAudioEngine::shutdown()
 {
-    recorder.stop();
+    recorder.stopAccepting();
+    recordingFinalizer.removeAllJobs(false, 10000);
+    recorder.finishStop();
     playing.store(false, std::memory_order_release);
 
     if (deviceManager != nullptr)
@@ -316,6 +330,9 @@ juce::Result StudioAudioEngine::startRecording(const juce::File& destination,
                                                int firstInputChannel,
                                                int channels)
 {
+    if (recordingFinalizing.load(std::memory_order_acquire))
+        return juce::Result::fail("The previous recording is still finalizing.");
+
     if (deviceManager == nullptr)
         return juce::Result::fail("No audio device is available.");
 
@@ -337,6 +354,25 @@ juce::Result StudioAudioEngine::startRecording(const juce::File& destination,
 StudioAudioEngine::RecordingResult StudioAudioEngine::stopRecording()
 {
     return recorder.stop();
+}
+
+void StudioAudioEngine::stopRecordingAsync(std::function<void(RecordingResult)> completion)
+{
+    if (recordingFinalizing.exchange(true, std::memory_order_acq_rel))
+        return;
+
+    recorder.stopAccepting();
+    recordingFinalizer.addJob([this, completion = std::move(completion)]() mutable
+    {
+        auto result = recorder.finishStop();
+        recordingFinalizing.store(false, std::memory_order_release);
+        juce::MessageManager::callAsync(
+            [completion = std::move(completion), result = std::move(result)]() mutable
+            {
+                if (completion)
+                    completion(std::move(result));
+            });
+    });
 }
 
 std::optional<double> StudioAudioEngine::audioFileDuration(const juce::File& source, juce::String& error)

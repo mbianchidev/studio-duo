@@ -8,6 +8,7 @@
 
 #include <array>
 #include <atomic>
+#include <functional>
 #include <optional>
 #include <vector>
 
@@ -51,6 +52,7 @@ public:
                                 int firstInputChannel,
                                 int channels);
     RecordingResult stopRecording();
+    void stopRecordingAsync(std::function<void(RecordingResult)> completion);
     std::optional<double> audioFileDuration(const juce::File& source, juce::String& error);
     juce::Result renderToWav(const Project& project, const juce::File& destination, double sampleRate);
 
@@ -87,6 +89,8 @@ private:
                            int channels,
                            int firstInputChannel);
         RecordingResult stop();
+        void stopAccepting() noexcept;
+        RecordingResult finishStop();
         void push(const float* const* inputs, int inputChannels, int samples) noexcept;
         [[nodiscard]] bool isActive() const noexcept;
         [[nodiscard]] double capturedDurationSeconds() const noexcept;
@@ -151,6 +155,8 @@ private:
     std::atomic<float> outputLeftPeak { 0.0f };
     std::atomic<float> outputRightPeak { 0.0f };
     LockFreeRecorder recorder;
+    juce::ThreadPool recordingFinalizer { 1 };
+    std::atomic<bool> recordingFinalizing { false };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(StudioAudioEngine)
 };

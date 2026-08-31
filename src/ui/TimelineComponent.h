@@ -37,6 +37,10 @@ public:
     std::function<void(const juce::String&, double, double, double)> onClipTrimmed;
     std::function<void(double)> onSeek;
     std::function<void(double)> onZoomRequested;
+    std::function<void()> onSplitSelected;
+    std::function<void()> onTrimStartSelected;
+    std::function<void()> onTrimEndSelected;
+    std::function<void()> onDeleteSelected;
 
     void paint(juce::Graphics& graphics) override;
     void mouseDown(const juce::MouseEvent& event) override;
@@ -66,6 +70,7 @@ private:
     [[nodiscard]] float trackY(const juce::String& trackId) const noexcept;
     [[nodiscard]] double xToSeconds(float x) const noexcept;
     [[nodiscard]] float secondsToX(double seconds) const noexcept;
+    void showContextMenu(const juce::MouseEvent& event);
 
     const Project* project = nullptr;
     juce::String selectedTrackId;
