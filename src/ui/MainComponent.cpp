@@ -614,6 +614,12 @@ void MainComponent::paint(juce::Graphics& graphics)
     graphics.drawVerticalLine(getWidth() - 251,
                               static_cast<float>(bodyTop),
                               static_cast<float>(mixerTop));
+    graphics.setColour(juce::Colour(StudioColours::panel));
+    graphics.fillRect(286, bodyTop, getWidth() - 536, 38);
+    graphics.setColour(juce::Colour(StudioColours::border));
+    graphics.drawHorizontalLine(bodyTop + 37,
+                                286.0f,
+                                static_cast<float>(getWidth() - 250));
 
     graphics.setColour(juce::Colour(StudioColours::secondaryText));
     graphics.setFont(10.5f);
@@ -654,6 +660,11 @@ void MainComponent::resized()
 
     statusLabel.setBounds(status.reduced(10, 0));
     mixer->setBounds(mixerBounds);
+    auto editToolbar = bounds.removeFromTop(38).reduced(7, 4);
+    trimClipStartButton.setBounds(editToolbar.removeFromLeft(108).reduced(2));
+    splitClipButton.setBounds(editToolbar.removeFromLeft(118).reduced(2));
+    trimClipEndButton.setBounds(editToolbar.removeFromLeft(108).reduced(2));
+    deleteClipButton.setBounds(editToolbar.removeFromLeft(96).reduced(2));
     timelineViewport.setBounds(bounds);
 
     auto topRow = header.reduced(14, 8);
@@ -697,15 +708,7 @@ void MainComponent::resized()
     auto inspector = right.reduced(16, 42);
     inspectorName.setBounds(inspector.removeFromTop(28));
     inspectorDetails.setBounds(inspector.removeFromTop(24));
-    inspector.removeFromTop(6);
-    auto clipActions = inspector.removeFromTop(30);
-    splitClipButton.setBounds(clipActions.removeFromLeft(118).reduced(2));
-    deleteClipButton.setBounds(clipActions.removeFromLeft(96).reduced(2));
-    inspector.removeFromTop(4);
-    auto trimActions = inspector.removeFromTop(30);
-    trimClipStartButton.setBounds(trimActions.removeFromLeft(108).reduced(2));
-    trimClipEndButton.setBounds(trimActions.removeFromLeft(108).reduced(2));
-    inspector.removeFromTop(8);
+    inspector.removeFromTop(12);
     inputLabel.setBounds(inspector.removeFromTop(20));
     inputSelector.setBounds(inspector.removeFromTop(30));
     inspector.removeFromTop(6);
@@ -1134,6 +1137,10 @@ void MainComponent::toggleRecording()
 
     activeRecordingTrackId = track->id;
     recordingStartSeconds = audioEngine.positionSeconds();
+    timeline.setRecordingPreview(activeRecordingTrackId,
+                                 recordingStartSeconds,
+                                 0.0,
+                                 { 0.0f });
     audioEngine.play();
     setStatus("Recording " + track->name + ". Press REC or STOP to finish.");
 }
@@ -1142,7 +1149,7 @@ void MainComponent::finishRecording()
 {
     auto* track = project.findTrack(activeRecordingTrackId);
     const auto recording = audioEngine.stopRecording();
-    audioEngine.pause();
+    audioEngine.stop();
     activeRecordingTrackId.clear();
     timeline.clearRecordingPreview();
     if (recording.result.failed())

@@ -92,14 +92,15 @@ to avoid accidental feedback.
 Selected clips show edge handles. Drag the body to move a clip, the left edge
 to change its timeline start and source offset, or the right edge to shorten or
 restore the available source range. During move or trim, the original bounds
-remain as a ghost outline. **SPLIT @ PLAYHEAD** exposes splitting without a
-keyboard shortcut. Clicking the selected clip or its track places the playhead
-without dropping clip selection, so the trim buttons and bracket shortcuts act
-at that cursor.
+remain as a ghost outline. The command bar above the timeline exposes trim
+left, split, trim right, and delete actions. Clicking the selected clip or its
+track places the playhead without dropping clip selection, so the command bar
+and shortcuts act at that cursor.
 
 Recording draws a live waveform from lock-free peak buckets. Stopping creates
 and flushes the WAV before adding its clip; the inspector shows the saved WAV
-filename and the status bar reports the completed file.
+filename and the status bar reports the completed file. The waveform baseline
+is visible immediately, and stopping recording also stops transport.
 
 ## Documentation
 

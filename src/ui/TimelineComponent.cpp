@@ -235,13 +235,17 @@ void TimelineComponent::paint(juce::Graphics& graphics)
                 graphics.fillRoundedRectangle(preview, 5.0f);
                 graphics.setColour(juce::Colours::white);
                 graphics.drawRoundedRectangle(preview, 5.0f, 1.5f);
+                const auto centre = preview.getCentreY() + 6.0f;
+                graphics.setColour(juce::Colours::white.withAlpha(0.24f));
+                graphics.drawHorizontalLine(static_cast<int>(centre),
+                                            preview.getX() + 6.0f,
+                                            preview.getRight() - 6.0f);
 
                 if (!recordingPeaks.empty())
                 {
                     const auto columns = juce::jmax(1,
                                                     juce::jmin(static_cast<int>(recordingPeaks.size()),
                                                                static_cast<int>(preview.getWidth()) - 12));
-                    const auto centre = preview.getCentreY() + 6.0f;
                     const auto maximumHeight = preview.getHeight() * 0.32f;
                     graphics.setColour(juce::Colours::white.withAlpha(0.55f));
                     for (int column = 0; column < columns; ++column)
@@ -250,10 +254,10 @@ void TimelineComponent::paint(juce::Graphics& graphics)
                             static_cast<double>(column)
                             / static_cast<double>(columns)
                             * static_cast<double>(recordingPeaks.size()));
-                        const auto peak = juce::jlimit(0.0f,
-                                                       1.0f,
-                                                       recordingPeaks[std::min(peakIndex,
-                                                                               recordingPeaks.size() - 1)]);
+                        const auto peak = std::sqrt(juce::jlimit(
+                            0.0f,
+                            1.0f,
+                            recordingPeaks[std::min(peakIndex, recordingPeaks.size() - 1)]));
                         const auto x = preview.getX()
                             + 6.0f
                             + static_cast<float>(column)

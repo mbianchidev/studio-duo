@@ -120,4 +120,12 @@ buckets stored in a bounded lock-free array. The UI reads snapshots of those
 peaks to draw the growing take without touching the WAV writer or audio files.
 Stopping flushes the writer, verifies that the WAV exists, then creates the
 non-destructive clip. Dropped-sample conditions remain visible warnings but do
-not hide an otherwise valid recording.
+not hide an otherwise valid recording. The live clip is created visually at
+record start, always draws a baseline, and uses square-root peak scaling so
+quiet input remains visible.
+
+On macOS, CMake applies an ad-hoc signature with the stable designated
+requirement `dev.mbianchi.studioduo`. This keeps the TCC microphone grant tied
+to the app identity instead of the changing binary hash during local rebuilds.
+A release build should replace this development signature with the project
+Developer ID signature.
