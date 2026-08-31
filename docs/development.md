@@ -98,6 +98,8 @@ Clip trimming changes only timeline start, source offset, and duration. The
 model stores source length separately, prevents trims outside available audio,
 and restores all three edit values through undo. The timeline keeps the
 original rectangle as a dashed ghost while previewing move and trim edits.
+Cursor trims preserve the selected clip while the playhead is repositioned on
+the same track; `[` trims the start and `]` trims the end.
 
 Recording is associated with a stable track ID captured when the take starts,
 so changing the UI selection cannot move the resulting clip to another track.

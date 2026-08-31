@@ -69,6 +69,8 @@ open "build/StudioDuo_artefacts/Release/Studio Duo.app"
 | Undo | `Command/Ctrl+Z` |
 | Redo | `Command/Ctrl+Shift+Z` |
 | Split selected clip at playhead | `S` |
+| Trim selected clip start to playhead | `[` |
+| Trim selected clip end to playhead | `]` |
 | Delete selected clip | `Delete` or `Backspace` |
 
 Use **I/O** to select audio devices. Arm an audio track before recording. Drag
@@ -91,7 +93,9 @@ Selected clips show edge handles. Drag the body to move a clip, the left edge
 to change its timeline start and source offset, or the right edge to shorten or
 restore the available source range. During move or trim, the original bounds
 remain as a ghost outline. **SPLIT @ PLAYHEAD** exposes splitting without a
-keyboard shortcut.
+keyboard shortcut. Clicking the selected clip or its track places the playhead
+without dropping clip selection, so the trim buttons and bracket shortcuts act
+at that cursor.
 
 Recording draws a live waveform from lock-free peak buckets. Stopping creates
 and flushes the WAV before adding its clip; the inspector shows the saved WAV
