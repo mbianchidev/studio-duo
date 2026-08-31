@@ -94,6 +94,10 @@ complete state is also copied to `recovery/latest.json`.
 Audio files remain immutable. Clips store source references and non-destructive
 start, offset, duration, gain, and mute decisions.
 
+Clip trimming changes only timeline start, source offset, and duration. The
+model stores source length separately, prevents trims outside available audio,
+and restores all three edit values through undo.
+
 Recording is associated with a stable track ID captured when the take starts,
 so changing the UI selection cannot move the resulting clip to another track.
 Starting a take auto-arms the selected audio track when necessary and starts

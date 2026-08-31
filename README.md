@@ -87,6 +87,10 @@ The track inspector selects the hardware input, chooses mono or adjacent-channel
 stereo capture, and enables software monitoring. Monitoring is off by default
 to avoid accidental feedback.
 
+Selected clips show edge handles. Drag the body to move a clip, the left edge
+to change its timeline start and source offset, or the right edge to shorten or
+restore the available source range.
+
 ## Documentation
 
 - [Product and technical design](docs/design.md)
