@@ -35,6 +35,11 @@ set(STUDIO_DUO_MODEL_SOURCES
     src/project_io/ProjectFile.h
 )
 
+set(STUDIO_DUO_PLUGIN_SOURCES
+    src/plugin_host/PluginCatalog.cpp
+    src/plugin_host/PluginCatalog.h
+)
+
 juce_add_gui_app(
     StudioDuo
     PRODUCT_NAME "Studio Duo"
@@ -53,12 +58,17 @@ target_sources(
         src/Main.cpp
         src/audio/StudioAudioEngine.cpp
         src/audio/StudioAudioEngine.h
+        src/plugin_host/PluginBrowserComponent.cpp
+        src/plugin_host/PluginBrowserComponent.h
+        src/plugin_host/PluginScanWorker.cpp
+        src/plugin_host/PluginScanWorker.h
         src/ui/MainComponent.cpp
         src/ui/MainComponent.h
         src/ui/StudioTheme.h
         src/ui/TimelineComponent.cpp
         src/ui/TimelineComponent.h
         ${STUDIO_DUO_MODEL_SOURCES}
+        ${STUDIO_DUO_PLUGIN_SOURCES}
 )
 
 target_include_directories(StudioDuo PRIVATE src)
@@ -70,13 +80,22 @@ target_compile_definitions(
         JUCE_USE_CURL=0
         JUCE_WEB_BROWSER=0
         JUCE_STRICT_REFCOUNTEDPOINTER=1
+        JUCE_PLUGINHOST_VST=0
+        JUCE_PLUGINHOST_VST3=1
         STUDIO_DUO_VERSION="${PROJECT_VERSION}"
 )
+
+if(APPLE)
+    target_compile_definitions(StudioDuo PRIVATE JUCE_PLUGINHOST_AU=1)
+else()
+    target_compile_definitions(StudioDuo PRIVATE JUCE_PLUGINHOST_AU=0)
+endif()
 
 target_link_libraries(
     StudioDuo
     PRIVATE
         juce::juce_audio_formats
+        juce::juce_audio_processors
         juce::juce_audio_utils
         juce::juce_data_structures
         juce::juce_gui_extra
@@ -96,6 +115,7 @@ if(STUDIO_DUO_BUILD_TESTS)
         PRIVATE
             tests/ModelTests.cpp
             ${STUDIO_DUO_MODEL_SOURCES}
+            ${STUDIO_DUO_PLUGIN_SOURCES}
     )
 
     target_include_directories(StudioDuoTests PRIVATE src)
@@ -105,13 +125,22 @@ if(STUDIO_DUO_BUILD_TESTS)
         PRIVATE
             JUCE_USE_CURL=0
             JUCE_WEB_BROWSER=0
+            JUCE_PLUGINHOST_VST=0
+            JUCE_PLUGINHOST_VST3=1
             STUDIO_DUO_VERSION="${PROJECT_VERSION}"
     )
+
+    if(APPLE)
+        target_compile_definitions(StudioDuoTests PRIVATE JUCE_PLUGINHOST_AU=1)
+    else()
+        target_compile_definitions(StudioDuoTests PRIVATE JUCE_PLUGINHOST_AU=0)
+    endif()
 
     target_link_libraries(
         StudioDuoTests
         PRIVATE
             juce::juce_audio_formats
+            juce::juce_audio_processors
             juce::juce_data_structures
             juce::juce_graphics
         PUBLIC

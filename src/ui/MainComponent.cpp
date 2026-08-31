@@ -349,6 +349,10 @@ MainComponent::MainComponent()
     mixer->addKeyListener(this);
     addAndMakeVisible(*mixer);
 
+    pluginBrowser = std::make_unique<PluginBrowserComponent>(pluginCatalog);
+    pluginBrowser->addKeyListener(this);
+    addAndMakeVisible(*pluginBrowser);
+
     addAndMakeVisible(statusLabel);
     statusLabel.setColour(juce::Label::textColourId, juce::Colour(StudioColours::secondaryText));
     statusLabel.setJustificationType(juce::Justification::centredLeft);
@@ -390,10 +394,10 @@ void MainComponent::paint(juce::Graphics& graphics)
     const auto bodyTop = 76;
     const auto mixerTop = getHeight() - 204;
     graphics.setColour(juce::Colour(StudioColours::panel));
-    graphics.fillRect(0, bodyTop, 214, mixerTop - bodyTop);
+    graphics.fillRect(0, bodyTop, 286, mixerTop - bodyTop);
     graphics.fillRect(getWidth() - 250, bodyTop, 250, mixerTop - bodyTop);
     graphics.setColour(juce::Colour(StudioColours::border));
-    graphics.drawVerticalLine(213, static_cast<float>(bodyTop), static_cast<float>(mixerTop));
+    graphics.drawVerticalLine(285, static_cast<float>(bodyTop), static_cast<float>(mixerTop));
     graphics.drawVerticalLine(getWidth() - 251,
                               static_cast<float>(bodyTop),
                               static_cast<float>(mixerTop));
@@ -432,7 +436,7 @@ void MainComponent::resized()
     auto header = bounds.removeFromTop(76);
     auto status = bounds.removeFromBottom(28);
     auto mixerBounds = bounds.removeFromBottom(176);
-    auto left = bounds.removeFromLeft(214);
+    auto left = bounds.removeFromLeft(286);
     auto right = bounds.removeFromRight(250);
 
     statusLabel.setBounds(status.reduced(10, 0));
@@ -470,6 +474,8 @@ void MainComponent::resized()
     addTrackButton.setBounds(sessionPanel.removeFromTop(34));
     sessionPanel.removeFromTop(8);
     importButton.setBounds(sessionPanel.removeFromTop(34));
+    sessionPanel.removeFromTop(18);
+    pluginBrowser->setBounds(sessionPanel);
 
     auto inspector = right.reduced(16, 42);
     inspectorName.setBounds(inspector.removeFromTop(28));

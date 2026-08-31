@@ -1,4 +1,5 @@
 #include "model/ProjectCommands.h"
+#include "plugin_host/PluginCatalog.h"
 #include "project_io/ProjectFile.h"
 
 #include <cmath>
@@ -91,6 +92,22 @@ void packagePersistence()
 
     package.deleteRecursively();
 }
+
+void pluginCatalogFiltering()
+{
+    studio::PluginCatalogEntry entry;
+    entry.name = "Scream Forge";
+    entry.manufacturer = "Studio Duo";
+    entry.category = "Pitch";
+    entry.format = "VST3";
+
+    expect(studio::PluginCatalog::matchesQuery(entry, "scream vst3"),
+           "Plugin filter matches across name and format.");
+    expect(studio::PluginCatalog::matchesQuery(entry, "studio pitch"),
+           "Plugin filter matches manufacturer and category.");
+    expect(!studio::PluginCatalog::matchesQuery(entry, "compressor"),
+           "Plugin filter rejects unrelated terms.");
+}
 }
 
 int main()
@@ -98,6 +115,7 @@ int main()
     serializationRoundTrip();
     commandHistory();
     packagePersistence();
+    pluginCatalogFiltering();
 
     if (failures == 0)
     {

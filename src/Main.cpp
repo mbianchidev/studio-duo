@@ -1,4 +1,5 @@
 #include "ui/MainComponent.h"
+#include "plugin_host/PluginScanWorker.h"
 
 #include <juce_gui_extra/juce_gui_extra.h>
 
@@ -22,14 +23,22 @@ public:
         return true;
     }
 
-    void initialise(const juce::String&) override
+    void initialise(const juce::String& commandLine) override
     {
+        auto worker = std::make_unique<PluginScanWorker>();
+        if (worker->initialise(commandLine))
+        {
+            pluginScanWorker = std::move(worker);
+            return;
+        }
+
         mainWindow = std::make_unique<MainWindow>(getApplicationName());
     }
 
     void shutdown() override
     {
         mainWindow.reset();
+        pluginScanWorker.reset();
     }
 
     void systemRequestedQuit() override
@@ -65,6 +74,7 @@ private:
     };
 
     std::unique_ptr<MainWindow> mainWindow;
+    std::unique_ptr<PluginScanWorker> pluginScanWorker;
 };
 }
 START_JUCE_APPLICATION(studio::StudioDuoApplication)

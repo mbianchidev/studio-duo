@@ -4,6 +4,8 @@
 #include "TimelineComponent.h"
 #include "audio/StudioAudioEngine.h"
 #include "model/ProjectCommands.h"
+#include "plugin_host/PluginBrowserComponent.h"
+#include "plugin_host/PluginCatalog.h"
 #include "project_io/ProjectFile.h"
 
 #include <juce_audio_utils/juce_audio_utils.h>
@@ -106,6 +108,8 @@ private:
     juce::Viewport timelineViewport;
     TimelineComponent timeline;
     std::unique_ptr<MixerPanel> mixer;
+    PluginCatalog pluginCatalog;
+    std::unique_ptr<PluginBrowserComponent> pluginBrowser;
     juce::Label statusLabel;
     std::unique_ptr<juce::FileChooser> fileChooser;
     juce::TooltipWindow tooltipWindow { this, 700 };
