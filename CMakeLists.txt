@@ -12,6 +12,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(STUDIO_DUO_BUILD_TESTS "Build Studio Duo tests" ON)
+set(STUDIO_DUO_BUNDLE_ID "dev.mbianchi.studioduo")
 
 find_package(JUCE CONFIG QUIET)
 
@@ -47,7 +48,7 @@ juce_add_gui_app(
     StudioDuo
     PRODUCT_NAME "Studio Duo"
     COMPANY_NAME "Studio Duo"
-    BUNDLE_ID "dev.mbianchi.studioduo"
+    BUNDLE_ID "${STUDIO_DUO_BUNDLE_ID}"
     VERSION ${PROJECT_VERSION}
     MICROPHONE_PERMISSION_ENABLED TRUE
     MICROPHONE_PERMISSION_TEXT "Studio Duo needs microphone access to record audio."
@@ -110,6 +111,22 @@ target_link_libraries(
         juce::juce_recommended_lto_flags
         juce::juce_recommended_warning_flags
 )
+
+if(APPLE)
+    add_custom_command(
+        TARGET StudioDuo
+        POST_BUILD
+        COMMAND /usr/bin/codesign
+            --force
+            --deep
+            --sign -
+            --identifier "${STUDIO_DUO_BUNDLE_ID}"
+            --requirements "=designated => identifier \"${STUDIO_DUO_BUNDLE_ID}\""
+            "$<TARGET_BUNDLE_DIR:StudioDuo>"
+        COMMENT "Applying stable development signature to Studio Duo"
+        VERBATIM
+    )
+endif()
 
 if(STUDIO_DUO_BUILD_TESTS)
     enable_testing()
