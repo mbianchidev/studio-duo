@@ -626,7 +626,13 @@ void TimelineComponent::showContextMenu(const juce::MouseEvent& event)
     };
     menu.addItem(std::move(remove));
 
-    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this));
+    const auto screenPosition = event.getScreenPosition();
+    menu.showMenuAsync(juce::PopupMenu::Options()
+                           .withTargetComponent(this)
+                           .withTargetScreenArea({ screenPosition.x,
+                                                   screenPosition.y,
+                                                   1,
+                                                   1 }));
     repaint();
 }
 
