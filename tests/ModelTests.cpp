@@ -34,7 +34,8 @@ void serializationRoundTrip()
     clip.name = "DI";
     clip.startSeconds = 1.5;
     clip.durationSeconds = 3.25;
-    clip.sourceLengthSeconds = 3.25;
+    clip.sourceLengthSeconds = 4.0;
+    clip.sourceRangeEndSeconds = 3.25;
     project.tracks.front().clips.push_back(clip);
 
     studio::PluginInsert insert;
@@ -61,6 +62,9 @@ void serializationRoundTrip()
            "Tempo survives serialization.");
     expect(decoded.has_value() && decoded->tracks.front().clips.size() == 1,
            "Clips survive serialization.");
+    expect(decoded.has_value()
+               && std::abs(decoded->tracks.front().clips.front().sourceRangeEnd() - 3.25) < 0.0001,
+           "Clip recovery bounds survive serialization.");
     expect(decoded.has_value() && decoded->tracks.front().inserts.size() == 1,
            "Plugin inserts survive serialization.");
     expect(decoded.has_value()
@@ -233,6 +237,87 @@ void commandHistory()
     expect(project.tracks.front().inserts.empty(), "Remove insert command removes the slot.");
     expect(history.undo(project), "Remove insert command can be undone.");
     expect(project.tracks.front().inserts.size() == 1, "Undo restores the plugin insert.");
+}
+
+void splitClipBoundaries()
+{
+    auto project = studio::Project::createDefault();
+    project.tracks.front().clips.clear();
+
+    studio::AudioClip clip;
+    clip.name = "Recorded take";
+    clip.startSeconds = 2.0;
+    clip.durationSeconds = 8.0;
+    clip.sourceLengthSeconds = 8.0;
+    clip.sourceRangeStartSeconds = 0.0;
+    clip.sourceRangeEndSeconds = 8.0;
+    const auto leftId = clip.id;
+    project.tracks.front().clips.push_back(clip);
+
+    studio::CommandStack history;
+    juce::String error;
+    expect(history.perform(std::make_unique<studio::SplitClipCommand>(leftId, 5.0),
+                           project,
+                           error),
+           error.toRawUTF8());
+
+    const auto& clips = project.tracks.front().clips;
+    expect(clips.size() == 2, "Split creates left and right clip halves.");
+    const auto rightId = clips[1].id;
+    expect(std::abs(clips[0].sourceRangeStartSeconds - 0.0) < 0.0001
+               && std::abs(clips[0].sourceRangeEndSeconds - 3.0) < 0.0001,
+           "The left half cannot expand past the split source position.");
+    expect(std::abs(clips[1].sourceRangeStartSeconds - 3.0) < 0.0001
+               && std::abs(clips[1].sourceRangeEndSeconds - 8.0) < 0.0001,
+           "The right half cannot expand before the split source position.");
+
+    error.clear();
+    expect(!history.perform(std::make_unique<studio::TrimClipCommand>(leftId, 2.0, 0.0, 3.25),
+                            project,
+                            error),
+           "The left half rejects expansion across the split.");
+    error.clear();
+    expect(!history.perform(std::make_unique<studio::TrimClipCommand>(rightId,
+                                                                      4.75,
+                                                                      2.75,
+                                                                      5.25),
+                            project,
+                            error),
+           "The right half rejects expansion across the split.");
+
+    error.clear();
+    expect(history.perform(std::make_unique<studio::TrimClipCommand>(leftId, 2.0, 0.0, 2.0),
+                           project,
+                           error),
+           error.toRawUTF8());
+    error.clear();
+    expect(history.perform(std::make_unique<studio::TrimClipCommand>(rightId, 6.0, 4.0, 4.0),
+                           project,
+                           error),
+           error.toRawUTF8());
+
+    const auto* shortenedLeft = project.findClip(leftId);
+    const auto* shortenedRight = project.findClip(rightId);
+    expect(shortenedLeft != nullptr
+               && std::abs(shortenedLeft->recoverableEndSeconds() - 5.0) < 0.0001,
+           "A shortened left half retains a recoverable tail up to the split.");
+    expect(shortenedRight != nullptr
+               && std::abs(shortenedRight->recoverableStartSeconds() - 5.0) < 0.0001,
+           "A shortened right half retains a recoverable head back to the split.");
+
+    error.clear();
+    expect(history.perform(std::make_unique<studio::TrimClipCommand>(leftId, 2.0, 0.0, 3.0),
+                           project,
+                           error),
+           error.toRawUTF8());
+    error.clear();
+    expect(history.perform(std::make_unique<studio::TrimClipCommand>(rightId, 5.0, 3.0, 5.0),
+                           project,
+                           error),
+           error.toRawUTF8());
+    expect(std::abs(project.findClip(leftId)->endSeconds() - 5.0) < 0.0001
+               && std::abs(project.findClip(rightId)->startSeconds - 5.0) < 0.0001,
+           "Both split halves can expand back to their shared boundary.");
 }
 
 void packagePersistence()
@@ -434,6 +519,7 @@ int main()
 {
     serializationRoundTrip();
     commandHistory();
+    splitClipBoundaries();
     packagePersistence();
     pluginAwareExportGuard();
     pluginCatalogFiltering();

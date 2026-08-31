@@ -4,9 +4,28 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 
 namespace studio
 {
+namespace
+{
+float waveformAmplitude(const AudioClip& clip, double sourceSeconds) noexcept
+{
+    const auto sourceKey = clip.sourceFile.getFullPathName().isNotEmpty()
+        ? clip.sourceFile.getFullPathName()
+        : clip.id;
+    auto value = static_cast<std::uint32_t>(sourceKey.hashCode())
+        ^ static_cast<std::uint32_t>(std::max(0.0, sourceSeconds) * 64.0);
+    value ^= value >> 16;
+    value *= 0x7feb352du;
+    value ^= value >> 15;
+    value *= 0x846ca68bu;
+    value ^= value >> 16;
+    return static_cast<float>(value & 0xffffu) / 65535.0f;
+}
+}
+
 TimelineComponent::TimelineComponent()
 {
     setOpaque(true);
@@ -293,6 +312,40 @@ void TimelineComponent::paint(juce::Graphics& graphics)
         if (clip == nullptr)
             continue;
 
+        const auto recoverableStart = clip->recoverableStartSeconds();
+        const auto recoverableEnd = clip->recoverableEndSeconds();
+        if (recoverableStart < clip->startSeconds - 0.0001
+            || recoverableEnd > clip->endSeconds() + 0.0001)
+        {
+            const juce::Rectangle<float> ghostBounds(
+                secondsToX(recoverableStart),
+                hit.bounds.getY(),
+                static_cast<float>(std::max(20.0,
+                                            (recoverableEnd - recoverableStart)
+                                                * pixelsPerSecond)),
+                hit.bounds.getHeight());
+            auto recoverableClip = *clip;
+            recoverableClip.startSeconds = recoverableStart;
+            recoverableClip.sourceOffsetSeconds = clip->sourceRangeStartSeconds;
+            recoverableClip.durationSeconds = clip->sourceRangeEnd()
+                - clip->sourceRangeStartSeconds;
+
+            graphics.setColour(clip->colour.withAlpha(0.10f));
+            graphics.fillRoundedRectangle(ghostBounds, 5.0f);
+            drawClipWaveform(graphics, recoverableClip, ghostBounds, 0.12f);
+            graphics.setColour(juce::Colours::white.withAlpha(
+                hit.clipId == selectedClipId ? 0.30f : 0.18f));
+            const float dashLengths[] { 4.0f, 4.0f };
+            juce::Path ghostShape;
+            ghostShape.addRoundedRectangle(ghostBounds, 5.0f);
+            juce::Path dashedGhost;
+            juce::PathStrokeType(1.0f).createDashedStroke(dashedGhost,
+                                                          ghostShape,
+                                                          dashLengths,
+                                                          2);
+            graphics.fillPath(dashedGhost);
+        }
+
         auto bounds = hit.bounds;
         if (draggedClipId == hit.clipId)
         {
@@ -577,8 +630,12 @@ void TimelineComponent::mouseDrag(const juce::MouseEvent& event)
     }
     else if (dragMode == DragMode::trimStart)
     {
-        const auto minimumStart = std::max(0.0,
-                                           dragOriginalStart - dragOriginalSourceOffset);
+        const auto* clip = project != nullptr ? project->findClip(draggedClipId) : nullptr;
+        const auto minimumStart = std::max(
+            0.0,
+            clip != nullptr
+                ? clip->recoverableStartSeconds()
+                : dragOriginalStart - dragOriginalSourceOffset);
         const auto maximumStart = dragOriginalStart + dragOriginalDuration - minimumDuration;
         const auto unsnapped = juce::jlimit(minimumStart,
                                            maximumStart,
@@ -591,8 +648,9 @@ void TimelineComponent::mouseDrag(const juce::MouseEvent& event)
     }
     else if (dragMode == DragMode::trimEnd)
     {
-        const auto sourceRemaining = project != nullptr
-            ? project->findClip(draggedClipId)->sourceLengthSeconds - dragOriginalSourceOffset
+        const auto* clip = project != nullptr ? project->findClip(draggedClipId) : nullptr;
+        const auto sourceRemaining = clip != nullptr
+            ? clip->sourceRangeEnd() - dragOriginalSourceOffset
             : dragOriginalDuration;
         const auto unsnappedDuration = juce::jlimit(minimumDuration,
                                                     sourceRemaining,
@@ -882,13 +940,19 @@ void TimelineComponent::drawClipWaveform(juce::Graphics& graphics,
 {
     graphics.saveState();
     graphics.reduceClipRegion(bounds.toNearestInt().reduced(5));
-    const auto seed = static_cast<std::uint32_t>(clip.id.hashCode());
-    juce::Random random(seed);
     const auto middle = bounds.getCentreY() + 8.0f;
+    const auto waveformWidth = std::max(1.0f, bounds.getWidth() - 12.0f);
     graphics.setColour(juce::Colours::white.withAlpha(alpha));
     for (float x = bounds.getX() + 8.0f; x < bounds.getRight() - 4.0f; x += 4.0f)
     {
-        const auto amplitude = random.nextFloat() * (bounds.getHeight() * 0.23f);
+        const auto progress = juce::jlimit(0.0,
+                                           1.0,
+                                           static_cast<double>(x - bounds.getX() - 8.0f)
+                                               / waveformWidth);
+        const auto sourceSeconds = clip.sourceOffsetSeconds
+            + progress * clip.durationSeconds;
+        const auto amplitude = waveformAmplitude(clip, sourceSeconds)
+            * (bounds.getHeight() * 0.23f);
         graphics.drawVerticalLine(static_cast<int>(x),
                                   middle - amplitude,
                                   middle + amplitude);

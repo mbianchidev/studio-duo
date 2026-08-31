@@ -1469,6 +1469,7 @@ void MainComponent::importAudioFile(const juce::File& source)
     clip.startSeconds = audioEngine.positionSeconds();
     clip.durationSeconds = *duration;
     clip.sourceLengthSeconds = *duration;
+    clip.sourceRangeEndSeconds = *duration;
     clip.colour = destination->colour;
 
     const auto clipId = clip.id;
@@ -1747,6 +1748,7 @@ void MainComponent::completeRecording(
         clip.startSeconds = recordingStartSeconds;
         clip.durationSeconds = recording.durationSeconds;
         clip.sourceLengthSeconds = recording.durationSeconds;
+        clip.sourceRangeEndSeconds = recording.durationSeconds;
         clip.colour = target.versionTrack.colour;
         if (firstClipId.isEmpty())
             firstClipId = clip.id;

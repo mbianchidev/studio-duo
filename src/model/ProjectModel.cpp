@@ -112,6 +112,23 @@ double AudioClip::endSeconds() const noexcept
     return startSeconds + durationSeconds;
 }
 
+double AudioClip::sourceRangeEnd() const noexcept
+{
+    return sourceRangeEndSeconds > 0.0
+        ? sourceRangeEndSeconds
+        : sourceLengthSeconds;
+}
+
+double AudioClip::recoverableStartSeconds() const noexcept
+{
+    return startSeconds - (sourceOffsetSeconds - sourceRangeStartSeconds);
+}
+
+double AudioClip::recoverableEndSeconds() const noexcept
+{
+    return startSeconds + (sourceRangeEnd() - sourceOffsetSeconds);
+}
+
 juce::var AudioClip::toVar() const
 {
     auto object = std::make_unique<juce::DynamicObject>();
@@ -121,6 +138,8 @@ juce::var AudioClip::toVar() const
     object->setProperty("startSeconds", startSeconds);
     object->setProperty("sourceOffsetSeconds", sourceOffsetSeconds);
     object->setProperty("sourceLengthSeconds", sourceLengthSeconds);
+    object->setProperty("sourceRangeStartSeconds", sourceRangeStartSeconds);
+    object->setProperty("sourceRangeEndSeconds", sourceRangeEnd());
     object->setProperty("durationSeconds", durationSeconds);
     object->setProperty("gainDecibels", gainDecibels);
     object->setProperty("muted", muted);
@@ -144,13 +163,21 @@ std::optional<AudioClip> AudioClip::fromVar(const juce::var& value, juce::String
     clip.sourceLengthSeconds = numberProperty(*object,
                                               "sourceLengthSeconds",
                                               clip.sourceOffsetSeconds + clip.durationSeconds);
+    clip.sourceRangeStartSeconds = numberProperty(*object, "sourceRangeStartSeconds", 0.0);
+    clip.sourceRangeEndSeconds = numberProperty(*object,
+                                                "sourceRangeEndSeconds",
+                                                clip.sourceLengthSeconds);
     clip.gainDecibels = static_cast<float>(numberProperty(*object, "gainDecibels", 0.0));
     clip.muted = booleanProperty(*object, "muted", false);
     clip.colour = colourProperty(*object, "colour", juce::Colour(0xffdd5b3f));
 
     if (clip.id.isEmpty() || clip.durationSeconds <= 0.0 || clip.startSeconds < 0.0
         || clip.sourceOffsetSeconds < 0.0
-        || clip.sourceLengthSeconds < clip.sourceOffsetSeconds + clip.durationSeconds)
+        || clip.sourceRangeStartSeconds < 0.0
+        || clip.sourceRangeStartSeconds > clip.sourceOffsetSeconds + 0.0001
+        || clip.sourceRangeStartSeconds >= clip.sourceRangeEnd() - 0.0001
+        || clip.sourceRangeEnd() > clip.sourceLengthSeconds + 0.0001
+        || clip.sourceRangeEnd() < clip.sourceOffsetSeconds + clip.durationSeconds - 0.0001)
     {
         error = "Clip contains an invalid ID or time range.";
         return std::nullopt;

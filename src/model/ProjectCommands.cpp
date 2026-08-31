@@ -420,10 +420,10 @@ bool TrimClipCommand::perform(Project& project, juce::String& error)
         error = "A clip must remain at least one millisecond long.";
         return false;
     }
-    if (clip->sourceLengthSeconds > 0.0
-        && newSourceOffsetSeconds + newDurationSeconds > clip->sourceLengthSeconds + 0.0001)
+    if (newSourceOffsetSeconds < clip->sourceRangeStartSeconds - 0.0001
+        || newSourceOffsetSeconds + newDurationSeconds > clip->sourceRangeEnd() + 0.0001)
     {
-        error = "The trim extends beyond the available source audio.";
+        error = "The trim extends beyond this clip's recoverable source range.";
         return false;
     }
 
@@ -495,10 +495,14 @@ bool SplitClipCommand::perform(Project& project, juce::String& error)
     }
 
     const auto leftDuration = splitSeconds - original.startSeconds;
+    const auto splitSourceSeconds = original.sourceOffsetSeconds + leftDuration;
     auto leftSide = original;
     leftSide.durationSeconds = leftDuration;
+    leftSide.sourceRangeEndSeconds = splitSourceSeconds;
     rightSide.startSeconds = splitSeconds;
-    rightSide.sourceOffsetSeconds = original.sourceOffsetSeconds + leftDuration;
+    rightSide.sourceOffsetSeconds = splitSourceSeconds;
+    rightSide.sourceRangeStartSeconds = splitSourceSeconds;
+    rightSide.sourceRangeEndSeconds = original.sourceRangeEnd();
     rightSide.durationSeconds = original.durationSeconds - leftDuration;
 
     *iterator = std::move(leftSide);

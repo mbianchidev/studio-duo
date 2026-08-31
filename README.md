@@ -111,13 +111,15 @@ has a draggable L/R pan knob; double-click it to return to center.
 
 Selected clips show edge handles. Drag the body to move a clip, the left edge
 to change its timeline start and source offset, or the right edge to shorten or
-restore the available source range. During move or trim, the original bounds
-remain as a ghost outline. The command bar above the timeline exposes trim
-left, split, trim right, and delete actions. Clicking the selected clip or its
-track places the playhead without dropping clip selection, so the command bar
-and shortcuts act at that cursor. Drag a clip vertically to move it to another
-audio track while preserving its source and edit history. The ghost keeps a
-subtle copy of the original waveform visible under an edge-trim preview.
+restore the available source range. Trimmed-away audio remains visible as a
+subtle dashed waveform ghost and can be restored by dragging the edge back.
+Splitting creates two independent source ranges: the left clip cannot expand
+past the split point, and the right clip cannot expand before it, even after the
+playhead moves. The command bar above the timeline exposes trim left, split,
+trim right, and delete actions. Clicking the selected clip or its track places
+the playhead without dropping clip selection, so the command bar and shortcuts
+act at that cursor. Drag a clip vertically to move it to another audio track
+while preserving its source and edit history.
 
 Recording draws a live waveform from lock-free peak buckets. Stopping creates
 and flushes the WAV before adding its clip; the inspector shows the saved WAV

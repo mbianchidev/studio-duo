@@ -53,12 +53,17 @@ struct AudioClip
     double startSeconds = 0.0;
     double sourceOffsetSeconds = 0.0;
     double sourceLengthSeconds = 4.0;
+    double sourceRangeStartSeconds = 0.0;
+    double sourceRangeEndSeconds = 0.0;
     double durationSeconds = 4.0;
     float gainDecibels = 0.0f;
     bool muted = false;
     juce::Colour colour { 0xffdd5b3f };
 
     [[nodiscard]] double endSeconds() const noexcept;
+    [[nodiscard]] double sourceRangeEnd() const noexcept;
+    [[nodiscard]] double recoverableStartSeconds() const noexcept;
+    [[nodiscard]] double recoverableEndSeconds() const noexcept;
     [[nodiscard]] juce::var toVar() const;
     static std::optional<AudioClip> fromVar(const juce::var& value, juce::String& error);
 };
