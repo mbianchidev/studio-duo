@@ -123,6 +123,12 @@ can hide them using the parent's persisted collapse state. Parent rows draw a
 subtle aggregate of child clips. Deleting a parent removes and restores the
 whole group atomically through undo.
 
+The left track-header context menu targets the clicked parent or version lane.
+Delete removes one version or the complete parent group, while the master
+remains protected. The lower mixer filters out child lanes and exposes an
+interactive pan knob for each parent channel; drag vertically to change pan or
+double-click to reset center.
+
 Audio tracks persist their first hardware input, mono/stereo mode, and software
 monitoring state. The lock-free recorder copies only those selected callback
 channels into its FIFO. Monitoring is mixed after timeline playback and before

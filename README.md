@@ -90,13 +90,16 @@ also duplicates or deletes the selected non-master track with full undo support.
 Each new take on an existing audio track is recorded to a grouped `v1`, `v2`,
 `v3`, ... child track directly below its parent. Version tracks retain normal
 arm, mute, solo, split, trim, move, and delete behavior. The parent can collapse
-the versions and shows their combined waveform/result.
+the versions and shows their combined waveform/result. Two-finger/right-click
+the left track header for mute, solo, arm, collapse/expand, and group-aware
+delete actions.
 
 The track inspector selects the hardware input, chooses mono or adjacent-channel
 stereo capture, and enables software monitoring. Monitoring is off by default
 to avoid accidental feedback. Gain defaults to `0.0 dB`, accepts signed decimal
 entry, and uses a rotary control. Pan defaults to `Center` and displays `% L` or
-`% R`. **COLOR** opens an undoable track palette.
+`% R`. **COLOR** opens an undoable track palette. Every lower mixer strip also
+has a draggable L/R pan knob; double-click it to return to center.
 
 Selected clips show edge handles. Drag the body to move a clip, the left edge
 to change its timeline start and source offset, or the right edge to shorten or
