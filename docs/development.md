@@ -101,6 +101,10 @@ original rectangle as a dashed ghost while previewing move and trim edits.
 Cursor trims preserve the selected clip while the playhead is repositioned on
 the same track; `[` trims the start and `]` trims the end.
 
+Clip move commands capture the original track, clip index, and timeline
+position. Horizontal drags change time; vertical drags transfer the same clip
+ID to another audio track. Undo restores both placement dimensions.
+
 Recording is associated with a stable track ID captured when the take starts,
 so changing the UI selection cannot move the resulting clip to another track.
 Starting a take auto-arms the selected audio track when necessary and starts

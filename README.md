@@ -95,12 +95,14 @@ restore the available source range. During move or trim, the original bounds
 remain as a ghost outline. The command bar above the timeline exposes trim
 left, split, trim right, and delete actions. Clicking the selected clip or its
 track places the playhead without dropping clip selection, so the command bar
-and shortcuts act at that cursor.
+and shortcuts act at that cursor. Drag a clip vertically to move it to another
+audio track while preserving its source and edit history.
 
 Recording draws a live waveform from lock-free peak buckets. Stopping creates
 and flushes the WAV before adding its clip; the inspector shows the saved WAV
 filename and the status bar reports the completed file. The waveform baseline
-is visible immediately, and stopping recording also stops transport.
+is visible immediately in a full-width recording region, and either **STOP REC**
+or **STOP** finalizes capture and stops transport through the same path.
 
 ## Documentation
 
