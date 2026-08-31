@@ -213,6 +213,7 @@ StudioAudioEngine::~StudioAudioEngine()
 juce::Result StudioAudioEngine::initialise(juce::AudioDeviceManager& manager)
 {
     shutdown();
+    shuttingDown.store(false, std::memory_order_release);
 
     const auto error = manager.initialiseWithDefaultDevices(1, 2);
     if (error.isNotEmpty())
@@ -225,9 +226,7 @@ juce::Result StudioAudioEngine::initialise(juce::AudioDeviceManager& manager)
 
 void StudioAudioEngine::shutdown()
 {
-    recorder.stopAccepting();
-    recordingFinalizer.removeAllJobs(false, 10000);
-    recorder.finishStop();
+    shuttingDown.store(true, std::memory_order_release);
     playing.store(false, std::memory_order_release);
 
     if (deviceManager != nullptr)
@@ -235,18 +234,58 @@ void StudioAudioEngine::shutdown()
         deviceManager->removeAudioCallback(this);
         deviceManager = nullptr;
     }
+
+    recorder.stopAccepting();
+    recordingFinalizer.removeAllJobs(false, 10000);
+    recorder.finishStop();
+    pluginRuntimeBuilder.removeAllJobs(false, -1);
+
+    for (auto& graph : pluginRuntimeGraphs)
+        graph.tracks.clear();
+    activePluginRuntime.store(0, std::memory_order_release);
+    readingPluginRuntime.store(-1, std::memory_order_release);
+    activeSnapshot.store(0, std::memory_order_release);
+    activeRenderPair.store(0, std::memory_order_release);
+    readingSnapshot.store(-1, std::memory_order_release);
+    for (auto& generation : snapshotGenerations)
+        generation.store(0, std::memory_order_relaxed);
+    for (auto& generation : pluginRuntimeGenerations)
+        generation.store(0, std::memory_order_relaxed);
+    pluginLateBlocks.store(0, std::memory_order_relaxed);
+    {
+        const juce::ScopedLock lock(pluginRequestLock);
+        pendingPluginRequests.clear();
+        pendingPluginSnapshot.reset();
+        pendingPluginFingerprint.clear();
+        buildingPluginFingerprint.clear();
+        desiredPluginFingerprint.clear();
+        activePluginFingerprint.clear();
+        pendingPluginGeneration = 0;
+        pendingSnapshotGeneration = 0;
+        desiredPluginGeneration = 0;
+        activePluginGeneration = 0;
+        hasPendingPluginRequest = false;
+        pluginBuilderRunning = false;
+    }
+    {
+        const juce::ScopedLock lock(pluginStatusLock);
+        pluginStatuses.clear();
+    }
 }
 
-juce::Result StudioAudioEngine::updateProject(const Project& project)
+juce::Result StudioAudioEngine::updateProject(
+    const Project& project,
+    std::vector<PluginRuntimeRequest> pluginRequests)
 {
     juce::String error;
-    auto snapshot = buildSnapshot(project, currentSampleRate(), error);
+    auto snapshot = buildSnapshot(project,
+                                  currentSampleRate(),
+                                  pluginRequests,
+                                  error);
     if (!snapshot.has_value())
         return juce::Result::fail(error);
 
-    const auto destination = chooseWritableSnapshot();
-    snapshots[static_cast<std::size_t>(destination)] = std::move(*snapshot);
-    activeSnapshot.store(destination, std::memory_order_release);
+    requestPluginRuntime(std::move(pluginRequests), std::move(*snapshot));
     return juce::Result::ok();
 }
 
@@ -326,6 +365,66 @@ std::vector<float> StudioAudioEngine::recordingWaveform() const
     return recorder.waveform();
 }
 
+std::vector<StudioAudioEngine::PluginRuntimeStatus> StudioAudioEngine::pluginRuntimeStatuses() const
+{
+    const juce::ScopedLock graphLock(pluginRequestLock);
+    std::vector<PluginRuntimeStatus> statuses;
+    {
+        const juce::ScopedLock statusLock(pluginStatusLock);
+        statuses = pluginStatuses;
+    }
+
+    const auto& graph = pluginRuntimeGraphs[static_cast<std::size_t>(
+        activePluginRuntime.load(std::memory_order_acquire))];
+    for (auto& status : statuses)
+    {
+        if (status.state != PluginRuntimeStatus::State::ready)
+            continue;
+
+        for (const auto& track : graph.tracks)
+        {
+            const auto insert = std::find_if(track.inserts.cbegin(),
+                                             track.inserts.cend(),
+                                             [&status](const auto& candidate)
+            {
+                return candidate.insertId == status.insertId;
+            });
+            if (insert != track.inserts.cend()
+                && (insert->bridge == nullptr || !insert->bridge->isReady()))
+            {
+                status.state = PluginRuntimeStatus::State::failed;
+                status.message = "Sandbox worker disconnected";
+                break;
+            }
+        }
+    }
+    return statuses;
+}
+
+std::uint64_t StudioAudioEngine::pluginLateBlockCount() const noexcept
+{
+    return pluginLateBlocks.load(std::memory_order_relaxed);
+}
+
+bool StudioAudioEngine::pluginRuntimeTransitionPending() const
+{
+    const juce::ScopedLock lock(pluginRequestLock);
+    return pluginBuilderRunning
+        || hasPendingPluginRequest
+        || desiredPluginFingerprint != activePluginFingerprint;
+}
+
+void StudioAudioEngine::forcePluginRuntimeReload(
+    const Project& project,
+    std::vector<PluginRuntimeRequest> pluginRequests)
+{
+    {
+        const juce::ScopedLock lock(pluginRequestLock);
+        desiredPluginFingerprint.clear();
+    }
+    updateProject(project, std::move(pluginRequests));
+}
+
 juce::Result StudioAudioEngine::startRecording(const juce::File& destination,
                                                int firstInputChannel,
                                                int channels)
@@ -391,8 +490,12 @@ juce::Result StudioAudioEngine::renderToWav(const Project& project,
                                             const juce::File& destination,
                                             double renderSampleRate)
 {
+    if (project.hasActivePluginInserts())
+        return juce::Result::fail(
+            "Fast export cannot omit active plugins. Bypass inserts or use playback capture until real-time bounce ships.");
+
     juce::String error;
-    auto snapshot = buildSnapshot(project, renderSampleRate, error);
+    auto snapshot = buildSnapshot(project, renderSampleRate, {}, error);
     if (!snapshot.has_value())
         return juce::Result::fail(error);
 
@@ -440,11 +543,18 @@ juce::Result StudioAudioEngine::renderToWav(const Project& project,
 std::optional<StudioAudioEngine::RenderSnapshot> StudioAudioEngine::buildSnapshot(
     const Project& project,
     double targetSampleRate,
+    const std::vector<PluginRuntimeRequest>& pluginRequests,
     juce::String& error)
 {
     RenderSnapshot snapshot;
     snapshot.sampleRate = targetSampleRate;
-    snapshot.lengthSamples = static_cast<std::int64_t>(std::ceil(project.lengthSeconds() * targetSampleRate));
+    snapshot.processingQuantum = juce::jlimit(
+        1,
+        PluginBridgeSharedState::maxBlockSize,
+        deviceBlockSize.load(std::memory_order_acquire));
+    snapshot.contentLengthSamples = static_cast<std::int64_t>(
+        std::ceil(project.lengthSeconds() * targetSampleRate));
+    snapshot.lengthSamples = snapshot.contentLengthSamples;
     snapshot.loopStartSample = static_cast<std::int64_t>(project.loopStartSeconds * targetSampleRate);
     snapshot.loopEndSample = static_cast<std::int64_t>(project.loopEndSeconds * targetSampleRate);
     snapshot.tempo = project.tempo;
@@ -455,22 +565,22 @@ std::optional<StudioAudioEngine::RenderSnapshot> StudioAudioEngine::buildSnapsho
         return track.solo && track.type != TrackType::master;
     });
 
-    float masterGain = 1.0f;
     if (const auto master = std::find_if(project.tracks.cbegin(), project.tracks.cend(), [](const auto& track)
         {
             return track.type == TrackType::master;
         }); master != project.tracks.cend())
-        masterGain = master->muted ? 0.0f : juce::Decibels::decibelsToGain(master->volumeDecibels);
-
-    for (const auto& track : project.tracks)
     {
-        if (track.type == TrackType::master || track.muted || (anySolo && !track.solo))
-            continue;
+        snapshot.masterRuntimeKey = runtimeKey(master->id);
+        snapshot.masterGain = juce::Decibels::decibelsToGain(master->volumeDecibels);
+        snapshot.masterPan = master->pan;
+        snapshot.masterAudible = !master->muted;
+    }
 
-        const auto trackGain = juce::Decibels::decibelsToGain(track.volumeDecibels) * masterGain;
-        const auto leftPanGain = track.pan > 0.0f ? 1.0f - track.pan : 1.0f;
-        const auto rightPanGain = track.pan < 0.0f ? 1.0f + track.pan : 1.0f;
-
+    const auto buildClips = [this, targetSampleRate, &error](const Track& track)
+        -> std::optional<std::vector<RenderClip>>
+    {
+        std::vector<RenderClip> clips;
+        clips.reserve(track.clips.size());
         for (const auto& clip : track.clips)
         {
             if (clip.muted || !clip.sourceFile.existsAsFile())
@@ -486,9 +596,7 @@ std::optional<StudioAudioEngine::RenderSnapshot> StudioAudioEngine::buildSnapsho
                 std::llround(clip.sourceOffsetSeconds * targetSampleRate));
             renderClip.lengthSamples = static_cast<std::int64_t>(
                 std::llround(clip.durationSeconds * targetSampleRate));
-            const auto clipGain = juce::Decibels::decibelsToGain(clip.gainDecibels) * trackGain;
-            renderClip.leftGain = clipGain * leftPanGain;
-            renderClip.rightGain = clipGain * rightPanGain;
+            renderClip.gain = juce::Decibels::decibelsToGain(clip.gainDecibels);
             renderClip.samples = std::move(*audio);
 
             const auto available = static_cast<std::int64_t>(renderClip.samples.getNumSamples())
@@ -496,11 +604,170 @@ std::optional<StudioAudioEngine::RenderSnapshot> StudioAudioEngine::buildSnapsho
             renderClip.lengthSamples = std::max<std::int64_t>(0,
                                                                std::min(renderClip.lengthSamples, available));
             if (renderClip.lengthSamples > 0)
-                snapshot.clips.push_back(std::move(renderClip));
+                clips.push_back(std::move(renderClip));
         }
+
+        return clips;
+    };
+
+    for (const auto& parent : project.tracks)
+    {
+        if (parent.type == TrackType::master || parent.parentTrackId.isNotEmpty())
+            continue;
+
+        RenderTrack renderTrack;
+        renderTrack.runtimeKey = runtimeKey(parent.id);
+        renderTrack.volumeGain = juce::Decibels::decibelsToGain(parent.volumeDecibels);
+        renderTrack.pan = parent.pan;
+        renderTrack.audible = !parent.muted;
+
+        auto parentClips = buildClips(parent);
+        if (!parentClips.has_value())
+            return std::nullopt;
+
+        RenderSource parentSource;
+        parentSource.isParentContent = true;
+        parentSource.audible = !parent.muted && (!anySolo || parent.solo);
+        parentSource.clips = std::move(*parentClips);
+        renderTrack.sources.push_back(std::move(parentSource));
+
+        for (const auto& child : project.tracks)
+        {
+            if (child.parentTrackId != parent.id)
+                continue;
+
+            auto childClips = buildClips(child);
+            if (!childClips.has_value())
+                return std::nullopt;
+
+            RenderSource source;
+            source.runtimeKey = runtimeKey(child.id);
+            source.volumeGain = juce::Decibels::decibelsToGain(child.volumeDecibels);
+            source.pan = child.pan;
+            source.audible = !parent.muted
+                && !child.muted
+                && (!anySolo || parent.solo || child.solo);
+            source.clips = std::move(*childClips);
+            renderTrack.sources.push_back(std::move(source));
+        }
+
+        if (renderTrack.sources.size() == 1 && anySolo && !parent.solo)
+            renderTrack.audible = false;
+        else if (renderTrack.sources.size() > 1
+                 && anySolo
+                 && !parent.solo
+                 && std::none_of(project.tracks.cbegin(),
+                                 project.tracks.cend(),
+                                 [&parent](const auto& child)
+        {
+            return child.parentTrackId == parent.id && child.solo;
+        }))
+            renderTrack.audible = false;
+
+        snapshot.tracks.push_back(std::move(renderTrack));
     }
 
+    configureRuntimeTiming(snapshot, pluginRequests);
+
     return snapshot;
+}
+
+void StudioAudioEngine::configureRuntimeTiming(
+    RenderSnapshot& snapshot,
+    const std::vector<PluginRuntimeRequest>& pluginRequests) const
+{
+    const auto latencyForKey = [&pluginRequests, &snapshot](std::uint64_t key)
+    {
+        return std::accumulate(pluginRequests.cbegin(),
+                               pluginRequests.cend(),
+                               0,
+                               [key, &snapshot](int total, const auto& request)
+        {
+            if (runtimeKey(request.trackId) != key
+                || request.bypassed
+                || request.missing
+                || !request.description.has_value())
+                return total;
+
+            return total
+                + snapshot.processingQuantum
+                + std::max(0, request.latencySamples);
+        });
+    };
+    const auto tailForKey = [&pluginRequests](std::uint64_t key)
+    {
+        return std::accumulate(pluginRequests.cbegin(),
+                               pluginRequests.cend(),
+                               0.0,
+                               [key](double total, const auto& request)
+        {
+            if (runtimeKey(request.trackId) != key
+                || request.bypassed
+                || request.missing
+                || !request.description.has_value())
+                return total;
+            return total + std::max(0.0, request.tailSeconds);
+        });
+    };
+    const auto resetDelay = [&snapshot](auto& delay, int samples)
+    {
+        delay.delaySamples = std::max(0, samples);
+        delay.writePosition = 0;
+        delay.buffer.setSize(2,
+                             std::max(1,
+                                      delay.delaySamples
+                                          + snapshot.processingQuantum
+                                          + 1),
+                             false,
+                             true,
+                             false);
+        delay.buffer.clear();
+    };
+
+    auto maximumTrackLatency = 0;
+    auto maximumTrackTailSeconds = 0.0;
+    for (auto& track : snapshot.tracks)
+    {
+        auto maximumSourceLatency = 0;
+        auto maximumSourceTail = 0.0;
+        for (auto& source : track.sources)
+        {
+            source.runtimeLatencySamples = source.isParentContent
+                ? 0
+                : latencyForKey(source.runtimeKey);
+            maximumSourceLatency = std::max(maximumSourceLatency,
+                                            source.runtimeLatencySamples);
+            maximumSourceTail = std::max(maximumSourceTail,
+                                         source.isParentContent
+                                             ? 0.0
+                                             : tailForKey(source.runtimeKey));
+        }
+
+        for (auto& source : track.sources)
+            resetDelay(source.compensation,
+                       maximumSourceLatency - source.runtimeLatencySamples);
+
+        track.runtimeLatencySamples = maximumSourceLatency
+            + latencyForKey(track.runtimeKey);
+        maximumTrackLatency = std::max(maximumTrackLatency,
+                                       track.runtimeLatencySamples);
+        maximumTrackTailSeconds = std::max(maximumTrackTailSeconds,
+                                           maximumSourceTail + tailForKey(track.runtimeKey));
+    }
+
+    for (auto& track : snapshot.tracks)
+        resetDelay(track.compensation,
+                   maximumTrackLatency - track.runtimeLatencySamples);
+
+    const auto masterLatency = latencyForKey(snapshot.masterRuntimeKey);
+    resetDelay(snapshot.clickCompensation,
+               maximumTrackLatency + masterLatency);
+    snapshot.lengthSamples = snapshot.contentLengthSamples
+        + maximumTrackLatency
+        + masterLatency
+        + static_cast<std::int64_t>(
+            std::ceil((maximumTrackTailSeconds + tailForKey(snapshot.masterRuntimeKey))
+                      * snapshot.sampleRate));
 }
 
 std::optional<juce::AudioBuffer<float>> StudioAudioEngine::readAndResample(
@@ -563,24 +830,189 @@ void StudioAudioEngine::mixSample(const RenderSnapshot& snapshot,
                                   float& left,
                                   float& right) noexcept
 {
-    for (const auto& clip : snapshot.clips)
+    if (!snapshot.masterAudible)
+        return;
+
+    for (const auto& track : snapshot.tracks)
     {
-        const auto relative = timelineSample - clip.startSample;
-        if (relative < 0 || relative >= clip.lengthSamples)
+        if (!track.audible)
             continue;
 
-        const auto sourceSample = clip.sourceOffsetSamples + relative;
-        if (sourceSample < 0 || sourceSample >= clip.samples.getNumSamples())
-            continue;
+        float trackLeft = 0.0f;
+        float trackRight = 0.0f;
+        for (const auto& source : track.sources)
+        {
+            if (!source.audible)
+                continue;
 
-        const auto index = static_cast<int>(sourceSample);
-        const auto sourceLeft = clip.samples.getSample(0, index);
-        const auto sourceRight = clip.samples.getNumChannels() > 1
-            ? clip.samples.getSample(1, index)
-            : sourceLeft;
-        left += sourceLeft * clip.leftGain;
-        right += sourceRight * clip.rightGain;
+            float sourceLeft = 0.0f;
+            float sourceRight = 0.0f;
+            for (const auto& clip : source.clips)
+            {
+                const auto relative = timelineSample - clip.startSample;
+                if (relative < 0 || relative >= clip.lengthSamples)
+                    continue;
+
+                const auto sourceSample = clip.sourceOffsetSamples + relative;
+                if (sourceSample < 0 || sourceSample >= clip.samples.getNumSamples())
+                    continue;
+
+                const auto index = static_cast<int>(sourceSample);
+                const auto clipLeft = clip.samples.getSample(0, index);
+                const auto clipRight = clip.samples.getNumChannels() > 1
+                    ? clip.samples.getSample(1, index)
+                    : clipLeft;
+                sourceLeft += clipLeft * clip.gain;
+                sourceRight += clipRight * clip.gain;
+            }
+
+            const auto leftPanGain = source.pan > 0.0f ? 1.0f - source.pan : 1.0f;
+            const auto rightPanGain = source.pan < 0.0f ? 1.0f + source.pan : 1.0f;
+            trackLeft += sourceLeft * source.volumeGain * leftPanGain;
+            trackRight += sourceRight * source.volumeGain * rightPanGain;
+        }
+
+        const auto leftPanGain = track.pan > 0.0f ? 1.0f - track.pan : 1.0f;
+        const auto rightPanGain = track.pan < 0.0f ? 1.0f + track.pan : 1.0f;
+        left += trackLeft * track.volumeGain * leftPanGain;
+        right += trackRight * track.volumeGain * rightPanGain;
     }
+
+    const auto masterLeftGain = snapshot.masterGain
+        * (snapshot.masterPan > 0.0f ? 1.0f - snapshot.masterPan : 1.0f);
+    const auto masterRightGain = snapshot.masterGain
+        * (snapshot.masterPan < 0.0f ? 1.0f + snapshot.masterPan : 1.0f);
+    left *= masterLeftGain;
+    right *= masterRightGain;
+}
+
+void StudioAudioEngine::renderSourceBlock(RenderSource& source,
+                                          std::int64_t timelineSample,
+                                          int samples,
+                                          bool loopEnabled,
+                                          std::int64_t loopStartSample,
+                                          std::int64_t loopEndSample) noexcept
+{
+    source.processingBuffer.clear(0, 0, samples);
+    source.processingBuffer.clear(1, 0, samples);
+    if (!source.audible)
+        return;
+
+    for (int sample = 0; sample < samples; ++sample)
+    {
+        auto position = timelineSample + sample;
+        if (loopEnabled && position >= loopEndSample)
+        {
+            const auto loopLength = loopEndSample - loopStartSample;
+            if (loopLength > 0)
+                position = loopStartSample + (position - loopStartSample) % loopLength;
+        }
+        float left = 0.0f;
+        float right = 0.0f;
+        for (const auto& clip : source.clips)
+        {
+            const auto relative = position - clip.startSample;
+            if (relative < 0 || relative >= clip.lengthSamples)
+                continue;
+
+            const auto sourceSample = clip.sourceOffsetSamples + relative;
+            if (sourceSample < 0 || sourceSample >= clip.samples.getNumSamples())
+                continue;
+
+            const auto index = static_cast<int>(sourceSample);
+            const auto clipLeft = clip.samples.getSample(0, index);
+            const auto clipRight = clip.samples.getNumChannels() > 1
+                ? clip.samples.getSample(1, index)
+                : clipLeft;
+            left += clipLeft * clip.gain;
+            right += clipRight * clip.gain;
+        }
+
+        source.processingBuffer.setSample(0, sample, left);
+        source.processingBuffer.setSample(1, sample, right);
+    }
+
+    applyTrackGainAndPan(source.processingBuffer,
+                         samples,
+                         source.volumeGain,
+                         source.pan);
+}
+
+void StudioAudioEngine::applyTrackGainAndPan(juce::AudioBuffer<float>& buffer,
+                                             int samples,
+                                             float gain,
+                                             float pan) noexcept
+{
+    const auto leftGain = gain * (pan > 0.0f ? 1.0f - pan : 1.0f);
+    const auto rightGain = gain * (pan < 0.0f ? 1.0f + pan : 1.0f);
+    buffer.applyGain(0, 0, samples, leftGain);
+    buffer.applyGain(1, 0, samples, rightGain);
+}
+
+void StudioAudioEngine::applyDelayCompensation(
+    juce::AudioBuffer<float>& buffer,
+    int samples,
+    RenderSource::DelayCompensator& delay) noexcept
+{
+    if (delay.delaySamples <= 0 || delay.buffer.getNumSamples() <= delay.delaySamples)
+        return;
+
+    const auto capacity = delay.buffer.getNumSamples();
+    for (int sample = 0; sample < samples; ++sample)
+    {
+        auto readPosition = delay.writePosition - delay.delaySamples;
+        if (readPosition < 0)
+            readPosition += capacity;
+
+        for (int channel = 0; channel < 2; ++channel)
+        {
+            const auto input = buffer.getSample(channel, sample);
+            const auto output = delay.buffer.getSample(channel, readPosition);
+            delay.buffer.setSample(channel, delay.writePosition, input);
+            buffer.setSample(channel, sample, output);
+        }
+
+        delay.writePosition = (delay.writePosition + 1) % capacity;
+    }
+}
+
+void StudioAudioEngine::processRuntimeChain(std::uint64_t key,
+                                            juce::AudioBuffer<float>& buffer) noexcept
+{
+    if (key == 0)
+        return;
+
+    const auto readingIndex = readingPluginRuntime.load(std::memory_order_acquire);
+    const auto runtimeIndex = readingIndex >= 0
+        ? readingIndex
+        : activePluginRuntime.load(std::memory_order_acquire);
+    auto& graph = pluginRuntimeGraphs[static_cast<std::size_t>(runtimeIndex)];
+
+    const auto track = std::find_if(graph.tracks.begin(), graph.tracks.end(), [key](const auto& candidate)
+    {
+        return candidate.key == key;
+    });
+    if (track != graph.tracks.end())
+    {
+        for (auto& insert : track->inserts)
+        {
+            if (insert.bridge != nullptr && insert.bridge->isReady())
+            {
+                const auto before = insert.bridge->lateBlockCount();
+                insert.bridge->processBlock(buffer);
+                const auto after = insert.bridge->lateBlockCount();
+                if (after > before)
+                    pluginLateBlocks.fetch_add(after - before, std::memory_order_relaxed);
+            }
+            else
+            {
+                applyDelayCompensation(buffer,
+                                       buffer.getNumSamples(),
+                                       insert.failureDelay);
+            }
+        }
+    }
+
 }
 
 void StudioAudioEngine::addMetronome(const RenderSnapshot& snapshot,
@@ -620,6 +1052,300 @@ int StudioAudioEngine::chooseWritableSnapshot() const noexcept
     return (active + 1) % static_cast<int>(snapshots.size());
 }
 
+void StudioAudioEngine::requestPluginRuntime(std::vector<PluginRuntimeRequest> requests,
+                                             RenderSnapshot snapshot)
+{
+    const auto fingerprint = pluginRuntimeFingerprint(requests);
+    auto startBuilder = false;
+    {
+        const juce::ScopedLock lock(pluginRequestLock);
+        if (fingerprint == activePluginFingerprint
+            && fingerprint == desiredPluginFingerprint
+            && !pluginBuilderRunning
+            && !hasPendingPluginRequest)
+        {
+            const auto destination = chooseWritableSnapshot();
+            snapshots[static_cast<std::size_t>(destination)] = std::move(snapshot);
+            snapshotGenerations[static_cast<std::size_t>(destination)].store(
+                activePluginGeneration,
+                std::memory_order_release);
+            activeSnapshot.store(destination, std::memory_order_release);
+            activeRenderPair.store(renderPair(activePluginGeneration,
+                                              destination,
+                                              activePluginRuntime.load(std::memory_order_acquire)),
+                                   std::memory_order_release);
+            return;
+        }
+
+        if (fingerprint != desiredPluginFingerprint
+            || (!pluginBuilderRunning
+                && !hasPendingPluginRequest
+                && fingerprint != activePluginFingerprint))
+        {
+            desiredPluginFingerprint = fingerprint;
+            ++desiredPluginGeneration;
+            pendingPluginRequests = std::move(requests);
+            pendingPluginFingerprint = fingerprint;
+            pendingPluginGeneration = desiredPluginGeneration;
+            hasPendingPluginRequest = true;
+        }
+
+        pendingPluginSnapshot = std::move(snapshot);
+        pendingSnapshotGeneration = desiredPluginGeneration;
+        if (!pluginBuilderRunning)
+        {
+            pluginBuilderRunning = true;
+            startBuilder = true;
+        }
+    }
+
+    if (startBuilder)
+        pluginRuntimeBuilder.addJob([this] { runPluginRuntimeBuilder(); });
+}
+
+void StudioAudioEngine::runPluginRuntimeBuilder()
+{
+    for (;;)
+    {
+        std::vector<PluginRuntimeRequest> requests;
+        juce::String fingerprint;
+        std::uint64_t generation = 0;
+        {
+            const juce::ScopedLock lock(pluginRequestLock);
+            if (!hasPendingPluginRequest)
+            {
+                pluginBuilderRunning = false;
+                return;
+            }
+
+            requests = std::move(pendingPluginRequests);
+            fingerprint = pendingPluginFingerprint;
+            generation = pendingPluginGeneration;
+            pendingPluginFingerprint.clear();
+            hasPendingPluginRequest = false;
+            buildingPluginFingerprint = fingerprint;
+        }
+
+        std::vector<PluginRuntimeStatus> statuses;
+        statuses.reserve(requests.size());
+        PluginRuntimeGraph graph;
+
+        for (auto& request : requests)
+        {
+            if (shuttingDown.load(std::memory_order_acquire))
+                return;
+
+            PluginRuntimeStatus status;
+            status.trackId = request.trackId;
+            status.insertId = request.insertId;
+            status.name = request.name;
+
+            if (request.bypassed)
+            {
+                status.state = PluginRuntimeStatus::State::bypassed;
+                status.message = "Bypassed";
+                statuses.push_back(std::move(status));
+                continue;
+            }
+
+            if (request.missing || !request.description.has_value())
+            {
+                status.state = PluginRuntimeStatus::State::missing;
+                status.message = "Plugin unavailable";
+                statuses.push_back(std::move(status));
+                continue;
+            }
+
+            status.state = PluginRuntimeStatus::State::loading;
+            status.message = "Starting sandbox worker";
+            {
+                const juce::ScopedLock lock(pluginStatusLock);
+                pluginStatuses = statuses;
+                pluginStatuses.push_back(status);
+            }
+
+            auto bridge = std::make_unique<PluginBridgeClient>();
+            const auto result = bridge->startPlugin(*request.description,
+                                                    currentSampleRate(),
+                                                    PluginBridgeSharedState::maxBlockSize,
+                                                    request.state);
+            if (result.failed())
+            {
+                auto track = std::find_if(graph.tracks.begin(),
+                                          graph.tracks.end(),
+                                          [&request](const auto& candidate)
+                {
+                    return candidate.key == runtimeKey(request.trackId);
+                });
+                if (track == graph.tracks.end())
+                {
+                    graph.tracks.push_back({ runtimeKey(request.trackId), {} });
+                    track = std::prev(graph.tracks.end());
+                }
+
+                InsertRuntime failedRuntime;
+                failedRuntime.insertId = request.insertId;
+                failedRuntime.name = request.name;
+                failedRuntime.failureDelay.delaySamples
+                    = deviceBlockSize.load(std::memory_order_acquire)
+                    + std::max(0, request.latencySamples);
+                failedRuntime.failureDelay.buffer.setSize(
+                    2,
+                    failedRuntime.failureDelay.delaySamples
+                        + PluginBridgeSharedState::maxBlockSize
+                        + 1);
+                failedRuntime.failureDelay.buffer.clear();
+                track->inserts.push_back(std::move(failedRuntime));
+
+                status.state = PluginRuntimeStatus::State::failed;
+                status.message = result.getErrorMessage();
+                statuses.push_back(std::move(status));
+                continue;
+            }
+
+            auto track = std::find_if(graph.tracks.begin(),
+                                      graph.tracks.end(),
+                                      [&request](const auto& candidate)
+            {
+                return candidate.key == runtimeKey(request.trackId);
+            });
+            if (track == graph.tracks.end())
+            {
+                graph.tracks.push_back({ runtimeKey(request.trackId), {} });
+                track = std::prev(graph.tracks.end());
+            }
+
+            InsertRuntime insertRuntime;
+            insertRuntime.insertId = request.insertId;
+            insertRuntime.name = request.name;
+            insertRuntime.failureDelay.delaySamples
+                = deviceBlockSize.load(std::memory_order_acquire)
+                + bridge->reportedLatencySamples();
+            insertRuntime.failureDelay.buffer.setSize(
+                2,
+                insertRuntime.failureDelay.delaySamples
+                    + PluginBridgeSharedState::maxBlockSize
+                    + 1);
+            insertRuntime.failureDelay.buffer.clear();
+            insertRuntime.bridge = std::move(bridge);
+            track->inserts.push_back(std::move(insertRuntime));
+            status.state = PluginRuntimeStatus::State::ready;
+            status.message = "Sandbox ready";
+            status.latencySamples = track->inserts.back().bridge->reportedLatencySamples();
+            status.tailSeconds = track->inserts.back().bridge->reportedTailSeconds();
+            request.latencySamples = status.latencySamples;
+            request.tailSeconds = status.tailSeconds;
+            statuses.push_back(std::move(status));
+        }
+
+        {
+            const juce::ScopedLock lock(pluginRequestLock);
+            if (generation != desiredPluginGeneration)
+            {
+                buildingPluginFingerprint.clear();
+                continue;
+            }
+            if (!pendingPluginSnapshot.has_value()
+                || pendingSnapshotGeneration != generation)
+            {
+                buildingPluginFingerprint.clear();
+                continue;
+            }
+
+            configureRuntimeTiming(*pendingPluginSnapshot, requests);
+            const auto runtimeDestination = chooseWritableRuntime();
+            const auto snapshotDestination = chooseWritableSnapshot();
+            pluginRuntimeGraphs[static_cast<std::size_t>(runtimeDestination)] = std::move(graph);
+            snapshots[static_cast<std::size_t>(snapshotDestination)]
+                = std::move(*pendingPluginSnapshot);
+            pendingPluginSnapshot.reset();
+            pluginRuntimeGenerations[static_cast<std::size_t>(runtimeDestination)].store(
+                generation,
+                std::memory_order_release);
+            snapshotGenerations[static_cast<std::size_t>(snapshotDestination)].store(
+                generation,
+                std::memory_order_release);
+            activePluginRuntime.store(runtimeDestination, std::memory_order_release);
+            activeSnapshot.store(snapshotDestination, std::memory_order_release);
+            activeRenderPair.store(renderPair(generation,
+                                              snapshotDestination,
+                                              runtimeDestination),
+                                   std::memory_order_release);
+            activePluginFingerprint = fingerprint;
+            activePluginGeneration = generation;
+            buildingPluginFingerprint.clear();
+        }
+        pluginLateBlocks.store(0, std::memory_order_relaxed);
+
+        {
+            const juce::ScopedLock lock(pluginStatusLock);
+            pluginStatuses = std::move(statuses);
+        }
+    }
+}
+
+juce::String StudioAudioEngine::pluginRuntimeFingerprint(
+    const std::vector<PluginRuntimeRequest>& requests) const
+{
+    juce::String fingerprint = juce::String(currentSampleRate(), 3)
+        + "|"
+        + juce::String(deviceBlockSize.load(std::memory_order_acquire))
+        + "|";
+    for (const auto& request : requests)
+    {
+        auto stateHash = std::uint64_t { 1469598103934665603ULL };
+        const auto* bytes = static_cast<const std::uint8_t*>(request.state.getData());
+        for (std::size_t index = 0; index < request.state.getSize(); ++index)
+        {
+            stateHash ^= bytes[index];
+            stateHash *= 1099511628211ULL;
+        }
+
+        fingerprint << request.trackId
+                    << ":"
+                    << request.insertId
+                    << ":"
+                    << (request.bypassed ? "b" : "e")
+                    << ":"
+                    << (request.missing ? "m" : "a")
+                    << ":"
+                    << juce::String(request.catalogRevision)
+                    << ":"
+                    << juce::String::toHexString(static_cast<juce::int64>(stateHash))
+                    << ":";
+        if (request.description.has_value())
+            fingerprint << request.description->createIdentifierString();
+        fingerprint << ";";
+    }
+    return fingerprint;
+}
+
+std::uint64_t StudioAudioEngine::runtimeKey(const juce::String& trackId) noexcept
+{
+    return static_cast<std::uint64_t>(trackId.hashCode64());
+}
+
+std::uint64_t StudioAudioEngine::renderPair(std::uint64_t generation,
+                                            int snapshotIndex,
+                                            int runtimeIndex) noexcept
+{
+    return (generation << 4)
+        | (static_cast<std::uint64_t>(snapshotIndex & 0x3) << 2)
+        | static_cast<std::uint64_t>(runtimeIndex & 0x3);
+}
+
+int StudioAudioEngine::chooseWritableRuntime() const noexcept
+{
+    const auto active = activePluginRuntime.load(std::memory_order_acquire);
+    const auto reading = readingPluginRuntime.load(std::memory_order_acquire);
+
+    for (int index = 0; index < static_cast<int>(pluginRuntimeGraphs.size()); ++index)
+        if (index != active && index != reading)
+            return index;
+
+    return (active + 1) % static_cast<int>(pluginRuntimeGraphs.size());
+}
+
 void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inputChannelData,
                                                          int numInputChannels,
                                                          float* const* outputChannelData,
@@ -645,45 +1371,202 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
     if (playing.load(std::memory_order_acquire))
     {
         int snapshotIndex = 0;
-        do
+        int runtimeIndex = 0;
+        auto pairAcquired = false;
+        for (int attempt = 0; attempt < 3; ++attempt)
         {
-            snapshotIndex = activeSnapshot.load(std::memory_order_acquire);
+            const auto pair = activeRenderPair.load(std::memory_order_acquire);
+            runtimeIndex = static_cast<int>(pair & 0x3);
+            snapshotIndex = static_cast<int>((pair >> 2) & 0x3);
             readingSnapshot.store(snapshotIndex, std::memory_order_release);
+            readingPluginRuntime.store(runtimeIndex, std::memory_order_release);
+            if (pair == activeRenderPair.load(std::memory_order_acquire))
+            {
+                pairAcquired = true;
+                break;
+            }
         }
-        while (snapshotIndex != activeSnapshot.load(std::memory_order_acquire));
+        if (!pairAcquired)
+        {
+            readingSnapshot.store(-1, std::memory_order_release);
+            readingPluginRuntime.store(-1, std::memory_order_release);
+            outputLeftPeak.store(0.0f, std::memory_order_relaxed);
+            outputRightPeak.store(0.0f, std::memory_order_relaxed);
+            return;
+        }
 
-        const auto& snapshot = snapshots[static_cast<std::size_t>(snapshotIndex)];
+        auto& snapshot = snapshots[static_cast<std::size_t>(snapshotIndex)];
         auto position = playheadSample.load(std::memory_order_acquire);
         const auto recordingActive = recorder.isActive();
+        auto outputOffset = 0;
 
-        for (int sample = 0; sample < numSamples; ++sample)
+        while (outputOffset < numSamples)
         {
+            auto samplesThisBlock = std::min(
+                numSamples - outputOffset,
+                PluginBridgeSharedState::maxBlockSize);
+
             if (position >= snapshot.lengthSamples && !recordingActive)
             {
                 playing.store(false, std::memory_order_release);
                 break;
             }
 
-            float left = 0.0f;
-            float right = 0.0f;
-            if (position < snapshot.lengthSamples)
-                mixSample(snapshot, position, left, right);
+            snapshot.masterBuffer.clear(0, 0, samplesThisBlock);
+            snapshot.masterBuffer.clear(1, 0, samplesThisBlock);
+
+            for (auto& track : snapshot.tracks)
+            {
+                track.processingBuffer.clear(0, 0, samplesThisBlock);
+                track.processingBuffer.clear(1, 0, samplesThisBlock);
+
+                for (auto& source : track.sources)
+                {
+                    renderSourceBlock(source,
+                                      position,
+                                      samplesThisBlock,
+                                      !recordingActive && snapshot.loopEnabled,
+                                      snapshot.loopStartSample,
+                                      snapshot.loopEndSample);
+
+                    float* sourceChannels[] {
+                        source.processingBuffer.getWritePointer(0),
+                        source.processingBuffer.getWritePointer(1)
+                    };
+                    juce::AudioBuffer<float> sourceView(sourceChannels,
+                                                        2,
+                                                        samplesThisBlock);
+                    if (!source.isParentContent)
+                        processRuntimeChain(source.runtimeKey, sourceView);
+                    applyDelayCompensation(source.processingBuffer,
+                                           samplesThisBlock,
+                                           source.compensation);
+
+                    if (source.audible)
+                    {
+                        track.processingBuffer.addFrom(0,
+                                                       0,
+                                                       source.processingBuffer,
+                                                       0,
+                                                       0,
+                                                       samplesThisBlock);
+                        track.processingBuffer.addFrom(1,
+                                                       0,
+                                                       source.processingBuffer,
+                                                       1,
+                                                       0,
+                                                       samplesThisBlock);
+                    }
+                }
+
+                float* trackChannels[] {
+                    track.processingBuffer.getWritePointer(0),
+                    track.processingBuffer.getWritePointer(1)
+                };
+                juce::AudioBuffer<float> trackView(trackChannels,
+                                                   2,
+                                                   samplesThisBlock);
+                processRuntimeChain(track.runtimeKey, trackView);
+                applyTrackGainAndPan(track.processingBuffer,
+                                     samplesThisBlock,
+                                     track.volumeGain,
+                                     track.pan);
+                applyDelayCompensation(track.processingBuffer,
+                                       samplesThisBlock,
+                                       track.compensation);
+                if (track.audible)
+                {
+                    snapshot.masterBuffer.addFrom(0,
+                                                  0,
+                                                  track.processingBuffer,
+                                                  0,
+                                                  0,
+                                                  samplesThisBlock);
+                    snapshot.masterBuffer.addFrom(1,
+                                                  0,
+                                                  track.processingBuffer,
+                                                  1,
+                                                  0,
+                                                  samplesThisBlock);
+                }
+            }
+
+            float* masterChannels[] {
+                snapshot.masterBuffer.getWritePointer(0),
+                snapshot.masterBuffer.getWritePointer(1)
+            };
+            juce::AudioBuffer<float> masterView(masterChannels,
+                                                2,
+                                                samplesThisBlock);
+            processRuntimeChain(snapshot.masterRuntimeKey, masterView);
+            if (snapshot.masterAudible)
+                applyTrackGainAndPan(snapshot.masterBuffer,
+                                     samplesThisBlock,
+                                     snapshot.masterGain,
+                                     snapshot.masterPan);
+            else
+                snapshot.masterBuffer.clear();
+
+            snapshot.clickBuffer.clear(0, 0, samplesThisBlock);
+            snapshot.clickBuffer.clear(1, 0, samplesThisBlock);
             if (metronomeEnabled.load(std::memory_order_relaxed))
-                addMetronome(snapshot, position, left, right);
+            {
+                for (int sample = 0; sample < samplesThisBlock; ++sample)
+                {
+                    float clickLeft = 0.0f;
+                    float clickRight = 0.0f;
+                    auto clickPosition = position + sample;
+                    if (!recordingActive
+                        && snapshot.loopEnabled
+                        && clickPosition >= snapshot.loopEndSample)
+                    {
+                        const auto loopLength = snapshot.loopEndSample - snapshot.loopStartSample;
+                        if (loopLength > 0)
+                            clickPosition = snapshot.loopStartSample
+                                + (clickPosition - snapshot.loopStartSample) % loopLength;
+                    }
+                    if (recordingActive || clickPosition < snapshot.contentLengthSamples)
+                        addMetronome(snapshot, clickPosition, clickLeft, clickRight);
+                    snapshot.clickBuffer.setSample(0, sample, clickLeft);
+                    snapshot.clickBuffer.setSample(1, sample, clickRight);
+                }
+            }
+            applyDelayCompensation(snapshot.clickBuffer,
+                                   samplesThisBlock,
+                                   snapshot.clickCompensation);
 
-            if (outputChannelData[0] != nullptr)
-                outputChannelData[0][sample] = left;
-            if (numOutputChannels > 1 && outputChannelData[1] != nullptr)
-                outputChannelData[1][sample] = right;
+            for (int sample = 0; sample < samplesThisBlock; ++sample)
+            {
+                if (outputChannelData[0] != nullptr)
+                    outputChannelData[0][outputOffset + sample]
+                        = snapshot.masterBuffer.getSample(0, sample)
+                        + snapshot.clickBuffer.getSample(0, sample);
+                if (numOutputChannels > 1 && outputChannelData[1] != nullptr)
+                    outputChannelData[1][outputOffset + sample]
+                        = snapshot.masterBuffer.getSample(1, sample)
+                        + snapshot.clickBuffer.getSample(1, sample);
+            }
 
-            ++position;
+            position += samplesThisBlock;
+            outputOffset += samplesThisBlock;
             if (!recordingActive
                 && snapshot.loopEnabled
                 && position >= snapshot.loopEndSample)
-                position = snapshot.loopStartSample;
+            {
+                const auto loopLength = snapshot.loopEndSample - snapshot.loopStartSample;
+                if (loopLength > 0)
+                    position = snapshot.loopStartSample
+                        + (position - snapshot.loopStartSample) % loopLength;
+            }
+            else if (!recordingActive && position >= snapshot.lengthSamples)
+            {
+                position = snapshot.lengthSamples;
+                playing.store(false, std::memory_order_release);
+            }
         }
 
         playheadSample.store(position, std::memory_order_release);
+        readingPluginRuntime.store(-1, std::memory_order_release);
         readingSnapshot.store(-1, std::memory_order_release);
     }
 
@@ -731,6 +1614,8 @@ void StudioAudioEngine::audioDeviceAboutToStart(juce::AudioIODevice* device)
 {
     sampleRate.store(device != nullptr ? device->getCurrentSampleRate() : 48000.0,
                      std::memory_order_release);
+    deviceBlockSize.store(device != nullptr ? device->getCurrentBufferSizeSamples() : 512,
+                          std::memory_order_release);
 }
 
 void StudioAudioEngine::audioDeviceStopped()

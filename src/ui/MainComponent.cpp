@@ -294,8 +294,17 @@ public:
         repaint();
     }
 
+    void setRuntimeStatuses(std::vector<StudioAudioEngine::PluginRuntimeStatus> value,
+                            std::uint64_t lateBlocks)
+    {
+        runtimeStatuses = std::move(value);
+        lateBlockCount = lateBlocks;
+        repaint();
+    }
+
     std::function<void(const juce::String&, const juce::String&, bool)> onBypass;
     std::function<void(const juce::String&, const juce::String&)> onRemove;
+    std::function<void()> onReload;
 
     void paint(juce::Graphics& graphics) override
     {
@@ -346,10 +355,42 @@ public:
                                     juce::Justification::centredLeft,
                                     1);
 
-            juce::String detail = insert.missing ? "MISSING" : "SANDBOX";
-            detail += "  |  " + insert.format;
-            graphics.setColour(juce::Colour(insert.missing ? StudioColours::orange
-                                                           : StudioColours::green));
+            const auto status = std::find_if(runtimeStatuses.cbegin(),
+                                             runtimeStatuses.cend(),
+                                             [&insert](const auto& candidate)
+            {
+                return candidate.insertId == insert.id;
+            });
+            auto stateText = juce::String("SANDBOX");
+            auto stateColour = juce::Colour(StudioColours::green);
+            if (status != runtimeStatuses.cend())
+            {
+                switch (status->state)
+                {
+                    case StudioAudioEngine::PluginRuntimeStatus::State::bypassed:
+                        stateText = "BYPASSED";
+                        stateColour = juce::Colour(StudioColours::amber);
+                        break;
+                    case StudioAudioEngine::PluginRuntimeStatus::State::missing:
+                        stateText = "MISSING";
+                        stateColour = juce::Colour(StudioColours::orange);
+                        break;
+                    case StudioAudioEngine::PluginRuntimeStatus::State::loading:
+                        stateText = "LOADING";
+                        stateColour = juce::Colour(StudioColours::amber);
+                        break;
+                    case StudioAudioEngine::PluginRuntimeStatus::State::ready:
+                        stateText = "READY";
+                        break;
+                    case StudioAudioEngine::PluginRuntimeStatus::State::failed:
+                        stateText = "CRASHED - CLICK TO RELOAD";
+                        stateColour = juce::Colour(StudioColours::orange);
+                        break;
+                }
+            }
+
+            const auto detail = stateText + "  |  " + insert.format;
+            graphics.setColour(stateColour);
             graphics.setFont(juce::Font(juce::FontOptions(9.0f)));
             graphics.drawFittedText(detail,
                                     8,
@@ -377,6 +418,18 @@ public:
                               juce::Justification::centred);
             y += 54;
         }
+
+        if (lateBlockCount > 0)
+        {
+            graphics.setColour(juce::Colour(StudioColours::amber));
+            graphics.setFont(juce::Font(juce::FontOptions(9.0f)));
+            graphics.drawText(juce::String(lateBlockCount) + " late sandbox blocks",
+                              0,
+                              getHeight() - 18,
+                              getWidth(),
+                              18,
+                              juce::Justification::centredLeft);
+        }
     }
 
     void mouseDown(const juce::MouseEvent& event) override
@@ -390,6 +443,13 @@ public:
             return;
 
         const auto& insert = track->inserts[static_cast<std::size_t>(index)];
+        const auto failed = std::any_of(runtimeStatuses.cbegin(),
+                                        runtimeStatuses.cend(),
+                                        [&insert](const auto& status)
+        {
+            return status.insertId == insert.id
+                && status.state == StudioAudioEngine::PluginRuntimeStatus::State::failed;
+        });
         if (event.position.x >= static_cast<float>(getWidth() - 30))
         {
             if (onRemove)
@@ -400,11 +460,17 @@ public:
             if (onBypass)
                 onBypass(track->id, insert.id, !insert.bypassed);
         }
+        else if (failed && onReload)
+        {
+            onReload();
+        }
     }
 
 private:
     const Project* project = nullptr;
     juce::String trackId;
+    std::vector<StudioAudioEngine::PluginRuntimeStatus> runtimeStatuses;
+    std::uint64_t lateBlockCount = 0;
 };
 
 MainComponent::MainComponent()
@@ -714,6 +780,12 @@ MainComponent::MainComponent()
     };
     timeline.onSeek = [this](double seconds)
     {
+        if (project.hasActivePluginInserts())
+        {
+            audioEngine.pause();
+            audioEngine.forcePluginRuntimeReload(project, pluginRuntimeRequests());
+            setStatus("Playhead moved. Resetting sandbox pipelines...");
+        }
         audioEngine.seekSeconds(seconds);
         timeline.setPlayheadSeconds(seconds);
     };
@@ -757,6 +829,11 @@ MainComponent::MainComponent()
     insertPanel->onRemove = [this](const auto& trackId, const auto& insertId)
     {
         perform(std::make_unique<RemovePluginInsertCommand>(trackId, insertId));
+    };
+    insertPanel->onReload = [this]
+    {
+        audioEngine.forcePluginRuntimeReload(project, pluginRuntimeRequests());
+        setStatus("Reloading sandboxed plugin workers...");
     };
     insertPanel->addKeyListener(this);
     addAndMakeVisible(*insertPanel);
@@ -956,6 +1033,39 @@ void MainComponent::timerCallback()
                            juce::Colour(recording ? StudioColours::orange
                                                  : StudioColours::raised));
     mixer->setPeaks(audioEngine.leftPeak(), audioEngine.rightPeak());
+    auto runtimeStatuses = audioEngine.pluginRuntimeStatuses();
+    auto runtimeMetadataChanged = false;
+    for (const auto& status : runtimeStatuses)
+    {
+        if (status.state != StudioAudioEngine::PluginRuntimeStatus::State::ready)
+            continue;
+
+        for (auto& track : project.tracks)
+        {
+            const auto insert = std::find_if(track.inserts.begin(),
+                                             track.inserts.end(),
+                                             [&status](const auto& candidate)
+            {
+                return candidate.id == status.insertId;
+            });
+            if (insert == track.inserts.end())
+                continue;
+
+            if (insert->latencySamples != status.latencySamples
+                || std::abs(insert->tailSeconds - status.tailSeconds) > 0.000001)
+            {
+                insert->latencySamples = status.latencySamples;
+                insert->tailSeconds = status.tailSeconds;
+                runtimeMetadataChanged = true;
+            }
+            break;
+        }
+    }
+    if (runtimeMetadataChanged)
+        projectChanged();
+
+    insertPanel->setRuntimeStatuses(std::move(runtimeStatuses),
+                                    audioEngine.pluginLateBlockCount());
     if (recording)
     {
         const auto duration = audioEngine.recordingDurationSeconds();
@@ -978,11 +1088,27 @@ void MainComponent::timerCallback()
             + device->getInputChannelNames().joinIntoString("|")
             + ":"
             + device->getActiveInputChannels().toString(16)
+            + ":"
+            + juce::String(device->getCurrentSampleRate(), 1)
+            + ":"
+            + juce::String(device->getCurrentBufferSizeSamples())
         : juce::String();
     if (signature != inputConfigurationSignature)
     {
         inputConfigurationSignature = signature;
         refreshInputControls();
+        if (const auto result = audioEngine.updateProject(project,
+                                                          pluginRuntimeRequests()); result.failed())
+            setStatus(result.getErrorMessage(), true);
+    }
+
+    const auto catalogRevision = pluginCatalog.revision();
+    if (!pluginCatalog.isScanning() && catalogRevision != lastRuntimeCatalogRevision)
+    {
+        lastRuntimeCatalogRevision = catalogRevision;
+        if (const auto result = audioEngine.updateProject(project,
+                                                          pluginRuntimeRequests()); result.failed())
+            setStatus(result.getErrorMessage(), true);
     }
 }
 
@@ -1309,7 +1435,21 @@ void MainComponent::importAudioFile(const juce::File& source)
 void MainComponent::exportMixTo(const juce::File& destination)
 {
     setStatus("Rendering " + destination.getFileName() + "...");
-    const auto result = audioEngine.renderToWav(project, destination, 48000.0);
+    auto exportProject = project;
+    for (auto& track : exportProject.tracks)
+        for (auto& insert : track.inserts)
+        {
+            insert.missing = !pluginCatalog.descriptionForIdentifier(insert.pluginIdentifier).has_value();
+            if (!insert.missing && insert.stateFile.isNotEmpty())
+            {
+                const auto stateFile = projectPackage.getChildFile(insert.stateFile);
+                insert.missing = !projectPackage.exists()
+                    || !stateFile.isAChildOf(projectPackage)
+                    || !stateFile.existsAsFile();
+            }
+        }
+
+    const auto result = audioEngine.renderToWav(exportProject, destination, 48000.0);
     if (result.failed())
     {
         showError("Export failed", result.getErrorMessage());
@@ -1327,7 +1467,19 @@ void MainComponent::togglePlayback()
         return;
     }
 
-    audioEngine.isPlaying() ? audioEngine.pause() : audioEngine.play();
+    if (audioEngine.isPlaying())
+    {
+        audioEngine.pause();
+        return;
+    }
+
+    if (audioEngine.pluginRuntimeTransitionPending())
+    {
+        setStatus("Waiting for sandboxed plugins to become ready.", true);
+        return;
+    }
+
+    audioEngine.play();
 }
 
 void MainComponent::toggleRecording()
@@ -1393,6 +1545,8 @@ void MainComponent::stopTransportAndRecording()
     recordButton.setColour(juce::TextButton::buttonColourId,
                            juce::Colour(StudioColours::raised));
     timeline.clearRecordingPreview();
+    if (project.hasActivePluginInserts() && !recordingFinalizationInProgress)
+        audioEngine.forcePluginRuntimeReload(project, pluginRuntimeRequests());
 }
 
 void MainComponent::finishRecording()
@@ -1461,6 +1615,8 @@ void MainComponent::completeRecording(const juce::String& trackId,
                   ? savedMessage + " " + recording.warning
                   : savedMessage,
               recording.warning.isNotEmpty());
+    if (project.hasActivePluginInserts())
+        audioEngine.forcePluginRuntimeReload(project, pluginRuntimeRequests());
 }
 
 void MainComponent::addAudioTrack()
@@ -1881,13 +2037,50 @@ void MainComponent::projectChanged(bool writeRecovery, bool markDirty)
     updateInspector();
     updateTimelineSize();
 
-    if (const auto result = audioEngine.updateProject(project); result.failed())
+    if (const auto result = audioEngine.updateProject(project,
+                                                      pluginRuntimeRequests()); result.failed())
         setStatus(result.getErrorMessage(), true);
     updateInputMonitoring();
 
     if (writeRecovery && projectPackage.exists())
         if (const auto result = ProjectFile::writeRecoveryPoint(project, projectPackage); result.failed())
             setStatus(result.getErrorMessage(), true);
+}
+
+std::vector<StudioAudioEngine::PluginRuntimeRequest> MainComponent::pluginRuntimeRequests() const
+{
+    std::vector<StudioAudioEngine::PluginRuntimeRequest> requests;
+    for (const auto& track : project.tracks)
+    {
+        for (const auto& insert : track.inserts)
+        {
+            StudioAudioEngine::PluginRuntimeRequest request;
+            request.trackId = track.id;
+            request.insertId = insert.id;
+            request.name = insert.name;
+            request.bypassed = insert.bypassed;
+            request.missing = false;
+            request.latencySamples = insert.latencySamples;
+            request.tailSeconds = insert.tailSeconds;
+            request.catalogRevision = pluginCatalog.revision();
+            request.description = pluginCatalog.descriptionForIdentifier(insert.pluginIdentifier);
+            if (!request.description.has_value())
+                request.missing = true;
+
+            if (insert.stateFile.isNotEmpty())
+            {
+                const auto stateFile = projectPackage.getChildFile(insert.stateFile);
+                if (!projectPackage.exists()
+                    || !stateFile.isAChildOf(projectPackage)
+                    || !stateFile.existsAsFile()
+                    || !stateFile.loadFileAsData(request.state))
+                    request.missing = true;
+            }
+
+            requests.push_back(std::move(request));
+        }
+    }
+    return requests;
 }
 
 bool MainComponent::perform(std::unique_ptr<ProjectCommand> command)

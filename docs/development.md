@@ -77,6 +77,22 @@ instantiate that plugin in the worker, restore opaque state, validate the
 current channel count, prepare it, and process shared blocks without loading
 third-party code into the DAW.
 
+Playback builds parent-track render nodes containing ordinary clips plus
+version-lane sources. Child inserts process before the parent sum, parent
+inserts process the group result, and master inserts process the final mix.
+Snapshots and worker graphs share one published generation descriptor, so the
+audio callback never combines routing from different project states.
+
+Each bridge reports plugin latency and tail duration after preparation. The
+engine aligns child sources, parent tracks, the master path, and the metronome,
+then feeds silence long enough to drain reported tails. Crashed or
+startup-failed workers switch to an equivalent dry delay rather than shifting
+their path early. Seek and Stop rebuild the pipeline before playback resumes.
+
+Fast offline export refuses projects with effective active inserts rather than
+silently omitting processing. A plugin-inclusive real-time bounce remains a
+later checkpoint.
+
 Run the transport and installed-plugin activation diagnostics with:
 
 ```sh

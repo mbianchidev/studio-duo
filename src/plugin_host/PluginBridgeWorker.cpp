@@ -171,7 +171,10 @@ void PluginBridgeWorker::startProcessing(std::unique_ptr<juce::AudioPluginInstan
                           true,
                           false);
     processBuffer.clear();
-    sendStatus("ready");
+    sendStatus("ready|"
+               + juce::String(plugin != nullptr ? plugin->getLatencySamples() : 0)
+               + "|"
+               + juce::String(plugin != nullptr ? plugin->getTailLengthSeconds() : 0.0, 6));
     startThread(juce::Thread::Priority::high);
 }
 

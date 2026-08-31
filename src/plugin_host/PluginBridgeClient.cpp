@@ -78,7 +78,8 @@ juce::Result PluginBridgeClient::startInternal(const juce::PluginDescription* de
         }
     }
 
-    if (responseMessage != "ready")
+    const auto responseParts = juce::StringArray::fromTokens(responseMessage, "|", "");
+    if (responseParts.isEmpty() || responseParts[0] != "ready")
     {
         const auto error = responseMessage.isNotEmpty() ? responseMessage
                                                         : "worker disconnected";
@@ -86,7 +87,23 @@ juce::Result PluginBridgeClient::startInternal(const juce::PluginDescription* de
         return juce::Result::fail("Plugin bridge setup failed: " + error);
     }
 
+    pluginLatencySamples.store(responseParts.size() > 1 ? responseParts[1].getIntValue() : 0,
+                               std::memory_order_release);
+    pluginTailSeconds.store(responseParts.size() > 2 ? responseParts[2].getDoubleValue() : 0.0,
+                            std::memory_order_release);
     ready.store(true, std::memory_order_release);
+    processingBlockSize = blockSize;
+    completedOutputSamples = 0;
+    nextInputSequence = 0;
+    inFlightSequence = -1;
+    completedSequence = -1;
+    inFlightMissedDeadline = false;
+    for (auto& channel : inputAccumulator)
+        channel.fill(0.0f);
+    for (auto& channel : completedOutput)
+        channel.fill(0.0f);
+    for (auto& channel : lastValidOutput)
+        channel.fill(0.0f);
     return juce::Result::ok();
 }
 
@@ -105,7 +122,14 @@ void PluginBridgeClient::stop()
     lastValidChannels = 0;
     lastValidSamples = 0;
     lastOutputSequence = 0;
+    completedOutputSamples = 0;
+    nextInputSequence = 0;
+    inFlightSequence = -1;
+    completedSequence = -1;
+    inFlightMissedDeadline = false;
     responseMessage.clear();
+    pluginLatencySamples.store(0, std::memory_order_relaxed);
+    pluginTailSeconds.store(0.0, std::memory_order_relaxed);
 }
 
 void PluginBridgeClient::processBlock(juce::AudioBuffer<float>& audio) noexcept
@@ -117,67 +141,115 @@ void PluginBridgeClient::processBlock(juce::AudioBuffer<float>& audio) noexcept
     }
 
     const auto channels = std::min(audio.getNumChannels(), PluginBridgeSharedState::maxChannels);
-    const auto samples = std::min(audio.getNumSamples(), PluginBridgeSharedState::maxBlockSize);
-    const auto hostSequence = sharedState->hostSequence.load(std::memory_order_relaxed);
-    const auto workerSequence = sharedState->workerSequence.load(std::memory_order_acquire);
-
-    if (workerSequence != lastOutputSequence)
+    const auto samples = std::min(audio.getNumSamples(),
+                                  PluginBridgeSharedState::maxBlockSize);
+    for (int channel = 0; channel < PluginBridgeSharedState::maxChannels; ++channel)
     {
-        const auto outputChannels = std::min(
-            static_cast<int>(sharedState->numChannels.load(std::memory_order_relaxed)),
-            PluginBridgeSharedState::maxChannels);
-        const auto outputSamples = std::min(
-            static_cast<int>(sharedState->numSamples.load(std::memory_order_relaxed)),
-            PluginBridgeSharedState::maxBlockSize);
-
-        for (int channel = 0; channel < outputChannels; ++channel)
-        {
-            const auto& source = sharedState->output[static_cast<std::size_t>(channel)];
-            std::copy_n(source.begin(),
-                        outputSamples,
-                        lastValidOutput[static_cast<std::size_t>(channel)].begin());
-        }
-        lastValidChannels = outputChannels;
-        lastValidSamples = outputSamples;
-        lastOutputSequence = workerSequence;
+        auto& destination = inputAccumulator[static_cast<std::size_t>(channel)];
+        if (channel < channels)
+            std::copy_n(audio.getReadPointer(channel), samples, destination.begin());
+        else
+            std::fill_n(destination.begin(), samples, 0.0f);
     }
 
-    if (workerSequence == hostSequence && audio.getNumSamples() <= PluginBridgeSharedState::maxBlockSize)
-    {
-        for (int channel = 0; channel < channels; ++channel)
-        {
-            const auto* source = audio.getReadPointer(channel);
-            auto& destination = sharedState->input[static_cast<std::size_t>(channel)];
-            std::copy_n(source, samples, destination.begin());
-        }
-        for (int channel = channels; channel < PluginBridgeSharedState::maxChannels; ++channel)
-            std::fill_n(sharedState->input[static_cast<std::size_t>(channel)].begin(), samples, 0.0f);
+    const auto expectedSequence = inFlightSequence;
+    fetchWorkerOutput();
+    writeOutputBlock(audio, expectedSequence);
 
-        sharedState->numChannels.store(static_cast<std::uint32_t>(channels),
-                                       std::memory_order_relaxed);
-        sharedState->numSamples.store(static_cast<std::uint32_t>(samples),
-                                      std::memory_order_relaxed);
-        sharedState->hostSequence.store(hostSequence + 1, std::memory_order_release);
-    }
+    fetchWorkerOutput();
+    if (inFlightSequence < 0
+        && sharedState->workerSequence.load(std::memory_order_acquire)
+            == sharedState->hostSequence.load(std::memory_order_relaxed))
+        publishInputBlock(samples);
     else
-    {
         lateBlocks.fetch_add(1, std::memory_order_relaxed);
+}
+
+void PluginBridgeClient::fetchWorkerOutput() noexcept
+{
+    const auto workerSequence = sharedState->workerSequence.load(std::memory_order_acquire);
+    if (workerSequence == lastOutputSequence)
+        return;
+
+    const auto outputChannels = std::min(
+        static_cast<int>(sharedState->numChannels.load(std::memory_order_relaxed)),
+        PluginBridgeSharedState::maxChannels);
+    const auto outputSize = std::min(
+        static_cast<int>(sharedState->numSamples.load(std::memory_order_relaxed)),
+        processingBlockSize);
+    if (inFlightSequence >= 0 && !inFlightMissedDeadline)
+    {
+        for (int channel = 0; channel < PluginBridgeSharedState::maxChannels; ++channel)
+        {
+            const auto sourceChannel = outputChannels > 0 ? std::min(channel,
+                                                                     outputChannels - 1)
+                                                          : -1;
+            auto& destination = completedOutput[static_cast<std::size_t>(channel)];
+            if (sourceChannel >= 0)
+                std::copy_n(sharedState->output[static_cast<std::size_t>(sourceChannel)].begin(),
+                            outputSize,
+                            destination.begin());
+            else
+                std::fill_n(destination.begin(), outputSize, 0.0f);
+        }
+        completedSequence = inFlightSequence;
+        completedOutputSamples = outputSize;
     }
 
-    if (lastValidSamples == samples && lastValidChannels > 0)
+    inFlightSequence = -1;
+    inFlightMissedDeadline = false;
+    lastOutputSequence = workerSequence;
+}
+
+void PluginBridgeClient::publishInputBlock(int samples) noexcept
+{
+    const auto hostSequence = sharedState->hostSequence.load(std::memory_order_relaxed);
+    for (int channel = 0; channel < PluginBridgeSharedState::maxChannels; ++channel)
+        std::copy_n(inputAccumulator[static_cast<std::size_t>(channel)].begin(),
+                    samples,
+                    sharedState->input[static_cast<std::size_t>(channel)].begin());
+
+    sharedState->numChannels.store(PluginBridgeSharedState::maxChannels,
+                                   std::memory_order_relaxed);
+    sharedState->numSamples.store(static_cast<std::uint32_t>(samples),
+                                  std::memory_order_relaxed);
+    sharedState->hostSequence.store(hostSequence + 1, std::memory_order_release);
+    inFlightSequence = nextInputSequence++;
+    inFlightMissedDeadline = false;
+}
+
+void PluginBridgeClient::writeOutputBlock(juce::AudioBuffer<float>& audio,
+                                          std::int64_t expectedSequence) noexcept
+{
+    const auto samples = audio.getNumSamples();
+    if (expectedSequence >= 0 && completedSequence == expectedSequence)
     {
-        for (int channel = 0; channel < audio.getNumChannels(); ++channel)
+        lastValidOutput = completedOutput;
+        lastValidChannels = PluginBridgeSharedState::maxChannels;
+        lastValidSamples = completedOutputSamples;
+        completedSequence = -1;
+    }
+    else if (expectedSequence >= 0 && inFlightSequence == expectedSequence)
+        inFlightMissedDeadline = true;
+
+    for (int channel = 0; channel < audio.getNumChannels(); ++channel)
+    {
+        const auto sourceChannel = std::min(channel,
+                                            PluginBridgeSharedState::maxChannels - 1);
+        if (lastValidSamples > 0)
         {
-            const auto sourceChannel = std::min(channel, lastValidChannels - 1);
+            const auto copied = std::min(samples, lastValidSamples);
             audio.copyFrom(channel,
                            0,
                            lastValidOutput[static_cast<std::size_t>(sourceChannel)].data(),
-                           samples);
+                           copied);
+            if (copied < samples)
+                audio.clear(channel, copied, samples - copied);
         }
-    }
-    else
-    {
-        audio.clear();
+        else
+        {
+            audio.clear(channel, 0, samples);
+        }
     }
 }
 
@@ -189,6 +261,33 @@ bool PluginBridgeClient::isReady() const noexcept
 std::uint64_t PluginBridgeClient::lateBlockCount() const noexcept
 {
     return lateBlocks.load(std::memory_order_relaxed);
+}
+
+int PluginBridgeClient::reportedLatencySamples() const noexcept
+{
+    return pluginLatencySamples.load(std::memory_order_acquire);
+}
+
+double PluginBridgeClient::reportedTailSeconds() const noexcept
+{
+    return pluginTailSeconds.load(std::memory_order_acquire);
+}
+
+juce::String PluginBridgeClient::diagnosticState() const
+{
+    if (sharedState == nullptr)
+        return "unmapped";
+
+    return "host="
+        + juce::String(sharedState->hostSequence.load(std::memory_order_acquire))
+        + " worker="
+        + juce::String(sharedState->workerSequence.load(std::memory_order_acquire))
+        + " input="
+        + juce::String(processingBlockSize)
+        + " inflight="
+        + juce::String(inFlightSequence)
+        + " completed="
+        + juce::String(completedSequence);
 }
 
 void PluginBridgeClient::handleMessageFromWorker(const juce::MemoryBlock& message)

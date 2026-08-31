@@ -23,6 +23,9 @@ The repository now contains a working native C++20 and JUCE 9 application with:
   diagnostics
 - Out-of-process plugin instantiation, state restoration, channel-layout
   validation, preparation, and audio block processing
+- Active parent, version-lane, and master insert chains during playback with
+  matched graph/snapshot publication, delay compensation, tail draining, and
+  metronome alignment
 - A dark single-window arrangement, inspector, transport, and mixer workspace
 - Versioned `.studioduo` directory packages with generation-based saves and a
   recovery point
@@ -30,10 +33,10 @@ The repository now contains a working native C++20 and JUCE 9 application with:
 - Automated model, command-history, and project-persistence tests on macOS and
   Windows
 
-This is the first vertical slice, not the full 1.0 feature set. Routing project
-insert chains through bridge clients, plugin editors and automation, linked
-multitrack editing, MIDI, mastering, DAWproject exchange, and the bundled
-device suite remain on the accepted roadmap.
+This is the first vertical slice, not the full 1.0 feature set. Plugin editors,
+automation, real-time plugin-inclusive bounce, linked multitrack editing, MIDI,
+mastering, DAWproject exchange, and the bundled device suite remain on the
+accepted roadmap.
 
 ## Build
 
@@ -79,7 +82,9 @@ Use **I/O** to select audio devices. Arm an audio track before recording. Drag
 clips to move them on the beat grid. Use **SCAN** in the plugin catalog to probe
 installed VST3 and Audio Unit plugins outside the main process. Select a catalog
 entry and choose **ADD** to attach its bridge-ready insert record to the selected
-track.
+track. Ready inserts process playback in sandbox workers; the inspector reports
+loading, ready, missing, bypassed, crashed, and late-block states. Click a
+crashed insert status to reload its worker.
 
 Each timeline track header has **M**, **S**, and **R** controls for mute, solo,
 and record arm. Use either **+ AUDIO TRACK** control to add tracks. Pressing

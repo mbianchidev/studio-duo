@@ -68,6 +68,7 @@ private:
     void updateTimelineSize();
     void zoomTimeline(double factor, bool reset = false);
     void projectChanged(bool writeRecovery = true, bool markDirty = true);
+    [[nodiscard]] std::vector<StudioAudioEngine::PluginRuntimeRequest> pluginRuntimeRequests() const;
     bool perform(std::unique_ptr<ProjectCommand> command);
     void changeSelectedTrackState(const std::function<void(TrackMixState&)>& change);
     Track* createRecordingVersionTrack();
@@ -92,6 +93,7 @@ private:
     bool recordingFinalizationInProgress = false;
     bool updatingInputControls = false;
     juce::String inputConfigurationSignature;
+    std::uint64_t lastRuntimeCatalogRevision = 0;
 
     juce::TextButton newButton { "NEW" };
     juce::TextButton openButton { "OPEN" };

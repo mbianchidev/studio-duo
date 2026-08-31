@@ -42,6 +42,8 @@ void serializationRoundTrip()
     insert.name = "Test Gate";
     insert.manufacturer = "Studio Duo";
     insert.format = "VST3";
+    insert.latencySamples = 128;
+    insert.tailSeconds = 1.5;
     project.tracks.front().inserts.push_back(insert);
 
     studio::Track version;
@@ -74,6 +76,10 @@ void serializationRoundTrip()
                && decoded->tracks.front().inserts.front().bridgeMode
                       == studio::PluginBridgeMode::sandboxed,
            "Plugin bridge mode survives serialization.");
+    expect(decoded.has_value()
+               && decoded->tracks.front().inserts.front().latencySamples == 128
+               && std::abs(decoded->tracks.front().inserts.front().tailSeconds - 1.5) < 0.0001,
+           "Plugin latency and tail metadata survive serialization.");
 }
 
 void commandHistory()
@@ -250,6 +256,20 @@ void packagePersistence()
     package.deleteRecursively();
 }
 
+void pluginAwareExportGuard()
+{
+    auto project = studio::Project::createDefault();
+    studio::PluginInsert insert;
+    insert.pluginIdentifier = "VST3-export-test";
+    insert.name = "Export Test";
+    insert.format = "VST3";
+    project.tracks.front().inserts.push_back(insert);
+
+    expect(project.hasActivePluginInserts(), "Project reports active plugin inserts.");
+    project.tracks.front().inserts.front().bypassed = true;
+    expect(!project.hasActivePluginInserts(), "Bypassed plugins do not block fast export.");
+}
+
 void pluginCatalogFiltering()
 {
     studio::PluginCatalogEntry entry;
@@ -317,6 +337,7 @@ int main()
     serializationRoundTrip();
     commandHistory();
     packagePersistence();
+    pluginAwareExportGuard();
     pluginCatalogFiltering();
     pluginBridgeProtocol();
     liveRecordingWaveform();

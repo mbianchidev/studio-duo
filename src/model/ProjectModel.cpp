@@ -57,6 +57,7 @@ juce::var PluginInsert::toVar() const
     object->setProperty("stateHash", stateHash);
     object->setProperty("bridgeMode", pluginBridgeModeToString(bridgeMode));
     object->setProperty("latencySamples", latencySamples);
+    object->setProperty("tailSeconds", tailSeconds);
     object->setProperty("bypassed", bypassed);
     object->setProperty("missing", missing);
     return juce::var(object.release());
@@ -79,6 +80,7 @@ std::optional<PluginInsert> PluginInsert::fromVar(const juce::var& value, juce::
     insert.stateFile = object->getProperty("stateFile").toString();
     insert.stateHash = object->getProperty("stateHash").toString();
     insert.latencySamples = juce::jmax(0, integerProperty(*object, "latencySamples", 0));
+    insert.tailSeconds = std::max(0.0, numberProperty(*object, "tailSeconds", 0.0));
     insert.bypassed = booleanProperty(*object, "bypassed", false);
     insert.missing = booleanProperty(*object, "missing", false);
 
@@ -362,6 +364,17 @@ double Project::lengthSeconds() const noexcept
             length = std::max(length, clip.endSeconds());
 
     return length;
+}
+
+bool Project::hasActivePluginInserts() const noexcept
+{
+    return std::any_of(tracks.cbegin(), tracks.cend(), [](const auto& track)
+    {
+        return std::any_of(track.inserts.cbegin(), track.inserts.cend(), [](const auto& insert)
+        {
+            return !insert.bypassed && !insert.missing;
+        });
+    });
 }
 
 juce::var Project::toVar() const

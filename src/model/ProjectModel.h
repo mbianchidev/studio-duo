@@ -37,6 +37,7 @@ struct PluginInsert
     juce::String stateHash;
     PluginBridgeMode bridgeMode = PluginBridgeMode::sandboxed;
     int latencySamples = 0;
+    double tailSeconds = 0.0;
     bool bypassed = false;
     bool missing = false;
 
@@ -110,6 +111,7 @@ public:
     [[nodiscard]] Track* findTrackContainingClip(const juce::String& clipId);
     [[nodiscard]] const Track* findTrackContainingClip(const juce::String& clipId) const;
     [[nodiscard]] double lengthSeconds() const noexcept;
+    [[nodiscard]] bool hasActivePluginInserts() const noexcept;
     [[nodiscard]] juce::var toVar() const;
 
     static std::optional<Project> fromVar(const juce::var& value, juce::String& error);

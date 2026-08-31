@@ -99,28 +99,23 @@ private:
             return;
         }
 
-        juce::AudioBuffer<float> firstBlock(2, 64);
+        juce::AudioBuffer<float> firstBlock(2, 512);
         for (int channel = 0; channel < firstBlock.getNumChannels(); ++channel)
-            juce::FloatVectorOperations::fill(firstBlock.getWritePointer(channel), 0.25f, 64);
+            juce::FloatVectorOperations::fill(firstBlock.getWritePointer(channel), 0.25f, 512);
 
         bridgeSelfTest->processBlock(firstBlock);
-        bool passed = false;
-        for (int attempt = 0; attempt < 50 && !passed; ++attempt)
-        {
-            juce::Thread::sleep(2);
-            juce::AudioBuffer<float> nextBlock(2, 64);
-            for (int channel = 0; channel < nextBlock.getNumChannels(); ++channel)
-                juce::FloatVectorOperations::fill(nextBlock.getWritePointer(channel), -0.5f, 64);
+        juce::Thread::sleep(50);
+        juce::AudioBuffer<float> outputBlock(2, 512);
+        outputBlock.clear();
+        bridgeSelfTest->processBlock(outputBlock);
+        const auto passed = std::abs(outputBlock.getSample(0, 0) - 0.25f) < 0.0001f
+            && std::abs(outputBlock.getSample(1, 511) - 0.25f) < 0.0001f;
 
-            bridgeSelfTest->processBlock(nextBlock);
-            passed = std::abs(nextBlock.getSample(0, 0) - 0.25f) < 0.0001f
-                && std::abs(nextBlock.getSample(1, 63) - 0.25f) < 0.0001f;
-        }
-
+        const auto diagnostics = bridgeSelfTest->diagnosticState();
         bridgeSelfTest->stop();
         setApplicationReturnValue(passed ? 0 : 1);
         if (!passed)
-            juce::Logger::writeToLog("plugin.bridge.self-test: timed out waiting for worker output");
+            juce::Logger::writeToLog("plugin.bridge.self-test: " + diagnostics);
         quit();
     }
 
