@@ -728,8 +728,12 @@ void MainComponent::timerCallback()
     mixer->setPeaks(audioEngine.leftPeak(), audioEngine.rightPeak());
 
     auto* device = deviceManager.getCurrentAudioDevice();
+    juce::AudioDeviceManager::AudioDeviceSetup audioSetup;
+    deviceManager.getAudioDeviceSetup(audioSetup);
     const auto signature = device != nullptr
-        ? device->getInputChannelNames().joinIntoString("|")
+        ? audioSetup.inputDeviceName
+            + ":"
+            + device->getInputChannelNames().joinIntoString("|")
             + ":"
             + device->getActiveInputChannels().toString(16)
         : juce::String();
@@ -1338,7 +1342,12 @@ void MainComponent::refreshInputControls()
     if (auto* device = deviceManager.getCurrentAudioDevice())
     {
         const auto names = device->getInputChannelNames();
-        const auto deviceName = device->getName().trim();
+        juce::AudioDeviceManager::AudioDeviceSetup audioSetup;
+        deviceManager.getAudioDeviceSetup(audioSetup);
+        const auto configuredInputName = audioSetup.inputDeviceName.trim();
+        const auto deviceName = configuredInputName.isNotEmpty()
+            ? configuredInputName
+            : device->getName().trim();
         for (int index = 0; index < names.size(); ++index)
         {
             auto channelName = names[index].trim();
