@@ -722,10 +722,23 @@ void MainComponent::timerCallback()
                                        project.timeSignatureNumerator),
                           juce::dontSendNotification);
     playButton.setButtonText(audioEngine.isPlaying() ? "PAUSE" : "PLAY");
+    const auto recording = audioEngine.isRecording();
+    recordButton.setButtonText(recording ? "STOP REC" : "REC");
     recordButton.setColour(juce::TextButton::buttonColourId,
-                           juce::Colour(audioEngine.isRecording() ? StudioColours::orange
-                                                                 : StudioColours::raised));
+                           juce::Colour(recording ? StudioColours::orange
+                                                 : StudioColours::raised));
     mixer->setPeaks(audioEngine.leftPeak(), audioEngine.rightPeak());
+    if (recording)
+    {
+        const auto duration = audioEngine.recordingDurationSeconds();
+        timeline.setRecordingPreview(activeRecordingTrackId,
+                                     recordingStartSeconds,
+                                     duration);
+        setStatus("Recording "
+                      + juce::String(duration, 1)
+                      + " s. Press STOP REC or STOP to finish.");
+        updateTimelineSize();
+    }
 
     auto* device = deviceManager.getCurrentAudioDevice();
     juce::AudioDeviceManager::AudioDeviceSetup audioSetup;
@@ -1102,6 +1115,7 @@ void MainComponent::finishRecording()
     const auto recording = audioEngine.stopRecording();
     audioEngine.pause();
     activeRecordingTrackId.clear();
+    timeline.clearRecordingPreview();
     if (recording.result.failed())
     {
         showError("Recording warning", recording.result.getErrorMessage());

@@ -34,6 +34,23 @@ void TimelineComponent::setPlayheadSeconds(double seconds)
     repaint(std::min(oldX, newX) - 3, 0, std::abs(newX - oldX) + 7, getHeight());
 }
 
+void TimelineComponent::setRecordingPreview(juce::String trackId,
+                                            double startSeconds,
+                                            double durationSeconds)
+{
+    recordingTrackId = std::move(trackId);
+    recordingStartSeconds = std::max(0.0, startSeconds);
+    recordingDurationSeconds = std::max(0.0, durationSeconds);
+    repaint();
+}
+
+void TimelineComponent::clearRecordingPreview()
+{
+    recordingTrackId.clear();
+    recordingDurationSeconds = 0.0;
+    repaint();
+}
+
 void TimelineComponent::setPixelsPerSecond(double pixels)
 {
     pixelsPerSecond = juce::jlimit(24.0, 320.0, pixels);
@@ -42,7 +59,9 @@ void TimelineComponent::setPixelsPerSecond(double pixels)
 
 int TimelineComponent::preferredWidth(int minimumWidth) const
 {
-    const auto seconds = project != nullptr ? project->lengthSeconds() + 8.0 : 16.0;
+    const auto projectSeconds = project != nullptr ? project->lengthSeconds() : 8.0;
+    const auto previewEnd = recordingStartSeconds + recordingDurationSeconds;
+    const auto seconds = std::max(projectSeconds, previewEnd) + 8.0;
     return std::max(minimumWidth,
                     trackHeaderWidth + static_cast<int>(std::ceil(seconds * pixelsPerSecond)));
 }
@@ -177,6 +196,34 @@ void TimelineComponent::paint(juce::Graphics& graphics)
             bounds.setWidth(static_cast<float>(std::max(20.0,
                                                         dragPreviewDuration
                                                             * pixelsPerSecond)));
+        }
+
+        if (recordingTrackId.isNotEmpty())
+        {
+            const auto iterator = std::find_if(project->tracks.cbegin(),
+                                               project->tracks.cend(),
+                                               [this](const auto& track)
+            {
+                return track.id == recordingTrackId;
+            });
+            if (iterator != project->tracks.cend())
+            {
+                const auto index = static_cast<int>(std::distance(project->tracks.cbegin(), iterator));
+                const auto y = rulerHeight + index * trackHeight + 12;
+                const juce::Rectangle<float> preview(
+                    secondsToX(recordingStartSeconds),
+                    static_cast<float>(y),
+                    static_cast<float>(std::max(20.0, recordingDurationSeconds * pixelsPerSecond)),
+                    trackHeight - 24.0f);
+                graphics.setColour(juce::Colour(StudioColours::orange).withAlpha(0.72f));
+                graphics.fillRoundedRectangle(preview, 5.0f);
+                graphics.setColour(juce::Colours::white);
+                graphics.drawRoundedRectangle(preview, 5.0f, 1.5f);
+                graphics.setFont(juce::Font(juce::FontOptions(12.0f, juce::Font::bold)));
+                graphics.drawText("RECORDING  " + juce::String(recordingDurationSeconds, 1) + " s",
+                                  preview.toNearestInt().withHeight(24).reduced(8, 0),
+                                  juce::Justification::centredLeft);
+            }
         }
 
         const auto selected = hit.clipId == selectedClipId;

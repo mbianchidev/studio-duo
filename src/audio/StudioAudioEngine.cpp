@@ -55,6 +55,7 @@ juce::Result StudioAudioEngine::LockFreeRecorder::start(const juce::File& destin
     ringBuffer.clear();
     samplesWritten.store(0, std::memory_order_relaxed);
     samplesDropped.store(0, std::memory_order_relaxed);
+    samplesCaptured.store(0, std::memory_order_relaxed);
     accepting.store(true, std::memory_order_release);
     startThread();
     return juce::Result::ok();
@@ -124,11 +125,18 @@ void StudioAudioEngine::LockFreeRecorder::push(const float* const* inputs,
     copyRegion(start1, size1, 0);
     copyRegion(start2, size2, size1);
     fifo.finishedWrite(size1 + size2);
+    samplesCaptured.fetch_add(size1 + size2, std::memory_order_relaxed);
 }
 
 bool StudioAudioEngine::LockFreeRecorder::isActive() const noexcept
 {
     return accepting.load(std::memory_order_acquire);
+}
+
+double StudioAudioEngine::LockFreeRecorder::capturedDurationSeconds() const noexcept
+{
+    return static_cast<double>(samplesCaptured.load(std::memory_order_relaxed))
+        / recordingSampleRate;
 }
 
 void StudioAudioEngine::LockFreeRecorder::run()
@@ -281,6 +289,11 @@ float StudioAudioEngine::rightPeak() const noexcept
 double StudioAudioEngine::currentSampleRate() const noexcept
 {
     return sampleRate.load(std::memory_order_acquire);
+}
+
+double StudioAudioEngine::recordingDurationSeconds() const noexcept
+{
+    return recorder.capturedDurationSeconds();
 }
 
 juce::Result StudioAudioEngine::startRecording(const juce::File& destination,
@@ -589,10 +602,11 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
 
         const auto& snapshot = snapshots[static_cast<std::size_t>(snapshotIndex)];
         auto position = playheadSample.load(std::memory_order_acquire);
+        const auto recordingActive = recorder.isActive();
 
         for (int sample = 0; sample < numSamples; ++sample)
         {
-            if (position >= snapshot.lengthSamples)
+            if (position >= snapshot.lengthSamples && !recordingActive)
             {
                 playing.store(false, std::memory_order_release);
                 break;
@@ -600,7 +614,8 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
 
             float left = 0.0f;
             float right = 0.0f;
-            mixSample(snapshot, position, left, right);
+            if (position < snapshot.lengthSamples)
+                mixSample(snapshot, position, left, right);
             if (metronomeEnabled.load(std::memory_order_relaxed))
                 addMetronome(snapshot, position, left, right);
 
@@ -610,7 +625,9 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
                 outputChannelData[1][sample] = right;
 
             ++position;
-            if (snapshot.loopEnabled && position >= snapshot.loopEndSample)
+            if (!recordingActive
+                && snapshot.loopEnabled
+                && position >= snapshot.loopEndSample)
                 position = snapshot.loopStartSample;
         }
 

@@ -42,6 +42,7 @@ public:
     [[nodiscard]] float leftPeak() const noexcept;
     [[nodiscard]] float rightPeak() const noexcept;
     [[nodiscard]] double currentSampleRate() const noexcept;
+    [[nodiscard]] double recordingDurationSeconds() const noexcept;
 
     juce::Result startRecording(const juce::File& destination,
                                 int firstInputChannel,
@@ -85,6 +86,7 @@ private:
         RecordingResult stop();
         void push(const float* const* inputs, int inputChannels, int samples) noexcept;
         [[nodiscard]] bool isActive() const noexcept;
+        [[nodiscard]] double capturedDurationSeconds() const noexcept;
 
     private:
         void run() override;
@@ -96,6 +98,7 @@ private:
         std::atomic<bool> accepting { false };
         std::atomic<std::int64_t> samplesWritten { 0 };
         std::atomic<std::int64_t> samplesDropped { 0 };
+        std::atomic<std::int64_t> samplesCaptured { 0 };
         juce::File outputFile;
         double recordingSampleRate = 48000.0;
         int recordingChannels = 1;
