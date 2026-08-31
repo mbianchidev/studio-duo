@@ -138,7 +138,11 @@ void TimelineComponent::paint(juce::Graphics& graphics)
 
         graphics.setColour(juce::Colour(StudioColours::secondaryText));
         graphics.setFont(juce::Font(juce::FontOptions(9.5f)));
-        graphics.drawText(trackTypeToString(track.type).toUpperCase(),
+        const auto routingLabel = track.type == TrackType::audio
+            ? "IN " + juce::String(track.inputChannel + 1)
+                + (track.stereoInput ? "+" + juce::String(track.inputChannel + 2) : juce::String())
+            : trackTypeToString(track.type).toUpperCase();
+        graphics.drawText(routingLabel,
                           128,
                           y + 48,
                           40,

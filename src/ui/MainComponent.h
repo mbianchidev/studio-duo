@@ -57,6 +57,8 @@ private:
     void selectTrack(const juce::String& trackId);
     void selectClip(const juce::String& trackId, const juce::String& clipId);
     void updateInspector();
+    void refreshInputControls();
+    void updateInputMonitoring();
     void updateTimelineSize();
     void projectChanged(bool writeRecovery = true, bool markDirty = true);
     bool perform(std::unique_ptr<ProjectCommand> command);
@@ -79,6 +81,8 @@ private:
     juce::String selectedClipId;
     bool dirty = false;
     bool statusIsError = false;
+    bool updatingInputControls = false;
+    juce::String inputConfigurationSignature;
 
     juce::TextButton newButton { "NEW" };
     juce::TextButton openButton { "OPEN" };
@@ -104,6 +108,10 @@ private:
 
     juce::Label inspectorName;
     juce::Label inspectorDetails;
+    juce::Label inputLabel;
+    juce::ComboBox inputSelector;
+    juce::ToggleButton stereoInputButton { "STEREO" };
+    juce::ToggleButton monitorButton { "MONITOR" };
     juce::Label volumeLabel;
     juce::Label panLabel;
     juce::Slider volumeSlider;

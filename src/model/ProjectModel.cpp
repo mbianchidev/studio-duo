@@ -163,6 +163,9 @@ juce::var Track::toVar() const
     object->setProperty("muted", muted);
     object->setProperty("solo", solo);
     object->setProperty("armed", armed);
+    object->setProperty("inputChannel", inputChannel);
+    object->setProperty("stereoInput", stereoInput);
+    object->setProperty("inputMonitoring", inputMonitoring);
     object->setProperty("colour", colour.toString());
 
     juce::Array<juce::var> insertValues;
@@ -203,6 +206,9 @@ std::optional<Track> Track::fromVar(const juce::var& value, juce::String& error)
     track.muted = booleanProperty(*object, "muted", false);
     track.solo = booleanProperty(*object, "solo", false);
     track.armed = booleanProperty(*object, "armed", false);
+    track.inputChannel = juce::jmax(0, integerProperty(*object, "inputChannel", 0));
+    track.stereoInput = booleanProperty(*object, "stereoInput", false);
+    track.inputMonitoring = booleanProperty(*object, "inputMonitoring", false);
     track.colour = colourProperty(*object, "colour", juce::Colour(0xffdd5b3f));
 
     const auto insertValues = object->getProperty("inserts");

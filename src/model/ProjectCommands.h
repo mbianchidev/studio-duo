@@ -122,6 +122,9 @@ struct TrackMixState
     bool muted = false;
     bool solo = false;
     bool armed = false;
+    int inputChannel = 0;
+    bool stereoInput = false;
+    bool inputMonitoring = false;
 
     static TrackMixState fromTrack(const Track& track);
 };

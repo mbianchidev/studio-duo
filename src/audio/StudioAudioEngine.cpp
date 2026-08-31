@@ -28,7 +28,8 @@ StudioAudioEngine::LockFreeRecorder::~LockFreeRecorder()
 
 juce::Result StudioAudioEngine::LockFreeRecorder::start(const juce::File& destination,
                                                         double newSampleRate,
-                                                        int channels)
+                                                        int channels,
+                                                        int firstInputChannel)
 {
     if (isActive())
         return juce::Result::fail("A recording is already in progress.");
@@ -49,6 +50,7 @@ juce::Result StudioAudioEngine::LockFreeRecorder::start(const juce::File& destin
     outputFile = destination;
     recordingSampleRate = newSampleRate;
     recordingChannels = juce::jlimit(1, 2, channels);
+    recordingFirstInputChannel = juce::jmax(0, firstInputChannel);
     fifo.reset();
     ringBuffer.clear();
     samplesWritten.store(0, std::memory_order_relaxed);
@@ -110,7 +112,8 @@ void StudioAudioEngine::LockFreeRecorder::push(const float* const* inputs,
     {
         for (int channel = 0; channel < recordingChannels; ++channel)
         {
-            const auto* source = channel < inputChannels ? inputs[channel] : nullptr;
+            const auto sourceChannel = recordingFirstInputChannel + channel;
+            const auto* source = sourceChannel < inputChannels ? inputs[sourceChannel] : nullptr;
             if (source != nullptr)
                 ringBuffer.copyFrom(channel, destinationStart, source + sourceStart, count);
             else
@@ -241,6 +244,15 @@ void StudioAudioEngine::setMetronomeEnabled(bool enabled) noexcept
     metronomeEnabled.store(enabled, std::memory_order_release);
 }
 
+void StudioAudioEngine::setInputMonitoring(bool enabled,
+                                           int firstInputChannel,
+                                           int channels) noexcept
+{
+    monitoringFirstInput.store(juce::jmax(0, firstInputChannel), std::memory_order_relaxed);
+    monitoringChannels.store(juce::jlimit(1, 2, channels), std::memory_order_relaxed);
+    monitoringEnabled.store(enabled, std::memory_order_release);
+}
+
 bool StudioAudioEngine::isPlaying() const noexcept
 {
     return playing.load(std::memory_order_acquire);
@@ -271,7 +283,9 @@ double StudioAudioEngine::currentSampleRate() const noexcept
     return sampleRate.load(std::memory_order_acquire);
 }
 
-juce::Result StudioAudioEngine::startRecording(const juce::File& destination)
+juce::Result StudioAudioEngine::startRecording(const juce::File& destination,
+                                               int firstInputChannel,
+                                               int channels)
 {
     if (deviceManager == nullptr)
         return juce::Result::fail("No audio device is available.");
@@ -280,8 +294,15 @@ juce::Result StudioAudioEngine::startRecording(const juce::File& destination)
     if (device == nullptr || device->getActiveInputChannels().countNumberOfSetBits() == 0)
         return juce::Result::fail("Enable at least one audio input before recording.");
 
-    const auto channels = juce::jmin(2, device->getActiveInputChannels().countNumberOfSetBits());
-    return recorder.start(destination, currentSampleRate(), channels);
+    const auto activeInputs = device->getActiveInputChannels().countNumberOfSetBits();
+    const auto captureChannels = juce::jlimit(1, 2, channels);
+    if (firstInputChannel < 0 || firstInputChannel + captureChannels > activeInputs)
+        return juce::Result::fail("The selected track input is not enabled in audio I/O settings.");
+
+    return recorder.start(destination,
+                          currentSampleRate(),
+                          captureChannels,
+                          firstInputChannel);
 }
 
 StudioAudioEngine::RecordingResult StudioAudioEngine::stopRecording()
@@ -547,59 +568,94 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
         if (outputChannelData[channel] != nullptr)
             juce::FloatVectorOperations::clear(outputChannelData[channel], numSamples);
 
-    if (!playing.load(std::memory_order_acquire) || numOutputChannels == 0)
+    if (numOutputChannels == 0)
     {
         outputLeftPeak.store(0.0f, std::memory_order_relaxed);
         outputRightPeak.store(0.0f, std::memory_order_relaxed);
         return;
     }
 
-    int snapshotIndex = 0;
-    do
+    auto leftPeakValue = 0.0f;
+    auto rightPeakValue = 0.0f;
+    if (playing.load(std::memory_order_acquire))
     {
-        snapshotIndex = activeSnapshot.load(std::memory_order_acquire);
-        readingSnapshot.store(snapshotIndex, std::memory_order_release);
-    }
-    while (snapshotIndex != activeSnapshot.load(std::memory_order_acquire));
+        int snapshotIndex = 0;
+        do
+        {
+            snapshotIndex = activeSnapshot.load(std::memory_order_acquire);
+            readingSnapshot.store(snapshotIndex, std::memory_order_release);
+        }
+        while (snapshotIndex != activeSnapshot.load(std::memory_order_acquire));
 
-    const auto& snapshot = snapshots[static_cast<std::size_t>(snapshotIndex)];
-    auto position = playheadSample.load(std::memory_order_acquire);
-    float leftPeakValue = 0.0f;
-    float rightPeakValue = 0.0f;
+        const auto& snapshot = snapshots[static_cast<std::size_t>(snapshotIndex)];
+        auto position = playheadSample.load(std::memory_order_acquire);
+
+        for (int sample = 0; sample < numSamples; ++sample)
+        {
+            if (position >= snapshot.lengthSamples)
+            {
+                playing.store(false, std::memory_order_release);
+                break;
+            }
+
+            float left = 0.0f;
+            float right = 0.0f;
+            mixSample(snapshot, position, left, right);
+            if (metronomeEnabled.load(std::memory_order_relaxed))
+                addMetronome(snapshot, position, left, right);
+
+            if (outputChannelData[0] != nullptr)
+                outputChannelData[0][sample] = left;
+            if (numOutputChannels > 1 && outputChannelData[1] != nullptr)
+                outputChannelData[1][sample] = right;
+
+            ++position;
+            if (snapshot.loopEnabled && position >= snapshot.loopEndSample)
+                position = snapshot.loopStartSample;
+        }
+
+        playheadSample.store(position, std::memory_order_release);
+        readingSnapshot.store(-1, std::memory_order_release);
+    }
+
+    if (monitoringEnabled.load(std::memory_order_acquire))
+    {
+        const auto firstInput = monitoringFirstInput.load(std::memory_order_relaxed);
+        const auto inputCount = monitoringChannels.load(std::memory_order_relaxed);
+        const auto* monitorLeft = firstInput < numInputChannels
+            ? inputChannelData[firstInput]
+            : nullptr;
+        const auto* monitorRight = inputCount > 1 && firstInput + 1 < numInputChannels
+            ? inputChannelData[firstInput + 1]
+            : monitorLeft;
+
+        for (int sample = 0; sample < numSamples; ++sample)
+        {
+            if (outputChannelData[0] != nullptr && monitorLeft != nullptr)
+                outputChannelData[0][sample] += monitorLeft[sample];
+            if (numOutputChannels > 1
+                && outputChannelData[1] != nullptr
+                && monitorRight != nullptr)
+                outputChannelData[1][sample] += monitorRight[sample];
+        }
+    }
 
     for (int sample = 0; sample < numSamples; ++sample)
     {
-        if (position >= snapshot.lengthSamples)
-        {
-            playing.store(false, std::memory_order_release);
-            break;
-        }
-
-        float left = 0.0f;
-        float right = 0.0f;
-        mixSample(snapshot, position, left, right);
-        if (metronomeEnabled.load(std::memory_order_relaxed))
-            addMetronome(snapshot, position, left, right);
-
-        left = juce::jlimit(-1.0f, 1.0f, left);
-        right = juce::jlimit(-1.0f, 1.0f, right);
         if (outputChannelData[0] != nullptr)
-            outputChannelData[0][sample] = left;
+        {
+            outputChannelData[0][sample] = juce::jlimit(-1.0f, 1.0f, outputChannelData[0][sample]);
+            leftPeakValue = std::max(leftPeakValue, std::abs(outputChannelData[0][sample]));
+        }
         if (numOutputChannels > 1 && outputChannelData[1] != nullptr)
-            outputChannelData[1][sample] = right;
-
-        leftPeakValue = std::max(leftPeakValue, std::abs(left));
-        rightPeakValue = std::max(rightPeakValue, std::abs(right));
-        ++position;
-
-        if (snapshot.loopEnabled && position >= snapshot.loopEndSample)
-            position = snapshot.loopStartSample;
+        {
+            outputChannelData[1][sample] = juce::jlimit(-1.0f, 1.0f, outputChannelData[1][sample]);
+            rightPeakValue = std::max(rightPeakValue, std::abs(outputChannelData[1][sample]));
+        }
     }
 
-    playheadSample.store(position, std::memory_order_release);
     outputLeftPeak.store(leftPeakValue, std::memory_order_relaxed);
     outputRightPeak.store(rightPeakValue, std::memory_order_relaxed);
-    readingSnapshot.store(-1, std::memory_order_release);
 }
 
 void StudioAudioEngine::audioDeviceAboutToStart(juce::AudioIODevice* device)

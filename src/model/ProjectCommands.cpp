@@ -290,7 +290,16 @@ void DeleteClipCommand::undo(Project& project)
 
 TrackMixState TrackMixState::fromTrack(const Track& track)
 {
-    return { track.volumeDecibels, track.pan, track.muted, track.solo, track.armed };
+    return {
+        track.volumeDecibels,
+        track.pan,
+        track.muted,
+        track.solo,
+        track.armed,
+        track.inputChannel,
+        track.stereoInput,
+        track.inputMonitoring
+    };
 }
 
 SetTrackMixCommand::SetTrackMixCommand(juce::String trackToChange,
@@ -333,6 +342,9 @@ void SetTrackMixCommand::apply(Track& track, const TrackMixState& state)
     track.muted = state.muted;
     track.solo = state.solo;
     track.armed = state.armed;
+    track.inputChannel = state.inputChannel;
+    track.stereoInput = state.stereoInput;
+    track.inputMonitoring = state.inputMonitoring;
 }
 
 AddPluginInsertCommand::AddPluginInsertCommand(juce::String destinationTrackId,

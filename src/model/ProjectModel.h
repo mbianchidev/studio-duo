@@ -71,6 +71,9 @@ struct Track
     bool muted = false;
     bool solo = false;
     bool armed = false;
+    int inputChannel = 0;
+    bool stereoInput = false;
+    bool inputMonitoring = false;
     juce::Colour colour { 0xffdd5b3f };
     std::vector<PluginInsert> inserts;
     std::vector<AudioClip> clips;

@@ -24,6 +24,9 @@ void serializationRoundTrip()
     auto project = studio::Project::createDefault();
     project.name = "Serialization";
     project.tempo = 168.0;
+    project.tracks.front().inputChannel = 1;
+    project.tracks.front().stereoInput = true;
+    project.tracks.front().inputMonitoring = true;
 
     studio::AudioClip clip;
     clip.name = "DI";
@@ -49,6 +52,11 @@ void serializationRoundTrip()
            "Clips survive serialization.");
     expect(decoded.has_value() && decoded->tracks.front().inserts.size() == 1,
            "Plugin inserts survive serialization.");
+    expect(decoded.has_value()
+               && decoded->tracks.front().inputChannel == 1
+               && decoded->tracks.front().stereoInput
+               && decoded->tracks.front().inputMonitoring,
+           "Track input routing survives serialization.");
     expect(decoded.has_value()
                && decoded->tracks.front().inserts.front().bridgeMode
                       == studio::PluginBridgeMode::sandboxed,

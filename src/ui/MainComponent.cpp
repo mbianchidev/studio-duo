@@ -301,6 +301,8 @@ MainComponent::MainComponent()
     configureButton(muteButton, "Mute selected track");
     configureButton(soloButton, "Solo selected track");
     configureButton(armButton, "Arm selected track for recording");
+    configureButton(stereoInputButton, "Capture this input and the following input as stereo");
+    configureButton(monitorButton, "Monitor the selected track input through Studio Duo");
 
     newButton.onClick = [this] { createNewProject(); };
     openButton.onClick = [this] { beginOpenProject(); };
@@ -332,6 +334,14 @@ MainComponent::MainComponent()
     armButton.onClick = [this]
     {
         changeSelectedTrackState([](auto& state) { state.armed = !state.armed; });
+    };
+    stereoInputButton.onClick = [this]
+    {
+        changeSelectedTrackState([](auto& state) { state.stereoInput = !state.stereoInput; });
+    };
+    monitorButton.onClick = [this]
+    {
+        changeSelectedTrackState([](auto& state) { state.inputMonitoring = !state.inputMonitoring; });
     };
 
     loopButton.setToggleState(project.loopEnabled, juce::dontSendNotification);
@@ -377,6 +387,26 @@ MainComponent::MainComponent()
     inspectorName.setFont(juce::Font(juce::FontOptions(17.0f, juce::Font::bold)));
     addAndMakeVisible(inspectorDetails);
     inspectorDetails.setColour(juce::Label::textColourId, juce::Colour(StudioColours::secondaryText));
+
+    addAndMakeVisible(inputLabel);
+    inputLabel.setText("INPUT", juce::dontSendNotification);
+    inputLabel.setColour(juce::Label::textColourId, juce::Colour(StudioColours::secondaryText));
+    addAndMakeVisible(inputSelector);
+    inputSelector.setTooltip("Select the hardware input for this audio track");
+    inputSelector.onChange = [this]
+    {
+        if (updatingInputControls || inputSelector.getSelectedItemIndex() < 0)
+            return;
+
+        const auto* track = project.findTrack(selectedTrackId);
+        if (track == nullptr || track->type != TrackType::audio)
+            return;
+
+        const auto before = TrackMixState::fromTrack(*track);
+        auto after = before;
+        after.inputChannel = inputSelector.getSelectedItemIndex();
+        perform(std::make_unique<SetTrackMixCommand>(track->id, before, after));
+    };
 
     addAndMakeVisible(volumeLabel);
     volumeLabel.setText("VOLUME", juce::dontSendNotification);
@@ -649,7 +679,14 @@ void MainComponent::resized()
     auto inspector = right.reduced(16, 42);
     inspectorName.setBounds(inspector.removeFromTop(28));
     inspectorDetails.setBounds(inspector.removeFromTop(24));
-    inspector.removeFromTop(20);
+    inspector.removeFromTop(12);
+    inputLabel.setBounds(inspector.removeFromTop(20));
+    inputSelector.setBounds(inspector.removeFromTop(30));
+    inspector.removeFromTop(6);
+    auto inputToggles = inspector.removeFromTop(28);
+    stereoInputButton.setBounds(inputToggles.removeFromLeft(94).reduced(2));
+    monitorButton.setBounds(inputToggles.removeFromLeft(100).reduced(2));
+    inspector.removeFromTop(12);
     volumeLabel.setBounds(inspector.removeFromTop(20));
     volumeSlider.setBounds(inspector.removeFromTop(36));
     inspector.removeFromTop(12);
@@ -679,6 +716,18 @@ void MainComponent::timerCallback()
                            juce::Colour(audioEngine.isRecording() ? StudioColours::orange
                                                                  : StudioColours::raised));
     mixer->setPeaks(audioEngine.leftPeak(), audioEngine.rightPeak());
+
+    const auto* device = deviceManager.getCurrentAudioDevice();
+    const auto signature = device != nullptr
+        ? device->getInputChannelNames().joinIntoString("|")
+            + ":"
+            + device->getActiveInputChannels().toString(16)
+        : juce::String();
+    if (signature != inputConfigurationSignature)
+    {
+        inputConfigurationSignature = signature;
+        refreshInputControls();
+    }
 }
 
 bool MainComponent::keyPressed(const juce::KeyPress& key, juce::Component*)
@@ -1017,7 +1066,9 @@ void MainComponent::toggleRecording()
         ".wav",
         false);
 
-    const auto result = audioEngine.startRecording(activeRecording);
+    const auto result = audioEngine.startRecording(activeRecording,
+                                                   track->inputChannel,
+                                                   track->stereoInput ? 2 : 1);
     if (result.failed())
     {
         showError("Recording unavailable", result.getErrorMessage());
@@ -1229,6 +1280,9 @@ void MainComponent::updateInspector()
         muteButton.setEnabled(false);
         soloButton.setEnabled(false);
         armButton.setEnabled(false);
+        inputSelector.setEnabled(false);
+        stereoInputButton.setEnabled(false);
+        monitorButton.setEnabled(false);
         return;
     }
 
@@ -1242,6 +1296,10 @@ void MainComponent::updateInspector()
     muteButton.setEnabled(track->type != TrackType::master || !track->muted);
     soloButton.setEnabled(track->type != TrackType::master);
     armButton.setEnabled(track->type == TrackType::audio);
+    inputSelector.setEnabled(track->type == TrackType::audio);
+    stereoInputButton.setEnabled(track->type == TrackType::audio
+                                 && track->inputChannel + 1 < inputSelector.getNumItems());
+    monitorButton.setEnabled(track->type == TrackType::audio);
     volumeSlider.setValue(track->volumeDecibels, juce::dontSendNotification);
     panSlider.setValue(track->pan, juce::dontSendNotification);
     muteButton.setColour(juce::TextButton::buttonColourId,
@@ -1251,6 +1309,63 @@ void MainComponent::updateInspector()
     armButton.setColour(juce::TextButton::buttonColourId,
                         juce::Colour(track->armed ? StudioColours::orange : StudioColours::raised));
     armButton.setButtonText(track->armed ? "ARMED" : "ARM");
+    stereoInputButton.setToggleState(track->stereoInput, juce::dontSendNotification);
+    monitorButton.setToggleState(track->inputMonitoring, juce::dontSendNotification);
+    monitorButton.setButtonText(track->inputMonitoring ? "MONITOR ON" : "MONITOR");
+    updatingInputControls = true;
+    inputSelector.setSelectedItemIndex(track->inputChannel, juce::dontSendNotification);
+    updatingInputControls = false;
+}
+
+void MainComponent::refreshInputControls()
+{
+    const auto selectedIndex = inputSelector.getSelectedItemIndex();
+    updatingInputControls = true;
+    inputSelector.clear(juce::dontSendNotification);
+
+    if (const auto* device = deviceManager.getCurrentAudioDevice())
+    {
+        const auto names = device->getInputChannelNames();
+        for (int index = 0; index < names.size(); ++index)
+            inputSelector.addItem(names[index].isNotEmpty()
+                                      ? names[index]
+                                      : "Input " + juce::String(index + 1),
+                                  index + 1);
+    }
+
+    if (inputSelector.getNumItems() == 0)
+        inputSelector.addItem("No active input", 1);
+
+    const auto* track = project.findTrack(selectedTrackId);
+    const auto requested = track != nullptr ? track->inputChannel : selectedIndex;
+    inputSelector.setSelectedItemIndex(juce::jlimit(0,
+                                                   inputSelector.getNumItems() - 1,
+                                                   requested),
+                                       juce::dontSendNotification);
+    updatingInputControls = false;
+    updateInspector();
+}
+
+void MainComponent::updateInputMonitoring()
+{
+    const Track* monitored = nullptr;
+    if (const auto* selected = project.findTrack(selectedTrackId);
+        selected != nullptr && selected->type == TrackType::audio && selected->inputMonitoring)
+        monitored = selected;
+
+    if (monitored == nullptr)
+    {
+        const auto iterator = std::find_if(project.tracks.cbegin(), project.tracks.cend(), [](const auto& track)
+        {
+            return track.type == TrackType::audio && track.inputMonitoring;
+        });
+        if (iterator != project.tracks.cend())
+            monitored = &*iterator;
+    }
+
+    audioEngine.setInputMonitoring(monitored != nullptr,
+                                   monitored != nullptr ? monitored->inputChannel : 0,
+                                   monitored != nullptr && monitored->stereoInput ? 2 : 1);
 }
 
 void MainComponent::updateTimelineSize()
@@ -1279,6 +1394,7 @@ void MainComponent::projectChanged(bool writeRecovery, bool markDirty)
 
     if (const auto result = audioEngine.updateProject(project); result.failed())
         setStatus(result.getErrorMessage(), true);
+    updateInputMonitoring();
 
     if (writeRecovery && projectPackage.exists())
         if (const auto result = ProjectFile::writeRecoveryPoint(project, projectPackage); result.failed())

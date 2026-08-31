@@ -34,6 +34,7 @@ public:
     void stop() noexcept;
     void seekSeconds(double seconds) noexcept;
     void setMetronomeEnabled(bool enabled) noexcept;
+    void setInputMonitoring(bool enabled, int firstInputChannel, int channels) noexcept;
 
     [[nodiscard]] bool isPlaying() const noexcept;
     [[nodiscard]] bool isRecording() const noexcept;
@@ -42,7 +43,9 @@ public:
     [[nodiscard]] float rightPeak() const noexcept;
     [[nodiscard]] double currentSampleRate() const noexcept;
 
-    juce::Result startRecording(const juce::File& destination);
+    juce::Result startRecording(const juce::File& destination,
+                                int firstInputChannel,
+                                int channels);
     RecordingResult stopRecording();
     std::optional<double> audioFileDuration(const juce::File& source, juce::String& error);
     juce::Result renderToWav(const Project& project, const juce::File& destination, double sampleRate);
@@ -75,7 +78,10 @@ private:
         LockFreeRecorder();
         ~LockFreeRecorder() override;
 
-        juce::Result start(const juce::File& destination, double sampleRate, int channels);
+        juce::Result start(const juce::File& destination,
+                           double sampleRate,
+                           int channels,
+                           int firstInputChannel);
         RecordingResult stop();
         void push(const float* const* inputs, int inputChannels, int samples) noexcept;
         [[nodiscard]] bool isActive() const noexcept;
@@ -93,6 +99,7 @@ private:
         juce::File outputFile;
         double recordingSampleRate = 48000.0;
         int recordingChannels = 1;
+        int recordingFirstInputChannel = 0;
     };
 
     std::optional<RenderSnapshot> buildSnapshot(const Project& project,
@@ -130,6 +137,9 @@ private:
     std::atomic<double> sampleRate { 48000.0 };
     std::atomic<bool> playing { false };
     std::atomic<bool> metronomeEnabled { true };
+    std::atomic<bool> monitoringEnabled { false };
+    std::atomic<int> monitoringFirstInput { 0 };
+    std::atomic<int> monitoringChannels { 1 };
     std::atomic<float> outputLeftPeak { 0.0f };
     std::atomic<float> outputRightPeak { 0.0f };
     LockFreeRecorder recorder;
