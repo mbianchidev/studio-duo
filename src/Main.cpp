@@ -5,6 +5,7 @@
 
 #include <juce_gui_extra/juce_gui_extra.h>
 
+#include <algorithm>
 #include <cmath>
 
 namespace studio
@@ -50,6 +51,14 @@ public:
             return;
         }
 
+        if (commandLine.contains("--bridge-plugin-self-test"))
+        {
+            bridgeSelfTest = std::make_unique<PluginBridgeClient>();
+            pluginActivationCatalog = std::make_unique<PluginCatalog>();
+            juce::MessageManager::callAsync([this] { runPluginActivationSelfTest(); });
+            return;
+        }
+
         mainWindow = std::make_unique<MainWindow>(getApplicationName());
     }
 
@@ -59,6 +68,7 @@ public:
         pluginScanWorker.reset();
         pluginBridgeWorker.reset();
         bridgeSelfTest.reset();
+        pluginActivationCatalog.reset();
     }
 
     void systemRequestedQuit() override
@@ -114,6 +124,60 @@ private:
         quit();
     }
 
+    void runPluginActivationSelfTest()
+    {
+        if (bridgeSelfTest == nullptr || pluginActivationCatalog == nullptr)
+        {
+            setApplicationReturnValue(1);
+            quit();
+            return;
+        }
+
+        const auto entries = pluginActivationCatalog->entries();
+        const auto candidate = std::find_if(entries.cbegin(), entries.cend(), [](const auto& entry)
+        {
+            return !entry.instrument
+                && entry.inputChannels > 0
+                && entry.inputChannels <= PluginBridgeSharedState::maxChannels
+                && entry.outputChannels > 0
+                && entry.outputChannels <= PluginBridgeSharedState::maxChannels;
+        });
+        if (candidate == entries.cend())
+        {
+            juce::Logger::writeToLog("plugin.bridge.activation-test: no compatible catalog plugin");
+            setApplicationReturnValue(2);
+            quit();
+            return;
+        }
+
+        const auto description = pluginActivationCatalog->descriptionForIdentifier(candidate->identifier);
+        if (!description.has_value())
+        {
+            setApplicationReturnValue(1);
+            quit();
+            return;
+        }
+
+        const auto result = bridgeSelfTest->startPlugin(*description, 48000.0, 512);
+        if (result.failed())
+        {
+            juce::Logger::writeToLog("plugin.bridge.activation-test: " + result.getErrorMessage());
+            setApplicationReturnValue(1);
+            quit();
+            return;
+        }
+
+        juce::AudioBuffer<float> block(2, 512);
+        block.clear();
+        bridgeSelfTest->processBlock(block);
+        juce::Thread::sleep(10);
+        bridgeSelfTest->processBlock(block);
+        const auto passed = bridgeSelfTest->isReady();
+        bridgeSelfTest->stop();
+        setApplicationReturnValue(passed ? 0 : 1);
+        quit();
+    }
+
     class MainWindow final : public juce::DocumentWindow
     {
     public:
@@ -140,6 +204,7 @@ private:
     std::unique_ptr<PluginScanWorker> pluginScanWorker;
     std::unique_ptr<PluginBridgeWorker> pluginBridgeWorker;
     std::unique_ptr<PluginBridgeClient> bridgeSelfTest;
+    std::unique_ptr<PluginCatalog> pluginActivationCatalog;
 };
 }
 START_JUCE_APPLICATION(studio::StudioDuoApplication)

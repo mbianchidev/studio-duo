@@ -72,7 +72,20 @@ then reads the previous completed output. It never allocates, locks, waits, or
 uses IPC. A late worker causes the client to reuse the last valid output, or
 silence before the first completed block, and increments a diagnostic counter.
 The current worker is a deterministic pass-through used to validate transport
-and lifecycle behavior before third-party plugin instances are activated.
+and lifecycle behavior. It can also receive a catalog `PluginDescription`,
+instantiate that plugin in the worker, restore opaque state, validate the
+current channel count, prepare it, and process shared blocks without loading
+third-party code into the DAW.
+
+Run the transport and installed-plugin activation diagnostics with:
+
+```sh
+"build/StudioDuo_artefacts/Release/Studio Duo.app/Contents/MacOS/Studio Duo" --bridge-self-test
+"build/StudioDuo_artefacts/Release/Studio Duo.app/Contents/MacOS/Studio Duo" --bridge-plugin-self-test
+```
+
+The second command selects a compatible effect from the local catalog without
+printing its identity.
 
 Project saves use a `.studioduo` directory package. Session data is written to
 a new generation before `manifest.json` is atomically replaced. The latest
