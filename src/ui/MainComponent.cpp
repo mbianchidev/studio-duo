@@ -717,7 +717,7 @@ void MainComponent::timerCallback()
                                                                  : StudioColours::raised));
     mixer->setPeaks(audioEngine.leftPeak(), audioEngine.rightPeak());
 
-    const auto* device = deviceManager.getCurrentAudioDevice();
+    auto* device = deviceManager.getCurrentAudioDevice();
     const auto signature = device != nullptr
         ? device->getInputChannelNames().joinIntoString("|")
             + ":"
@@ -1323,7 +1323,7 @@ void MainComponent::refreshInputControls()
     updatingInputControls = true;
     inputSelector.clear(juce::dontSendNotification);
 
-    if (const auto* device = deviceManager.getCurrentAudioDevice())
+    if (auto* device = deviceManager.getCurrentAudioDevice())
     {
         const auto names = device->getInputChannelNames();
         for (int index = 0; index < names.size(); ++index)

@@ -83,6 +83,10 @@ and record arm. Use either **+ AUDIO TRACK** control to add tracks. Pressing
 transport; press **REC** or **STOP** to finish the take. The session sidebar
 also duplicates or deletes the selected non-master track with full undo support.
 
+The track inspector selects the hardware input, chooses mono or adjacent-channel
+stereo capture, and enables software monitoring. Monitoring is off by default
+to avoid accidental feedback.
+
 ## Documentation
 
 - [Product and technical design](docs/design.md)

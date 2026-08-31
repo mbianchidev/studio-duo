@@ -102,3 +102,8 @@ transport at the clip start position.
 Track creation, duplication, and deletion are typed commands. Duplication
 regenerates the track, clip, and insert IDs so later edits never alias the
 source track. The master track is protected from duplicate and delete actions.
+
+Audio tracks persist their first hardware input, mono/stereo mode, and software
+monitoring state. The lock-free recorder copies only those selected callback
+channels into its FIFO. Monitoring is mixed after timeline playback and before
+peak measurement without allocating, locking, or waiting on the audio callback.
