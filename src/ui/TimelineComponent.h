@@ -72,6 +72,10 @@ private:
     [[nodiscard]] float trackY(const juce::String& trackId) const noexcept;
     [[nodiscard]] double xToSeconds(float x) const noexcept;
     [[nodiscard]] float secondsToX(double seconds) const noexcept;
+    static void drawClipWaveform(juce::Graphics& graphics,
+                                 const AudioClip& clip,
+                                 juce::Rectangle<float> bounds,
+                                 float alpha);
     void showContextMenu(const juce::MouseEvent& event);
 
     const Project* project = nullptr;

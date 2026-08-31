@@ -232,39 +232,46 @@ void TimelineComponent::paint(juce::Graphics& graphics)
                       addTrackHeight - 14,
                       juce::Justification::centred);
 
+    for (std::size_t visibleIndex = 0; visibleIndex < tracks.size(); ++visibleIndex)
+    {
+        const auto& parent = *tracks[visibleIndex];
+        if (parent.parentTrackId.isNotEmpty())
+            continue;
+
+        const auto parentY = rulerHeight + static_cast<int>(visibleIndex) * trackHeight + 12;
+        for (const auto& child : project->tracks)
+        {
+            if (child.parentTrackId != parent.id)
+                continue;
+
+            for (const auto& clip : child.clips)
+            {
+                const juce::Rectangle<float> aggregate(
+                    secondsToX(clip.startSeconds),
+                    static_cast<float>(parentY),
+                    static_cast<float>(std::max(20.0, clip.durationSeconds * pixelsPerSecond)),
+                    trackHeight - 24.0f);
+                graphics.setColour(parent.colour.withAlpha(0.12f));
+                graphics.fillRoundedRectangle(aggregate, 5.0f);
+                drawClipWaveform(graphics, clip, aggregate, 0.13f);
+                graphics.setColour(parent.colour.withAlpha(0.28f));
+                graphics.drawRoundedRectangle(aggregate, 5.0f, 1.0f);
+            }
+        }
+    }
+
     for (const auto& hit : clipHits())
     {
         const auto* clip = project->findClip(hit.clipId);
         if (clip == nullptr)
             continue;
 
-        const auto drawWaveform = [&graphics, clip](juce::Rectangle<float> waveformBounds,
-                                                    float alpha)
-        {
-            graphics.saveState();
-            graphics.reduceClipRegion(waveformBounds.toNearestInt().reduced(5));
-            const auto seed = static_cast<std::uint32_t>(clip->id.hashCode());
-            juce::Random random(seed);
-            const auto middle = waveformBounds.getCentreY() + 8.0f;
-            graphics.setColour(juce::Colours::white.withAlpha(alpha));
-            for (float x = waveformBounds.getX() + 8.0f;
-                 x < waveformBounds.getRight() - 4.0f;
-                 x += 4.0f)
-            {
-                const auto amplitude = random.nextFloat() * (waveformBounds.getHeight() * 0.23f);
-                graphics.drawVerticalLine(static_cast<int>(x),
-                                          middle - amplitude,
-                                          middle + amplitude);
-            }
-            graphics.restoreState();
-        };
-
         auto bounds = hit.bounds;
         if (draggedClipId == hit.clipId)
         {
             graphics.setColour(clip->colour.withAlpha(0.16f));
             graphics.fillRoundedRectangle(hit.bounds, 5.0f);
-            drawWaveform(hit.bounds, 0.12f);
+            drawClipWaveform(graphics, *clip, hit.bounds, 0.12f);
             graphics.setColour(juce::Colours::white.withAlpha(0.28f));
             const float dashLengths[] { 4.0f, 4.0f };
             juce::Path originalShape;
@@ -303,7 +310,7 @@ void TimelineComponent::paint(juce::Graphics& graphics)
                                           1.5f);
         }
 
-        drawWaveform(bounds, 0.28f);
+        drawClipWaveform(graphics, *clip, bounds, 0.28f);
 
         graphics.setColour(juce::Colours::white);
         graphics.setFont(12.5f);
@@ -752,6 +759,27 @@ float TimelineComponent::trackY(const juce::String& trackId) const noexcept
 
     const auto index = static_cast<int>(std::distance(tracks.cbegin(), iterator));
     return static_cast<float>(rulerHeight + index * trackHeight);
+}
+
+void TimelineComponent::drawClipWaveform(juce::Graphics& graphics,
+                                         const AudioClip& clip,
+                                         juce::Rectangle<float> bounds,
+                                         float alpha)
+{
+    graphics.saveState();
+    graphics.reduceClipRegion(bounds.toNearestInt().reduced(5));
+    const auto seed = static_cast<std::uint32_t>(clip.id.hashCode());
+    juce::Random random(seed);
+    const auto middle = bounds.getCentreY() + 8.0f;
+    graphics.setColour(juce::Colours::white.withAlpha(alpha));
+    for (float x = bounds.getX() + 8.0f; x < bounds.getRight() - 4.0f; x += 4.0f)
+    {
+        const auto amplitude = random.nextFloat() * (bounds.getHeight() * 0.23f);
+        graphics.drawVerticalLine(static_cast<int>(x),
+                                  middle - amplitude,
+                                  middle + amplitude);
+    }
+    graphics.restoreState();
 }
 
 double TimelineComponent::xToSeconds(float x) const noexcept
