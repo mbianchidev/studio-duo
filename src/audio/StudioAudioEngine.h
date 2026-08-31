@@ -1,5 +1,6 @@
 #pragma once
 
+#include "RecordingWaveform.h"
 #include "model/ProjectModel.h"
 
 #include <juce_audio_devices/juce_audio_devices.h>
@@ -95,8 +96,6 @@ private:
         void run() override;
 
         static constexpr int capacitySamples = 1 << 20;
-        static constexpr int waveformBucketSamples = 2048;
-        static constexpr std::size_t waveformCapacity = 65536;
         juce::AbstractFifo fifo { capacitySamples };
         juce::AudioBuffer<float> ringBuffer { 2, capacitySamples };
         std::unique_ptr<juce::AudioFormatWriter> writer;
@@ -108,12 +107,7 @@ private:
         double recordingSampleRate = 48000.0;
         int recordingChannels = 1;
         int recordingFirstInputChannel = 0;
-        std::array<std::atomic<float>, waveformCapacity> waveformPeaks {};
-        std::atomic<std::uint64_t> waveformSequence { 0 };
-        std::atomic<float> partialWaveformPeak { 0.0f };
-        std::atomic<int> partialWaveformSamples { 0 };
-        float waveformPeakAccumulator = 0.0f;
-        int waveformSamplesInBucket = 0;
+        RecordingWaveform recordingWaveform;
     };
 
     std::optional<RenderSnapshot> buildSnapshot(const Project& project,

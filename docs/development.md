@@ -96,7 +96,8 @@ start, offset, duration, gain, and mute decisions.
 
 Clip trimming changes only timeline start, source offset, and duration. The
 model stores source length separately, prevents trims outside available audio,
-and restores all three edit values through undo.
+and restores all three edit values through undo. The timeline keeps the
+original rectangle as a dashed ghost while previewing move and trim edits.
 
 Recording is associated with a stable track ID captured when the take starts,
 so changing the UI selection cannot move the resulting clip to another track.
@@ -111,3 +112,10 @@ Audio tracks persist their first hardware input, mono/stereo mode, and software
 monitoring state. The lock-free recorder copies only those selected callback
 channels into its FIFO. Monitoring is mixed after timeline playback and before
 peak measurement without allocating, locking, or waiting on the audio callback.
+
+The recorder also reduces selected input samples into fixed 2048-sample peak
+buckets stored in a bounded lock-free array. The UI reads snapshots of those
+peaks to draw the growing take without touching the WAV writer or audio files.
+Stopping flushes the writer, verifies that the WAV exists, then creates the
+non-destructive clip. Dropped-sample conditions remain visible warnings but do
+not hide an otherwise valid recording.

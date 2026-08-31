@@ -89,7 +89,13 @@ to avoid accidental feedback.
 
 Selected clips show edge handles. Drag the body to move a clip, the left edge
 to change its timeline start and source offset, or the right edge to shorten or
-restore the available source range.
+restore the available source range. During move or trim, the original bounds
+remain as a ghost outline. **SPLIT @ PLAYHEAD** exposes splitting without a
+keyboard shortcut.
+
+Recording draws a live waveform from lock-free peak buckets. Stopping creates
+and flushes the WAV before adding its clip; the inspector shows the saved WAV
+filename and the status bar reports the completed file.
 
 ## Documentation
 

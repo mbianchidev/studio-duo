@@ -61,6 +61,7 @@ target_sources(
         src/Main.cpp
         src/audio/StudioAudioEngine.cpp
         src/audio/StudioAudioEngine.h
+        src/audio/RecordingWaveform.h
         src/plugin_host/PluginBrowserComponent.cpp
         src/plugin_host/PluginBrowserComponent.h
         src/plugin_host/PluginBridgeWorker.cpp

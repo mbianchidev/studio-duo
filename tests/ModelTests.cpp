@@ -1,8 +1,10 @@
 #include "model/ProjectCommands.h"
+#include "audio/RecordingWaveform.h"
 #include "plugin_host/PluginCatalog.h"
 #include "plugin_host/PluginBridgeProtocol.h"
 #include "project_io/ProjectFile.h"
 
+#include <array>
 #include <cmath>
 #include <iostream>
 
@@ -232,6 +234,28 @@ void pluginBridgeProtocol()
     expect(!studio::PluginBridgeProtocol::processAvailableBlock(state),
            "Bridge worker does not process the same block twice.");
 }
+
+void liveRecordingWaveform()
+{
+    studio::RecordingWaveform waveform;
+    waveform.reset();
+
+    std::array<float, studio::RecordingWaveform::bucketSamples> left {};
+    std::array<float, studio::RecordingWaveform::bucketSamples> right {};
+    left[100] = 0.4f;
+    right[300] = -0.8f;
+    const float* channels[] { left.data(), right.data() };
+    waveform.push(channels,
+                  2,
+                  0,
+                  2,
+                  studio::RecordingWaveform::bucketSamples);
+
+    const auto peaks = waveform.snapshot();
+    expect(peaks.size() == 1, "Recording waveform creates one completed peak bucket.");
+    expect(peaks.size() == 1 && std::abs(peaks.front() - 0.8f) < 0.0001f,
+           "Recording waveform captures the loudest selected input sample.");
+}
 }
 
 int main()
@@ -241,6 +265,7 @@ int main()
     packagePersistence();
     pluginCatalogFiltering();
     pluginBridgeProtocol();
+    liveRecordingWaveform();
 
     if (failures == 0)
     {
