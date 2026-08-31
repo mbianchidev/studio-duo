@@ -79,6 +79,29 @@ private:
     bool capturedOriginal = false;
 };
 
+class TrimClipCommand final : public ProjectCommand
+{
+public:
+    TrimClipCommand(juce::String clipToTrim,
+                    double destinationStartSeconds,
+                    double destinationSourceOffsetSeconds,
+                    double destinationDurationSeconds);
+
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    juce::String clipId;
+    double newStartSeconds = 0.0;
+    double newSourceOffsetSeconds = 0.0;
+    double newDurationSeconds = 0.0;
+    double oldStartSeconds = 0.0;
+    double oldSourceOffsetSeconds = 0.0;
+    double oldDurationSeconds = 0.0;
+    bool capturedOriginal = false;
+};
+
 class SplitClipCommand final : public ProjectCommand
 {
 public:

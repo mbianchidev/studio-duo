@@ -172,13 +172,32 @@ void TimelineComponent::paint(juce::Graphics& graphics)
 
         auto bounds = hit.bounds;
         if (draggedClipId == hit.clipId)
+        {
             bounds.setX(secondsToX(dragPreviewStart));
+            bounds.setWidth(static_cast<float>(std::max(20.0,
+                                                        dragPreviewDuration
+                                                            * pixelsPerSecond)));
+        }
 
         const auto selected = hit.clipId == selectedClipId;
         graphics.setColour(clip->colour.withAlpha(clip->muted ? 0.35f : 0.86f));
         graphics.fillRoundedRectangle(bounds, 5.0f);
         graphics.setColour(selected ? juce::Colours::white : clip->colour.brighter(0.35f));
         graphics.drawRoundedRectangle(bounds, 5.0f, selected ? 2.0f : 1.0f);
+        if (selected)
+        {
+            graphics.setColour(juce::Colours::white.withAlpha(0.85f));
+            graphics.fillRoundedRectangle(bounds.getX() + 3.0f,
+                                          bounds.getY() + 8.0f,
+                                          3.0f,
+                                          bounds.getHeight() - 16.0f,
+                                          1.5f);
+            graphics.fillRoundedRectangle(bounds.getRight() - 6.0f,
+                                          bounds.getY() + 8.0f,
+                                          3.0f,
+                                          bounds.getHeight() - 16.0f,
+                                          1.5f);
+        }
 
         graphics.saveState();
         graphics.reduceClipRegion(bounds.toNearestInt().reduced(5));
@@ -262,7 +281,17 @@ void TimelineComponent::mouseDown(const juce::MouseEvent& event)
         if (const auto* clip = project != nullptr ? project->findClip(hit.clipId) : nullptr)
         {
             dragOriginalStart = clip->startSeconds;
+            dragOriginalSourceOffset = clip->sourceOffsetSeconds;
+            dragOriginalDuration = clip->durationSeconds;
             dragPreviewStart = dragOriginalStart;
+            dragPreviewSourceOffset = dragOriginalSourceOffset;
+            dragPreviewDuration = dragOriginalDuration;
+            if (event.position.x <= hit.bounds.getX() + 9.0f)
+                dragMode = DragMode::trimStart;
+            else if (event.position.x >= hit.bounds.getRight() - 9.0f)
+                dragMode = DragMode::trimEnd;
+            else
+                dragMode = DragMode::move;
         }
 
         if (onClipSelected)
@@ -291,20 +320,65 @@ void TimelineComponent::mouseDrag(const juce::MouseEvent& event)
         return;
 
     const auto deltaSeconds = (event.position.x - dragStartX) / pixelsPerSecond;
-    const auto unsnapped = std::max(0.0, dragOriginalStart + deltaSeconds);
     const auto beat = project != nullptr ? 60.0 / project->tempo : 0.5;
-    dragPreviewStart = std::round(unsnapped / beat) * beat;
+    const auto minimumDuration = std::max(0.01, beat / 16.0);
+
+    if (dragMode == DragMode::move)
+    {
+        const auto unsnapped = std::max(0.0, dragOriginalStart + deltaSeconds);
+        dragPreviewStart = std::round(unsnapped / beat) * beat;
+    }
+    else if (dragMode == DragMode::trimStart)
+    {
+        const auto minimumStart = std::max(0.0,
+                                           dragOriginalStart - dragOriginalSourceOffset);
+        const auto maximumStart = dragOriginalStart + dragOriginalDuration - minimumDuration;
+        const auto unsnapped = juce::jlimit(minimumStart,
+                                           maximumStart,
+                                           dragOriginalStart + deltaSeconds);
+        dragPreviewStart = std::round(unsnapped / (beat / 4.0)) * (beat / 4.0);
+        dragPreviewStart = juce::jlimit(minimumStart, maximumStart, dragPreviewStart);
+        const auto appliedDelta = dragPreviewStart - dragOriginalStart;
+        dragPreviewSourceOffset = dragOriginalSourceOffset + appliedDelta;
+        dragPreviewDuration = dragOriginalDuration - appliedDelta;
+    }
+    else if (dragMode == DragMode::trimEnd)
+    {
+        const auto sourceRemaining = project != nullptr
+            ? project->findClip(draggedClipId)->sourceLengthSeconds - dragOriginalSourceOffset
+            : dragOriginalDuration;
+        const auto unsnappedDuration = juce::jlimit(minimumDuration,
+                                                    sourceRemaining,
+                                                    dragOriginalDuration + deltaSeconds);
+        dragPreviewDuration = std::round(unsnappedDuration / (beat / 4.0))
+            * (beat / 4.0);
+        dragPreviewDuration = juce::jlimit(minimumDuration,
+                                           sourceRemaining,
+                                           dragPreviewDuration);
+    }
     repaint();
 }
 
 void TimelineComponent::mouseUp(const juce::MouseEvent&)
 {
-    if (draggedClipId.isNotEmpty()
-        && std::abs(dragPreviewStart - dragOriginalStart) > 0.0001
-        && onClipMoved)
-        onClipMoved(draggedClipId, dragPreviewStart);
+    if (draggedClipId.isNotEmpty())
+    {
+        if (dragMode == DragMode::move
+            && std::abs(dragPreviewStart - dragOriginalStart) > 0.0001
+            && onClipMoved)
+            onClipMoved(draggedClipId, dragPreviewStart);
+        else if ((dragMode == DragMode::trimStart || dragMode == DragMode::trimEnd)
+                 && (std::abs(dragPreviewStart - dragOriginalStart) > 0.0001
+                     || std::abs(dragPreviewDuration - dragOriginalDuration) > 0.0001)
+                 && onClipTrimmed)
+            onClipTrimmed(draggedClipId,
+                          dragPreviewStart,
+                          dragPreviewSourceOffset,
+                          dragPreviewDuration);
+    }
 
     draggedClipId.clear();
+    dragMode = DragMode::none;
     repaint();
 }
 

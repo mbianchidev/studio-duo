@@ -32,6 +32,7 @@ void serializationRoundTrip()
     clip.name = "DI";
     clip.startSeconds = 1.5;
     clip.durationSeconds = 3.25;
+    clip.sourceLengthSeconds = 3.25;
     project.tracks.front().clips.push_back(clip);
 
     studio::PluginInsert insert;
@@ -102,6 +103,7 @@ void commandHistory()
     studio::AudioClip clip;
     clip.name = "Take 1";
     clip.durationSeconds = 8.0;
+    clip.sourceLengthSeconds = 8.0;
     const auto clipId = clip.id;
 
     expect(history.perform(std::make_unique<studio::AddClipCommand>(project.tracks.front().id, clip),
@@ -113,6 +115,20 @@ void commandHistory()
     expect(history.perform(std::make_unique<studio::MoveClipCommand>(clipId, 2.0), project, error),
            error.toRawUTF8());
     expect(project.findClip(clipId)->startSeconds == 2.0, "Move clip command updates its start.");
+
+    expect(history.perform(std::make_unique<studio::TrimClipCommand>(clipId, 3.0, 1.0, 7.0),
+                           project,
+                           error),
+           error.toRawUTF8());
+    expect(project.findClip(clipId)->startSeconds == 3.0
+               && project.findClip(clipId)->sourceOffsetSeconds == 1.0
+               && project.findClip(clipId)->durationSeconds == 7.0,
+           "Trim clip command preserves a non-destructive source offset.");
+    expect(history.undo(project), "Trim clip command can be undone.");
+    expect(project.findClip(clipId)->startSeconds == 2.0
+               && project.findClip(clipId)->sourceOffsetSeconds == 0.0
+               && project.findClip(clipId)->durationSeconds == 8.0,
+           "Undo restores the original clip boundaries.");
 
     expect(history.perform(std::make_unique<studio::SplitClipCommand>(clipId, 5.0), project, error),
            error.toRawUTF8());

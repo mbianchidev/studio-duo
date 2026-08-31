@@ -118,6 +118,7 @@ juce::var AudioClip::toVar() const
     object->setProperty("sourceFile", sourceFile.getFullPathName());
     object->setProperty("startSeconds", startSeconds);
     object->setProperty("sourceOffsetSeconds", sourceOffsetSeconds);
+    object->setProperty("sourceLengthSeconds", sourceLengthSeconds);
     object->setProperty("durationSeconds", durationSeconds);
     object->setProperty("gainDecibels", gainDecibels);
     object->setProperty("muted", muted);
@@ -138,12 +139,16 @@ std::optional<AudioClip> AudioClip::fromVar(const juce::var& value, juce::String
     clip.startSeconds = numberProperty(*object, "startSeconds", 0.0);
     clip.sourceOffsetSeconds = numberProperty(*object, "sourceOffsetSeconds", 0.0);
     clip.durationSeconds = numberProperty(*object, "durationSeconds", 0.0);
+    clip.sourceLengthSeconds = numberProperty(*object,
+                                              "sourceLengthSeconds",
+                                              clip.sourceOffsetSeconds + clip.durationSeconds);
     clip.gainDecibels = static_cast<float>(numberProperty(*object, "gainDecibels", 0.0));
     clip.muted = booleanProperty(*object, "muted", false);
     clip.colour = colourProperty(*object, "colour", juce::Colour(0xffdd5b3f));
 
     if (clip.id.isEmpty() || clip.durationSeconds <= 0.0 || clip.startSeconds < 0.0
-        || clip.sourceOffsetSeconds < 0.0)
+        || clip.sourceOffsetSeconds < 0.0
+        || clip.sourceLengthSeconds < clip.sourceOffsetSeconds + clip.durationSeconds)
     {
         error = "Clip contains an invalid ID or time range.";
         return std::nullopt;

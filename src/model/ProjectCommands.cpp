@@ -173,6 +173,66 @@ void MoveClipCommand::undo(Project& project)
         clip->startSeconds = oldStartSeconds;
 }
 
+TrimClipCommand::TrimClipCommand(juce::String clipToTrim,
+                                 double destinationStartSeconds,
+                                 double destinationSourceOffsetSeconds,
+                                 double destinationDurationSeconds)
+    : clipId(std::move(clipToTrim)),
+      newStartSeconds(std::max(0.0, destinationStartSeconds)),
+      newSourceOffsetSeconds(std::max(0.0, destinationSourceOffsetSeconds)),
+      newDurationSeconds(destinationDurationSeconds)
+{
+}
+
+juce::String TrimClipCommand::name() const
+{
+    return "Trim clip";
+}
+
+bool TrimClipCommand::perform(Project& project, juce::String& error)
+{
+    auto* clip = project.findClip(clipId);
+    if (clip == nullptr)
+    {
+        error = "The clip to trim no longer exists.";
+        return false;
+    }
+    if (newDurationSeconds < 0.001)
+    {
+        error = "A clip must remain at least one millisecond long.";
+        return false;
+    }
+    if (clip->sourceLengthSeconds > 0.0
+        && newSourceOffsetSeconds + newDurationSeconds > clip->sourceLengthSeconds + 0.0001)
+    {
+        error = "The trim extends beyond the available source audio.";
+        return false;
+    }
+
+    if (!capturedOriginal)
+    {
+        oldStartSeconds = clip->startSeconds;
+        oldSourceOffsetSeconds = clip->sourceOffsetSeconds;
+        oldDurationSeconds = clip->durationSeconds;
+        capturedOriginal = true;
+    }
+
+    clip->startSeconds = newStartSeconds;
+    clip->sourceOffsetSeconds = newSourceOffsetSeconds;
+    clip->durationSeconds = newDurationSeconds;
+    return true;
+}
+
+void TrimClipCommand::undo(Project& project)
+{
+    if (auto* clip = project.findClip(clipId))
+    {
+        clip->startSeconds = oldStartSeconds;
+        clip->sourceOffsetSeconds = oldSourceOffsetSeconds;
+        clip->durationSeconds = oldDurationSeconds;
+    }
+}
+
 SplitClipCommand::SplitClipCommand(juce::String clipToSplit, double splitPositionSeconds)
     : clipId(std::move(clipToSplit)),
       splitSeconds(splitPositionSeconds)

@@ -51,6 +51,7 @@ struct AudioClip
     juce::File sourceFile;
     double startSeconds = 0.0;
     double sourceOffsetSeconds = 0.0;
+    double sourceLengthSeconds = 4.0;
     double durationSeconds = 4.0;
     float gainDecibels = 0.0f;
     bool muted = false;

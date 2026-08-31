@@ -515,6 +515,16 @@ MainComponent::MainComponent()
     {
         perform(std::make_unique<MoveClipCommand>(clipId, start));
     };
+    timeline.onClipTrimmed = [this](const auto& clipId,
+                                    double start,
+                                    double sourceOffset,
+                                    double duration)
+    {
+        perform(std::make_unique<TrimClipCommand>(clipId,
+                                                  start,
+                                                  sourceOffset,
+                                                  duration));
+    };
     timeline.onSeek = [this](double seconds)
     {
         audioEngine.seekSeconds(seconds);
@@ -1003,6 +1013,7 @@ void MainComponent::importAudioFile(const juce::File& source)
     clip.sourceFile = source;
     clip.startSeconds = audioEngine.positionSeconds();
     clip.durationSeconds = *duration;
+    clip.sourceLengthSeconds = *duration;
     clip.colour = destination->colour;
 
     const auto clipId = clip.id;
@@ -1104,6 +1115,7 @@ void MainComponent::finishRecording()
     clip.sourceFile = recording.file;
     clip.startSeconds = recordingStartSeconds;
     clip.durationSeconds = recording.durationSeconds;
+    clip.sourceLengthSeconds = recording.durationSeconds;
     clip.colour = track->colour;
     const auto clipId = clip.id;
 

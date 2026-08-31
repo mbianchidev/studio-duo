@@ -27,6 +27,7 @@ public:
     std::function<void()> onAddTrack;
     std::function<void(const juce::String&, const juce::String&)> onClipSelected;
     std::function<void(const juce::String&, double)> onClipMoved;
+    std::function<void(const juce::String&, double, double, double)> onClipTrimmed;
     std::function<void(double)> onSeek;
 
     void paint(juce::Graphics& graphics) override;
@@ -42,6 +43,14 @@ private:
         juce::Rectangle<float> bounds;
     };
 
+    enum class DragMode
+    {
+        none,
+        move,
+        trimStart,
+        trimEnd
+    };
+
     [[nodiscard]] std::vector<Hit> clipHits() const;
     [[nodiscard]] int trackIndexAt(float y) const noexcept;
     [[nodiscard]] double xToSeconds(float x) const noexcept;
@@ -54,8 +63,13 @@ private:
     double playheadSeconds = 0.0;
     double pixelsPerSecond = 96.0;
     double dragOriginalStart = 0.0;
+    double dragOriginalSourceOffset = 0.0;
+    double dragOriginalDuration = 0.0;
     double dragPreviewStart = 0.0;
+    double dragPreviewSourceOffset = 0.0;
+    double dragPreviewDuration = 0.0;
     float dragStartX = 0.0f;
+    DragMode dragMode = DragMode::none;
 
     static constexpr int rulerHeight = 36;
     static constexpr int trackHeaderWidth = 176;
