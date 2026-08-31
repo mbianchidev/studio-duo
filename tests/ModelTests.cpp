@@ -61,6 +61,20 @@ void commandHistory()
     studio::CommandStack history;
     juce::String error;
 
+    studio::Track extraTrack;
+    extraTrack.name = "Added Track";
+    extraTrack.armed = true;
+    const auto extraTrackId = extraTrack.id;
+    expect(history.perform(std::make_unique<studio::AddTrackCommand>(extraTrack), project, error),
+           error.toRawUTF8());
+    expect(project.findTrack(extraTrackId) != nullptr, "Add track command creates a track.");
+    expect(project.tracks[project.tracks.size() - 2].id == extraTrackId,
+           "Audio tracks are inserted before the master.");
+    expect(history.undo(project), "Add track command can be undone.");
+    expect(project.findTrack(extraTrackId) == nullptr, "Undo removes the added track.");
+    expect(history.redo(project, error), error.toRawUTF8());
+    expect(project.findTrack(extraTrackId) != nullptr, "Redo restores the added track.");
+
     studio::AudioClip clip;
     clip.name = "Take 1";
     clip.durationSeconds = 8.0;

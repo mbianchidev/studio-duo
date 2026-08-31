@@ -71,6 +71,7 @@ private:
     CommandStack commandStack;
     juce::File projectPackage;
     juce::File activeRecording;
+    juce::String activeRecordingTrackId;
     double recordingStartSeconds = 0.0;
     juce::String selectedTrackId;
     juce::String selectedClipId;

@@ -50,7 +50,8 @@ int TimelineComponent::preferredWidth(int minimumWidth) const
 int TimelineComponent::preferredHeight(int minimumHeight) const
 {
     const auto trackCount = project != nullptr ? static_cast<int>(project->tracks.size()) : 0;
-    return std::max(minimumHeight, rulerHeight + trackCount * trackHeight);
+    return std::max(minimumHeight,
+                    rulerHeight + trackCount * trackHeight + addTrackHeight);
 }
 
 void TimelineComponent::paint(juce::Graphics& graphics)
@@ -113,21 +114,51 @@ void TimelineComponent::paint(juce::Graphics& graphics)
                           24,
                           juce::Justification::centredLeft);
 
-        juce::String state;
-        if (track.armed) state << "REC ";
-        if (track.muted) state << "MUTE ";
-        if (track.solo) state << "SOLO";
-        if (state.isEmpty()) state = trackTypeToString(track.type).toUpperCase();
-        graphics.setColour(juce::Colour(track.armed ? StudioColours::orange
-                                                    : StudioColours::secondaryText));
-        graphics.setFont(10.5f);
-        graphics.drawText(state.trimEnd(),
-                          26,
-                          y + 38,
-                          trackHeaderWidth - 38,
-                          22,
-                          juce::Justification::centredLeft);
+        const auto drawControl = [&graphics, y](int x,
+                                                const juce::String& label,
+                                                bool active,
+                                                juce::Colour activeColour)
+        {
+            const juce::Rectangle<float> bounds(static_cast<float>(x),
+                                                static_cast<float>(y + 48),
+                                                28.0f,
+                                                24.0f);
+            graphics.setColour(active ? activeColour : juce::Colour(StudioColours::raised));
+            graphics.fillRoundedRectangle(bounds, 3.0f);
+            graphics.setColour(active ? juce::Colours::white
+                                      : juce::Colour(StudioColours::secondaryText));
+            graphics.setFont(juce::Font(juce::FontOptions(10.0f, juce::Font::bold)));
+            graphics.drawText(label, bounds.toNearestInt(), juce::Justification::centred);
+        };
+
+        drawControl(26, "M", track.muted, juce::Colour(StudioColours::amber));
+        drawControl(60, "S", track.solo, juce::Colour(StudioColours::green));
+        if (track.type == TrackType::audio)
+            drawControl(94, "R", track.armed, juce::Colour(StudioColours::orange));
+
+        graphics.setColour(juce::Colour(StudioColours::secondaryText));
+        graphics.setFont(juce::Font(juce::FontOptions(9.5f)));
+        graphics.drawText(trackTypeToString(track.type).toUpperCase(),
+                          128,
+                          y + 48,
+                          40,
+                          24,
+                          juce::Justification::centredRight);
     }
+
+    const auto addTrackY = rulerHeight + static_cast<int>(project->tracks.size()) * trackHeight;
+    graphics.setColour(juce::Colour(StudioColours::panel));
+    graphics.fillRect(0, addTrackY, trackHeaderWidth, addTrackHeight);
+    graphics.setColour(juce::Colour(StudioColours::border));
+    graphics.drawRect(10, addTrackY + 7, trackHeaderWidth - 20, addTrackHeight - 14, 1);
+    graphics.setColour(juce::Colour(StudioColours::text));
+    graphics.setFont(juce::Font(juce::FontOptions(11.0f, juce::Font::bold)));
+    graphics.drawText("+ ADD AUDIO TRACK",
+                      14,
+                      addTrackY + 7,
+                      trackHeaderWidth - 28,
+                      addTrackHeight - 14,
+                      juce::Justification::centred);
 
     for (const auto& hit : clipHits())
     {
@@ -175,6 +206,46 @@ void TimelineComponent::paint(juce::Graphics& graphics)
 
 void TimelineComponent::mouseDown(const juce::MouseEvent& event)
 {
+    if (project != nullptr && event.position.x < trackHeaderWidth)
+    {
+        const auto addTrackY = rulerHeight + static_cast<int>(project->tracks.size()) * trackHeight;
+        if (event.position.y >= static_cast<float>(addTrackY)
+            && event.position.y < static_cast<float>(addTrackY + addTrackHeight))
+        {
+            if (onAddTrack)
+                onAddTrack();
+            return;
+        }
+
+        const auto trackIndex = trackIndexAt(event.position.y);
+        if (trackIndex >= 0 && trackIndex < static_cast<int>(project->tracks.size()))
+        {
+            const auto& track = project->tracks[static_cast<std::size_t>(trackIndex)];
+            const auto localY = static_cast<int>(event.position.y)
+                - rulerHeight
+                - trackIndex * trackHeight;
+            const auto x = static_cast<int>(event.position.x);
+            if (localY >= 44 && localY <= 76)
+            {
+                if (x >= 22 && x <= 58 && onTrackMute)
+                    onTrackMute(track.id);
+                else if (x >= 58 && x <= 92 && onTrackSolo)
+                    onTrackSolo(track.id);
+                else if (x >= 92 && x <= 126
+                         && track.type == TrackType::audio
+                         && onTrackArm)
+                    onTrackArm(track.id);
+                else
+                    return;
+
+                selectedTrackId = track.id;
+                selectedClipId.clear();
+                repaint();
+                return;
+            }
+        }
+    }
+
     for (const auto& hit : clipHits())
     {
         if (!hit.bounds.contains(event.position))

@@ -21,6 +21,10 @@ public:
     [[nodiscard]] int preferredHeight(int minimumHeight) const;
 
     std::function<void(const juce::String&)> onTrackSelected;
+    std::function<void(const juce::String&)> onTrackMute;
+    std::function<void(const juce::String&)> onTrackSolo;
+    std::function<void(const juce::String&)> onTrackArm;
+    std::function<void()> onAddTrack;
     std::function<void(const juce::String&, const juce::String&)> onClipSelected;
     std::function<void(const juce::String&, double)> onClipMoved;
     std::function<void(double)> onSeek;
@@ -56,5 +60,6 @@ private:
     static constexpr int rulerHeight = 36;
     static constexpr int trackHeaderWidth = 176;
     static constexpr int trackHeight = 88;
+    static constexpr int addTrackHeight = 44;
 };
 }

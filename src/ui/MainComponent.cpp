@@ -457,6 +457,22 @@ MainComponent::MainComponent()
     timeline.addKeyListener(this);
     timeline.setProject(&project);
     timeline.onTrackSelected = [this](const auto& trackId) { selectTrack(trackId); };
+    timeline.onTrackMute = [this](const auto& trackId)
+    {
+        selectTrack(trackId);
+        changeSelectedTrackState([](auto& state) { state.muted = !state.muted; });
+    };
+    timeline.onTrackSolo = [this](const auto& trackId)
+    {
+        selectTrack(trackId);
+        changeSelectedTrackState([](auto& state) { state.solo = !state.solo; });
+    };
+    timeline.onTrackArm = [this](const auto& trackId)
+    {
+        selectTrack(trackId);
+        changeSelectedTrackState([](auto& state) { state.armed = !state.armed; });
+    };
+    timeline.onAddTrack = [this] { addAudioTrack(); };
     timeline.onClipSelected = [this](const auto& trackId, const auto& clipId)
     {
         selectClip(trackId, clipId);
@@ -966,7 +982,20 @@ void MainComponent::toggleRecording()
     auto* track = recordingTrack();
     if (track == nullptr)
     {
-        showError("Recording unavailable", "Add and arm an audio track first.");
+        const auto* selected = project.findTrack(selectedTrackId);
+        if (selected != nullptr && selected->type == TrackType::audio)
+        {
+            const auto before = TrackMixState::fromTrack(*selected);
+            auto after = before;
+            after.armed = true;
+            if (perform(std::make_unique<SetTrackMixCommand>(selected->id, before, after)))
+                track = project.findTrack(selectedTrackId);
+        }
+    }
+
+    if (track == nullptr)
+    {
+        showError("Recording unavailable", "Select an audio track or add a new one first.");
         return;
     }
 
@@ -987,14 +1016,18 @@ void MainComponent::toggleRecording()
         return;
     }
 
+    activeRecordingTrackId = track->id;
     recordingStartSeconds = audioEngine.positionSeconds();
-    setStatus("Recording " + track->name + " to " + activeRecording.getFileName());
+    audioEngine.play();
+    setStatus("Recording " + track->name + ". Press REC or STOP to finish.");
 }
 
 void MainComponent::finishRecording()
 {
-    auto* track = recordingTrack();
+    auto* track = project.findTrack(activeRecordingTrackId);
     const auto recording = audioEngine.stopRecording();
+    audioEngine.pause();
+    activeRecordingTrackId.clear();
     if (recording.result.failed())
     {
         showError("Recording warning", recording.result.getErrorMessage());
@@ -1030,6 +1063,7 @@ void MainComponent::addAudioTrack()
         return candidate.type == TrackType::audio;
     }));
     track.name = "Audio " + juce::String(audioTrackCount + 1);
+    track.armed = true;
     const std::array colours {
         juce::Colour(0xffdd5b3f),
         juce::Colour(0xffd99a42),
@@ -1167,6 +1201,7 @@ void MainComponent::updateInspector()
                          juce::Colour(track->solo ? StudioColours::green : StudioColours::raised));
     armButton.setColour(juce::TextButton::buttonColourId,
                         juce::Colour(track->armed ? StudioColours::orange : StudioColours::raised));
+    armButton.setButtonText(track->armed ? "ARMED" : "ARM");
 }
 
 void MainComponent::updateTimelineSize()
