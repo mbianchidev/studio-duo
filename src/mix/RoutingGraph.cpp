@@ -15,8 +15,7 @@ bool isAudioNode(const Track& track)
         && (track.type == TrackType::audio
             || track.type == TrackType::instrument
             || track.type == TrackType::aux
-            || track.type == TrackType::bus
-            || track.type == TrackType::controlRoom);
+            || track.type == TrackType::bus);
 }
 
 bool hasInsert(const Track& track, const juce::String& insertId)
@@ -318,7 +317,9 @@ std::optional<std::vector<juce::String>> RoutingGraph::order(
         if (!connection.enabled
             || connection.signalType != SignalType::audio
             || connection.kind == RouteKind::mainOutput
-            || connection.kind == RouteKind::hardwareOutput)
+            || connection.kind == RouteKind::hardwareOutput
+            || (connection.kind == RouteKind::controlRoom
+                && connection.sourceTrackId == masterId))
             continue;
         if (!addEdge(connection.sourceTrackId, connection.destination.trackId))
         {

@@ -51,6 +51,10 @@ set(STUDIO_DUO_MODEL_SOURCES
     src/mix/RoutingTypes.h
     src/mix/RoutingGraph.cpp
     src/mix/RoutingGraph.h
+    src/mix/RoutingGraphCompiler.cpp
+    src/mix/RoutingGraphCompiler.h
+    src/mix/SoloResolver.cpp
+    src/mix/SoloResolver.h
     src/model/ProjectCommands.cpp
     src/model/ProjectCommands.h
     src/model/ProjectModel.cpp
@@ -184,23 +188,40 @@ if(STUDIO_DUO_BUILD_TESTS)
         PRIVATE
             tests/ModelTests.cpp
             tests/RoutingModelTests.cpp
+            tests/RoutingEngineTests.cpp
+            src/audio/StudioAudioEngine.cpp
+            src/audio/StudioAudioEngine.h
+            src/plugin_host/PluginBridgeClient.cpp
+            src/plugin_host/PluginBridgeClient.h
+            src/plugin_host/PluginBridgeProtocol.h
             ${STUDIO_DUO_MODEL_SOURCES}
     )
 
     target_include_directories(StudioDuoTests PRIVATE src)
+    target_include_directories(StudioDuoTests SYSTEM PRIVATE ${signalsmith_stretch_SOURCE_DIR})
 
     target_compile_definitions(
         StudioDuoTests
         PRIVATE
             JUCE_USE_CURL=0
             JUCE_WEB_BROWSER=0
+            JUCE_PLUGINHOST_VST=0
+            JUCE_PLUGINHOST_VST3=1
             STUDIO_DUO_VERSION="${PROJECT_VERSION}"
     )
+    if(APPLE)
+        target_compile_definitions(StudioDuoTests PRIVATE JUCE_PLUGINHOST_AU=1)
+    else()
+        target_compile_definitions(StudioDuoTests PRIVATE JUCE_PLUGINHOST_AU=0)
+    endif()
 
     target_link_libraries(
         StudioDuoTests
         PRIVATE
             juce::juce_audio_formats
+            juce::juce_audio_devices
+            juce::juce_audio_processors
+            juce::juce_audio_utils
             juce::juce_data_structures
             juce::juce_graphics
         PUBLIC

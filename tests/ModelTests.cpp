@@ -1166,6 +1166,7 @@ int main()
     multitrackRecordingTargets();
     multitrackRecordingCommand();
     routingModelTests();
+    routingEngineTests();
 
     if (failures == 0)
     {

@@ -21,6 +21,7 @@ class StudioAudioEngine final : private juce::AudioIODeviceCallback
 {
 public:
     static constexpr std::size_t maximumRecordingTracks = 64;
+    static constexpr std::size_t maximumMeterTracks = 128;
 
     struct RecordingResult
     {
@@ -83,6 +84,15 @@ public:
         double tailSeconds = 0.0;
     };
 
+    struct TrackMeterSnapshot
+    {
+        juce::String trackId;
+        float preFaderLeft = 0.0f;
+        float preFaderRight = 0.0f;
+        float postFaderLeft = 0.0f;
+        float postFaderRight = 0.0f;
+    };
+
     StudioAudioEngine();
     ~StudioAudioEngine() override;
 
@@ -106,6 +116,7 @@ public:
     [[nodiscard]] double currentSampleRate() const noexcept;
     [[nodiscard]] std::vector<RecordingProgress> recordingProgress() const;
     [[nodiscard]] std::vector<PluginRuntimeStatus> pluginRuntimeStatuses() const;
+    [[nodiscard]] std::vector<TrackMeterSnapshot> trackMeterSnapshots() const;
     [[nodiscard]] std::uint64_t pluginLateBlockCount() const noexcept;
     [[nodiscard]] bool pluginRuntimeTransitionPending() const;
     void forcePluginRuntimeReload(const Project& project,
@@ -120,6 +131,9 @@ public:
     juce::Result renderClipToWav(const AudioClip& clip,
                                  const juce::File& destination,
                                  double sampleRate);
+    juce::Result renderToBuffer(const Project& project,
+                                juce::AudioBuffer<float>& destination,
+                                double sampleRate);
     juce::Result startLatencyCalibration(int outputChannel, int inputChannel);
     std::optional<LatencyCalibrationResult> takeLatencyCalibrationResult();
     juce::Result renderToWav(const Project& project, const juce::File& destination, double sampleRate);
@@ -161,10 +175,31 @@ private:
 
     struct RenderTrack
     {
+        struct Route
+        {
+            RouteKind kind = RouteKind::send;
+            RouteTap tap = RouteTap::postFader;
+            int destinationIndex = -1;
+            juce::String destinationInsertId;
+            int hardwareFirstChannel = 0;
+            int hardwareChannels = 0;
+            float gain = 1.0f;
+            float pan = 0.0f;
+            juce::AudioBuffer<float> processingBuffer {
+                2,
+                PluginBridgeSharedState::maxBlockSize
+            };
+            RenderSource::DelayCompensator compensation;
+        };
+
         std::uint64_t runtimeKey = 0;
         float volumeGain = 1.0f;
+        float vcaGain = 1.0f;
         float pan = 0.0f;
+        bool polarityInverted = false;
         bool audible = true;
+        bool processing = true;
+        int meterIndex = -1;
         int runtimeLatencySamples = 0;
         int destinationIndex = -1;
         float offlineRoutingGainLeft = 1.0f;
@@ -175,6 +210,11 @@ private:
             2,
             PluginBridgeSharedState::maxBlockSize
         };
+        juce::AudioBuffer<float> sidechainBuffer {
+            2,
+            PluginBridgeSharedState::maxBlockSize
+        };
+        std::vector<Route> routes;
         RenderSource::DelayCompensator compensation;
     };
 
@@ -206,6 +246,15 @@ private:
         float masterGain = 1.0f;
         float masterPan = 0.0f;
         bool masterAudible = true;
+        bool controlRoomEnabled = false;
+        std::uint64_t controlRoomRuntimeKey = 0;
+        float controlRoomGain = 1.0f;
+        float controlRoomPan = 0.0f;
+        int controlRoomOutputChannel = 0;
+        bool controlRoomMuted = false;
+        bool controlRoomDimmed = false;
+        float controlRoomDimGain = 1.0f;
+        bool controlRoomMono = false;
         std::vector<HardwareSend> hardwareSends;
         std::vector<RenderTrack> tracks;
         juce::AudioBuffer<float> masterBuffer {
@@ -216,6 +265,12 @@ private:
             2,
             PluginBridgeSharedState::maxBlockSize
         };
+        juce::AudioBuffer<float> controlRoomBuffer {
+            2,
+            PluginBridgeSharedState::maxBlockSize
+        };
+        std::vector<float> offlineTrackLeft;
+        std::vector<float> offlineTrackRight;
         RenderSource::DelayCompensator clickCompensation;
     };
 
@@ -236,6 +291,15 @@ private:
     struct PluginRuntimeGraph
     {
         std::vector<TrackRuntime> tracks;
+    };
+
+    struct MeterSlot
+    {
+        juce::String trackId;
+        std::atomic<float> preFaderLeft { 0.0f };
+        std::atomic<float> preFaderRight { 0.0f };
+        std::atomic<float> postFaderLeft { 0.0f };
+        std::atomic<float> postFaderRight { 0.0f };
     };
 
     class LockFreeRecorder final : private juce::Thread
@@ -293,7 +357,7 @@ private:
         juce::String& error) const;
     void configureRuntimeTiming(RenderSnapshot& snapshot,
                                 const std::vector<PluginRuntimeRequest>& pluginRequests) const;
-    static void mixSample(const RenderSnapshot& snapshot,
+    static void mixSample(RenderSnapshot& snapshot,
                           std::int64_t timelineSample,
                           float& left,
                           float& right) noexcept;
@@ -326,6 +390,7 @@ private:
                                                   int snapshotIndex,
                                                   int runtimeIndex) noexcept;
     int chooseWritableRuntime() const noexcept;
+    int meterSlotFor(const juce::String& trackId);
     void waitForRecordingCallbacks() const noexcept;
     std::vector<RecordingResult> finishRecordingSession();
     static void addMetronome(const RenderSnapshot& snapshot,
@@ -389,6 +454,8 @@ private:
     mutable juce::CriticalSection pluginStatusLock;
     std::vector<PluginRuntimeStatus> pluginStatuses;
     std::atomic<std::uint64_t> pluginLateBlocks { 0 };
+    mutable juce::CriticalSection meterLock;
+    std::array<MeterSlot, maximumMeterTracks> meterSlots;
     std::array<std::unique_ptr<LockFreeRecorder>, maximumRecordingTracks> recorders;
     std::atomic<int> activeRecorderCount { 0 };
     std::atomic<bool> recordingAccepting { false };

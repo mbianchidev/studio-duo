@@ -374,7 +374,7 @@ double AudioClip::sourceSecondsAt(double timelineOffsetSeconds) const noexcept
 
     auto previousTimeline = 0.0;
     auto previousSource = sourceStart;
-    auto mapped = sourceEnd;
+    auto mapped = sourceStart;
     auto mappedWithinSegment = false;
     for (const auto& marker : warpMarkers)
     {
