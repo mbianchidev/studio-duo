@@ -124,6 +124,7 @@ StudioAudioEngine::RecordingResult StudioAudioEngine::LockFreeRecorder::finishSt
 
 void StudioAudioEngine::LockFreeRecorder::push(const float* const* inputs,
                                                int inputChannels,
+                                               int sourceSampleOffset,
                                                int samples) noexcept
 {
     if (!accepting.load(std::memory_order_acquire) || samples <= 0)
@@ -146,7 +147,10 @@ void StudioAudioEngine::LockFreeRecorder::push(const float* const* inputs,
             const auto sourceChannel = recordingFirstInputChannel + channel;
             const auto* source = sourceChannel < inputChannels ? inputs[sourceChannel] : nullptr;
             if (source != nullptr)
-                ringBuffer->copyFrom(channel, destinationStart, source + sourceStart, count);
+                ringBuffer->copyFrom(channel,
+                                     destinationStart,
+                                     source + sourceSampleOffset + sourceStart,
+                                     count);
             else
                 ringBuffer->clear(channel, destinationStart, count);
         }
@@ -160,7 +164,8 @@ void StudioAudioEngine::LockFreeRecorder::push(const float* const* inputs,
                             inputChannels,
                             recordingFirstInputChannel,
                             recordingChannels,
-                            writable);
+                            writable,
+                            sourceSampleOffset);
 }
 
 void StudioAudioEngine::LockFreeRecorder::noteDroppedSamples(int samples) noexcept
@@ -310,6 +315,7 @@ juce::Result StudioAudioEngine::updateProject(
     const Project& project,
     std::vector<PluginRuntimeRequest> pluginRequests)
 {
+    metronomeEnabled.store(project.metronomeEnabled, std::memory_order_release);
     juce::String error;
     auto snapshot = buildSnapshot(project,
                                   currentSampleRate(),
@@ -466,7 +472,8 @@ void StudioAudioEngine::forcePluginRuntimeReload(
     updateProject(project, std::move(pluginRequests));
 }
 
-juce::Result StudioAudioEngine::startRecording(const std::vector<RecordingRequest>& requests)
+juce::Result StudioAudioEngine::startRecording(const std::vector<RecordingRequest>& requests,
+                                               const RecordingPlan& plan)
 {
     if (recordingFinalizing.load(std::memory_order_acquire))
         return juce::Result::fail("The previous recording is still finalizing.");
@@ -541,6 +548,37 @@ juce::Result StudioAudioEngine::startRecording(const std::vector<RecordingReques
         }
     }
 
+    if (plan.captureStartSeconds < 0.0
+        || (plan.captureEndSeconds >= 0.0
+            && plan.captureEndSeconds <= plan.captureStartSeconds)
+        || (plan.transportEndSeconds >= 0.0
+            && plan.transportEndSeconds < plan.captureEndSeconds))
+    {
+        return juce::Result::fail("The recording transport range is invalid.");
+    }
+
+    const auto recordingSampleRate = currentSampleRate();
+    recordingCaptureStartSample.store(
+        static_cast<std::int64_t>(std::llround(plan.captureStartSeconds
+                                              * recordingSampleRate)),
+        std::memory_order_relaxed);
+    recordingCaptureEndSample.store(
+        plan.captureEndSeconds >= 0.0
+            ? static_cast<std::int64_t>(std::llround(plan.captureEndSeconds
+                                                    * recordingSampleRate))
+            : -1,
+        std::memory_order_relaxed);
+    recordingTransportEndSample.store(
+        plan.transportEndSeconds >= 0.0
+            ? static_cast<std::int64_t>(std::llround(plan.transportEndSeconds
+                                                    * recordingSampleRate))
+            : -1,
+        std::memory_order_relaxed);
+    recordingLoopEnabled.store(plan.loopEnabled, std::memory_order_relaxed);
+    playheadSample.store(
+        static_cast<std::int64_t>(std::llround(plan.transportStartSeconds
+                                              * recordingSampleRate)),
+        std::memory_order_release);
     activeRecorderCount.store(static_cast<int>(requests.size()), std::memory_order_release);
     recordingAccepting.store(true, std::memory_order_release);
     playing.store(true, std::memory_order_release);
@@ -692,6 +730,14 @@ std::optional<StudioAudioEngine::RenderSnapshot> StudioAudioEngine::buildSnapsho
     snapshot.loopStartSample = static_cast<std::int64_t>(project.loopStartSeconds * targetSampleRate);
     snapshot.loopEndSample = static_cast<std::int64_t>(project.loopEndSeconds * targetSampleRate);
     snapshot.tempo = project.tempo;
+    snapshot.tempoChanges = project.tempoChanges;
+    snapshot.meterChanges = project.meterChanges;
+    snapshot.timeSignatureNumerator = project.timeSignatureNumerator;
+    snapshot.timeSignatureDenominator = project.timeSignatureDenominator;
+    snapshot.metronomeSubdivision = project.metronomeSubdivision;
+    snapshot.metronomeOutputChannel = project.metronomeOutputChannel;
+    snapshot.metronomeLevel = project.metronomeLevel;
+    snapshot.metronomeAccentLevel = project.metronomeAccentLevel;
     snapshot.loopEnabled = project.loopEnabled && snapshot.loopEndSample > snapshot.loopStartSample;
 
     const auto anySolo = std::any_of(project.tracks.cbegin(), project.tracks.cend(), [](const auto& track)
@@ -1149,27 +1195,140 @@ void StudioAudioEngine::processRuntimeChain(std::uint64_t key,
 
 }
 
+double StudioAudioEngine::tempoAt(const RenderSnapshot& snapshot,
+                                  double seconds) noexcept
+{
+    if (snapshot.tempoChanges.empty())
+        return snapshot.tempo;
+
+    const auto position = std::max(0.0, seconds);
+    if (position < snapshot.tempoChanges.front().timeSeconds)
+        return snapshot.tempo;
+    auto index = std::size_t { 0 };
+    while (index + 1 < snapshot.tempoChanges.size()
+           && snapshot.tempoChanges[index + 1].timeSeconds <= position)
+        ++index;
+
+    const auto& current = snapshot.tempoChanges[index];
+    if (!current.rampToNext || index + 1 >= snapshot.tempoChanges.size())
+        return current.bpm;
+
+    const auto& next = snapshot.tempoChanges[index + 1];
+    const auto duration = next.timeSeconds - current.timeSeconds;
+    if (duration <= 0.0)
+        return next.bpm;
+    const auto progress = juce::jlimit(0.0,
+                                       1.0,
+                                       (position - current.timeSeconds) / duration);
+    return current.bpm + (next.bpm - current.bpm) * progress;
+}
+
+double StudioAudioEngine::beatsAt(const RenderSnapshot& snapshot,
+                                  double seconds) noexcept
+{
+    const auto target = std::max(0.0, seconds);
+    if (snapshot.tempoChanges.empty())
+        return target * snapshot.tempo / 60.0;
+
+    auto beats = 0.0;
+    if (snapshot.tempoChanges.front().timeSeconds > 0.0)
+    {
+        const auto initialEnd = std::min(target,
+                                         snapshot.tempoChanges.front().timeSeconds);
+        beats += initialEnd * snapshot.tempo / 60.0;
+        if (target <= snapshot.tempoChanges.front().timeSeconds)
+            return beats;
+    }
+
+    for (std::size_t index = 0; index < snapshot.tempoChanges.size(); ++index)
+    {
+        const auto& current = snapshot.tempoChanges[index];
+        if (target <= current.timeSeconds)
+            return beats;
+        const auto segmentEnd = index + 1 < snapshot.tempoChanges.size()
+            ? snapshot.tempoChanges[index + 1].timeSeconds
+            : target;
+        const auto end = std::min(target, segmentEnd);
+        if (end <= current.timeSeconds)
+            continue;
+
+        const auto elapsed = end - current.timeSeconds;
+        if (current.rampToNext && index + 1 < snapshot.tempoChanges.size())
+        {
+            const auto duration = snapshot.tempoChanges[index + 1].timeSeconds
+                - current.timeSeconds;
+            const auto slope = duration > 0.0
+                ? (snapshot.tempoChanges[index + 1].bpm - current.bpm) / duration
+                : 0.0;
+            beats += (current.bpm * elapsed + 0.5 * slope * elapsed * elapsed) / 60.0;
+        }
+        else
+        {
+            beats += current.bpm * elapsed / 60.0;
+        }
+
+        if (target <= segmentEnd)
+            return beats;
+    }
+    return beats;
+}
+
+MeterChange StudioAudioEngine::meterAt(const RenderSnapshot& snapshot,
+                                       double seconds) noexcept
+{
+    auto current = MeterChange { 0.0,
+                                 snapshot.timeSignatureNumerator,
+                                 snapshot.timeSignatureDenominator };
+    for (const auto& change : snapshot.meterChanges)
+    {
+        if (change.timeSeconds > seconds)
+            break;
+        current = change;
+    }
+    return current;
+}
+
 void StudioAudioEngine::addMetronome(const RenderSnapshot& snapshot,
                                      std::int64_t timelineSample,
                                      float& left,
                                      float& right) noexcept
 {
-    const auto samplesPerBeat = snapshot.sampleRate * 60.0 / snapshot.tempo;
-    const auto beatPosition = std::fmod(static_cast<double>(timelineSample), samplesPerBeat);
+    const auto seconds = static_cast<double>(timelineSample) / snapshot.sampleRate;
+    const auto meter = meterAt(snapshot, seconds);
+    const auto quarterBeats = beatsAt(snapshot, seconds);
+    const auto meterStartQuarterBeats = beatsAt(snapshot, meter.timeSeconds);
+    const auto metricBeats = (quarterBeats - meterStartQuarterBeats)
+        * static_cast<double>(meter.denominator)
+        / 4.0;
+    const auto subdivision = std::max(1, snapshot.metronomeSubdivision);
+    const auto clickPosition = metricBeats * static_cast<double>(subdivision);
+    const auto clickIndex = static_cast<std::int64_t>(std::floor(clickPosition + 0.0000001));
+    const auto clickProgress = clickPosition - static_cast<double>(clickIndex);
+    const auto secondsPerMetricBeat = 60.0
+        / tempoAt(snapshot, seconds)
+        * 4.0
+        / static_cast<double>(meter.denominator);
+    const auto clickPositionSeconds = clickProgress
+        * secondsPerMetricBeat
+        / static_cast<double>(subdivision);
     constexpr auto clickDurationSeconds = 0.018;
-    const auto clickSamples = snapshot.sampleRate * clickDurationSeconds;
-    if (beatPosition >= clickSamples)
+    if (clickPositionSeconds < 0.0 || clickPositionSeconds >= clickDurationSeconds)
         return;
 
-    const auto beat = static_cast<std::int64_t>(static_cast<double>(timelineSample) / samplesPerBeat);
-    const auto frequency = beat % 4 == 0 ? 1760.0 : 1320.0;
-    const auto envelope = static_cast<float>(1.0 - beatPosition / clickSamples);
+    const auto clicksPerBar = std::max(1, meter.numerator * subdivision);
+    const auto accent = clickIndex % clicksPerBar == 0;
+    const auto frequency = accent ? 1760.0 : 1320.0;
+    const auto envelope = static_cast<float>(
+        1.0 - clickPositionSeconds / clickDurationSeconds);
+    const auto level = accent
+        ? snapshot.metronomeAccentLevel
+        : snapshot.metronomeLevel;
     const auto click = static_cast<float>(std::sin(juce::MathConstants<double>::twoPi
                                                    * frequency
-                                                   * beatPosition
-                                                   / snapshot.sampleRate))
+                                                   * clickPositionSeconds))
         * envelope
-        * 0.18f;
+        * 0.18f
+        * level;
     left += click;
     right += click;
 }
@@ -1497,23 +1656,44 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
         {
             recordingBlockActive = true;
             const auto recorderCount = activeRecorderCount.load(std::memory_order_acquire);
-            std::array<int, maximumRecordingTracks> freeSamples {};
-            for (int index = 0; index < recorderCount; ++index)
-            {
-                freeSamples[static_cast<std::size_t>(index)]
-                    = recorders[static_cast<std::size_t>(index)]->availableSamples();
-            }
+            const auto callbackStart = playheadSample.load(std::memory_order_acquire);
+            const auto captureStart = recordingCaptureStartSample.load(
+                std::memory_order_relaxed);
+            const auto captureEnd = recordingCaptureEndSample.load(
+                std::memory_order_relaxed);
+            const auto callbackEnd = callbackStart + numSamples;
+            const auto firstCaptureSample = std::max(callbackStart, captureStart);
+            const auto lastCaptureSample = captureEnd >= 0
+                ? std::min(callbackEnd, captureEnd)
+                : callbackEnd;
+            const auto sourceSampleOffset = static_cast<int>(
+                std::max<std::int64_t>(0, firstCaptureSample - callbackStart));
+            const auto requestedCaptureSamples = static_cast<int>(
+                std::max<std::int64_t>(0, lastCaptureSample - firstCaptureSample));
 
-            const auto captureSamples = synchronizedCaptureSamples(
-                numSamples,
-                std::span<const int>(freeSamples.data(),
-                                     static_cast<std::size_t>(recorderCount)));
-            const auto droppedSamples = numSamples - captureSamples;
-            for (int index = 0; index < recorderCount; ++index)
+            if (requestedCaptureSamples > 0)
             {
-                auto& recorder = recorders[static_cast<std::size_t>(index)];
-                recorder->noteDroppedSamples(droppedSamples);
-                recorder->push(inputChannelData, numInputChannels, captureSamples);
+                std::array<int, maximumRecordingTracks> freeSamples {};
+                for (int index = 0; index < recorderCount; ++index)
+                {
+                    freeSamples[static_cast<std::size_t>(index)]
+                        = recorders[static_cast<std::size_t>(index)]->availableSamples();
+                }
+
+                const auto captureSamples = synchronizedCaptureSamples(
+                    requestedCaptureSamples,
+                    std::span<const int>(freeSamples.data(),
+                                         static_cast<std::size_t>(recorderCount)));
+                const auto droppedSamples = requestedCaptureSamples - captureSamples;
+                for (int index = 0; index < recorderCount; ++index)
+                {
+                    auto& recorder = recorders[static_cast<std::size_t>(index)];
+                    recorder->noteDroppedSamples(droppedSamples);
+                    recorder->push(inputChannelData,
+                                   numInputChannels,
+                                   sourceSampleOffset,
+                                   captureSamples);
+                }
             }
         }
     }
@@ -1563,6 +1743,12 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
         auto& snapshot = snapshots[static_cast<std::size_t>(snapshotIndex)];
         auto position = playheadSample.load(std::memory_order_acquire);
         const auto renderingRecording = recordingBlockActive;
+        const auto renderLooping = snapshot.loopEnabled
+            && (!renderingRecording
+                || recordingLoopEnabled.load(std::memory_order_relaxed));
+        const auto recordingTransportEnd = renderingRecording
+            ? recordingTransportEndSample.load(std::memory_order_relaxed)
+            : -1;
         auto outputOffset = 0;
 
         while (outputOffset < numSamples)
@@ -1570,6 +1756,18 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
             auto samplesThisBlock = std::min(
                 numSamples - outputOffset,
                 PluginBridgeSharedState::maxBlockSize);
+
+            if (recordingTransportEnd >= 0)
+            {
+                if (position >= recordingTransportEnd)
+                {
+                    playing.store(false, std::memory_order_release);
+                    break;
+                }
+                samplesThisBlock = static_cast<int>(std::min<std::int64_t>(
+                    samplesThisBlock,
+                    recordingTransportEnd - position));
+            }
 
             if (position >= snapshot.lengthSamples && !renderingRecording)
             {
@@ -1590,7 +1788,7 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
                     renderSourceBlock(source,
                                       position,
                                       samplesThisBlock,
-                                      !renderingRecording && snapshot.loopEnabled,
+                                      renderLooping,
                                       snapshot.loopStartSample,
                                       snapshot.loopEndSample);
 
@@ -1681,8 +1879,7 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
                     float clickLeft = 0.0f;
                     float clickRight = 0.0f;
                     auto clickPosition = position + sample;
-                    if (!renderingRecording
-                        && snapshot.loopEnabled
+                    if (renderLooping
                         && clickPosition >= snapshot.loopEndSample)
                     {
                         const auto loopLength = snapshot.loopEndSample - snapshot.loopStartSample;
@@ -1704,18 +1901,36 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
             {
                 if (outputChannelData[0] != nullptr)
                     outputChannelData[0][outputOffset + sample]
-                        = snapshot.masterBuffer.getSample(0, sample)
-                        + snapshot.clickBuffer.getSample(0, sample);
+                        = snapshot.masterBuffer.getSample(0, sample);
                 if (numOutputChannels > 1 && outputChannelData[1] != nullptr)
                     outputChannelData[1][outputOffset + sample]
-                        = snapshot.masterBuffer.getSample(1, sample)
-                        + snapshot.clickBuffer.getSample(1, sample);
+                        = snapshot.masterBuffer.getSample(1, sample);
+
+                const auto clickOutput = snapshot.metronomeOutputChannel;
+                if (clickOutput >= 0
+                    && clickOutput < numOutputChannels
+                    && outputChannelData[clickOutput] != nullptr)
+                {
+                    outputChannelData[clickOutput][outputOffset + sample]
+                        += snapshot.clickBuffer.getSample(0, sample);
+                }
+                if (clickOutput + 1 < numOutputChannels
+                    && outputChannelData[clickOutput + 1] != nullptr)
+                {
+                    outputChannelData[clickOutput + 1][outputOffset + sample]
+                        += snapshot.clickBuffer.getSample(1, sample);
+                }
             }
 
             position += samplesThisBlock;
             outputOffset += samplesThisBlock;
-            if (!renderingRecording
-                && snapshot.loopEnabled
+            if (recordingTransportEnd >= 0 && position >= recordingTransportEnd)
+            {
+                position = recordingTransportEnd;
+                playing.store(false, std::memory_order_release);
+                break;
+            }
+            if (renderLooping
                 && position >= snapshot.loopEndSample)
             {
                 const auto loopLength = snapshot.loopEndSample - snapshot.loopStartSample;

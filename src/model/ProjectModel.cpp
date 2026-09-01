@@ -41,6 +41,89 @@ juce::Colour colourProperty(const juce::DynamicObject& object,
     const auto value = object.getProperty(name);
     return value.isString() ? juce::Colour::fromString(value.toString()) : fallback;
 }
+
+bool validMeterDenominator(int denominator)
+{
+    return denominator == 1
+        || denominator == 2
+        || denominator == 4
+        || denominator == 8
+        || denominator == 16
+        || denominator == 32;
+}
+}
+
+juce::var TempoChange::toVar() const
+{
+    auto object = std::make_unique<juce::DynamicObject>();
+    object->setProperty("timeSeconds", timeSeconds);
+    object->setProperty("bpm", bpm);
+    object->setProperty("rampToNext", rampToNext);
+    return juce::var(object.release());
+}
+
+bool TempoChange::operator==(const TempoChange& other) const noexcept
+{
+    return std::abs(timeSeconds - other.timeSeconds) < 0.0000001
+        && std::abs(bpm - other.bpm) < 0.0000001
+        && rampToNext == other.rampToNext;
+}
+
+std::optional<TempoChange> TempoChange::fromVar(const juce::var& value,
+                                                juce::String& error)
+{
+    const auto* object = requireObject(value, error, "Tempo change");
+    if (object == nullptr)
+        return std::nullopt;
+
+    TempoChange change;
+    change.timeSeconds = numberProperty(*object, "timeSeconds", 0.0);
+    change.bpm = numberProperty(*object, "bpm", 120.0);
+    change.rampToNext = booleanProperty(*object, "rampToNext", false);
+    if (change.timeSeconds < 0.0 || change.bpm < 20.0 || change.bpm > 400.0)
+    {
+        error = "Tempo changes require a non-negative time and a tempo from 20 to 400 BPM.";
+        return std::nullopt;
+    }
+    return change;
+}
+
+juce::var MeterChange::toVar() const
+{
+    auto object = std::make_unique<juce::DynamicObject>();
+    object->setProperty("timeSeconds", timeSeconds);
+    object->setProperty("numerator", numerator);
+    object->setProperty("denominator", denominator);
+    return juce::var(object.release());
+}
+
+bool MeterChange::operator==(const MeterChange& other) const noexcept
+{
+    return std::abs(timeSeconds - other.timeSeconds) < 0.0000001
+        && numerator == other.numerator
+        && denominator == other.denominator;
+}
+
+std::optional<MeterChange> MeterChange::fromVar(const juce::var& value,
+                                                juce::String& error)
+{
+    const auto* object = requireObject(value, error, "Meter change");
+    if (object == nullptr)
+        return std::nullopt;
+
+    MeterChange change;
+    change.timeSeconds = numberProperty(*object, "timeSeconds", 0.0);
+    change.numerator = integerProperty(*object, "numerator", 4);
+    change.denominator = integerProperty(*object, "denominator", 4);
+    if (change.timeSeconds < 0.0
+        || change.numerator < 1
+        || change.numerator > 32
+        || !validMeterDenominator(change.denominator))
+    {
+        error = "Meter changes require a valid position and a supported time signature.";
+        return std::nullopt;
+    }
+    return change;
 }
 
 juce::var PluginInsert::toVar() const
@@ -404,6 +487,202 @@ std::vector<juce::String> Project::armedAudioParentTrackIds() const
     return parentIds;
 }
 
+double Project::tempoAt(double seconds) const noexcept
+{
+    if (tempoChanges.empty())
+        return tempo;
+
+    const auto position = std::max(0.0, seconds);
+    if (position < tempoChanges.front().timeSeconds)
+        return tempo;
+    auto index = std::size_t { 0 };
+    while (index + 1 < tempoChanges.size()
+           && tempoChanges[index + 1].timeSeconds <= position)
+        ++index;
+
+    const auto& current = tempoChanges[index];
+    if (!current.rampToNext || index + 1 >= tempoChanges.size())
+        return current.bpm;
+
+    const auto& next = tempoChanges[index + 1];
+    const auto duration = next.timeSeconds - current.timeSeconds;
+    if (duration <= 0.0)
+        return next.bpm;
+    const auto progress = juce::jlimit(0.0,
+                                       1.0,
+                                       (position - current.timeSeconds) / duration);
+    return current.bpm + (next.bpm - current.bpm) * progress;
+}
+
+MeterChange Project::meterAt(double seconds) const noexcept
+{
+    if (meterChanges.empty())
+        return { 0.0, timeSignatureNumerator, timeSignatureDenominator };
+
+    const auto position = std::max(0.0, seconds);
+    auto current = MeterChange { 0.0,
+                                 timeSignatureNumerator,
+                                 timeSignatureDenominator };
+    for (const auto& change : meterChanges)
+    {
+        if (change.timeSeconds > position)
+            break;
+        current = change;
+    }
+    return current;
+}
+
+double Project::beatsAt(double seconds) const noexcept
+{
+    const auto target = std::max(0.0, seconds);
+    if (tempoChanges.empty())
+        return target * tempo / 60.0;
+
+    auto beats = 0.0;
+    if (tempoChanges.front().timeSeconds > 0.0)
+    {
+        const auto initialEnd = std::min(target, tempoChanges.front().timeSeconds);
+        beats += initialEnd * tempo / 60.0;
+        if (target <= tempoChanges.front().timeSeconds)
+            return beats;
+    }
+
+    for (std::size_t index = 0; index < tempoChanges.size(); ++index)
+    {
+        const auto& current = tempoChanges[index];
+        if (target <= current.timeSeconds)
+            return beats;
+        const auto segmentEnd = index + 1 < tempoChanges.size()
+            ? tempoChanges[index + 1].timeSeconds
+            : target;
+        const auto end = std::min(target, segmentEnd);
+        if (end <= current.timeSeconds)
+            continue;
+
+        const auto elapsed = end - current.timeSeconds;
+        if (current.rampToNext && index + 1 < tempoChanges.size())
+        {
+            const auto duration = tempoChanges[index + 1].timeSeconds
+                - current.timeSeconds;
+            const auto slope = duration > 0.0
+                ? (tempoChanges[index + 1].bpm - current.bpm) / duration
+                : 0.0;
+            beats += (current.bpm * elapsed + 0.5 * slope * elapsed * elapsed) / 60.0;
+        }
+        else
+        {
+            beats += current.bpm * elapsed / 60.0;
+        }
+
+        if (target <= segmentEnd)
+            return beats;
+    }
+    return beats;
+}
+
+double Project::secondsAtBeat(double beats) const noexcept
+{
+    const auto target = std::max(0.0, beats);
+    if (target == 0.0)
+        return 0.0;
+
+    auto upper = std::max(1.0, target * 60.0 / std::max(20.0, tempo));
+    while (beatsAt(upper) < target && upper < 86400.0)
+        upper *= 2.0;
+
+    auto lower = 0.0;
+    for (int iteration = 0; iteration < 80; ++iteration)
+    {
+        const auto middle = (lower + upper) * 0.5;
+        if (beatsAt(middle) < target)
+            lower = middle;
+        else
+            upper = middle;
+    }
+    return (lower + upper) * 0.5;
+}
+
+MusicalPosition Project::musicalPositionAt(double seconds) const noexcept
+{
+    const auto target = std::max(0.0, seconds);
+    auto current = MeterChange { 0.0,
+                                 timeSignatureNumerator,
+                                 timeSignatureDenominator };
+    auto completedBars = 0;
+    for (const auto& change : meterChanges)
+    {
+        if (change.timeSeconds <= current.timeSeconds + 0.0000001)
+        {
+            current = change;
+            continue;
+        }
+        if (change.timeSeconds > target)
+            break;
+
+        const auto quarterBeats = beatsAt(change.timeSeconds)
+            - beatsAt(current.timeSeconds);
+        const auto metricBeats = quarterBeats
+            * static_cast<double>(current.denominator)
+            / 4.0;
+        completedBars += static_cast<int>(
+            std::ceil(metricBeats / static_cast<double>(current.numerator)
+                      - 0.0000001));
+        current = change;
+    }
+
+    const auto quarterBeats = beatsAt(target) - beatsAt(current.timeSeconds);
+    const auto metricBeats = std::max(
+        0.0,
+        quarterBeats * static_cast<double>(current.denominator) / 4.0);
+    const auto barOffset = static_cast<int>(
+        std::floor(metricBeats / static_cast<double>(current.numerator)));
+    const auto beatInBar = metricBeats
+        - static_cast<double>(barOffset * current.numerator);
+    auto beat = static_cast<int>(std::floor(beatInBar));
+    auto ticks = static_cast<int>(
+        std::round((beatInBar - static_cast<double>(beat)) * 960.0));
+    if (ticks >= 960)
+    {
+        ticks = 0;
+        ++beat;
+    }
+    if (beat >= current.numerator)
+    {
+        beat = 0;
+        return { completedBars + barOffset + 2, 1, ticks, current };
+    }
+    return { completedBars + barOffset + 1, beat + 1, ticks, current };
+}
+
+RecordingPlan Project::recordingPlan(double cursorSeconds) const noexcept
+{
+    RecordingPlan plan;
+    plan.loopEnabled = !punchEnabled
+        && loopEnabled
+        && loopEndSeconds > loopStartSeconds;
+    plan.loopStartSeconds = loopStartSeconds;
+    plan.loopEndSeconds = loopEndSeconds;
+    plan.captureStartSeconds = punchEnabled
+        ? punchInSeconds
+        : plan.loopEnabled ? loopStartSeconds : std::max(0.0, cursorSeconds);
+    plan.captureEndSeconds = punchEnabled ? punchOutSeconds : -1.0;
+    plan.transportEndSeconds = punchEnabled
+        ? punchOutSeconds + std::max(0.0, postRollSeconds)
+        : -1.0;
+
+    const auto meter = meterAt(plan.captureStartSeconds);
+    const auto countInQuarterNotes = static_cast<double>(std::max(0, countInBars))
+        * static_cast<double>(meter.numerator)
+        * 4.0
+        / static_cast<double>(meter.denominator);
+    const auto countInStart = secondsAtBeat(
+        std::max(0.0, beatsAt(plan.captureStartSeconds) - countInQuarterNotes));
+    plan.transportStartSeconds = std::max(
+        0.0,
+        countInStart - std::max(0.0, preRollSeconds));
+    return plan;
+}
+
 double Project::lengthSeconds() const noexcept
 {
     double length = 8.0;
@@ -434,6 +713,25 @@ juce::var Project::toVar() const
     object->setProperty("tempo", tempo);
     object->setProperty("timeSignatureNumerator", timeSignatureNumerator);
     object->setProperty("timeSignatureDenominator", timeSignatureDenominator);
+    juce::Array<juce::var> tempoValues;
+    for (const auto& change : tempoChanges)
+        tempoValues.add(change.toVar());
+    object->setProperty("tempoChanges", juce::var(tempoValues));
+    juce::Array<juce::var> meterValues;
+    for (const auto& change : meterChanges)
+        meterValues.add(change.toVar());
+    object->setProperty("meterChanges", juce::var(meterValues));
+    object->setProperty("metronomeEnabled", metronomeEnabled);
+    object->setProperty("metronomeSubdivision", metronomeSubdivision);
+    object->setProperty("metronomeOutputChannel", metronomeOutputChannel);
+    object->setProperty("metronomeLevel", metronomeLevel);
+    object->setProperty("metronomeAccentLevel", metronomeAccentLevel);
+    object->setProperty("punchEnabled", punchEnabled);
+    object->setProperty("punchInSeconds", punchInSeconds);
+    object->setProperty("punchOutSeconds", punchOutSeconds);
+    object->setProperty("countInBars", countInBars);
+    object->setProperty("preRollSeconds", preRollSeconds);
+    object->setProperty("postRollSeconds", postRollSeconds);
     object->setProperty("loopEnabled", loopEnabled);
     object->setProperty("loopStartSeconds", loopStartSeconds);
     object->setProperty("loopEndSeconds", loopEndSeconds);
@@ -466,6 +764,74 @@ std::optional<Project> Project::fromVar(const juce::var& value, juce::String& er
     project.tempo = juce::jlimit(20.0, 400.0, numberProperty(*object, "tempo", 120.0));
     project.timeSignatureNumerator = juce::jlimit(1, 32, integerProperty(*object, "timeSignatureNumerator", 4));
     project.timeSignatureDenominator = integerProperty(*object, "timeSignatureDenominator", 4);
+    const auto tempoValues = object->getProperty("tempoChanges");
+    if (tempoValues.isArray())
+    {
+        for (const auto& tempoValue : *tempoValues.getArray())
+        {
+            auto change = TempoChange::fromVar(tempoValue, error);
+            if (!change.has_value())
+                return std::nullopt;
+            project.tempoChanges.push_back(*change);
+        }
+        std::stable_sort(project.tempoChanges.begin(),
+                         project.tempoChanges.end(),
+                         [](const auto& left, const auto& right)
+                         {
+                             return left.timeSeconds < right.timeSeconds;
+                         });
+    }
+    const auto meterValues = object->getProperty("meterChanges");
+    if (meterValues.isArray())
+    {
+        for (const auto& meterValue : *meterValues.getArray())
+        {
+            auto change = MeterChange::fromVar(meterValue, error);
+            if (!change.has_value())
+                return std::nullopt;
+            project.meterChanges.push_back(*change);
+        }
+        std::stable_sort(project.meterChanges.begin(),
+                         project.meterChanges.end(),
+                         [](const auto& left, const auto& right)
+                         {
+                             return left.timeSeconds < right.timeSeconds;
+                         });
+    }
+    project.metronomeEnabled = booleanProperty(*object, "metronomeEnabled", true);
+    project.metronomeSubdivision = juce::jlimit(
+        1,
+        8,
+        integerProperty(*object, "metronomeSubdivision", 1));
+    project.metronomeOutputChannel = std::max(
+        0,
+        integerProperty(*object, "metronomeOutputChannel", 0));
+    project.metronomeLevel = juce::jlimit(
+        0.0f,
+        1.0f,
+        static_cast<float>(numberProperty(*object, "metronomeLevel", 0.65)));
+    project.metronomeAccentLevel = juce::jlimit(
+        0.0f,
+        1.0f,
+        static_cast<float>(numberProperty(*object, "metronomeAccentLevel", 1.0)));
+    project.punchEnabled = booleanProperty(*object, "punchEnabled", false);
+    project.punchInSeconds = std::max(0.0,
+                                      numberProperty(*object, "punchInSeconds", 0.0));
+    project.punchOutSeconds = std::max(
+        project.punchInSeconds,
+        numberProperty(*object, "punchOutSeconds", 8.0));
+    project.countInBars = juce::jlimit(
+        0,
+        8,
+        integerProperty(*object, "countInBars", 0));
+    project.preRollSeconds = juce::jlimit(
+        0.0,
+        30.0,
+        numberProperty(*object, "preRollSeconds", 0.0));
+    project.postRollSeconds = juce::jlimit(
+        0.0,
+        30.0,
+        numberProperty(*object, "postRollSeconds", 0.0));
     project.loopEnabled = booleanProperty(*object, "loopEnabled", false);
     project.loopStartSeconds = std::max(0.0, numberProperty(*object, "loopStartSeconds", 0.0));
     project.loopEndSeconds = std::max(project.loopStartSeconds, numberProperty(*object, "loopEndSeconds", 8.0));

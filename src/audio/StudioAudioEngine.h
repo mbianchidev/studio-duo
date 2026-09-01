@@ -104,7 +104,8 @@ public:
     void forcePluginRuntimeReload(const Project& project,
                                   std::vector<PluginRuntimeRequest> pluginRequests);
 
-    juce::Result startRecording(const std::vector<RecordingRequest>& requests);
+    juce::Result startRecording(const std::vector<RecordingRequest>& requests,
+                                const RecordingPlan& plan);
     std::vector<RecordingResult> stopRecording();
     void stopRecordingAsync(std::function<void(std::vector<RecordingResult>)> completion);
     std::optional<double> audioFileDuration(const juce::File& source, juce::String& error);
@@ -167,6 +168,14 @@ private:
         std::int64_t loopStartSample = 0;
         std::int64_t loopEndSample = 0;
         double tempo = 120.0;
+        std::vector<TempoChange> tempoChanges;
+        std::vector<MeterChange> meterChanges;
+        int timeSignatureNumerator = 4;
+        int timeSignatureDenominator = 4;
+        int metronomeSubdivision = 1;
+        int metronomeOutputChannel = 0;
+        float metronomeLevel = 0.65f;
+        float metronomeAccentLevel = 1.0f;
         bool loopEnabled = false;
         std::uint64_t masterRuntimeKey = 0;
         float masterGain = 1.0f;
@@ -216,7 +225,10 @@ private:
         RecordingResult stop();
         void stopAccepting() noexcept;
         RecordingResult finishStop();
-        void push(const float* const* inputs, int inputChannels, int samples) noexcept;
+        void push(const float* const* inputs,
+                  int inputChannels,
+                  int sourceSampleOffset,
+                  int samples) noexcept;
         void noteDroppedSamples(int samples) noexcept;
         [[nodiscard]] bool isActive() const noexcept;
         [[nodiscard]] int availableSamples() const noexcept;
@@ -285,6 +297,12 @@ private:
                              std::int64_t timelineSample,
                              float& left,
                              float& right) noexcept;
+    [[nodiscard]] static double tempoAt(const RenderSnapshot& snapshot,
+                                        double seconds) noexcept;
+    [[nodiscard]] static double beatsAt(const RenderSnapshot& snapshot,
+                                        double seconds) noexcept;
+    [[nodiscard]] static MeterChange meterAt(const RenderSnapshot& snapshot,
+                                             double seconds) noexcept;
     int chooseWritableSnapshot() const noexcept;
 
     void audioDeviceIOCallbackWithContext(const float* const* inputChannelData,
@@ -340,6 +358,10 @@ private:
     std::atomic<int> activeRecorderCount { 0 };
     std::atomic<bool> recordingAccepting { false };
     mutable std::atomic<int> recordingCallbacksInFlight { 0 };
+    std::atomic<std::int64_t> recordingCaptureStartSample { 0 };
+    std::atomic<std::int64_t> recordingCaptureEndSample { -1 };
+    std::atomic<std::int64_t> recordingTransportEndSample { -1 };
+    std::atomic<bool> recordingLoopEnabled { false };
     juce::ThreadPool recordingFinalizer { 1 };
     std::atomic<bool> recordingFinalizing { false };
 

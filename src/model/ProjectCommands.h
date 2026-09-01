@@ -175,6 +175,48 @@ private:
     bool capturedOriginal = false;
 };
 
+struct ProjectTransportState
+{
+    double tempo = 120.0;
+    int timeSignatureNumerator = 4;
+    int timeSignatureDenominator = 4;
+    std::vector<TempoChange> tempoChanges;
+    std::vector<MeterChange> meterChanges;
+    bool metronomeEnabled = true;
+    int metronomeSubdivision = 1;
+    int metronomeOutputChannel = 0;
+    float metronomeLevel = 0.65f;
+    float metronomeAccentLevel = 1.0f;
+    bool punchEnabled = false;
+    double punchInSeconds = 0.0;
+    double punchOutSeconds = 8.0;
+    int countInBars = 0;
+    double preRollSeconds = 0.0;
+    double postRollSeconds = 0.0;
+    bool loopEnabled = false;
+    double loopStartSeconds = 0.0;
+    double loopEndSeconds = 8.0;
+
+    static ProjectTransportState fromProject(const Project& project);
+};
+
+class SetProjectTransportCommand final : public ProjectCommand
+{
+public:
+    SetProjectTransportCommand(ProjectTransportState before,
+                               ProjectTransportState after);
+
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    static void apply(Project& project, const ProjectTransportState& state);
+
+    ProjectTransportState oldState;
+    ProjectTransportState newState;
+};
+
 struct TrackMixState
 {
     float volumeDecibels = 0.0f;

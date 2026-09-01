@@ -24,6 +24,47 @@ enum class PluginBridgeMode
     trustedInProcess
 };
 
+struct TempoChange
+{
+    double timeSeconds = 0.0;
+    double bpm = 120.0;
+    bool rampToNext = false;
+
+    bool operator==(const TempoChange& other) const noexcept;
+    [[nodiscard]] juce::var toVar() const;
+    static std::optional<TempoChange> fromVar(const juce::var& value, juce::String& error);
+};
+
+struct MeterChange
+{
+    double timeSeconds = 0.0;
+    int numerator = 4;
+    int denominator = 4;
+
+    bool operator==(const MeterChange& other) const noexcept;
+    [[nodiscard]] juce::var toVar() const;
+    static std::optional<MeterChange> fromVar(const juce::var& value, juce::String& error);
+};
+
+struct RecordingPlan
+{
+    double transportStartSeconds = 0.0;
+    double captureStartSeconds = 0.0;
+    double captureEndSeconds = -1.0;
+    double transportEndSeconds = -1.0;
+    bool loopEnabled = false;
+    double loopStartSeconds = 0.0;
+    double loopEndSeconds = 0.0;
+};
+
+struct MusicalPosition
+{
+    int bar = 1;
+    int beat = 1;
+    int ticks = 0;
+    MeterChange meter;
+};
+
 struct PluginInsert
 {
     juce::String id { juce::Uuid().toString() };
@@ -102,6 +143,19 @@ public:
     double tempo = 120.0;
     int timeSignatureNumerator = 4;
     int timeSignatureDenominator = 4;
+    std::vector<TempoChange> tempoChanges;
+    std::vector<MeterChange> meterChanges;
+    bool metronomeEnabled = true;
+    int metronomeSubdivision = 1;
+    int metronomeOutputChannel = 0;
+    float metronomeLevel = 0.65f;
+    float metronomeAccentLevel = 1.0f;
+    bool punchEnabled = false;
+    double punchInSeconds = 0.0;
+    double punchOutSeconds = 8.0;
+    int countInBars = 0;
+    double preRollSeconds = 0.0;
+    double postRollSeconds = 0.0;
     bool loopEnabled = false;
     double loopStartSeconds = 0.0;
     double loopEndSeconds = 8.0;
@@ -116,6 +170,12 @@ public:
     [[nodiscard]] Track* findTrackContainingClip(const juce::String& clipId);
     [[nodiscard]] const Track* findTrackContainingClip(const juce::String& clipId) const;
     [[nodiscard]] std::vector<juce::String> armedAudioParentTrackIds() const;
+    [[nodiscard]] double tempoAt(double seconds) const noexcept;
+    [[nodiscard]] MeterChange meterAt(double seconds) const noexcept;
+    [[nodiscard]] double beatsAt(double seconds) const noexcept;
+    [[nodiscard]] double secondsAtBeat(double beats) const noexcept;
+    [[nodiscard]] MusicalPosition musicalPositionAt(double seconds) const noexcept;
+    [[nodiscard]] RecordingPlan recordingPlan(double cursorSeconds) const noexcept;
     [[nodiscard]] double lengthSeconds() const noexcept;
     [[nodiscard]] bool hasActivePluginInserts() const noexcept;
     [[nodiscard]] juce::var toVar() const;

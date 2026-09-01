@@ -124,15 +124,15 @@ void TimelineComponent::paint(juce::Graphics& graphics)
     if (project == nullptr)
         return;
 
-    const auto secondsPerBeat = 60.0 / project->tempo;
-    const auto beats = static_cast<int>(std::ceil((getWidth() - trackHeaderWidth)
-                                                  / pixelsPerSecond
-                                                  / secondsPerBeat));
-    for (int beat = 0; beat <= beats; ++beat)
+    const auto maximumSeconds = std::max(
+        project->lengthSeconds() + 8.0,
+        static_cast<double>(getWidth() - trackHeaderWidth) / pixelsPerSecond);
+    auto seconds = 0.0;
+    for (int line = 0; line < 100000 && seconds <= maximumSeconds; ++line)
     {
-        const auto seconds = beat * secondsPerBeat;
         const auto x = static_cast<int>(secondsToX(seconds));
-        const auto isBar = beat % project->timeSignatureNumerator == 0;
+        const auto position = project->musicalPositionAt(seconds);
+        const auto isBar = position.beat == 1 && position.ticks < 2;
         graphics.setColour(juce::Colour(isBar ? StudioColours::border : 0xff25292d));
         graphics.drawVerticalLine(x, static_cast<float>(rulerHeight), static_cast<float>(getHeight()));
 
@@ -140,13 +140,60 @@ void TimelineComponent::paint(juce::Graphics& graphics)
         {
             graphics.setColour(juce::Colour(StudioColours::secondaryText));
             graphics.setFont(12.0f);
-            graphics.drawText(juce::String(beat / project->timeSignatureNumerator + 1),
+            graphics.drawText(juce::String(position.bar),
                               x + 5,
                               0,
                               42,
                               rulerHeight,
                               juce::Justification::centredLeft);
         }
+
+        const auto quarterBeatStep = 4.0
+            / static_cast<double>(position.meter.denominator);
+        auto nextSeconds = project->secondsAtBeat(
+            project->beatsAt(seconds) + quarterBeatStep);
+        for (const auto& meterChange : project->meterChanges)
+        {
+            if (meterChange.timeSeconds > seconds + 0.0001
+                && meterChange.timeSeconds < nextSeconds - 0.0001)
+            {
+                nextSeconds = meterChange.timeSeconds;
+                break;
+            }
+        }
+        if (nextSeconds <= seconds + 0.000001)
+            break;
+        seconds = nextSeconds;
+    }
+
+    for (const auto& tempoChange : project->tempoChanges)
+    {
+        const auto x = static_cast<int>(secondsToX(tempoChange.timeSeconds));
+        graphics.setColour(juce::Colour(StudioColours::orange));
+        graphics.fillRect(x - 1, 0, 3, 5);
+        graphics.setFont(9.0f);
+        graphics.drawText(juce::String(tempoChange.bpm, 1)
+                              + (tempoChange.rampToNext ? " R" : ""),
+                          x + 4,
+                          1,
+                          52,
+                          12,
+                          juce::Justification::centredLeft);
+    }
+    for (const auto& meterChange : project->meterChanges)
+    {
+        const auto x = static_cast<int>(secondsToX(meterChange.timeSeconds));
+        graphics.setColour(juce::Colour(StudioColours::green));
+        graphics.fillRect(x - 1, 16, 3, 5);
+        graphics.setFont(9.0f);
+        graphics.drawText(juce::String(meterChange.numerator)
+                              + "/"
+                              + juce::String(meterChange.denominator),
+                          x + 4,
+                          15,
+                          42,
+                          12,
+                          juce::Justification::centredLeft);
     }
 
     const auto tracks = visibleTracks();

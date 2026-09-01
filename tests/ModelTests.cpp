@@ -26,6 +26,23 @@ void serializationRoundTrip()
     auto project = studio::Project::createDefault();
     project.name = "Serialization";
     project.tempo = 168.0;
+    project.tempoChanges = {
+        { 0.0, 168.0, true },
+        { 4.0, 180.0, false }
+    };
+    project.meterChanges = {
+        { 0.0, 4, 4 },
+        { 8.0, 7, 8 }
+    };
+    project.metronomeEnabled = false;
+    project.metronomeSubdivision = 2;
+    project.metronomeOutputChannel = 2;
+    project.punchEnabled = true;
+    project.punchInSeconds = 2.0;
+    project.punchOutSeconds = 6.0;
+    project.countInBars = 2;
+    project.preRollSeconds = 1.0;
+    project.postRollSeconds = 1.5;
     project.tracks.front().inputChannel = 1;
     project.tracks.front().stereoInput = true;
     project.tracks.front().inputMonitoring = true;
@@ -60,6 +77,23 @@ void serializationRoundTrip()
     expect(decoded.has_value() && decoded->name == project.name, "Project name survives serialization.");
     expect(decoded.has_value() && std::abs(decoded->tempo - project.tempo) < 0.0001,
            "Tempo survives serialization.");
+    expect(decoded.has_value()
+               && decoded->tempoChanges.size() == 2
+               && decoded->tempoChanges[0].rampToNext
+               && decoded->meterChanges.size() == 2
+               && decoded->meterChanges[1].numerator == 7,
+           "Tempo and meter maps survive serialization.");
+    expect(decoded.has_value()
+               && !decoded->metronomeEnabled
+               && decoded->metronomeSubdivision == 2
+               && decoded->metronomeOutputChannel == 2
+               && decoded->punchEnabled
+               && std::abs(decoded->punchInSeconds - 2.0) < 0.0001
+               && std::abs(decoded->punchOutSeconds - 6.0) < 0.0001
+               && decoded->countInBars == 2
+               && std::abs(decoded->preRollSeconds - 1.0) < 0.0001
+               && std::abs(decoded->postRollSeconds - 1.5) < 0.0001,
+           "Recording transport settings survive serialization.");
     expect(decoded.has_value() && decoded->tracks.front().clips.size() == 1,
            "Clips survive serialization.");
     expect(decoded.has_value()
@@ -124,6 +158,26 @@ void commandHistory()
                             project,
                             error),
            "Track names cannot be empty.");
+
+    const auto transportBefore = studio::ProjectTransportState::fromProject(project);
+    auto transportAfter = transportBefore;
+    transportAfter.tempo = 140.0;
+    transportAfter.punchEnabled = true;
+    transportAfter.punchInSeconds = 2.0;
+    transportAfter.punchOutSeconds = 6.0;
+    expect(history.perform(std::make_unique<studio::SetProjectTransportCommand>(
+                               transportBefore,
+                               transportAfter),
+                           project,
+                           error),
+           error.toRawUTF8());
+    expect(std::abs(project.tempo - 140.0) < 0.0001 && project.punchEnabled,
+           "Transport command applies project recording settings.");
+    expect(history.undo(project), "Transport changes can be undone.");
+    expect(std::abs(project.tempo - transportBefore.tempo) < 0.0001
+               && !project.punchEnabled,
+           "Undo restores project recording settings.");
+    expect(history.redo(project, error), error.toRawUTF8());
 
     studio::Track versionTrack;
     versionTrack.name = "v1";
@@ -339,6 +393,60 @@ void splitClipBoundaries()
            "Both split halves can expand back to their shared boundary.");
 }
 
+void transportMaps()
+{
+    auto project = studio::Project::createDefault();
+    project.tempoChanges = {
+        { 0.0, 120.0, true },
+        { 4.0, 180.0, false },
+        { 8.0, 90.0, false }
+    };
+    project.meterChanges = {
+        { 0.0, 4, 4 },
+        { 6.0, 7, 8 }
+    };
+
+    expect(std::abs(project.tempoAt(2.0) - 150.0) < 0.0001,
+           "Tempo ramps interpolate between map points.");
+    expect(std::abs(project.tempoAt(5.0) - 180.0) < 0.0001,
+           "Abrupt tempo segments hold their value.");
+    expect(std::abs(project.beatsAt(4.0) - 10.0) < 0.0001,
+           "Beat conversion integrates a tempo ramp.");
+    expect(std::abs(project.secondsAtBeat(10.0) - 4.0) < 0.0001,
+           "Beat conversion inverts tempo-map integration.");
+    expect(project.meterAt(7.0).numerator == 7
+               && project.meterAt(7.0).denominator == 8,
+           "Meter changes apply at their timeline position.");
+    const auto musicalPosition = project.musicalPositionAt(7.0);
+    expect(musicalPosition.bar == 5
+               && musicalPosition.beat == 7
+               && musicalPosition.ticks == 0,
+           "Musical positions count bars and denominator beats across meter changes.");
+
+    project.punchEnabled = true;
+    project.punchInSeconds = 4.0;
+    project.punchOutSeconds = 8.0;
+    project.countInBars = 1;
+    project.preRollSeconds = 0.5;
+    project.postRollSeconds = 1.0;
+    const auto plan = project.recordingPlan(6.0);
+    expect(std::abs(plan.captureStartSeconds - 4.0) < 0.0001
+               && std::abs(plan.captureEndSeconds - 8.0) < 0.0001
+               && std::abs(plan.transportEndSeconds - 9.0) < 0.0001
+               && plan.transportStartSeconds < plan.captureStartSeconds,
+           "Punch recording plans include count-in, pre-roll, and post-roll.");
+
+    project.punchEnabled = false;
+    project.loopEnabled = true;
+    project.loopStartSeconds = 2.0;
+    project.loopEndSeconds = 6.0;
+    const auto loopPlan = project.recordingPlan(5.0);
+    expect(loopPlan.loopEnabled
+               && std::abs(loopPlan.captureStartSeconds - 2.0) < 0.0001
+               && std::abs(loopPlan.loopEndSeconds - 6.0) < 0.0001,
+           "Loop recording plans begin at the loop boundary.");
+}
+
 void packagePersistence()
 {
     auto project = studio::Project::createDefault();
@@ -539,6 +647,7 @@ int main()
     serializationRoundTrip();
     commandHistory();
     splitClipBoundaries();
+    transportMaps();
     packagePersistence();
     pluginAwareExportGuard();
     pluginCatalogFiltering();

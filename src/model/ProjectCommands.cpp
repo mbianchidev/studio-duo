@@ -611,6 +611,94 @@ void DeleteClipCommand::undo(Project& project)
     }
 }
 
+ProjectTransportState ProjectTransportState::fromProject(const Project& project)
+{
+    return {
+        project.tempo,
+        project.timeSignatureNumerator,
+        project.timeSignatureDenominator,
+        project.tempoChanges,
+        project.meterChanges,
+        project.metronomeEnabled,
+        project.metronomeSubdivision,
+        project.metronomeOutputChannel,
+        project.metronomeLevel,
+        project.metronomeAccentLevel,
+        project.punchEnabled,
+        project.punchInSeconds,
+        project.punchOutSeconds,
+        project.countInBars,
+        project.preRollSeconds,
+        project.postRollSeconds,
+        project.loopEnabled,
+        project.loopStartSeconds,
+        project.loopEndSeconds
+    };
+}
+
+SetProjectTransportCommand::SetProjectTransportCommand(ProjectTransportState before,
+                                                       ProjectTransportState after)
+    : oldState(std::move(before)),
+      newState(std::move(after))
+{
+}
+
+juce::String SetProjectTransportCommand::name() const
+{
+    return "Change transport settings";
+}
+
+bool SetProjectTransportCommand::perform(Project& project, juce::String& error)
+{
+    if (newState.tempo < 20.0
+        || newState.tempo > 400.0
+        || newState.timeSignatureNumerator < 1
+        || newState.timeSignatureNumerator > 32
+        || newState.punchInSeconds < 0.0
+        || newState.punchOutSeconds <= newState.punchInSeconds
+        || newState.loopStartSeconds < 0.0
+        || newState.loopEndSeconds <= newState.loopStartSeconds
+        || newState.countInBars < 0
+        || newState.preRollSeconds < 0.0
+        || newState.postRollSeconds < 0.0)
+    {
+        error = "The transport settings contain an invalid tempo or time range.";
+        return false;
+    }
+
+    apply(project, newState);
+    return true;
+}
+
+void SetProjectTransportCommand::undo(Project& project)
+{
+    apply(project, oldState);
+}
+
+void SetProjectTransportCommand::apply(Project& project,
+                                       const ProjectTransportState& state)
+{
+    project.tempo = state.tempo;
+    project.timeSignatureNumerator = state.timeSignatureNumerator;
+    project.timeSignatureDenominator = state.timeSignatureDenominator;
+    project.tempoChanges = state.tempoChanges;
+    project.meterChanges = state.meterChanges;
+    project.metronomeEnabled = state.metronomeEnabled;
+    project.metronomeSubdivision = state.metronomeSubdivision;
+    project.metronomeOutputChannel = state.metronomeOutputChannel;
+    project.metronomeLevel = state.metronomeLevel;
+    project.metronomeAccentLevel = state.metronomeAccentLevel;
+    project.punchEnabled = state.punchEnabled;
+    project.punchInSeconds = state.punchInSeconds;
+    project.punchOutSeconds = state.punchOutSeconds;
+    project.countInBars = state.countInBars;
+    project.preRollSeconds = state.preRollSeconds;
+    project.postRollSeconds = state.postRollSeconds;
+    project.loopEnabled = state.loopEnabled;
+    project.loopStartSeconds = state.loopStartSeconds;
+    project.loopEndSeconds = state.loopEndSeconds;
+}
+
 TrackMixState TrackMixState::fromTrack(const Track& track)
 {
     return {

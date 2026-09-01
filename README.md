@@ -10,7 +10,8 @@ optimized for modern metal production without making the core DAW unfamiliar.
 
 The repository now contains a working native C++20 and JUCE 9 application with:
 
-- CoreAudio/ASIO/WASAPI device selection, transport, metronome, looping, and
+- CoreAudio/ASIO/WASAPI device selection, tempo and meter maps, routed
+  subdivided metronome, punch/count-in/pre/post-roll transport, looping, and
   sample-aligned lock-free multitrack audio recording
 - Audio import, playback, track arm/mute/solo, gain, pan, clip move, split,
   delete, undo, and redo
@@ -93,6 +94,11 @@ input into a separate sample-aligned WAV. If no track is armed, the selected
 audio track becomes the recording target for that pass. Press **REC** or
 **STOP** to finish all files at the same callback boundary. The session sidebar
 also duplicates or deletes the selected non-master track with full undo support.
+
+**TRACKING SETUP** adds tempo or meter changes at the playhead, configures jump
+or ramp transitions, punch points, count-in bars, pre/post-roll, loop bounds,
+click subdivision, and the hardware output used by the metronome. All settings
+are saved with the project and participate in undo/redo.
 
 Each completed pass creates grouped `v1`, `v2`, `v3`, ... child tracks directly
 below every recorded parent. A multitrack pass enters the project as one

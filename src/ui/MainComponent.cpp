@@ -548,6 +548,7 @@ MainComponent::MainComponent()
     configureButton(importButton, "Import WAV, AIFF, FLAC, or MP3 audio");
     configureButton(duplicateTrackButton, "Duplicate the selected track and its edits");
     configureButton(deleteTrackButton, "Delete the selected track");
+    configureButton(trackingButton, "Configure tempo, meter, punch, count-in, and click routing");
     configureButton(muteButton, "Mute selected track");
     configureButton(soloButton, "Solo selected track");
     configureButton(armButton, "Arm selected track for recording");
@@ -576,6 +577,7 @@ MainComponent::MainComponent()
     importButton.onClick = [this] { beginImportAudio(); };
     duplicateTrackButton.onClick = [this] { duplicateSelectedTrack(); };
     deleteTrackButton.onClick = [this] { deleteSelectedTrack(); };
+    trackingButton.onClick = [this] { showTrackingMenu(); };
     muteButton.onClick = [this]
     {
         changeSelectedTrackState([](auto& state) { state.muted = !state.muted; });
@@ -608,14 +610,19 @@ MainComponent::MainComponent()
     loopButton.setToggleState(project.loopEnabled, juce::dontSendNotification);
     loopButton.onClick = [this]
     {
-        project.loopEnabled = loopButton.getToggleState();
-        projectChanged();
+        changeTransportState([this](auto& state)
+        {
+            state.loopEnabled = loopButton.getToggleState();
+        });
     };
 
-    metronomeButton.setToggleState(true, juce::dontSendNotification);
+    metronomeButton.setToggleState(project.metronomeEnabled, juce::dontSendNotification);
     metronomeButton.onClick = [this]
     {
-        audioEngine.setMetronomeEnabled(metronomeButton.getToggleState());
+        changeTransportState([this](auto& state)
+        {
+            state.metronomeEnabled = metronomeButton.getToggleState();
+        });
     };
 
     addAndMakeVisible(projectLabel);
@@ -637,10 +644,40 @@ MainComponent::MainComponent()
     tempoSlider.setRange(20.0, 400.0, 1.0);
     tempoSlider.setValue(project.tempo, juce::dontSendNotification);
     tempoSlider.setDoubleClickReturnValue(true, 120.0);
+    tempoSlider.onDragStart = [this]
+    {
+        tempoEditStart = ProjectTransportState::fromProject(project);
+        tempoEditActive = true;
+    };
     tempoSlider.onValueChange = [this]
     {
-        project.tempo = tempoSlider.getValue();
-        projectChanged();
+        const auto applyTempo = [this](ProjectTransportState& state)
+        {
+            state.tempo = tempoSlider.getValue();
+            if (!state.tempoChanges.empty()
+                && state.tempoChanges.front().timeSeconds <= 0.0001)
+                state.tempoChanges.front().bpm = state.tempo;
+        };
+
+        if (tempoEditActive)
+        {
+            auto preview = ProjectTransportState::fromProject(project);
+            applyTempo(preview);
+            project.tempo = preview.tempo;
+            project.tempoChanges = std::move(preview.tempoChanges);
+            projectChanged(false, false);
+            return;
+        }
+
+        changeTransportState(applyTempo);
+    };
+    tempoSlider.onDragEnd = [this]
+    {
+        if (!tempoEditActive)
+            return;
+        tempoEditActive = false;
+        const auto after = ProjectTransportState::fromProject(project);
+        perform(std::make_unique<SetProjectTransportCommand>(tempoEditStart, after));
     };
     tempoSlider.addKeyListener(this);
 
@@ -1048,6 +1085,8 @@ void MainComponent::resized()
     duplicateTrackButton.setBounds(sessionPanel.removeFromTop(34));
     sessionPanel.removeFromTop(8);
     deleteTrackButton.setBounds(sessionPanel.removeFromTop(34));
+    sessionPanel.removeFromTop(8);
+    trackingButton.setBounds(sessionPanel.removeFromTop(34));
     sessionPanel.removeFromTop(18);
     pluginBrowser->setBounds(sessionPanel);
 
@@ -1093,9 +1132,7 @@ void MainComponent::timerCallback()
 
     const auto position = audioEngine.positionSeconds();
     timeline.setPlayheadSeconds(position);
-    positionLabel.setText(positionText(position,
-                                       project.tempo,
-                                       project.timeSignatureNumerator),
+    positionLabel.setText(positionText(position, project),
                           juce::dontSendNotification);
     const auto playing = audioEngine.isPlaying();
     playButton.setButtonText(playing ? "PAUSE" : "PLAY");
@@ -1697,8 +1734,9 @@ void MainComponent::toggleRecording()
         targets.push_back(std::move(target));
     }
 
-    recordingStartSeconds = audioEngine.positionSeconds();
-    const auto result = audioEngine.startRecording(requests);
+    activeRecordingPlan = project.recordingPlan(audioEngine.positionSeconds());
+    recordingStartSeconds = activeRecordingPlan.captureStartSeconds;
+    const auto result = audioEngine.startRecording(requests, activeRecordingPlan);
     if (result.failed())
     {
         showError("Recording unavailable", result.getErrorMessage());
@@ -2287,6 +2325,372 @@ void MainComponent::showTrackColourMenu()
     menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(trackColourButton));
 }
 
+void MainComponent::showTrackingMenu()
+{
+    const auto position = audioEngine.positionSeconds();
+    juce::PopupMenu menu;
+    menu.addSectionHeader("Tempo and meter");
+    menu.addItem("Add tempo change at playhead...", [this] { promptTempoChange(); });
+    menu.addItem("Add meter change at playhead...", [this] { promptMeterChange(); });
+    menu.addItem("Remove nearby tempo change", [this, position]
+    {
+        changeTransportState([this, position](auto& state)
+        {
+            const auto iterator = std::min_element(
+                state.tempoChanges.begin(),
+                state.tempoChanges.end(),
+                [position](const auto& left, const auto& right)
+                {
+                    return std::abs(left.timeSeconds - position)
+                        < std::abs(right.timeSeconds - position);
+                });
+            if (iterator == state.tempoChanges.end()
+                || std::abs(iterator->timeSeconds - position) > 0.25)
+            {
+                setStatus("No tempo change is close to the playhead.", true);
+                return;
+            }
+            state.tempoChanges.erase(iterator);
+        });
+    });
+    menu.addItem("Remove nearby meter change", [this, position]
+    {
+        changeTransportState([this, position](auto& state)
+        {
+            const auto iterator = std::min_element(
+                state.meterChanges.begin(),
+                state.meterChanges.end(),
+                [position](const auto& left, const auto& right)
+                {
+                    return std::abs(left.timeSeconds - position)
+                        < std::abs(right.timeSeconds - position);
+                });
+            if (iterator == state.meterChanges.end()
+                || std::abs(iterator->timeSeconds - position) > 0.25)
+            {
+                setStatus("No meter change is close to the playhead.", true);
+                return;
+            }
+            state.meterChanges.erase(iterator);
+        });
+    });
+
+    menu.addSeparator();
+    menu.addSectionHeader("Punch and ranges");
+    menu.addItem("Punch recording",
+                 true,
+                 project.punchEnabled,
+                 [this]
+                 {
+                     changeTransportState([](auto& state)
+                     {
+                         state.punchEnabled = !state.punchEnabled;
+                     });
+                 });
+    menu.addItem("Set punch in to playhead", [this, position]
+    {
+        changeTransportState([position](auto& state)
+        {
+            state.punchInSeconds = position;
+            state.punchOutSeconds = std::max(state.punchOutSeconds, position + 0.01);
+        });
+    });
+    menu.addItem("Set punch out to playhead", [this, position]
+    {
+        changeTransportState([position](auto& state)
+        {
+            state.punchOutSeconds = position;
+        });
+    });
+    menu.addItem("Set loop start to playhead", [this, position]
+    {
+        changeTransportState([position](auto& state)
+        {
+            state.loopStartSeconds = position;
+            state.loopEndSeconds = std::max(state.loopEndSeconds, position + 0.01);
+        });
+    });
+    menu.addItem("Set loop end to playhead", [this, position]
+    {
+        changeTransportState([position](auto& state)
+        {
+            state.loopEndSeconds = position;
+        });
+    });
+
+    const auto addIntegerChoices = [this](const juce::String& title,
+                                          int current,
+                                          std::initializer_list<int> values,
+                                          const std::function<void(ProjectTransportState&, int)>& set)
+    {
+        juce::PopupMenu submenu;
+        for (const auto value : values)
+        {
+            submenu.addItem(juce::String(value),
+                            true,
+                            value == current,
+                            [this, value, set]
+                            {
+                                changeTransportState([value, set](auto& state)
+                                {
+                                    set(state, value);
+                                });
+                            });
+        }
+        return std::pair { title, submenu };
+    };
+
+    auto countIn = addIntegerChoices(
+        "Count-in bars",
+        project.countInBars,
+        { 0, 1, 2, 4, 8 },
+        [](auto& state, int value) { state.countInBars = value; });
+    menu.addSubMenu(countIn.first, countIn.second);
+    auto subdivision = addIntegerChoices(
+        "Click subdivision",
+        project.metronomeSubdivision,
+        { 1, 2, 4, 8 },
+        [](auto& state, int value) { state.metronomeSubdivision = value; });
+    menu.addSubMenu(subdivision.first, subdivision.second);
+
+    const auto addRollChoices = [this](const juce::String& title,
+                                       double current,
+                                       const std::function<void(ProjectTransportState&, double)>& set)
+    {
+        juce::PopupMenu submenu;
+        for (const auto value : { 0.0, 0.5, 1.0, 2.0, 4.0 })
+        {
+            submenu.addItem(juce::String(value, 1) + " s",
+                            true,
+                            std::abs(value - current) < 0.0001,
+                            [this, value, set]
+                            {
+                                changeTransportState([value, set](auto& state)
+                                {
+                                    set(state, value);
+                                });
+                            });
+        }
+        return std::pair { title, submenu };
+    };
+
+    auto preRoll = addRollChoices(
+        "Pre-roll",
+        project.preRollSeconds,
+        [](auto& state, double value) { state.preRollSeconds = value; });
+    menu.addSubMenu(preRoll.first, preRoll.second);
+    auto postRoll = addRollChoices(
+        "Post-roll",
+        project.postRollSeconds,
+        [](auto& state, double value) { state.postRollSeconds = value; });
+    menu.addSubMenu(postRoll.first, postRoll.second);
+
+    juce::PopupMenu clickOutputMenu;
+    if (auto* device = deviceManager.getCurrentAudioDevice())
+    {
+        const auto names = device->getOutputChannelNames();
+        for (int index = 0; index < names.size(); ++index)
+        {
+            auto name = names[index].trim();
+            if (name.isEmpty())
+                name = "Output " + juce::String(index + 1);
+            clickOutputMenu.addItem(name,
+                                    true,
+                                    project.metronomeOutputChannel == index,
+                                    [this, index]
+                                    {
+                                        changeTransportState([index](auto& state)
+                                        {
+                                            state.metronomeOutputChannel = index;
+                                        });
+                                    });
+        }
+    }
+    if (clickOutputMenu.getNumItems() == 0)
+        clickOutputMenu.addItem("No audio outputs", false, false, [] {});
+    menu.addSubMenu("Click output", clickOutputMenu);
+
+    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(trackingButton));
+}
+
+void MainComponent::promptTempoChange()
+{
+    const auto position = audioEngine.positionSeconds();
+    auto* dialog = new juce::AlertWindow("Tempo change",
+                                         "Set the tempo at the current playhead.",
+                                         juce::MessageBoxIconType::NoIcon);
+    dialog->addTextEditor("bpm",
+                          juce::String(project.tempoAt(position), 2),
+                          "BPM");
+    dialog->addComboBox("transition",
+                        { "Jump", "Ramp from previous point" },
+                        "Transition");
+    dialog->getComboBoxComponent("transition")->setSelectedItemIndex(0);
+    dialog->addButton("Apply", 1, juce::KeyPress(juce::KeyPress::returnKey));
+    dialog->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+    dialog->centreAroundComponent(&trackingButton, 380, 210);
+    const juce::Component::SafePointer<juce::AlertWindow> dialogSafe(dialog);
+    dialog->enterModalState(
+        true,
+        juce::ModalCallbackFunction::create(
+            [safe = juce::Component::SafePointer<MainComponent>(this),
+             dialogSafe,
+             position](int result)
+            {
+                if (result != 1 || safe == nullptr || dialogSafe == nullptr)
+                    return;
+
+                const auto bpm = dialogSafe->getTextEditorContents("bpm").getDoubleValue();
+                if (bpm < 20.0 || bpm > 400.0)
+                {
+                    safe->showError("Tempo change unavailable",
+                                    "Enter a tempo from 20 to 400 BPM.");
+                    return;
+                }
+                const auto rampFromPrevious
+                    = dialogSafe->getComboBoxComponent("transition")
+                          ->getSelectedItemIndex()
+                    == 1;
+                safe->changeTransportState([position, bpm, rampFromPrevious](auto& state)
+                {
+                    if (state.tempoChanges.empty() && position > 0.0001)
+                        state.tempoChanges.push_back({ 0.0, state.tempo, false });
+
+                    const auto existing = std::find_if(
+                        state.tempoChanges.begin(),
+                        state.tempoChanges.end(),
+                        [position](const auto& change)
+                        {
+                            return std::abs(change.timeSeconds - position) < 0.0001;
+                        });
+                    if (existing != state.tempoChanges.end())
+                        existing->bpm = bpm;
+                    else
+                        state.tempoChanges.push_back({ position, bpm, false });
+
+                    std::stable_sort(state.tempoChanges.begin(),
+                                     state.tempoChanges.end(),
+                                     [](const auto& left, const auto& right)
+                                     {
+                                         return left.timeSeconds < right.timeSeconds;
+                                     });
+                    const auto inserted = std::find_if(
+                        state.tempoChanges.begin(),
+                        state.tempoChanges.end(),
+                        [position](const auto& change)
+                        {
+                            return std::abs(change.timeSeconds - position) < 0.0001;
+                        });
+                    if (inserted != state.tempoChanges.begin()
+                        && inserted != state.tempoChanges.end())
+                        (inserted - 1)->rampToNext = rampFromPrevious;
+                    if (position <= 0.0001)
+                        state.tempo = bpm;
+                });
+            }),
+        true);
+}
+
+void MainComponent::promptMeterChange()
+{
+    const auto position = audioEngine.positionSeconds();
+    const auto current = project.meterAt(position);
+    auto* dialog = new juce::AlertWindow("Meter change",
+                                         "Set the time signature at the current playhead.",
+                                         juce::MessageBoxIconType::NoIcon);
+    dialog->addTextEditor("numerator",
+                          juce::String(current.numerator),
+                          "Numerator");
+    dialog->addComboBox("denominator",
+                        { "1", "2", "4", "8", "16", "32" },
+                        "Denominator");
+    const std::array denominators { 1, 2, 4, 8, 16, 32 };
+    const auto denominator = std::find(denominators.cbegin(),
+                                       denominators.cend(),
+                                       current.denominator);
+    dialog->getComboBoxComponent("denominator")->setSelectedItemIndex(
+        denominator == denominators.cend()
+            ? 2
+            : static_cast<int>(std::distance(denominators.cbegin(), denominator)));
+    dialog->addButton("Apply", 1, juce::KeyPress(juce::KeyPress::returnKey));
+    dialog->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+    dialog->centreAroundComponent(&trackingButton, 380, 210);
+    const juce::Component::SafePointer<juce::AlertWindow> dialogSafe(dialog);
+    dialog->enterModalState(
+        true,
+        juce::ModalCallbackFunction::create(
+            [safe = juce::Component::SafePointer<MainComponent>(this),
+             dialogSafe,
+             position,
+             denominators](int result)
+            {
+                if (result != 1 || safe == nullptr || dialogSafe == nullptr)
+                    return;
+
+                const auto numerator
+                    = dialogSafe->getTextEditorContents("numerator").getIntValue();
+                const auto denominatorIndex
+                    = dialogSafe->getComboBoxComponent("denominator")
+                          ->getSelectedItemIndex();
+                if (numerator < 1
+                    || numerator > 32
+                    || denominatorIndex < 0
+                    || denominatorIndex >= static_cast<int>(denominators.size()))
+                {
+                    safe->showError("Meter change unavailable",
+                                    "Enter a numerator from 1 to 32.");
+                    return;
+                }
+                const auto selectedDenominator
+                    = denominators[static_cast<std::size_t>(denominatorIndex)];
+                safe->changeTransportState(
+                    [position, numerator, selectedDenominator](auto& state)
+                    {
+                        if (state.meterChanges.empty() && position > 0.0001)
+                        {
+                            state.meterChanges.push_back({
+                                0.0,
+                                state.timeSignatureNumerator,
+                                state.timeSignatureDenominator
+                            });
+                        }
+
+                        const auto existing = std::find_if(
+                            state.meterChanges.begin(),
+                            state.meterChanges.end(),
+                            [position](const auto& change)
+                            {
+                                return std::abs(change.timeSeconds - position) < 0.0001;
+                            });
+                        if (existing != state.meterChanges.end())
+                        {
+                            existing->numerator = numerator;
+                            existing->denominator = selectedDenominator;
+                        }
+                        else
+                        {
+                            state.meterChanges.push_back({
+                                position,
+                                numerator,
+                                selectedDenominator
+                            });
+                        }
+                        std::stable_sort(state.meterChanges.begin(),
+                                         state.meterChanges.end(),
+                                         [](const auto& left, const auto& right)
+                                         {
+                                             return left.timeSeconds < right.timeSeconds;
+                                         });
+                        if (position <= 0.0001)
+                        {
+                            state.timeSignatureNumerator = numerator;
+                            state.timeSignatureDenominator = selectedDenominator;
+                        }
+                    });
+            }),
+        true);
+}
+
 void MainComponent::updateInputMonitoring()
 {
     const Track* monitored = nullptr;
@@ -2345,6 +2749,7 @@ void MainComponent::projectChanged(bool writeRecovery, bool markDirty)
     insertPanel->setProject(&project);
     projectLabel.setText(project.name + (dirty ? " *" : ""), juce::dontSendNotification);
     loopButton.setToggleState(project.loopEnabled, juce::dontSendNotification);
+    metronomeButton.setToggleState(project.metronomeEnabled, juce::dontSendNotification);
     undoButton.setEnabled(commandStack.canUndo());
     redoButton.setEnabled(commandStack.canRedo());
     updateInspector();
@@ -2421,6 +2826,39 @@ void MainComponent::changeSelectedTrackState(const std::function<void(TrackMixSt
     perform(std::make_unique<SetTrackMixCommand>(track->id, before, after));
 }
 
+void MainComponent::changeTransportState(
+    const std::function<void(ProjectTransportState&)>& change)
+{
+    const auto before = ProjectTransportState::fromProject(project);
+    auto after = before;
+    change(after);
+    const auto same = [](double left, double right)
+    {
+        return std::abs(left - right) < 0.0000001;
+    };
+    if (same(before.tempo, after.tempo)
+        && before.timeSignatureNumerator == after.timeSignatureNumerator
+        && before.timeSignatureDenominator == after.timeSignatureDenominator
+        && before.tempoChanges == after.tempoChanges
+        && before.meterChanges == after.meterChanges
+        && before.metronomeEnabled == after.metronomeEnabled
+        && before.metronomeSubdivision == after.metronomeSubdivision
+        && before.metronomeOutputChannel == after.metronomeOutputChannel
+        && same(before.metronomeLevel, after.metronomeLevel)
+        && same(before.metronomeAccentLevel, after.metronomeAccentLevel)
+        && before.punchEnabled == after.punchEnabled
+        && same(before.punchInSeconds, after.punchInSeconds)
+        && same(before.punchOutSeconds, after.punchOutSeconds)
+        && before.countInBars == after.countInBars
+        && same(before.preRollSeconds, after.preRollSeconds)
+        && same(before.postRollSeconds, after.postRollSeconds)
+        && before.loopEnabled == after.loopEnabled
+        && same(before.loopStartSeconds, after.loopStartSeconds)
+        && same(before.loopEndSeconds, after.loopEndSeconds))
+        return;
+    perform(std::make_unique<SetProjectTransportCommand>(before, after));
+}
+
 Track MainComponent::makeRecordingVersionTrack(const Track& parent) const
 {
     const auto versionNumber = std::accumulate(
@@ -2477,21 +2915,18 @@ void MainComponent::showError(const juce::String& title, const juce::String& mes
     juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon, title, message);
 }
 
-juce::String MainComponent::positionText(double seconds, double tempo, int beatsPerBar)
+juce::String MainComponent::positionText(double seconds, const Project& project)
 {
-    const auto totalBeats = seconds * tempo / 60.0;
-    const auto bar = static_cast<int>(totalBeats / beatsPerBar) + 1;
-    const auto beat = static_cast<int>(totalBeats) % beatsPerBar + 1;
-    const auto ticks = static_cast<int>(std::fmod(totalBeats, 1.0) * 960.0);
+    const auto musical = project.musicalPositionAt(seconds);
     const auto minutes = static_cast<int>(seconds) / 60;
     const auto wholeSeconds = static_cast<int>(seconds) % 60;
     const auto milliseconds = static_cast<int>(std::fmod(seconds, 1.0) * 1000.0);
 
-    return juce::String(bar).paddedLeft('0', 3)
+    return juce::String(musical.bar).paddedLeft('0', 3)
         + " | "
-        + juce::String(beat).paddedLeft('0', 2)
+        + juce::String(musical.beat).paddedLeft('0', 2)
         + " | "
-        + juce::String(ticks).paddedLeft('0', 3)
+        + juce::String(musical.ticks).paddedLeft('0', 3)
         + "    "
         + juce::String(minutes).paddedLeft('0', 2)
         + ":"

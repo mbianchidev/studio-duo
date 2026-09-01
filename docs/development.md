@@ -73,6 +73,13 @@ Versioned project model
 Project package I/O and audio engine
 ```
 
+Tempo and meter maps are persisted project services. Beat/time conversion
+integrates linear tempo ramps and resets bar counting at meter changes. Recording
+plans derive transport start, capture start/end, post-roll stop, and loop
+behavior from the saved punch, count-in, and pre/post-roll settings. The audio
+callback clips capture to punch boundaries at sample resolution while allowing
+playback and the routed metronome to continue through pre-roll and post-roll.
+
 Plugin discovery sits beside the main process boundary:
 
 ```text

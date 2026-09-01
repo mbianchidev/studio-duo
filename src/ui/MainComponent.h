@@ -73,17 +73,21 @@ private:
     void refreshInputControls();
     void updateInputMonitoring();
     void showTrackColourMenu();
+    void showTrackingMenu();
+    void promptTempoChange();
+    void promptMeterChange();
     void updateTimelineSize();
     void zoomTimeline(double factor, bool reset = false);
     void projectChanged(bool writeRecovery = true, bool markDirty = true);
     [[nodiscard]] std::vector<StudioAudioEngine::PluginRuntimeRequest> pluginRuntimeRequests() const;
     bool perform(std::unique_ptr<ProjectCommand> command);
     void changeSelectedTrackState(const std::function<void(TrackMixState&)>& change);
+    void changeTransportState(const std::function<void(ProjectTransportState&)>& change);
     [[nodiscard]] Track makeRecordingVersionTrack(const Track& parent) const;
     Track* recordingTrack();
     void setStatus(const juce::String& message, bool error = false);
     void showError(const juce::String& title, const juce::String& message);
-    static juce::String positionText(double seconds, double tempo, int beatsPerBar);
+    static juce::String positionText(double seconds, const Project& project);
 
     StudioTheme theme;
     juce::AudioDeviceManager deviceManager;
@@ -92,6 +96,7 @@ private:
     CommandStack commandStack;
     juce::File projectPackage;
     std::vector<ActiveRecordingTarget> activeRecordingTargets;
+    RecordingPlan activeRecordingPlan;
     double recordingStartSeconds = 0.0;
     juce::String selectedTrackId;
     juce::String selectedClipId;
@@ -101,6 +106,8 @@ private:
     bool playAfterRuntimeTransition = false;
     bool updatingInputControls = false;
     bool updatingTrackName = false;
+    bool tempoEditActive = false;
+    ProjectTransportState tempoEditStart;
     juce::String inputConfigurationSignature;
     std::uint64_t lastRuntimeCatalogRevision = 0;
 
@@ -125,6 +132,7 @@ private:
     juce::TextButton importButton { "IMPORT AUDIO" };
     juce::TextButton duplicateTrackButton { "DUPLICATE TRACK" };
     juce::TextButton deleteTrackButton { "DELETE TRACK" };
+    juce::TextButton trackingButton { "TRACKING SETUP" };
 
     juce::Label inspectorName;
     juce::Label inspectorDetails;

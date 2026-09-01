@@ -39,7 +39,8 @@ public:
               int inputChannels,
               int firstInputChannel,
               int captureChannels,
-              int samples) noexcept
+              int samples,
+              int sourceSampleOffset = 0) noexcept
     {
         for (int sample = 0; sample < samples; ++sample)
         {
@@ -48,7 +49,9 @@ public:
             {
                 const auto sourceChannel = firstInputChannel + channel;
                 if (sourceChannel < inputChannels && inputs[sourceChannel] != nullptr)
-                    peak = std::max(peak, std::abs(inputs[sourceChannel][sample]));
+                    peak = std::max(
+                        peak,
+                        std::abs(inputs[sourceChannel][sourceSampleOffset + sample]));
             }
 
             peakAccumulator = std::max(peakAccumulator, peak);
