@@ -207,7 +207,9 @@ source track. The master track is protected from duplicate and delete actions.
 Track labels are edited through a typed rename command that rejects blank names
 and participates in undo/redo. Track colors use the existing mix-state command;
 the inspector provides palette shortcuts and a full HSV/RGB selector with live
-preview before one final undoable color change is recorded.
+preview before one final undoable color change is recorded. Timeline headers
+and mixer-strip titles open a shared anchored editor that batches simultaneous
+name and color changes into one undoable command.
 
 Recording creates flat-model child tracks with a stable `parentTrackId` and
 monotonic version number. They remain ordinary audio tracks for commands and

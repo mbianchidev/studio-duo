@@ -37,6 +37,7 @@ public:
     std::function<void(const juce::String&)> onTrackMute;
     std::function<void(const juce::String&)> onTrackSolo;
     std::function<void(const juce::String&)> onTrackArm;
+    std::function<void(const juce::String&, juce::Rectangle<int>)> onEditTrack;
     std::function<void(const juce::String&)> onToggleTrackVersions;
     std::function<void(const juce::String&)> onDeleteTrack;
     std::function<void()> onAddTrack;
@@ -65,6 +66,7 @@ public:
 
     void paint(juce::Graphics& graphics) override;
     void mouseDown(const juce::MouseEvent& event) override;
+    void mouseDoubleClick(const juce::MouseEvent& event) override;
     void mouseDrag(const juce::MouseEvent& event) override;
     void mouseUp(const juce::MouseEvent& event) override;
     void mouseWheelMove(const juce::MouseEvent& event,

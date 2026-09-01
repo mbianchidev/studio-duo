@@ -48,6 +48,88 @@ private:
     std::function<void(juce::Colour)> preview;
     std::function<void(juce::Colour, juce::Colour)> commit;
 };
+
+class TrackQuickEditor final : public juce::Component
+{
+public:
+    TrackQuickEditor(juce::String currentName,
+                     juce::Colour currentColour,
+                     std::function<void(juce::String, juce::Colour)> applyCallback)
+        : colourSelector(juce::ColourSelector::showColourAtTop
+                             | juce::ColourSelector::editableColour
+                             | juce::ColourSelector::showSliders
+                             | juce::ColourSelector::showColourspace),
+          apply(std::move(applyCallback))
+    {
+        nameEditor.setText(std::move(currentName), false);
+        nameEditor.setSelectAllWhenFocused(true);
+        nameEditor.setColour(juce::TextEditor::backgroundColourId,
+                             juce::Colour(StudioColours::panel));
+        nameEditor.setColour(juce::TextEditor::outlineColourId,
+                             juce::Colour(StudioColours::border));
+        nameEditor.setColour(juce::TextEditor::focusedOutlineColourId,
+                             juce::Colour(StudioColours::orange));
+        nameEditor.onReturnKey = [this] { applyAndClose(); };
+        nameEditor.onEscapeKey = [this] { close(); };
+        addAndMakeVisible(nameEditor);
+
+        colourSelector.setCurrentColour(currentColour,
+                                        juce::dontSendNotification);
+        addAndMakeVisible(colourSelector);
+
+        applyButton.onClick = [this] { applyAndClose(); };
+        cancelButton.onClick = [this] { close(); };
+        addAndMakeVisible(applyButton);
+        addAndMakeVisible(cancelButton);
+        setSize(340, 430);
+    }
+
+    void focusName()
+    {
+        nameEditor.grabKeyboardFocus();
+        nameEditor.selectAll();
+    }
+
+    void resized() override
+    {
+        auto bounds = getLocalBounds().reduced(12);
+        nameEditor.setBounds(bounds.removeFromTop(34));
+        bounds.removeFromTop(8);
+        auto buttons = bounds.removeFromBottom(34);
+        cancelButton.setBounds(buttons.removeFromRight(92).reduced(2));
+        applyButton.setBounds(buttons.removeFromRight(92).reduced(2));
+        bounds.removeFromBottom(8);
+        colourSelector.setBounds(bounds);
+    }
+
+private:
+    void applyAndClose()
+    {
+        const auto name = nameEditor.getText().trim();
+        if (name.isEmpty())
+        {
+            nameEditor.setColour(juce::TextEditor::outlineColourId,
+                                 juce::Colour(StudioColours::orange));
+            nameEditor.grabKeyboardFocus();
+            return;
+        }
+        if (apply)
+            apply(name, colourSelector.getCurrentColour());
+        close();
+    }
+
+    void close()
+    {
+        if (auto* callout = findParentComponentOfClass<juce::CallOutBox>())
+            callout->dismiss();
+    }
+
+    juce::TextEditor nameEditor;
+    juce::ColourSelector colourSelector;
+    juce::TextButton applyButton { "APPLY" };
+    juce::TextButton cancelButton { "CANCEL" };
+    std::function<void(juce::String, juce::Colour)> apply;
+};
 }
 
 class MainComponent::MixerPanel final : public juce::Component
@@ -73,6 +155,7 @@ public:
     }
 
     std::function<void(const juce::String&)> onTrackSelected;
+    std::function<void(const juce::String&, juce::Rectangle<int>)> onEditTrack;
     std::function<void(const juce::String&, float)> onPanChanged;
 
     void paint(juce::Graphics& graphics) override
@@ -309,7 +392,17 @@ public:
                                          getHeight() - 44);
         if (event.position.y >= static_cast<float>(strip.getBottom() - 60)
             && onPanChanged)
+        {
             onPanChanged(mixerTracks[static_cast<std::size_t>(index)]->id, 0.0f);
+            return;
+        }
+
+        if (onEditTrack)
+        {
+            const auto nameBounds = strip.reduced(8).withHeight(28);
+            onEditTrack(mixerTracks[static_cast<std::size_t>(index)]->id,
+                        localAreaToGlobal(nameBounds));
+        }
     }
 
 private:
@@ -834,6 +927,11 @@ MainComponent::MainComponent()
     timeline.addKeyListener(this);
     timeline.setProject(&project);
     timeline.onTrackSelected = [this](const auto& trackId) { selectTrack(trackId); };
+    timeline.onEditTrack = [this](const auto& trackId, auto targetArea)
+    {
+        selectTrack(trackId);
+        showTrackQuickEditor(trackId, targetArea);
+    };
     timeline.onTrackMute = [this](const auto& trackId)
     {
         selectTrack(trackId);
@@ -1023,6 +1121,11 @@ MainComponent::MainComponent()
     mixer = std::make_unique<MixerPanel>();
     mixer->setProject(&project);
     mixer->onTrackSelected = [this](const auto& trackId) { selectTrack(trackId); };
+    mixer->onEditTrack = [this](const auto& trackId, auto targetArea)
+    {
+        selectTrack(trackId);
+        showTrackQuickEditor(trackId, targetArea);
+    };
     mixer->onPanChanged = [this](const auto& trackId, float pan)
     {
         const auto* track = project.findTrack(trackId);
@@ -3005,6 +3108,60 @@ void MainComponent::showTrackColourMenu()
     menu.addItem(std::move(customItem));
 
     menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(trackColourButton));
+}
+
+void MainComponent::showTrackQuickEditor(const juce::String& trackId,
+                                         juce::Rectangle<int> targetScreenArea)
+{
+    const auto* track = project.findTrack(trackId);
+    if (track == nullptr)
+        return;
+
+    auto editor = std::make_unique<TrackQuickEditor>(
+        track->name,
+        track->colour,
+        [safe = juce::Component::SafePointer<MainComponent>(this),
+         trackId](juce::String name, juce::Colour colour)
+        {
+            if (safe == nullptr)
+                return;
+            const auto* current = safe->project.findTrack(trackId);
+            if (current == nullptr)
+                return;
+
+            std::vector<std::unique_ptr<ProjectCommand>> commands;
+            if (name != current->name)
+            {
+                commands.push_back(std::make_unique<RenameTrackCommand>(
+                    trackId,
+                    std::move(name)));
+            }
+            if (colour != current->colour)
+            {
+                const auto before = TrackMixState::fromTrack(*current);
+                auto after = before;
+                after.colour = colour;
+                commands.push_back(std::make_unique<SetTrackMixCommand>(
+                    trackId,
+                    before,
+                    after));
+            }
+            if (commands.empty())
+                return;
+            safe->perform(std::make_unique<BatchProjectCommand>(
+                "Edit track appearance",
+                std::move(commands)));
+        });
+    auto* editorPointer = editor.get();
+    juce::CallOutBox::launchAsynchronously(std::move(editor),
+                                           targetScreenArea,
+                                           nullptr);
+    juce::MessageManager::callAsync(
+        [safe = juce::Component::SafePointer<TrackQuickEditor>(editorPointer)]
+        {
+            if (safe != nullptr)
+                safe->focusName();
+        });
 }
 
 void MainComponent::showTrackingMenu()

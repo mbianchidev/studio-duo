@@ -800,6 +800,44 @@ void TimelineComponent::mouseDown(const juce::MouseEvent& event)
     repaint();
 }
 
+void TimelineComponent::mouseDoubleClick(const juce::MouseEvent& event)
+{
+    if (project == nullptr)
+        return;
+    const auto inTrackHeader = event.position.x >= static_cast<float>(viewportPositionX)
+        && event.position.x < static_cast<float>(viewportPositionX + trackHeaderWidth);
+    if (!inTrackHeader)
+        return;
+
+    const auto tracks = visibleTracks();
+    const auto trackIndex = trackIndexAt(event.position.y);
+    if (trackIndex < 0 || trackIndex >= static_cast<int>(tracks.size()))
+        return;
+    const auto localY = static_cast<int>(event.position.y)
+        - rulerHeight
+        - trackIndex * trackHeight;
+    const auto localX = static_cast<int>(event.position.x) - viewportPositionX;
+    if (localY > 42 || localX < 22)
+        return;
+
+    const auto& track = *tracks[static_cast<std::size_t>(trackIndex)];
+    selectedTrackId = track.id;
+    selectedClipId.clear();
+    if (onTrackSelected)
+        onTrackSelected(track.id);
+    if (onEditTrack)
+    {
+        const auto indent = track.parentTrackId.isNotEmpty() ? 16 : 0;
+        const juce::Rectangle<int> nameBounds(
+            viewportPositionX + 24 + indent,
+            rulerHeight + trackIndex * trackHeight + 8,
+            trackHeaderWidth - 34 - indent,
+            32);
+        onEditTrack(track.id, localAreaToGlobal(nameBounds));
+    }
+    repaint();
+}
+
 void TimelineComponent::mouseDrag(const juce::MouseEvent& event)
 {
     if (draggedClipId.isEmpty())
@@ -977,6 +1015,33 @@ void TimelineComponent::showContextMenu(const juce::MouseEvent& event)
             };
             menu.addItem(std::move(arm));
         }
+
+        juce::PopupMenu::Item editTrack("Edit name and color...");
+        editTrack.action = [this, trackId]
+        {
+            if (onEditTrack)
+            {
+                const auto visible = visibleTracks();
+                const auto iterator = std::find_if(
+                    visible.cbegin(),
+                    visible.cend(),
+                    [&trackId](const auto* candidate)
+                    {
+                        return candidate->id == trackId;
+                    });
+                if (iterator == visible.cend())
+                    return;
+                const auto index = static_cast<int>(
+                    std::distance(visible.cbegin(), iterator));
+                const juce::Rectangle<int> nameBounds(
+                    viewportPositionX + 24,
+                    rulerHeight + index * trackHeight + 8,
+                    trackHeaderWidth - 34,
+                    32);
+                onEditTrack(trackId, localAreaToGlobal(nameBounds));
+            }
+        };
+        menu.addItem(std::move(editTrack));
 
         const auto hasVersions = std::any_of(project->tracks.cbegin(),
                                              project->tracks.cend(),

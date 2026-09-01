@@ -90,6 +90,8 @@ private:
     void refreshInputControls();
     void updateInputMonitoring();
     void showTrackColourMenu();
+    void showTrackQuickEditor(const juce::String& trackId,
+                              juce::Rectangle<int> targetScreenArea);
     void showTrackingMenu();
     void promptTempoChange();
     void promptMeterChange();
