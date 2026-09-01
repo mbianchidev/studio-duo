@@ -1676,6 +1676,72 @@ PluginInsert* SetPluginBypassCommand::find(Project& project) const
     return iterator == track->inserts.end() ? nullptr : &*iterator;
 }
 
+SetPluginBridgeModeCommand::SetPluginBridgeModeCommand(
+    juce::String sourceTrackId,
+    juce::String insertToChange,
+    PluginBridgeMode mode)
+    : trackId(std::move(sourceTrackId)),
+      insertId(std::move(insertToChange)),
+      newMode(mode)
+{
+}
+
+juce::String SetPluginBridgeModeCommand::name() const
+{
+    return "Change plugin isolation mode";
+}
+
+bool SetPluginBridgeModeCommand::perform(Project& project,
+                                         juce::String& error)
+{
+    auto* insert = find(project);
+    if (insert == nullptr)
+    {
+        error = "The plugin insert no longer exists.";
+        return false;
+    }
+    if (newMode == PluginBridgeMode::araCompatibility
+        && !insert->araCapable)
+    {
+        error = "This plugin does not advertise an ARA extension.";
+        return false;
+    }
+
+    if (!capturedOriginal)
+    {
+        oldMode = insert->bridgeMode;
+        oldRecoveryDisabled = insert->recoveryDisabled;
+        capturedOriginal = true;
+    }
+    insert->bridgeMode = newMode;
+    insert->recoveryDisabled = false;
+    return true;
+}
+
+void SetPluginBridgeModeCommand::undo(Project& project)
+{
+    if (auto* insert = find(project))
+    {
+        insert->bridgeMode = oldMode;
+        insert->recoveryDisabled = oldRecoveryDisabled;
+    }
+}
+
+PluginInsert* SetPluginBridgeModeCommand::find(Project& project) const
+{
+    auto* track = project.findTrack(trackId);
+    if (track == nullptr)
+        return nullptr;
+    const auto iterator = std::find_if(
+        track->inserts.begin(),
+        track->inserts.end(),
+        [this](const auto& candidate)
+        {
+            return candidate.id == insertId;
+        });
+    return iterator == track->inserts.end() ? nullptr : &*iterator;
+}
+
 RemoveTrackCommand::RemoveTrackCommand(juce::String trackToRemove)
     : trackId(std::move(trackToRemove))
 {

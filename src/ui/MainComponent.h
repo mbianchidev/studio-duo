@@ -64,6 +64,9 @@ private:
     void duplicateSelectedTrack();
     void deleteSelectedTrack();
     void addPluginToSelectedTrack(const PluginCatalogEntry& entry);
+    void changePluginMode(const juce::String& trackId,
+                          const juce::String& insertId,
+                          PluginBridgeMode mode);
     void splitSelectedClip();
     void trimSelectedClipStartToPlayhead();
     void trimSelectedClipEndToPlayhead();

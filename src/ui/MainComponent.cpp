@@ -760,6 +760,13 @@ MainComponent::MainComponent()
     {
         perform(std::make_unique<RemovePluginInsertCommand>(trackId, insertId));
     };
+    insertPanel->onModeChange = [this](
+                                    const auto& trackId,
+                                    const auto& insertId,
+                                    auto mode)
+    {
+        changePluginMode(trackId, insertId, mode);
+    };
     insertPanel->onReload = [this]
     {
         audioEngine.forcePluginRuntimeReload(project, pluginRuntimeRequests());
@@ -1977,11 +1984,71 @@ void MainComponent::addPluginToSelectedTrack(const PluginCatalogEntry& entry)
     insert.manufacturer = entry.manufacturer;
     insert.format = entry.format;
     insert.version = entry.version;
+    insert.architecture = entry.architecture;
     insert.fileOrIdentifier = entry.fileOrIdentifier;
+    insert.araCapable = entry.araCapable;
     insert.bridgeMode = PluginBridgeMode::sandboxed;
 
     if (perform(std::make_unique<AddPluginInsertCommand>(track->id, insert)))
         setStatus(entry.name + " added as a sandboxed insert model.");
+}
+
+void MainComponent::changePluginMode(const juce::String& trackId,
+                                     const juce::String& insertId,
+                                     PluginBridgeMode mode)
+{
+    if (mode != PluginBridgeMode::araCompatibility)
+    {
+        perform(std::make_unique<SetPluginBridgeModeCommand>(
+            trackId,
+            insertId,
+            mode));
+        return;
+    }
+
+    if (!projectPackage.exists())
+    {
+        showError(
+            "Save required",
+            "Save the project before enabling ARA 2 compatibility mode so Studio Duo can create a recovery point.");
+        return;
+    }
+    if (const auto result = ProjectFile::writeRecoveryPoint(
+            project,
+            projectPackage);
+        result.failed())
+    {
+        showError("ARA recovery point failed", result.getErrorMessage());
+        return;
+    }
+
+    auto* dialog = new juce::AlertWindow(
+        "Enable ARA 2 compatibility mode?",
+        "ARA 2 needs synchronous access to the project document and runs this plugin in the Studio Duo process. Crash isolation is reduced. A recovery point has been written.",
+        juce::MessageBoxIconType::WarningIcon);
+    dialog->addButton(
+        "Enable ARA 2",
+        1,
+        juce::KeyPress(juce::KeyPress::returnKey));
+    dialog->addButton(
+        "Cancel",
+        0,
+        juce::KeyPress(juce::KeyPress::escapeKey));
+    dialog->centreAroundComponent(insertPanel.get(), 520, 230);
+    const juce::Component::SafePointer<MainComponent> safe(this);
+    dialog->enterModalState(
+        true,
+        juce::ModalCallbackFunction::create(
+            [safe, trackId, insertId](int result)
+            {
+                if (safe == nullptr || result != 1)
+                    return;
+                safe->perform(std::make_unique<SetPluginBridgeModeCommand>(
+                    trackId,
+                    insertId,
+                    PluginBridgeMode::araCompatibility));
+            }),
+        true);
 }
 
 void MainComponent::splitSelectedClip()
@@ -3891,6 +3958,8 @@ std::vector<StudioAudioEngine::PluginRuntimeRequest> MainComponent::pluginRuntim
             request.name = insert.name;
             request.bypassed = insert.bypassed;
             request.missing = false;
+            request.bridgeMode = insert.bridgeMode;
+            request.recoveryDisabled = insert.recoveryDisabled;
             request.latencySamples = insert.latencySamples;
             request.tailSeconds = insert.tailSeconds;
             request.catalogRevision = pluginCatalog.revision();

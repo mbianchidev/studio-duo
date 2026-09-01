@@ -19,6 +19,9 @@ public:
 
     std::function<void(const juce::String&, const juce::String&, bool)> onBypass;
     std::function<void(const juce::String&, const juce::String&)> onRemove;
+    std::function<void(const juce::String&,
+                       const juce::String&,
+                       PluginBridgeMode)> onModeChange;
     std::function<void()> onReload;
 
     void paint(juce::Graphics& graphics) override;

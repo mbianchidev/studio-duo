@@ -117,7 +117,22 @@ void PluginInsertPanel::paint(juce::Graphics& graphics)
             }
         }
 
-        const auto detail = stateText + "  |  " + insert.format;
+        const auto modeText =
+            insert.bridgeMode == PluginBridgeMode::sandboxed
+            ? juce::String("SANDBOX")
+            : insert.bridgeMode == PluginBridgeMode::araCompatibility
+                ? juce::String("ARA 2 / REDUCED ISOLATION")
+                : juce::String("TRUSTED IN-PROCESS");
+        if (insert.recoveryDisabled)
+        {
+            stateText = "RECOVERY DISABLED";
+            stateColour = juce::Colour(StudioColours::orange);
+        }
+        const auto detail = modeText
+            + "  |  "
+            + stateText
+            + "  |  "
+            + insert.format;
         graphics.setColour(stateColour);
         graphics.setFont(juce::Font(juce::FontOptions(9.0f)));
         graphics.drawFittedText(detail,
@@ -172,6 +187,46 @@ void PluginInsertPanel::mouseDown(const juce::MouseEvent& event)
         return;
 
     const auto& insert = track->inserts[static_cast<std::size_t>(index)];
+    if (event.mods.isPopupMenu())
+    {
+        juce::PopupMenu menu;
+        menu.addItem(
+            "Sandboxed DSP",
+            true,
+            insert.bridgeMode == PluginBridgeMode::sandboxed,
+            [this, selectedTrackId = track->id, insertId = insert.id]
+            {
+                if (onModeChange)
+                    onModeChange(selectedTrackId,
+                                 insertId,
+                                 PluginBridgeMode::sandboxed);
+            });
+        menu.addItem(
+            "ARA 2 compatibility (reduced isolation)",
+            insert.araCapable,
+            insert.bridgeMode == PluginBridgeMode::araCompatibility,
+            [this, selectedTrackId = track->id, insertId = insert.id]
+            {
+                if (onModeChange)
+                    onModeChange(selectedTrackId,
+                                 insertId,
+                                 PluginBridgeMode::araCompatibility);
+            });
+        menu.addItem(
+            "Trusted in-process",
+            true,
+            insert.bridgeMode == PluginBridgeMode::trustedInProcess,
+            [this, selectedTrackId = track->id, insertId = insert.id]
+            {
+                if (onModeChange)
+                    onModeChange(selectedTrackId,
+                                 insertId,
+                                 PluginBridgeMode::trustedInProcess);
+            });
+        menu.showMenuAsync(
+            juce::PopupMenu::Options().withTargetComponent(this));
+        return;
+    }
     const auto failed = std::any_of(
         runtimeStatuses.cbegin(),
         runtimeStatuses.cend(),

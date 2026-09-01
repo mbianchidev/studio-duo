@@ -513,6 +513,28 @@ private:
     bool capturedOriginal = false;
 };
 
+class SetPluginBridgeModeCommand final : public ProjectCommand
+{
+public:
+    SetPluginBridgeModeCommand(juce::String sourceTrackId,
+                               juce::String insertToChange,
+                               PluginBridgeMode mode);
+
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    PluginInsert* find(Project& project) const;
+
+    juce::String trackId;
+    juce::String insertId;
+    PluginBridgeMode newMode = PluginBridgeMode::sandboxed;
+    PluginBridgeMode oldMode = PluginBridgeMode::sandboxed;
+    bool oldRecoveryDisabled = false;
+    bool capturedOriginal = false;
+};
+
 class RemoveTrackCommand final : public ProjectCommand
 {
 public:

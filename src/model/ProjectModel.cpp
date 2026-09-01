@@ -284,6 +284,7 @@ juce::var PluginInsert::toVar() const
     object->setProperty("manufacturer", manufacturer);
     object->setProperty("format", format);
     object->setProperty("version", version);
+    object->setProperty("architecture", architecture);
     object->setProperty("fileOrIdentifier", fileOrIdentifier);
     object->setProperty("stateFile", stateFile);
     object->setProperty("stateHash", stateHash);
@@ -292,6 +293,8 @@ juce::var PluginInsert::toVar() const
     object->setProperty("tailSeconds", tailSeconds);
     object->setProperty("bypassed", bypassed);
     object->setProperty("missing", missing);
+    object->setProperty("araCapable", araCapable);
+    object->setProperty("recoveryDisabled", recoveryDisabled);
     return juce::var(object.release());
 }
 
@@ -308,6 +311,7 @@ std::optional<PluginInsert> PluginInsert::fromVar(const juce::var& value, juce::
     insert.manufacturer = object->getProperty("manufacturer").toString();
     insert.format = object->getProperty("format").toString();
     insert.version = object->getProperty("version").toString();
+    insert.architecture = object->getProperty("architecture").toString();
     insert.fileOrIdentifier = object->getProperty("fileOrIdentifier").toString();
     insert.stateFile = object->getProperty("stateFile").toString();
     insert.stateHash = object->getProperty("stateHash").toString();
@@ -315,6 +319,11 @@ std::optional<PluginInsert> PluginInsert::fromVar(const juce::var& value, juce::
     insert.tailSeconds = std::max(0.0, numberProperty(*object, "tailSeconds", 0.0));
     insert.bypassed = booleanProperty(*object, "bypassed", false);
     insert.missing = booleanProperty(*object, "missing", false);
+    insert.araCapable = booleanProperty(*object, "araCapable", false);
+    insert.recoveryDisabled = booleanProperty(
+        *object,
+        "recoveryDisabled",
+        false);
 
     const auto bridgeMode = pluginBridgeModeFromString(object->getProperty("bridgeMode").toString());
     if (!bridgeMode.has_value())

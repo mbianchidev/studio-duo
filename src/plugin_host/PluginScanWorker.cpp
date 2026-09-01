@@ -1,10 +1,12 @@
 #include "PluginScanWorker.h"
 
+#include "PluginFormats.h"
+
 namespace studio
 {
 PluginScanWorker::PluginScanWorker()
 {
-    juce::addDefaultFormatsToManager(formatManager);
+    PluginFormats::addSupportedFormats(formatManager);
 }
 
 PluginScanWorker::~PluginScanWorker()

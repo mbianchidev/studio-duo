@@ -15,11 +15,13 @@ struct PluginCatalogEntry
     juce::String category;
     juce::String format;
     juce::String version;
+    juce::String architecture;
     juce::String fileOrIdentifier;
     juce::String identifier;
     int inputChannels = 0;
     int outputChannels = 0;
     bool instrument = false;
+    bool araCapable = false;
 };
 
 class PluginCatalog final : private juce::Thread

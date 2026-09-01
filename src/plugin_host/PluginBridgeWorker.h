@@ -32,6 +32,10 @@ private:
     std::unique_ptr<juce::AudioPluginInstance> plugin;
     juce::AudioBuffer<float> processBuffer;
     juce::MidiBuffer midiBuffer;
+    int mainInputChannels = 2;
+    int sidechainInputChannels = 0;
+    int mainOutputChannels = 2;
+    int processingChannels = 2;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PluginBridgeWorker)
 };

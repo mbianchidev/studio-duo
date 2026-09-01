@@ -4,6 +4,7 @@
 #include "RecordingWaveform.h"
 #include "model/ProjectModel.h"
 #include "plugin_host/PluginBridgeClient.h"
+#include "plugin_host/AraDocumentHost.h"
 
 #include <juce_audio_devices/juce_audio_devices.h>
 #include <juce_audio_formats/juce_audio_formats.h>
@@ -60,8 +61,10 @@ public:
         int latencySamples = 0;
         double tailSeconds = 0.0;
         std::uint64_t catalogRevision = 0;
+        PluginBridgeMode bridgeMode = PluginBridgeMode::sandboxed;
         bool bypassed = false;
         bool missing = false;
+        bool recoveryDisabled = false;
     };
 
     struct PluginRuntimeStatus
@@ -279,6 +282,10 @@ private:
         juce::String insertId;
         juce::String name;
         std::unique_ptr<PluginBridgeClient> bridge;
+        std::unique_ptr<juce::AudioPluginInstance> inProcess;
+        std::unique_ptr<AraDocumentHost> araDocument;
+        juce::AudioBuffer<float> inProcessBuffer;
+        juce::MidiBuffer midi;
         RenderSource::DelayCompensator failureDelay;
     };
 
@@ -379,7 +386,8 @@ private:
                                        int samples,
                                        RenderSource::DelayCompensator& delay) noexcept;
     void processRuntimeChain(std::uint64_t runtimeKey,
-                             juce::AudioBuffer<float>& buffer) noexcept;
+                             juce::AudioBuffer<float>& buffer,
+                             const juce::AudioBuffer<float>* sidechain = nullptr) noexcept;
     void requestPluginRuntime(std::vector<PluginRuntimeRequest> requests,
                               RenderSnapshot snapshot);
     void runPluginRuntimeBuilder();

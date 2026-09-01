@@ -1,11 +1,13 @@
 #include "PluginBridgeWorker.h"
 
+#include "PluginFormats.h"
+
 namespace studio
 {
 PluginBridgeWorker::PluginBridgeWorker()
     : juce::Thread("Studio Duo plugin bridge")
 {
-    juce::addDefaultFormatsToManager(formatManager);
+    PluginFormats::addSupportedFormats(formatManager);
 }
 
 PluginBridgeWorker::~PluginBridgeWorker()
@@ -118,6 +120,10 @@ void PluginBridgeWorker::run()
         const auto channels = std::min(
             static_cast<int>(sharedState->numChannels.load(std::memory_order_relaxed)),
             PluginBridgeSharedState::maxChannels);
+        const auto sidechainChannels = std::min(
+            static_cast<int>(
+                sharedState->sidechainChannels.load(std::memory_order_relaxed)),
+            PluginBridgeSharedState::maxChannels);
         const auto samples = std::min(
             static_cast<int>(sharedState->numSamples.load(std::memory_order_relaxed)),
             PluginBridgeSharedState::maxBlockSize);
@@ -127,13 +133,77 @@ void PluginBridgeWorker::run()
                                    0,
                                    sharedState->input[static_cast<std::size_t>(channel)].data(),
                                    samples);
+        for (int channel = 0;
+             channel < std::min(sidechainChannels, sidechainInputChannels);
+             ++channel)
+        {
+            processBuffer.copyFrom(
+                mainInputChannels + channel,
+                0,
+                sharedState->sidechain[static_cast<std::size_t>(channel)].data(),
+                samples);
+        }
 
         midiBuffer.clear();
-        plugin->processBlock(processBuffer, midiBuffer);
+        const auto eventCount =
+            PluginBridgeProtocol::parameterEventCount(*sharedState);
+        const auto applyEvent = [this](const PluginBridgeParameterEvent& event)
+        {
+            auto& parameters = plugin->getParameters();
+            if (event.parameterIndex < static_cast<std::uint32_t>(
+                                           parameters.size()))
+            {
+                parameters[static_cast<int>(event.parameterIndex)]
+                    ->setValue(event.value);
+            }
+        };
+        auto processedSamples = 0;
+        auto eventIndex = 0;
+        while (eventIndex < eventCount)
+        {
+            const auto eventOffset = std::min(
+                samples,
+                static_cast<int>(
+                    sharedState
+                        ->parameterEvents[static_cast<std::size_t>(eventIndex)]
+                        .sampleOffset));
+            if (eventOffset > processedSamples)
+            {
+                juce::AudioBuffer<float> view(
+                    processBuffer.getArrayOfWritePointers(),
+                    processingChannels,
+                    processedSamples,
+                    eventOffset - processedSamples);
+                plugin->processBlock(view, midiBuffer);
+                processedSamples = eventOffset;
+            }
+            while (eventIndex < eventCount
+                   && static_cast<int>(
+                          sharedState
+                              ->parameterEvents[static_cast<std::size_t>(
+                                  eventIndex)]
+                              .sampleOffset)
+                       == eventOffset)
+            {
+                applyEvent(
+                    sharedState->parameterEvents[static_cast<std::size_t>(
+                        eventIndex)]);
+                ++eventIndex;
+            }
+        }
+        if (processedSamples < samples)
+        {
+            juce::AudioBuffer<float> view(
+                processBuffer.getArrayOfWritePointers(),
+                processingChannels,
+                processedSamples,
+                samples - processedSamples);
+            plugin->processBlock(view, midiBuffer);
+        }
         for (int channel = 0; channel < PluginBridgeSharedState::maxChannels; ++channel)
         {
             auto& destination = sharedState->output[static_cast<std::size_t>(channel)];
-            if (channel < processBuffer.getNumChannels())
+            if (channel < mainOutputChannels)
                 std::copy_n(processBuffer.getReadPointer(channel), samples, destination.begin());
             else
                 std::fill_n(destination.begin(), samples, 0.0f);
@@ -151,7 +221,18 @@ void PluginBridgeWorker::startProcessing(std::unique_ptr<juce::AudioPluginInstan
     {
         const auto inputChannels = newPlugin->getTotalNumInputChannels();
         const auto outputChannels = newPlugin->getTotalNumOutputChannels();
-        if (inputChannels > PluginBridgeSharedState::maxChannels
+        mainInputChannels = newPlugin->getBusCount(true) > 0
+            ? newPlugin->getChannelCountOfBus(true, 0)
+            : inputChannels;
+        sidechainInputChannels = newPlugin->getBusCount(true) > 1
+            ? newPlugin->getChannelCountOfBus(true, 1)
+            : 0;
+        mainOutputChannels = newPlugin->getBusCount(false) > 0
+            ? newPlugin->getChannelCountOfBus(false, 0)
+            : outputChannels;
+        processingChannels = std::max({ 2, inputChannels, outputChannels });
+        if (mainInputChannels > PluginBridgeSharedState::maxChannels
+            || sidechainInputChannels > PluginBridgeSharedState::maxChannels
             || outputChannels > PluginBridgeSharedState::maxChannels)
         {
             sendStatus("error:unsupported-channel-layout");
@@ -165,7 +246,7 @@ void PluginBridgeWorker::startProcessing(std::unique_ptr<juce::AudioPluginInstan
     }
 
     plugin = std::move(newPlugin);
-    processBuffer.setSize(PluginBridgeSharedState::maxChannels,
+    processBuffer.setSize(processingChannels,
                           PluginBridgeSharedState::maxBlockSize,
                           false,
                           true,

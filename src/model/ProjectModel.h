@@ -158,6 +158,7 @@ struct PluginInsert
     juce::String manufacturer;
     juce::String format;
     juce::String version;
+    juce::String architecture;
     juce::String fileOrIdentifier;
     juce::String stateFile;
     juce::String stateHash;
@@ -166,6 +167,8 @@ struct PluginInsert
     double tailSeconds = 0.0;
     bool bypassed = false;
     bool missing = false;
+    bool araCapable = false;
+    bool recoveryDisabled = false;
 
     [[nodiscard]] juce::var toVar() const;
     static std::optional<PluginInsert> fromVar(const juce::var& value, juce::String& error);

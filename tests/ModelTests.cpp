@@ -1009,6 +1009,12 @@ void pluginBridgeProtocol()
     state.input[0][1] = -0.5f;
     state.input[1][0] = 0.75f;
     state.input[1][1] = -1.0f;
+    state.sidechainChannels.store(2);
+    state.sidechain[0][0] = 0.5f;
+    state.parameterEventCount.store(1);
+    state.parameterEvents[0].parameterIndex = 7;
+    state.parameterEvents[0].sampleOffset = 2;
+    state.parameterEvents[0].value = 0.75f;
     state.hostSequence.store(1, std::memory_order_release);
 
     expect(studio::PluginBridgeProtocol::isValid(state), "Bridge protocol header is valid.");
@@ -1021,6 +1027,11 @@ void pluginBridgeProtocol()
            "Bridge transport preserves stereo samples.");
     expect(!studio::PluginBridgeProtocol::processAvailableBlock(state),
            "Bridge worker does not process the same block twice.");
+    expect(studio::PluginBridgeProtocol::parameterEventCount(state) == 1
+               && state.parameterEvents[0].parameterIndex == 7
+               && state.parameterEvents[0].sampleOffset == 2
+               && std::abs(state.sidechain[0][0] - 0.5f) < 0.0001f,
+           "Bridge audio, sidechain, and parameter events share one block record.");
 }
 
 void liveRecordingWaveform()
@@ -1168,6 +1179,7 @@ int main()
     routingModelTests();
     routingEngineTests();
     routingUiModelTests();
+    pluginFormatTests();
 
     if (failures == 0)
     {

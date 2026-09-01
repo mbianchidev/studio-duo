@@ -1,5 +1,6 @@
 #include "PluginCatalog.h"
 
+#include "PluginFormats.h"
 #include "PluginScanWorker.h"
 
 #include <algorithm>
@@ -11,6 +12,17 @@ namespace studio
 {
 namespace
 {
+juce::String currentArchitecture()
+{
+#if JUCE_ARM
+    return JUCE_64BIT ? "arm64" : "arm";
+#elif JUCE_64BIT
+    return "x86_64";
+#else
+    return "x86";
+#endif
+}
+
 class ScanCoordinator final : private juce::ChildProcessCoordinator
 {
 public:
@@ -193,7 +205,7 @@ PluginCatalog::PluginCatalog()
       cancelRequested(std::make_shared<std::atomic<bool>>(false))
 {
     catalogDirectory.createDirectory();
-    juce::addDefaultFormatsToManager(formatManager);
+    PluginFormats::addSupportedFormats(formatManager);
     knownPlugins.setCustomScanner(std::make_unique<OutOfProcessPluginScanner>(cancelRequested));
     load();
     juce::PluginDirectoryScanner::applyBlacklistingsFromDeadMansPedal(knownPlugins,
@@ -258,11 +270,13 @@ std::vector<PluginCatalogEntry> PluginCatalog::entries() const
             description.category,
             description.pluginFormatName,
             description.version,
+            currentArchitecture(),
             description.fileOrIdentifier,
             description.createIdentifierString(),
             description.numInputChannels,
             description.numOutputChannels,
-            description.isInstrument
+            description.isInstrument,
+            description.hasARAExtension
         });
     }
 

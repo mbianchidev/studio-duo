@@ -1,6 +1,8 @@
 #include "StudioAudioEngine.h"
 
 #include "mix/RoutingGraphCompiler.h"
+#include "plugin_host/PluginFormats.h"
+#include "plugin_host/ClapPluginInstance.h"
 
 #include "signalsmith-stretch.h"
 
@@ -443,6 +445,7 @@ std::vector<StudioAudioEngine::PluginRuntimeStatus> StudioAudioEngine::pluginRun
                 return candidate.insertId == status.insertId;
             });
             if (insert != track.inserts.cend()
+                && insert->inProcess == nullptr
                 && (insert->bridge == nullptr || !insert->bridge->isReady()))
             {
                 status.state = PluginRuntimeStatus::State::failed;
@@ -1242,7 +1245,9 @@ void StudioAudioEngine::configureRuntimeTiming(
                 return total;
 
             return total
-                + snapshot.processingQuantum
+                + (request.bridgeMode == PluginBridgeMode::sandboxed
+                       ? snapshot.processingQuantum
+                       : 0)
                 + std::max(0, request.latencySamples);
         });
     };
@@ -1857,7 +1862,8 @@ void StudioAudioEngine::applyDelayCompensation(
 }
 
 void StudioAudioEngine::processRuntimeChain(std::uint64_t key,
-                                            juce::AudioBuffer<float>& buffer) noexcept
+                                            juce::AudioBuffer<float>& buffer,
+                                            const juce::AudioBuffer<float>* sidechain) noexcept
 {
     if (key == 0)
         return;
@@ -1879,10 +1885,98 @@ void StudioAudioEngine::processRuntimeChain(std::uint64_t key,
             if (insert.bridge != nullptr && insert.bridge->isReady())
             {
                 const auto before = insert.bridge->lateBlockCount();
-                insert.bridge->processBlock(buffer);
+                insert.bridge->processBlock(buffer, sidechain);
                 const auto after = insert.bridge->lateBlockCount();
                 if (after > before)
                     pluginLateBlocks.fetch_add(after - before, std::memory_order_relaxed);
+            }
+            else if (insert.inProcess != nullptr)
+            {
+                auto& processor = *insert.inProcess;
+                const auto useScratch = processor.getTotalNumInputChannels()
+                        > buffer.getNumChannels()
+                    || processor.getTotalNumOutputChannels()
+                        > buffer.getNumChannels()
+                    || (sidechain != nullptr
+                        && processor.getBusCount(true) > 1);
+                if (!useScratch)
+                {
+                    insert.midi.clear();
+                    processor.processBlock(buffer, insert.midi);
+                    continue;
+                }
+
+                auto& scratch = insert.inProcessBuffer;
+                scratch.clear();
+                const auto mainChannels = processor.getBusCount(true) > 0
+                    ? processor.getChannelCountOfBus(true, 0)
+                    : processor.getTotalNumInputChannels();
+                for (int channel = 0;
+                     channel < std::min(mainChannels, buffer.getNumChannels());
+                     ++channel)
+                {
+                    const auto destination =
+                        processor.getChannelIndexInProcessBlockBuffer(
+                            true,
+                            0,
+                            channel);
+                    scratch.copyFrom(destination,
+                                     0,
+                                     buffer,
+                                     channel,
+                                     0,
+                                     buffer.getNumSamples());
+                }
+                if (sidechain != nullptr
+                    && processor.getBusCount(true) > 1)
+                {
+                    const auto sidechainChannels =
+                        processor.getChannelCountOfBus(true, 1);
+                    for (int channel = 0;
+                         channel
+                             < std::min(sidechainChannels,
+                                        sidechain->getNumChannels());
+                         ++channel)
+                    {
+                        const auto destination =
+                            processor.getChannelIndexInProcessBlockBuffer(
+                                true,
+                                1,
+                                channel);
+                        scratch.copyFrom(destination,
+                                         0,
+                                         *sidechain,
+                                         channel,
+                                         0,
+                                         buffer.getNumSamples());
+                    }
+                }
+                insert.midi.clear();
+                processor.processBlock(scratch, insert.midi);
+                const auto outputChannels = processor.getBusCount(false) > 0
+                    ? processor.getChannelCountOfBus(false, 0)
+                    : processor.getTotalNumOutputChannels();
+                for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
+                {
+                    if (channel < outputChannels)
+                    {
+                        const auto source =
+                            processor.getChannelIndexInProcessBlockBuffer(
+                                false,
+                                0,
+                                channel);
+                        buffer.copyFrom(channel,
+                                        0,
+                                        scratch,
+                                        source,
+                                        0,
+                                        buffer.getNumSamples());
+                    }
+                    else
+                    {
+                        buffer.clear(channel, 0, buffer.getNumSamples());
+                    }
+                }
             }
             else
             {
@@ -2138,6 +2232,8 @@ void StudioAudioEngine::runPluginRuntimeBuilder()
         std::vector<PluginRuntimeStatus> statuses;
         statuses.reserve(requests.size());
         PluginRuntimeGraph graph;
+        juce::AudioPluginFormatManager inProcessFormats;
+        PluginFormats::addSupportedFormats(inProcessFormats);
 
         for (auto& request : requests)
         {
@@ -2164,13 +2260,132 @@ void StudioAudioEngine::runPluginRuntimeBuilder()
                 statuses.push_back(std::move(status));
                 continue;
             }
+            if (request.recoveryDisabled)
+            {
+                status.state = PluginRuntimeStatus::State::failed;
+                status.message = "Disabled after an unclean in-process session";
+                statuses.push_back(std::move(status));
+                continue;
+            }
 
             status.state = PluginRuntimeStatus::State::loading;
-            status.message = "Starting sandbox worker";
+            status.message = request.bridgeMode == PluginBridgeMode::sandboxed
+                ? "Starting sandbox worker"
+                : "Starting reduced-isolation plugin";
             {
                 const juce::ScopedLock lock(pluginStatusLock);
                 pluginStatuses = statuses;
                 pluginStatuses.push_back(status);
+            }
+
+            if (request.bridgeMode != PluginBridgeMode::sandboxed)
+            {
+                if (request.bridgeMode == PluginBridgeMode::araCompatibility
+                    && !request.description->hasARAExtension)
+                {
+                    status.state = PluginRuntimeStatus::State::failed;
+                    status.message = "Plugin does not advertise ARA 2";
+                    statuses.push_back(std::move(status));
+                    continue;
+                }
+
+                juce::String creationError;
+                auto instance =
+                    request.description->pluginFormatName == "CLAP"
+                    ? std::unique_ptr<juce::AudioPluginInstance>(
+                          ClapPluginInstance::create(
+                              *request.description,
+                              currentSampleRate(),
+                              PluginBridgeSharedState::maxBlockSize,
+                              creationError))
+                    : inProcessFormats.createPluginInstance(
+                          *request.description,
+                          currentSampleRate(),
+                          PluginBridgeSharedState::maxBlockSize,
+                          creationError);
+                if (instance == nullptr)
+                {
+                    status.state = PluginRuntimeStatus::State::failed;
+                    status.message = creationError.isNotEmpty()
+                        ? creationError
+                        : "In-process plugin instantiation failed";
+                    statuses.push_back(std::move(status));
+                    continue;
+                }
+                if (!request.state.isEmpty())
+                    instance->setStateInformation(
+                        request.state.getData(),
+                        static_cast<int>(request.state.getSize()));
+                instance->prepareToPlay(
+                    currentSampleRate(),
+                    PluginBridgeSharedState::maxBlockSize);
+                std::unique_ptr<AraDocumentHost> araDocument;
+                if (request.bridgeMode == PluginBridgeMode::araCompatibility)
+                {
+                    araDocument = std::make_unique<AraDocumentHost>();
+                    if (const auto result = araDocument->bind(*instance);
+                        result.failed())
+                    {
+                        instance->releaseResources();
+                        status.state = PluginRuntimeStatus::State::failed;
+                        status.message = result.getErrorMessage();
+                        statuses.push_back(std::move(status));
+                        continue;
+                    }
+                }
+
+                auto track = std::find_if(
+                    graph.tracks.begin(),
+                    graph.tracks.end(),
+                    [&request](const auto& candidate)
+                    {
+                        return candidate.key == runtimeKey(request.trackId);
+                    });
+                if (track == graph.tracks.end())
+                {
+                    graph.tracks.push_back({
+                        runtimeKey(request.trackId),
+                        {}
+                    });
+                    track = std::prev(graph.tracks.end());
+                }
+
+                InsertRuntime insertRuntime;
+                insertRuntime.insertId = request.insertId;
+                insertRuntime.name = request.name;
+                insertRuntime.failureDelay.delaySamples =
+                    std::max(0, instance->getLatencySamples());
+                insertRuntime.failureDelay.buffer.setSize(
+                    2,
+                    insertRuntime.failureDelay.delaySamples
+                        + PluginBridgeSharedState::maxBlockSize
+                        + 1);
+                insertRuntime.failureDelay.buffer.clear();
+                insertRuntime.inProcessBuffer.setSize(
+                    std::max({
+                        2,
+                        instance->getTotalNumInputChannels(),
+                        instance->getTotalNumOutputChannels()
+                    }),
+                    PluginBridgeSharedState::maxBlockSize,
+                    false,
+                    true,
+                    false);
+                insertRuntime.inProcessBuffer.clear();
+                status.latencySamples = instance->getLatencySamples();
+                status.tailSeconds = instance->getTailLengthSeconds();
+                request.latencySamples = status.latencySamples;
+                request.tailSeconds = status.tailSeconds;
+                insertRuntime.inProcess = std::move(instance);
+                insertRuntime.araDocument = std::move(araDocument);
+                track->inserts.push_back(std::move(insertRuntime));
+                status.state = PluginRuntimeStatus::State::ready;
+                status.message =
+                    request.bridgeMode == PluginBridgeMode::araCompatibility
+                    ? "ARA compatibility ready - reduced isolation"
+                    : "Trusted in-process ready";
+                statuses.push_back(std::move(status));
+                continue;
             }
 
             auto bridge = std::make_unique<PluginBridgeClient>();
@@ -2317,6 +2532,10 @@ juce::String StudioAudioEngine::pluginRuntimeFingerprint(
                     << (request.bypassed ? "b" : "e")
                     << ":"
                     << (request.missing ? "m" : "a")
+                    << ":"
+                    << pluginBridgeModeToString(request.bridgeMode)
+                    << ":"
+                    << (request.recoveryDisabled ? "r" : "n")
                     << ":"
                     << juce::String(request.catalogRevision)
                     << ":"
@@ -2585,7 +2804,9 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
                 juce::AudioBuffer<float> trackView(trackChannels,
                                                    2,
                                                    samplesThisBlock);
-                processRuntimeChain(track.runtimeKey, trackView);
+                processRuntimeChain(track.runtimeKey,
+                                    trackView,
+                                    &track.sidechainBuffer);
                 const auto publishMeter = [&](bool postFader)
                 {
                     if (track.meterIndex < 0

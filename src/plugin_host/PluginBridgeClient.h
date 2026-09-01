@@ -9,6 +9,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <mutex>
+#include <span>
 
 namespace studio
 {
@@ -24,7 +25,10 @@ public:
                              int blockSize,
                              const juce::MemoryBlock& state = {});
     void stop();
-    void processBlock(juce::AudioBuffer<float>& audio) noexcept;
+    void processBlock(
+        juce::AudioBuffer<float>& audio,
+        const juce::AudioBuffer<float>* sidechain = nullptr,
+        std::span<const PluginBridgeParameterEvent> parameterEvents = {}) noexcept;
 
     [[nodiscard]] bool isReady() const noexcept;
     [[nodiscard]] std::uint64_t lateBlockCount() const noexcept;
@@ -53,8 +57,15 @@ private:
     std::array<std::array<float, PluginBridgeSharedState::maxBlockSize>,
                PluginBridgeSharedState::maxChannels> inputAccumulator {};
     std::array<std::array<float, PluginBridgeSharedState::maxBlockSize>,
+               PluginBridgeSharedState::maxChannels> sidechainAccumulator {};
+    std::array<std::array<float, PluginBridgeSharedState::maxBlockSize>,
                PluginBridgeSharedState::maxChannels> completedOutput {};
     int processingBlockSize = 512;
+    int inputChannels = 0;
+    int sidechainChannels = 0;
+    std::array<PluginBridgeParameterEvent,
+               PluginBridgeSharedState::maxParameterEvents> pendingParameterEvents {};
+    int pendingParameterEventCount = 0;
     int completedOutputSamples = 0;
     std::int64_t nextInputSequence = 0;
     std::int64_t inFlightSequence = -1;

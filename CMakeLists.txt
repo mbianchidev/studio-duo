@@ -35,6 +35,35 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(signalsmith_stretch)
 
+set(CLAP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(
+    clap
+    GIT_REPOSITORY https://github.com/free-audio/clap.git
+    GIT_TAG 1.2.10
+    GIT_SHALLOW TRUE
+)
+FetchContent_MakeAvailable(clap)
+
+set(CLAP_HELPERS_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(CLAP_HELPERS_DOWNLOAD_DEPENDENCIES OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(
+    clap_helpers
+    GIT_REPOSITORY https://github.com/free-audio/clap-helpers.git
+    GIT_TAG c35dd4906bd8efbb900cb2b89e680fed463cc8b1
+)
+FetchContent_MakeAvailable(clap_helpers)
+
+FetchContent_Declare(
+    ara_sdk
+    GIT_REPOSITORY https://github.com/Celemony/ARA_SDK.git
+    GIT_TAG releases/2.3.0
+    GIT_SHALLOW TRUE
+    GIT_SUBMODULES ARA_API ARA_Library
+    GIT_SUBMODULES_RECURSE TRUE
+)
+FetchContent_MakeAvailable(ara_sdk)
+juce_set_ara_sdk_path("${ara_sdk_SOURCE_DIR}")
+
 juce_add_binary_data(
     StudioDuoBrandData
     HEADER_NAME StudioDuoBrandData.h
@@ -66,11 +95,19 @@ set(STUDIO_DUO_MODEL_SOURCES
 )
 
 set(STUDIO_DUO_PLUGIN_SOURCES
+    src/plugin_host/AraDocumentHost.cpp
+    src/plugin_host/AraDocumentHost.h
+    src/plugin_host/ClapPluginFormat.cpp
+    src/plugin_host/ClapPluginFormat.h
+    src/plugin_host/ClapPluginInstance.cpp
+    src/plugin_host/ClapPluginInstance.h
     src/plugin_host/PluginBridgeClient.cpp
     src/plugin_host/PluginBridgeClient.h
     src/plugin_host/PluginBridgeProtocol.h
     src/plugin_host/PluginCatalog.cpp
     src/plugin_host/PluginCatalog.h
+    src/plugin_host/PluginFormats.cpp
+    src/plugin_host/PluginFormats.h
 )
 
 juce_add_gui_app(
@@ -142,6 +179,7 @@ target_compile_definitions(
         JUCE_STRICT_REFCOUNTEDPOINTER=1
         JUCE_PLUGINHOST_VST=0
         JUCE_PLUGINHOST_VST3=1
+        JUCE_PLUGINHOST_ARA=1
         STUDIO_DUO_VERSION="${PROJECT_VERSION}"
 )
 
@@ -159,6 +197,8 @@ target_link_libraries(
         juce::juce_audio_utils
         juce::juce_data_structures
         juce::juce_gui_extra
+        clap
+        clap-helpers
         StudioDuoBrandData
     PUBLIC
         juce::juce_recommended_config_flags
@@ -185,6 +225,29 @@ endif()
 if(STUDIO_DUO_BUILD_TESTS)
     enable_testing()
 
+    add_library(StudioDuoClapFixture MODULE tests/fixtures/ClapTestPlugin.c)
+    target_link_libraries(StudioDuoClapFixture PRIVATE clap)
+    set_target_properties(
+        StudioDuoClapFixture
+        PROPERTIES
+            PREFIX ""
+            OUTPUT_NAME "StudioDuoClapFixture"
+    )
+    if(APPLE)
+        set_target_properties(
+            StudioDuoClapFixture
+            PROPERTIES
+                BUNDLE TRUE
+                BUNDLE_EXTENSION clap
+                MACOSX_BUNDLE_GUI_IDENTIFIER "dev.mbianchi.studioduo.clap-fixture"
+                MACOSX_BUNDLE_BUNDLE_NAME "StudioDuoClapFixture"
+                MACOSX_BUNDLE_BUNDLE_VERSION "1"
+                MACOSX_BUNDLE_SHORT_VERSION_STRING "1.0"
+        )
+    elseif(WIN32)
+        set_target_properties(StudioDuoClapFixture PROPERTIES SUFFIX ".clap")
+    endif()
+
     juce_add_console_app(StudioDuoTests PRODUCT_NAME "Studio Duo Tests")
 
     target_sources(
@@ -194,6 +257,7 @@ if(STUDIO_DUO_BUILD_TESTS)
             tests/RoutingModelTests.cpp
             tests/RoutingEngineTests.cpp
             tests/RoutingUiModelTests.cpp
+            tests/PluginFormatTests.cpp
             src/ui/RoutingUiModel.cpp
             src/ui/RoutingUiModel.h
             src/audio/StudioAudioEngine.cpp
@@ -201,6 +265,14 @@ if(STUDIO_DUO_BUILD_TESTS)
             src/plugin_host/PluginBridgeClient.cpp
             src/plugin_host/PluginBridgeClient.h
             src/plugin_host/PluginBridgeProtocol.h
+            src/plugin_host/AraDocumentHost.cpp
+            src/plugin_host/AraDocumentHost.h
+            src/plugin_host/ClapPluginFormat.cpp
+            src/plugin_host/ClapPluginFormat.h
+            src/plugin_host/ClapPluginInstance.cpp
+            src/plugin_host/ClapPluginInstance.h
+            src/plugin_host/PluginFormats.cpp
+            src/plugin_host/PluginFormats.h
             ${STUDIO_DUO_MODEL_SOURCES}
     )
 
@@ -214,8 +286,23 @@ if(STUDIO_DUO_BUILD_TESTS)
             JUCE_WEB_BROWSER=0
             JUCE_PLUGINHOST_VST=0
             JUCE_PLUGINHOST_VST3=1
+            JUCE_PLUGINHOST_ARA=1
             STUDIO_DUO_VERSION="${PROJECT_VERSION}"
     )
+    if(APPLE)
+        target_compile_definitions(
+            StudioDuoTests
+            PRIVATE
+                STUDIO_DUO_CLAP_FIXTURE_PATH="$<TARGET_BUNDLE_DIR:StudioDuoClapFixture>"
+        )
+    else()
+        target_compile_definitions(
+            StudioDuoTests
+            PRIVATE
+                STUDIO_DUO_CLAP_FIXTURE_PATH="$<TARGET_FILE:StudioDuoClapFixture>"
+        )
+    endif()
+    add_dependencies(StudioDuoTests StudioDuoClapFixture)
     if(APPLE)
         target_compile_definitions(StudioDuoTests PRIVATE JUCE_PLUGINHOST_AU=1)
     else()
@@ -231,6 +318,8 @@ if(STUDIO_DUO_BUILD_TESTS)
             juce::juce_audio_utils
             juce::juce_data_structures
             juce::juce_graphics
+            clap
+            clap-helpers
         PUBLIC
             juce::juce_recommended_config_flags
             juce::juce_recommended_warning_flags

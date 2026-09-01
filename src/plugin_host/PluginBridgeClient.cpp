@@ -100,6 +100,8 @@ juce::Result PluginBridgeClient::startInternal(const juce::PluginDescription* de
     inFlightMissedDeadline = false;
     for (auto& channel : inputAccumulator)
         channel.fill(0.0f);
+    for (auto& channel : sidechainAccumulator)
+        channel.fill(0.0f);
     for (auto& channel : completedOutput)
         channel.fill(0.0f);
     for (auto& channel : lastValidOutput)
@@ -132,7 +134,10 @@ void PluginBridgeClient::stop()
     pluginTailSeconds.store(0.0, std::memory_order_relaxed);
 }
 
-void PluginBridgeClient::processBlock(juce::AudioBuffer<float>& audio) noexcept
+void PluginBridgeClient::processBlock(
+    juce::AudioBuffer<float>& audio,
+    const juce::AudioBuffer<float>* sidechain,
+    std::span<const PluginBridgeParameterEvent> parameterEvents) noexcept
 {
     if (!isReady() || sharedState == nullptr)
     {
@@ -151,6 +156,62 @@ void PluginBridgeClient::processBlock(juce::AudioBuffer<float>& audio) noexcept
         else
             std::fill_n(destination.begin(), samples, 0.0f);
     }
+    inputChannels = channels;
+    sidechainChannels = sidechain != nullptr
+        ? std::min(sidechain->getNumChannels(),
+                   PluginBridgeSharedState::maxChannels)
+        : 0;
+    for (int channel = 0;
+         channel < PluginBridgeSharedState::maxChannels;
+         ++channel)
+    {
+        auto& destination =
+            sidechainAccumulator[static_cast<std::size_t>(channel)];
+        if (sidechain != nullptr && channel < sidechainChannels)
+            std::copy_n(sidechain->getReadPointer(channel),
+                        samples,
+                        destination.begin());
+        else
+            std::fill_n(destination.begin(), samples, 0.0f);
+    }
+    pendingParameterEventCount = 0;
+    for (const auto& event : parameterEvents)
+    {
+        auto sanitized = event;
+        sanitized.sampleOffset = static_cast<std::uint32_t>(
+            std::min(samples - 1,
+                     static_cast<int>(sanitized.sampleOffset)));
+        sanitized.value = juce::jlimit(0.0f, 1.0f, sanitized.value);
+        if (pendingParameterEventCount
+            < PluginBridgeSharedState::maxParameterEvents)
+        {
+            pendingParameterEvents[static_cast<std::size_t>(
+                pendingParameterEventCount++)] = sanitized;
+            continue;
+        }
+
+        const auto existing = std::find_if(
+            pendingParameterEvents.begin(),
+            pendingParameterEvents.end(),
+            [&sanitized](const auto& candidate)
+            {
+                return candidate.parameterIndex == sanitized.parameterIndex;
+            });
+        if (existing != pendingParameterEvents.end())
+            *existing = sanitized;
+        else
+            pendingParameterEvents.back() = sanitized;
+        sharedState->parameterEventOverflowCount.fetch_add(
+            1,
+            std::memory_order_relaxed);
+    }
+    std::sort(
+        pendingParameterEvents.begin(),
+        pendingParameterEvents.begin() + pendingParameterEventCount,
+        [](const auto& left, const auto& right)
+        {
+            return left.sampleOffset < right.sampleOffset;
+        });
 
     const auto expectedSequence = inFlightSequence;
     fetchWorkerOutput();
@@ -208,11 +269,25 @@ void PluginBridgeClient::publishInputBlock(int samples) noexcept
         std::copy_n(inputAccumulator[static_cast<std::size_t>(channel)].begin(),
                     samples,
                     sharedState->input[static_cast<std::size_t>(channel)].begin());
+    for (int channel = 0; channel < PluginBridgeSharedState::maxChannels; ++channel)
+        std::copy_n(
+            sidechainAccumulator[static_cast<std::size_t>(channel)].begin(),
+            samples,
+            sharedState->sidechain[static_cast<std::size_t>(channel)].begin());
+    for (int event = 0; event < pendingParameterEventCount; ++event)
+        sharedState->parameterEvents[static_cast<std::size_t>(event)]
+            = pendingParameterEvents[static_cast<std::size_t>(event)];
 
-    sharedState->numChannels.store(PluginBridgeSharedState::maxChannels,
+    sharedState->numChannels.store(static_cast<std::uint32_t>(inputChannels),
                                    std::memory_order_relaxed);
+    sharedState->sidechainChannels.store(
+        static_cast<std::uint32_t>(sidechainChannels),
+        std::memory_order_relaxed);
     sharedState->numSamples.store(static_cast<std::uint32_t>(samples),
                                   std::memory_order_relaxed);
+    sharedState->parameterEventCount.store(
+        static_cast<std::uint32_t>(pendingParameterEventCount),
+        std::memory_order_relaxed);
     sharedState->hostSequence.store(hostSequence + 1, std::memory_order_release);
     inFlightSequence = nextInputSequence++;
     inFlightMissedDeadline = false;
