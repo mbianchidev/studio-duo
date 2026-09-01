@@ -1,4 +1,6 @@
-# Studio Duo
+<p align="center">
+  <img src="assets/branding/studio-duo-logo.svg" alt="Studio Duo" width="720">
+</p>
 
 [![CI](https://github.com/mbianchidev/studio-duo/actions/workflows/ci.yml/badge.svg)](https://github.com/mbianchidev/studio-duo/actions/workflows/ci.yml)
 
@@ -10,10 +12,12 @@ optimized for modern metal production without making the core DAW unfamiliar.
 
 The repository now contains a working native C++20 and JUCE 9 application with:
 
-- CoreAudio/ASIO/WASAPI device selection, transport, metronome, looping, and
-  lock-free audio recording
+- CoreAudio/ASIO/WASAPI device selection, tempo and meter maps, routed
+  subdivided metronome, punch/count-in/pre/post-roll transport, looping, and
+  sample-aligned lock-free multitrack audio recording
 - Audio import, playback, track arm/mute/solo, gain, pan, clip move, split,
-  delete, undo, and redo
+  delete, transient detection, pitch-preserving stretch/warp, fades,
+  crossfades, consolidation, undo, and redo
 - Out-of-process VST3 and Audio Unit discovery with a persistent searchable
   catalog, timeout isolation, and crash blacklisting
 - Persistent per-track plugin insert chains with sandbox mode, bypass, removal,
@@ -33,10 +37,10 @@ The repository now contains a working native C++20 and JUCE 9 application with:
 - Automated model, command-history, and project-persistence tests on macOS and
   Windows
 
-This is the first vertical slice, not the full 1.0 feature set. Plugin editors,
-automation, real-time plugin-inclusive bounce, linked multitrack editing, MIDI,
-mastering, DAWproject exchange, and the bundled device suite remain on the
-accepted roadmap.
+This now includes the Phase 1 vertical slice and Phase 2 professional tracking
+and editing workflows, not the full 1.0 feature set. Plugin editors, automation,
+real-time plugin-inclusive bounce, MIDI, mastering, DAWproject exchange, and the
+bundled device suite remain on the accepted roadmap.
 
 ## Build
 
@@ -87,34 +91,79 @@ loading, ready, missing, bypassed, crashed, and late-block states. Click a
 crashed insert status to reload its worker.
 
 Each timeline track header has **M**, **S**, and **R** controls for mute, solo,
-and record arm. Use either **+ AUDIO TRACK** control to add tracks. Pressing
-**REC** with an unarmed audio track selected arms it automatically and starts
-transport; press **REC** or **STOP** to finish the take. The session sidebar
+and record arm. Use either **+ AUDIO TRACK** control to add tracks. **REC**
+captures every armed audio parent from its configured mono or stereo hardware
+input into a separate sample-aligned WAV. If no track is armed, the selected
+audio track becomes the recording target for that pass. Press **REC** or
+**STOP** to finish all files at the same callback boundary. The session sidebar
 also duplicates or deletes the selected non-master track with full undo support.
+**Duplicate track** is available from the track-header context menu and copies
+the complete track family: audio clips, take lanes, inserts, input/mix settings,
+playlist/comp state, and connected tone-path sends and owned returns.
 
-Each new take on an existing audio track is recorded to a grouped `v1`, `v2`,
-`v3`, ... child track directly below its parent. Version tracks retain normal
-arm, mute, solo, split, trim, move, and delete behavior. The parent can collapse
-the versions and shows their combined waveform/result. Two-finger/right-click
-the left track header for mute, solo, arm, collapse/expand, and group-aware
-delete actions.
+**TRACKING SETUP** adds tempo or meter changes at the playhead, configures jump
+or ramp transitions, punch points, count-in bars, pre/post-roll, loop bounds,
+click subdivision, and the hardware output used by the metronome. All settings
+are saved with the project and participate in undo/redo.
+
+Arm two or more parent tracks and choose **Link armed parent tracks** in
+**TRACKING SETUP** to create a phase-locked edit group. Split, trim, move,
+delete, and comp operations then apply as one undoable command across the active
+takes at the same timeline position. The same menu selects the timing reference,
+quantize strength, protected anchors, group suspension, and unlinking.
+
+For reamping, select a DI parent in **TRACKING SETUP** and create either a
+hardware path to an existing return track or a plugin tone path. Hardware paths
+route the processed DI to the selected interface output, capture the configured
+return input, and can send an impulse to measure round-trip latency. Recorded
+returns are shifted by the measured latency plus the saved fine-alignment offset
+and can invert polarity. Plugin paths create a non-destructive track referencing
+the DI media; add VST3 inserts there to build the tone.
+
+Each completed pass creates grouped `v1`, `v2`, `v3`, ... child tracks directly
+below every recorded parent. A multitrack pass enters the project as one
+undoable command, so every synchronized lane is added, undone, or redone
+together. Version tracks retain normal arm, mute, solo, split, trim, move, and
+delete behavior. The parent can collapse the versions and shows their combined
+waveform/result. Two-finger/right-click the left track header for mute, solo,
+arm, collapse/expand, and group-aware delete actions.
+
+Loop recording writes one continuous synchronized WAV per armed parent and
+creates one alternate version lane per loop pass. Right-click a take clip to use
+its lane as the active playlist or assign that clip's edited range to the parent
+comp. New comp selections replace only overlapping regions; **Clear parent
+comp** returns playback to the active playlist.
 
 The track inspector selects the hardware input, chooses mono or adjacent-channel
 stereo capture, and enables software monitoring. Monitoring is off by default
 to avoid accidental feedback. Gain defaults to `0.0 dB`, accepts signed decimal
 entry, and uses a rotary control. Pan defaults to `Center` and displays `% L` or
-`% R`. **COLOR** opens an undoable track palette. Every lower mixer strip also
-has a draggable L/R pan knob; double-click it to return to center.
+`% R`. Double-click the inspector track name to rename it. **COLOR** offers
+quick palette choices plus an HSV/RGB custom picker; name and color changes are
+persistent and undoable. Double-click a timeline track name or the title area of
+a lower mixer strip to edit both values in one anchored panel. Drag the vertical
+mixer fader to change volume and double-click its lane to reset to `0.0 dB`.
+Every lower mixer strip also has a draggable L/R pan knob; double-click the knob
+area to return it to center.
 
 Selected clips show edge handles. Drag the body to move a clip, the left edge
 to change its timeline start and source offset, or the right edge to shorten or
-restore the available source range. During move or trim, the original bounds
-remain as a ghost outline. The command bar above the timeline exposes trim
-left, split, trim right, and delete actions. Clicking the selected clip or its
-track places the playhead without dropping clip selection, so the command bar
-and shortcuts act at that cursor. Drag a clip vertically to move it to another
-audio track while preserving its source and edit history. The ghost keeps a
-subtle copy of the original waveform visible under an edge-trim preview.
+restore the available source range. Trimmed-away audio remains visible as a
+subtle dashed waveform ghost and can be restored by dragging the edge back.
+Splitting creates two independent source ranges: the left clip cannot expand
+past the split point, and the right clip cannot expand before it, even after the
+playhead moves. The command bar above the timeline exposes trim left, split,
+trim right, and delete actions. Clicking the selected clip or its track places
+the playhead without dropping clip selection, so the command bar and shortcuts
+act at that cursor. Drag a clip vertically to move it to another audio track
+while preserving its source and edit history.
+
+Right-click a clip for deterministic transient detection, source-specific
+stretch modes, playback-rate presets, transient-to-playhead warp markers,
+fade-in/out placement, linked crossfade and gap closing, polarity inversion,
+reverse playback, and consolidation to a new immutable WAV. Green lines mark
+transients, orange triangles mark warp points, and fade curves remain visible
+on the clip.
 
 Recording draws a live waveform from lock-free peak buckets. Stopping creates
 and flushes the WAV before adding its clip; the inspector shows the saved WAV
@@ -141,8 +190,16 @@ shortcuts alongside each action, and the menu opens at the gesture point.
 - [Development and architecture](docs/development.md)
 - [Contributing](docs/contributing.md)
 
+## Brand assets
+
+The editable vector logo, app icon, PNG sizes, macOS ICNS, and Windows ICO are
+kept in [`assets/branding`](assets/branding). The JUCE application embeds the
+SVG mark in its window header and uses the 512 px and 32 px icon sources for
+native platform icon generation.
+
 ## License
 
 Studio Duo is licensed under the
 [GNU Affero General Public License v3.0 only](LICENSE). JUCE 9 is consumed under
-its AGPLv3 option for this open-source application.
+its AGPLv3 option for this open-source application. Signalsmith Stretch 1.1.0
+is fetched under its MIT license for pitch-preserving elastic audio.

@@ -11,6 +11,7 @@
 #include <juce_audio_utils/juce_audio_utils.h>
 
 #include <memory>
+#include <vector>
 
 namespace studio
 {
@@ -28,6 +29,13 @@ public:
 private:
     class MixerPanel;
     class InsertPanel;
+
+    struct ActiveRecordingTarget
+    {
+        juce::String parentTrackId;
+        Track versionTrack;
+        juce::File file;
+    };
 
     void timerCallback() override;
     bool keyPressed(const juce::KeyPress& key) override;
@@ -47,8 +55,8 @@ private:
     void toggleRecording();
     void stopTransportAndRecording();
     void finishRecording();
-    void completeRecording(const juce::String& trackId,
-                           StudioAudioEngine::RecordingResult recording);
+    void completeRecording(std::vector<ActiveRecordingTarget> targets,
+                           std::vector<StudioAudioEngine::RecordingResult> recordings);
     void addAudioTrack();
     void duplicateSelectedTrack();
     void deleteSelectedTrack();
@@ -57,6 +65,23 @@ private:
     void trimSelectedClipStartToPlayhead();
     void trimSelectedClipEndToPlayhead();
     void deleteSelectedClip();
+    void moveClip(const juce::String& clipId,
+                  const juce::String& destinationTrackId,
+                  double startSeconds);
+    void trimClip(const juce::String& clipId,
+                  double startSeconds,
+                  double sourceOffsetSeconds,
+                  double durationSeconds);
+    void quantizeSelectedGroup();
+    void analyseClipTransients(const juce::String& clipId);
+    void setClipStretchMode(const juce::String& clipId, StretchMode mode);
+    void setClipPlaybackRate(const juce::String& clipId, double rate);
+    void warpClipTransient(const juce::String& clipId, double timelineSeconds);
+    void setClipFade(const juce::String& clipId, double timelineSeconds, bool fadeIn);
+    void createClipCrossfade(const juce::String& clipId);
+    void toggleClipPolarity(const juce::String& clipId);
+    void toggleClipReverse(const juce::String& clipId);
+    void consolidateClip(const juce::String& clipId);
     void undo();
     void redo();
     void selectTrack(const juce::String& trackId);
@@ -65,26 +90,45 @@ private:
     void refreshInputControls();
     void updateInputMonitoring();
     void showTrackColourMenu();
+    void showTrackQuickEditor(const juce::String& trackId,
+                              juce::Rectangle<int> targetScreenArea);
+    void showTrackingMenu();
+    void promptTempoChange();
+    void promptMeterChange();
+    void createPluginTonePath(const juce::String& sourceTrackId);
     void updateTimelineSize();
     void zoomTimeline(double factor, bool reset = false);
     void projectChanged(bool writeRecovery = true, bool markDirty = true);
     [[nodiscard]] std::vector<StudioAudioEngine::PluginRuntimeRequest> pluginRuntimeRequests() const;
     bool perform(std::unique_ptr<ProjectCommand> command);
     void changeSelectedTrackState(const std::function<void(TrackMixState&)>& change);
-    Track* createRecordingVersionTrack();
+    void changeTransportState(const std::function<void(ProjectTransportState&)>& change);
+    void changeEditGroups(const std::function<void(std::vector<EditGroup>&)>& change);
+    void changeReampRoutes(const std::function<void(std::vector<ReampRoute>&)>& change);
+    [[nodiscard]] const AudioClip* activeClipAt(const juce::String& parentTrackId,
+                                                double seconds) const;
+    [[nodiscard]] std::vector<juce::String> linkedClipIdsAt(
+        const juce::String& clipId,
+        double seconds) const;
+    bool updateLinkedClips(
+        const juce::String& clipId,
+        const juce::String& commandName,
+        const std::function<bool(AudioClip&, const AudioClip&, juce::String&)>& update);
+    [[nodiscard]] Track makeRecordingVersionTrack(const Track& parent) const;
     Track* recordingTrack();
     void setStatus(const juce::String& message, bool error = false);
     void showError(const juce::String& title, const juce::String& message);
-    static juce::String positionText(double seconds, double tempo, int beatsPerBar);
+    static juce::String positionText(double seconds, const Project& project);
 
     StudioTheme theme;
+    std::unique_ptr<juce::Drawable> brandLogo;
     juce::AudioDeviceManager deviceManager;
     StudioAudioEngine audioEngine;
     Project project { Project::createDefault() };
     CommandStack commandStack;
     juce::File projectPackage;
-    juce::File activeRecording;
-    juce::String activeRecordingTrackId;
+    std::vector<ActiveRecordingTarget> activeRecordingTargets;
+    RecordingPlan activeRecordingPlan;
     double recordingStartSeconds = 0.0;
     juce::String selectedTrackId;
     juce::String selectedClipId;
@@ -93,7 +137,11 @@ private:
     bool recordingFinalizationInProgress = false;
     bool playAfterRuntimeTransition = false;
     bool updatingInputControls = false;
+    bool updatingTrackName = false;
+    bool tempoEditActive = false;
+    ProjectTransportState tempoEditStart;
     juce::String inputConfigurationSignature;
+    juce::String calibratingReampRouteId;
     std::uint64_t lastRuntimeCatalogRevision = 0;
 
     juce::TextButton newButton { "NEW" };
@@ -117,6 +165,7 @@ private:
     juce::TextButton importButton { "IMPORT AUDIO" };
     juce::TextButton duplicateTrackButton { "DUPLICATE TRACK" };
     juce::TextButton deleteTrackButton { "DELETE TRACK" };
+    juce::TextButton trackingButton { "TRACKING SETUP" };
 
     juce::Label inspectorName;
     juce::Label inspectorDetails;

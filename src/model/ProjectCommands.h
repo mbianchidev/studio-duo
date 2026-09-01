@@ -35,6 +35,21 @@ private:
     std::size_t nextCommand = 0;
 };
 
+class BatchProjectCommand final : public ProjectCommand
+{
+public:
+    BatchProjectCommand(juce::String commandName,
+                        std::vector<std::unique_ptr<ProjectCommand>> commands);
+
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    juce::String commandName;
+    std::vector<std::unique_ptr<ProjectCommand>> commands;
+};
+
 class AddTrackCommand final : public ProjectCommand
 {
 public:
@@ -47,6 +62,22 @@ public:
 private:
     Track track;
     std::size_t insertionIndex = 0;
+};
+
+class RenameTrackCommand final : public ProjectCommand
+{
+public:
+    RenameTrackCommand(juce::String trackToRename, juce::String replacementName);
+
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    juce::String trackId;
+    juce::String newName;
+    juce::String oldName;
+    bool capturedOriginal = false;
 };
 
 class AddClipCommand final : public ProjectCommand
@@ -62,6 +93,21 @@ private:
     juce::String trackId;
     AudioClip clip;
     std::size_t insertionIndex = 0;
+};
+
+class AddRecordingTakeCommand final : public ProjectCommand
+{
+public:
+    explicit AddRecordingTakeCommand(std::vector<Track> tracksToAdd);
+
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    std::vector<Track> tracks;
+    std::vector<std::pair<juce::String, bool>> parentCollapseStates;
+    bool capturedOriginal = false;
 };
 
 class MoveClipCommand final : public ProjectCommand
@@ -85,6 +131,25 @@ private:
     bool capturedOriginal = false;
 };
 
+class SetClipStateCommand final : public ProjectCommand
+{
+public:
+    SetClipStateCommand(juce::String trackId,
+                        AudioClip before,
+                        AudioClip after,
+                        juce::String commandName);
+
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    juce::String trackId;
+    AudioClip oldClip;
+    AudioClip newClip;
+    juce::String commandName;
+};
+
 class TrimClipCommand final : public ProjectCommand
 {
 public:
@@ -102,9 +167,7 @@ private:
     double newStartSeconds = 0.0;
     double newSourceOffsetSeconds = 0.0;
     double newDurationSeconds = 0.0;
-    double oldStartSeconds = 0.0;
-    double oldSourceOffsetSeconds = 0.0;
-    double oldDurationSeconds = 0.0;
+    AudioClip originalClip;
     bool capturedOriginal = false;
 };
 
@@ -142,6 +205,125 @@ private:
     AudioClip deletedClip;
     std::size_t clipIndex = 0;
     bool capturedOriginal = false;
+};
+
+class SetActiveTakeCommand final : public ProjectCommand
+{
+public:
+    SetActiveTakeCommand(juce::String parentTrackId,
+                         juce::String activeTakeTrackId);
+
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    juce::String parentId;
+    juce::String newActiveTakeId;
+    juce::String oldActiveTakeId;
+    bool capturedOriginal = false;
+};
+
+class SetCompRegionsCommand final : public ProjectCommand
+{
+public:
+    SetCompRegionsCommand(juce::String parentTrackId,
+                          std::vector<CompRegion> before,
+                          std::vector<CompRegion> after);
+
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    static bool validate(const Project& project,
+                         const juce::String& parentId,
+                         const std::vector<CompRegion>& regions,
+                         juce::String& error);
+
+    juce::String parentId;
+    std::vector<CompRegion> oldRegions;
+    std::vector<CompRegion> newRegions;
+};
+
+class SetEditGroupsCommand final : public ProjectCommand
+{
+public:
+    SetEditGroupsCommand(std::vector<EditGroup> before,
+                         std::vector<EditGroup> after);
+
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    static bool validate(const Project& project,
+                         const std::vector<EditGroup>& groups,
+                         juce::String& error);
+
+    std::vector<EditGroup> oldGroups;
+    std::vector<EditGroup> newGroups;
+};
+
+class SetReampRoutesCommand final : public ProjectCommand
+{
+public:
+    SetReampRoutesCommand(std::vector<ReampRoute> before,
+                          std::vector<ReampRoute> after);
+
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    static bool validate(const Project& project,
+                         const std::vector<ReampRoute>& routes,
+                         juce::String& error);
+
+    std::vector<ReampRoute> oldRoutes;
+    std::vector<ReampRoute> newRoutes;
+};
+
+struct ProjectTransportState
+{
+    double tempo = 120.0;
+    int timeSignatureNumerator = 4;
+    int timeSignatureDenominator = 4;
+    std::vector<TempoChange> tempoChanges;
+    std::vector<MeterChange> meterChanges;
+    bool metronomeEnabled = true;
+    int metronomeSubdivision = 1;
+    int metronomeOutputChannel = 0;
+    float metronomeLevel = 0.65f;
+    float metronomeAccentLevel = 1.0f;
+    bool punchEnabled = false;
+    double punchInSeconds = 0.0;
+    double punchOutSeconds = 8.0;
+    int countInBars = 0;
+    double preRollSeconds = 0.0;
+    double postRollSeconds = 0.0;
+    bool loopEnabled = false;
+    double loopStartSeconds = 0.0;
+    double loopEndSeconds = 8.0;
+
+    static ProjectTransportState fromProject(const Project& project);
+};
+
+class SetProjectTransportCommand final : public ProjectCommand
+{
+public:
+    SetProjectTransportCommand(ProjectTransportState before,
+                               ProjectTransportState after);
+
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    static void apply(Project& project, const ProjectTransportState& state);
+
+    ProjectTransportState oldState;
+    ProjectTransportState newState;
 };
 
 struct TrackMixState
@@ -243,6 +425,11 @@ public:
 private:
     juce::String trackId;
     std::vector<std::pair<std::size_t, Track>> removedTracks;
+    juce::String affectedParentId;
+    juce::String oldActiveTakeId;
+    std::vector<CompRegion> oldCompRegions;
+    std::vector<EditGroup> oldEditGroups;
+    std::vector<ReampRoute> oldReampRoutes;
     bool capturedOriginal = false;
 };
 
@@ -258,7 +445,9 @@ public:
 
 private:
     juce::String sourceTrackId;
-    Track duplicatedTrack;
+    juce::String duplicatedRootTrackId;
+    std::vector<Track> duplicatedTracks;
+    std::vector<ReampRoute> duplicatedRoutes;
     std::size_t insertionIndex = 0;
     bool createdDuplicate = false;
 };

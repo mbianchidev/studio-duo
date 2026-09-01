@@ -11,17 +11,22 @@ namespace studio
 class TimelineComponent final : public juce::Component
 {
 public:
+    struct RecordingPreview
+    {
+        juce::String trackId;
+        double startSeconds = 0.0;
+        double durationSeconds = 0.0;
+        std::vector<float> waveformPeaks;
+    };
+
     TimelineComponent();
 
     void setProject(const Project* projectToDisplay);
     void setSelection(juce::String trackId, juce::String clipId);
     void setPlayheadSeconds(double seconds);
     void setViewportPosition(int horizontalPosition);
-    void setRecordingPreview(juce::String trackId,
-                             double startSeconds,
-                             double durationSeconds,
-                             std::vector<float> waveformPeaks);
-    void clearRecordingPreview();
+    void setRecordingPreviews(std::vector<RecordingPreview> previews);
+    void clearRecordingPreviews();
     void setPixelsPerSecond(double pixels);
     [[nodiscard]] double getPixelsPerSecond() const noexcept;
     [[nodiscard]] float xForSeconds(double seconds) const noexcept;
@@ -32,7 +37,9 @@ public:
     std::function<void(const juce::String&)> onTrackMute;
     std::function<void(const juce::String&)> onTrackSolo;
     std::function<void(const juce::String&)> onTrackArm;
+    std::function<void(const juce::String&, juce::Rectangle<int>)> onEditTrack;
     std::function<void(const juce::String&)> onToggleTrackVersions;
+    std::function<void(const juce::String&)> onDuplicateTrack;
     std::function<void(const juce::String&)> onDeleteTrack;
     std::function<void()> onAddTrack;
     std::function<void(const juce::String&, const juce::String&)> onClipSelected;
@@ -44,9 +51,23 @@ public:
     std::function<void()> onTrimStartSelected;
     std::function<void()> onTrimEndSelected;
     std::function<void()> onDeleteSelected;
+    std::function<void(const juce::String&)> onUseTake;
+    std::function<void(const juce::String&)> onUseClipForComp;
+    std::function<void(const juce::String&)> onClearComp;
+    std::function<void(const juce::String&)> onAnalyseTransients;
+    std::function<void(const juce::String&, StretchMode)> onSetStretchMode;
+    std::function<void(const juce::String&, double)> onSetPlaybackRate;
+    std::function<void(const juce::String&, double)> onWarpTransientToTimeline;
+    std::function<void(const juce::String&, double)> onSetFadeIn;
+    std::function<void(const juce::String&, double)> onSetFadeOut;
+    std::function<void(const juce::String&)> onCreateCrossfade;
+    std::function<void(const juce::String&)> onToggleClipPolarity;
+    std::function<void(const juce::String&)> onToggleClipReverse;
+    std::function<void(const juce::String&)> onConsolidateClip;
 
     void paint(juce::Graphics& graphics) override;
     void mouseDown(const juce::MouseEvent& event) override;
+    void mouseDoubleClick(const juce::MouseEvent& event) override;
     void mouseDrag(const juce::MouseEvent& event) override;
     void mouseUp(const juce::MouseEvent& event) override;
     void mouseWheelMove(const juce::MouseEvent& event,
@@ -86,11 +107,8 @@ private:
     juce::String draggedClipId;
     juce::String dragOriginalTrackId;
     juce::String dragPreviewTrackId;
-    juce::String recordingTrackId;
     double playheadSeconds = 0.0;
-    double recordingStartSeconds = 0.0;
-    double recordingDurationSeconds = 0.0;
-    std::vector<float> recordingPeaks;
+    std::vector<RecordingPreview> recordingPreviews;
     double pixelsPerSecond = 96.0;
     int viewportPositionX = 0;
     double dragOriginalStart = 0.0;

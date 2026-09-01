@@ -9,6 +9,15 @@
 
 namespace studio
 {
+template <typename Range>
+int synchronizedCaptureSamples(int requestedSamples, const Range& freeSamples) noexcept
+{
+    auto captureSamples = std::max(0, requestedSamples);
+    for (const auto available : freeSamples)
+        captureSamples = std::min(captureSamples, std::max(0, available));
+    return captureSamples;
+}
+
 class RecordingWaveform
 {
 public:
@@ -30,7 +39,8 @@ public:
               int inputChannels,
               int firstInputChannel,
               int captureChannels,
-              int samples) noexcept
+              int samples,
+              int sourceSampleOffset = 0) noexcept
     {
         for (int sample = 0; sample < samples; ++sample)
         {
@@ -39,7 +49,9 @@ public:
             {
                 const auto sourceChannel = firstInputChannel + channel;
                 if (sourceChannel < inputChannels && inputs[sourceChannel] != nullptr)
-                    peak = std::max(peak, std::abs(inputs[sourceChannel][sample]));
+                    peak = std::max(
+                        peak,
+                        std::abs(inputs[sourceChannel][sourceSampleOffset + sample]));
             }
 
             peakAccumulator = std::max(peakAccumulator, peak);

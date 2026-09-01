@@ -1,5 +1,6 @@
 #pragma once
 
+#include "AudioAnalysis.h"
 #include "RecordingWaveform.h"
 #include "model/ProjectModel.h"
 #include "plugin_host/PluginBridgeClient.h"
@@ -19,12 +20,33 @@ namespace studio
 class StudioAudioEngine final : private juce::AudioIODeviceCallback
 {
 public:
+    static constexpr std::size_t maximumRecordingTracks = 64;
+
     struct RecordingResult
     {
         juce::Result result { juce::Result::ok() };
         juce::File file;
         double durationSeconds = 0.0;
         juce::String warning;
+    };
+
+    struct RecordingRequest
+    {
+        juce::File file;
+        int firstInputChannel = 0;
+        int channels = 1;
+    };
+
+    struct RecordingProgress
+    {
+        double durationSeconds = 0.0;
+        std::vector<float> waveform;
+    };
+
+    struct LatencyCalibrationResult
+    {
+        juce::Result result { juce::Result::ok() };
+        int latencySamples = 0;
     };
 
     struct PluginRuntimeRequest
@@ -82,29 +104,35 @@ public:
     [[nodiscard]] float leftPeak() const noexcept;
     [[nodiscard]] float rightPeak() const noexcept;
     [[nodiscard]] double currentSampleRate() const noexcept;
-    [[nodiscard]] double recordingDurationSeconds() const noexcept;
-    [[nodiscard]] std::vector<float> recordingWaveform() const;
+    [[nodiscard]] std::vector<RecordingProgress> recordingProgress() const;
     [[nodiscard]] std::vector<PluginRuntimeStatus> pluginRuntimeStatuses() const;
     [[nodiscard]] std::uint64_t pluginLateBlockCount() const noexcept;
     [[nodiscard]] bool pluginRuntimeTransitionPending() const;
     void forcePluginRuntimeReload(const Project& project,
                                   std::vector<PluginRuntimeRequest> pluginRequests);
 
-    juce::Result startRecording(const juce::File& destination,
-                                int firstInputChannel,
-                                int channels);
-    RecordingResult stopRecording();
-    void stopRecordingAsync(std::function<void(RecordingResult)> completion);
+    juce::Result startRecording(const std::vector<RecordingRequest>& requests,
+                                const RecordingPlan& plan);
+    std::vector<RecordingResult> stopRecording();
+    void stopRecordingAsync(std::function<void(std::vector<RecordingResult>)> completion);
     std::optional<double> audioFileDuration(const juce::File& source, juce::String& error);
+    std::vector<double> analyseTransients(const AudioClip& clip, juce::String& error);
+    juce::Result renderClipToWav(const AudioClip& clip,
+                                 const juce::File& destination,
+                                 double sampleRate);
+    juce::Result startLatencyCalibration(int outputChannel, int inputChannel);
+    std::optional<LatencyCalibrationResult> takeLatencyCalibrationResult();
     juce::Result renderToWav(const Project& project, const juce::File& destination, double sampleRate);
 
 private:
     struct RenderClip
     {
         std::int64_t startSample = 0;
-        std::int64_t sourceOffsetSamples = 0;
         std::int64_t lengthSamples = 0;
+        double timelineOffsetBaseSeconds = 0.0;
+        double sampleRate = 48000.0;
         float gain = 1.0f;
+        AudioClip processing;
         juce::AudioBuffer<float> samples;
     };
 
@@ -148,6 +176,12 @@ private:
 
     struct RenderSnapshot
     {
+        struct HardwareSend
+        {
+            std::uint64_t sourceRuntimeKey = 0;
+            int outputChannel = 2;
+        };
+
         double sampleRate = 48000.0;
         int processingQuantum = 512;
         std::int64_t contentLengthSamples = 0;
@@ -155,11 +189,20 @@ private:
         std::int64_t loopStartSample = 0;
         std::int64_t loopEndSample = 0;
         double tempo = 120.0;
+        std::vector<TempoChange> tempoChanges;
+        std::vector<MeterChange> meterChanges;
+        int timeSignatureNumerator = 4;
+        int timeSignatureDenominator = 4;
+        int metronomeSubdivision = 1;
+        int metronomeOutputChannel = 0;
+        float metronomeLevel = 0.65f;
+        float metronomeAccentLevel = 1.0f;
         bool loopEnabled = false;
         std::uint64_t masterRuntimeKey = 0;
         float masterGain = 1.0f;
         float masterPan = 0.0f;
         bool masterAudible = true;
+        std::vector<HardwareSend> hardwareSends;
         std::vector<RenderTrack> tracks;
         juce::AudioBuffer<float> masterBuffer {
             2,
@@ -204,8 +247,13 @@ private:
         RecordingResult stop();
         void stopAccepting() noexcept;
         RecordingResult finishStop();
-        void push(const float* const* inputs, int inputChannels, int samples) noexcept;
+        void push(const float* const* inputs,
+                  int inputChannels,
+                  int sourceSampleOffset,
+                  int samples) noexcept;
+        void noteDroppedSamples(int samples) noexcept;
         [[nodiscard]] bool isActive() const noexcept;
+        [[nodiscard]] int availableSamples() const noexcept;
         [[nodiscard]] double capturedDurationSeconds() const noexcept;
         [[nodiscard]] std::vector<float> waveform() const;
 
@@ -214,7 +262,7 @@ private:
 
         static constexpr int capacitySamples = 1 << 20;
         juce::AbstractFifo fifo { capacitySamples };
-        juce::AudioBuffer<float> ringBuffer { 2, capacitySamples };
+        std::unique_ptr<juce::AudioBuffer<float>> ringBuffer;
         std::unique_ptr<juce::AudioFormatWriter> writer;
         std::atomic<bool> accepting { false };
         std::atomic<std::int64_t> samplesWritten { 0 };
@@ -224,7 +272,7 @@ private:
         double recordingSampleRate = 48000.0;
         int recordingChannels = 1;
         int recordingFirstInputChannel = 0;
-        RecordingWaveform recordingWaveform;
+        std::unique_ptr<RecordingWaveform> recordingWaveform;
     };
 
     std::optional<RenderSnapshot> buildSnapshot(const Project& project,
@@ -234,6 +282,11 @@ private:
     std::optional<juce::AudioBuffer<float>> readAndResample(const juce::File& source,
                                                            double targetSampleRate,
                                                            juce::String& error);
+    std::optional<juce::AudioBuffer<float>> processClipAudio(
+        const AudioClip& clip,
+        const juce::AudioBuffer<float>& source,
+        double targetSampleRate,
+        juce::String& error) const;
     void configureRuntimeTiming(RenderSnapshot& snapshot,
                                 const std::vector<PluginRuntimeRequest>& pluginRequests) const;
     static void mixSample(const RenderSnapshot& snapshot,
@@ -246,6 +299,10 @@ private:
                                   bool loopEnabled,
                                   std::int64_t loopStartSample,
                                   std::int64_t loopEndSample) noexcept;
+    static bool readRenderClipSample(const RenderClip& clip,
+                                    std::int64_t relativeSample,
+                                    float& left,
+                                    float& right) noexcept;
     static void applyTrackGainAndPan(juce::AudioBuffer<float>& buffer,
                                      int samples,
                                      float gain,
@@ -265,10 +322,18 @@ private:
                                                   int snapshotIndex,
                                                   int runtimeIndex) noexcept;
     int chooseWritableRuntime() const noexcept;
+    void waitForRecordingCallbacks() const noexcept;
+    std::vector<RecordingResult> finishRecordingSession();
     static void addMetronome(const RenderSnapshot& snapshot,
                              std::int64_t timelineSample,
                              float& left,
                              float& right) noexcept;
+    [[nodiscard]] static double tempoAt(const RenderSnapshot& snapshot,
+                                        double seconds) noexcept;
+    [[nodiscard]] static double beatsAt(const RenderSnapshot& snapshot,
+                                        double seconds) noexcept;
+    [[nodiscard]] static MeterChange meterAt(const RenderSnapshot& snapshot,
+                                             double seconds) noexcept;
     int chooseWritableSnapshot() const noexcept;
 
     void audioDeviceIOCallbackWithContext(const float* const* inputChannelData,
@@ -320,9 +385,22 @@ private:
     mutable juce::CriticalSection pluginStatusLock;
     std::vector<PluginRuntimeStatus> pluginStatuses;
     std::atomic<std::uint64_t> pluginLateBlocks { 0 };
-    LockFreeRecorder recorder;
+    std::array<std::unique_ptr<LockFreeRecorder>, maximumRecordingTracks> recorders;
+    std::atomic<int> activeRecorderCount { 0 };
+    std::atomic<bool> recordingAccepting { false };
+    mutable std::atomic<int> recordingCallbacksInFlight { 0 };
+    std::atomic<std::int64_t> recordingCaptureStartSample { 0 };
+    std::atomic<std::int64_t> recordingCaptureEndSample { -1 };
+    std::atomic<std::int64_t> recordingTransportEndSample { -1 };
+    std::atomic<bool> recordingLoopEnabled { false };
     juce::ThreadPool recordingFinalizer { 1 };
     std::atomic<bool> recordingFinalizing { false };
+    std::atomic<bool> calibrationActive { false };
+    std::atomic<bool> calibrationResultReady { false };
+    std::atomic<int> calibrationOutputChannel { 0 };
+    std::atomic<int> calibrationInputChannel { 0 };
+    std::atomic<std::int64_t> calibrationSamplesElapsed { 0 };
+    std::atomic<int> calibrationLatencySamples { -1 };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(StudioAudioEngine)
 };

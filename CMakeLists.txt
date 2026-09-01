@@ -14,10 +14,10 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 option(STUDIO_DUO_BUILD_TESTS "Build Studio Duo tests" ON)
 set(STUDIO_DUO_BUNDLE_ID "dev.mbianchi.studioduo")
 
+include(FetchContent)
 find_package(JUCE CONFIG QUIET)
 
 if(NOT TARGET juce::juce_gui_extra)
-    include(FetchContent)
     FetchContent_Declare(
         JUCE
         GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
@@ -27,7 +27,26 @@ if(NOT TARGET juce::juce_gui_extra)
     FetchContent_MakeAvailable(JUCE)
 endif()
 
+FetchContent_Declare(
+    signalsmith_stretch
+    GIT_REPOSITORY https://github.com/Signalsmith-Audio/signalsmith-stretch.git
+    GIT_TAG 1.1.0
+    GIT_SHALLOW TRUE
+)
+FetchContent_MakeAvailable(signalsmith_stretch)
+
+juce_add_binary_data(
+    StudioDuoBrandData
+    HEADER_NAME StudioDuoBrandData.h
+    NAMESPACE studio_brand
+    SOURCES
+        assets/branding/studio-duo-icon.svg
+        assets/branding/studio-duo-icon-512.png
+)
+
 set(STUDIO_DUO_MODEL_SOURCES
+    src/audio/AudioAnalysis.cpp
+    src/audio/AudioAnalysis.h
     src/model/ProjectCommands.cpp
     src/model/ProjectCommands.h
     src/model/ProjectModel.cpp
@@ -50,6 +69,8 @@ juce_add_gui_app(
     COMPANY_NAME "Studio Duo"
     BUNDLE_ID "${STUDIO_DUO_BUNDLE_ID}"
     VERSION ${PROJECT_VERSION}
+    ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/assets/branding/studio-duo-icon-512.png"
+    ICON_SMALL "${CMAKE_CURRENT_SOURCE_DIR}/assets/branding/studio-duo-icon-32.png"
     MICROPHONE_PERMISSION_ENABLED TRUE
     MICROPHONE_PERMISSION_TEXT "Studio Duo needs microphone access to record audio."
 )
@@ -78,7 +99,21 @@ target_sources(
         ${STUDIO_DUO_PLUGIN_SOURCES}
 )
 
-target_include_directories(StudioDuo PRIVATE src)
+if(APPLE)
+    target_sources(
+        StudioDuo
+        PRIVATE
+            src/platform/ApplicationIcon.h
+            src/platform/MacApplicationIcon.mm
+    )
+endif()
+
+target_include_directories(
+    StudioDuo
+    PRIVATE
+        src
+)
+target_include_directories(StudioDuo SYSTEM PRIVATE ${signalsmith_stretch_SOURCE_DIR})
 
 target_compile_definitions(
     StudioDuo
@@ -106,6 +141,7 @@ target_link_libraries(
         juce::juce_audio_utils
         juce::juce_data_structures
         juce::juce_gui_extra
+        StudioDuoBrandData
     PUBLIC
         juce::juce_recommended_config_flags
         juce::juce_recommended_lto_flags

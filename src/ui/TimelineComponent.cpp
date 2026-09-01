@@ -3,10 +3,30 @@
 #include "StudioTheme.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstdint>
 
 namespace studio
 {
+namespace
+{
+float waveformAmplitude(const AudioClip& clip, double sourceSeconds) noexcept
+{
+    const auto sourceKey = clip.sourceFile.getFullPathName().isNotEmpty()
+        ? clip.sourceFile.getFullPathName()
+        : clip.id;
+    auto value = static_cast<std::uint32_t>(sourceKey.hashCode())
+        ^ static_cast<std::uint32_t>(std::max(0.0, sourceSeconds) * 64.0);
+    value ^= value >> 16;
+    value *= 0x7feb352du;
+    value ^= value >> 15;
+    value *= 0x846ca68bu;
+    value ^= value >> 16;
+    return static_cast<float>(value & 0xffffu) / 65535.0f;
+}
+}
+
 TimelineComponent::TimelineComponent()
 {
     setOpaque(true);
@@ -44,23 +64,20 @@ void TimelineComponent::setViewportPosition(int horizontalPosition)
     repaint();
 }
 
-void TimelineComponent::setRecordingPreview(juce::String trackId,
-                                            double startSeconds,
-                                            double durationSeconds,
-                                            std::vector<float> waveformPeaks)
+void TimelineComponent::setRecordingPreviews(std::vector<RecordingPreview> previews)
 {
-    recordingTrackId = std::move(trackId);
-    recordingStartSeconds = std::max(0.0, startSeconds);
-    recordingDurationSeconds = std::max(0.0, durationSeconds);
-    recordingPeaks = std::move(waveformPeaks);
+    for (auto& preview : previews)
+    {
+        preview.startSeconds = std::max(0.0, preview.startSeconds);
+        preview.durationSeconds = std::max(0.0, preview.durationSeconds);
+    }
+    recordingPreviews = std::move(previews);
     repaint();
 }
 
-void TimelineComponent::clearRecordingPreview()
+void TimelineComponent::clearRecordingPreviews()
 {
-    recordingTrackId.clear();
-    recordingDurationSeconds = 0.0;
-    recordingPeaks.clear();
+    recordingPreviews.clear();
     repaint();
 }
 
@@ -83,7 +100,9 @@ float TimelineComponent::xForSeconds(double seconds) const noexcept
 int TimelineComponent::preferredWidth(int minimumWidth) const
 {
     const auto projectSeconds = project != nullptr ? project->lengthSeconds() : 8.0;
-    const auto previewEnd = recordingStartSeconds + recordingDurationSeconds;
+    auto previewEnd = 0.0;
+    for (const auto& preview : recordingPreviews)
+        previewEnd = std::max(previewEnd, preview.startSeconds + preview.durationSeconds);
     const auto seconds = std::max(projectSeconds, previewEnd) + 8.0;
     return std::max(minimumWidth,
                     trackHeaderWidth + static_cast<int>(std::ceil(seconds * pixelsPerSecond)));
@@ -106,15 +125,15 @@ void TimelineComponent::paint(juce::Graphics& graphics)
     if (project == nullptr)
         return;
 
-    const auto secondsPerBeat = 60.0 / project->tempo;
-    const auto beats = static_cast<int>(std::ceil((getWidth() - trackHeaderWidth)
-                                                  / pixelsPerSecond
-                                                  / secondsPerBeat));
-    for (int beat = 0; beat <= beats; ++beat)
+    const auto maximumSeconds = std::max(
+        project->lengthSeconds() + 8.0,
+        static_cast<double>(getWidth() - trackHeaderWidth) / pixelsPerSecond);
+    auto seconds = 0.0;
+    for (int line = 0; line < 100000 && seconds <= maximumSeconds; ++line)
     {
-        const auto seconds = beat * secondsPerBeat;
         const auto x = static_cast<int>(secondsToX(seconds));
-        const auto isBar = beat % project->timeSignatureNumerator == 0;
+        const auto position = project->musicalPositionAt(seconds);
+        const auto isBar = position.beat == 1 && position.ticks < 2;
         graphics.setColour(juce::Colour(isBar ? StudioColours::border : 0xff25292d));
         graphics.drawVerticalLine(x, static_cast<float>(rulerHeight), static_cast<float>(getHeight()));
 
@@ -122,13 +141,73 @@ void TimelineComponent::paint(juce::Graphics& graphics)
         {
             graphics.setColour(juce::Colour(StudioColours::secondaryText));
             graphics.setFont(12.0f);
-            graphics.drawText(juce::String(beat / project->timeSignatureNumerator + 1),
+            graphics.drawText(juce::String(position.bar),
                               x + 5,
                               0,
                               42,
                               rulerHeight,
                               juce::Justification::centredLeft);
         }
+
+        const auto quarterBeatStep = 4.0
+            / static_cast<double>(position.meter.denominator);
+        auto nextSeconds = project->secondsAtBeat(
+            project->beatsAt(seconds) + quarterBeatStep);
+        for (const auto& meterChange : project->meterChanges)
+        {
+            if (meterChange.timeSeconds > seconds + 0.0001
+                && meterChange.timeSeconds < nextSeconds - 0.0001)
+            {
+                nextSeconds = meterChange.timeSeconds;
+                break;
+            }
+        }
+        if (nextSeconds <= seconds + 0.000001)
+            break;
+        seconds = nextSeconds;
+    }
+
+    for (const auto& tempoChange : project->tempoChanges)
+    {
+        const auto x = static_cast<int>(secondsToX(tempoChange.timeSeconds));
+        graphics.setColour(juce::Colour(StudioColours::orange));
+        graphics.fillRect(x - 1, 0, 3, 5);
+        graphics.setFont(9.0f);
+        graphics.drawText(juce::String(tempoChange.bpm, 1)
+                              + (tempoChange.rampToNext ? " R" : ""),
+                          x + 4,
+                          1,
+                          52,
+                          12,
+                          juce::Justification::centredLeft);
+    }
+    for (const auto& group : project->editGroups)
+    {
+        if (!group.enabled)
+            continue;
+        for (const auto anchor : group.protectedAnchorsSeconds)
+        {
+            const auto x = secondsToX(anchor);
+            graphics.setColour(juce::Colour(StudioColours::violet).withAlpha(0.55f));
+            graphics.drawVerticalLine(static_cast<int>(x),
+                                      static_cast<float>(rulerHeight),
+                                      static_cast<float>(getHeight()));
+        }
+    }
+    for (const auto& meterChange : project->meterChanges)
+    {
+        const auto x = static_cast<int>(secondsToX(meterChange.timeSeconds));
+        graphics.setColour(juce::Colour(StudioColours::green));
+        graphics.fillRect(x - 1, 16, 3, 5);
+        graphics.setFont(9.0f);
+        graphics.drawText(juce::String(meterChange.numerator)
+                              + "/"
+                              + juce::String(meterChange.denominator),
+                          x + 4,
+                          15,
+                          42,
+                          12,
+                          juce::Justification::centredLeft);
     }
 
     const auto tracks = visibleTracks();
@@ -232,6 +311,68 @@ void TimelineComponent::paint(juce::Graphics& graphics)
                               24,
                               juce::Justification::centredRight);
         }
+
+        if (childTrack
+            && project->activeTakeTrackId(track.parentTrackId) == track.id)
+        {
+            graphics.setColour(juce::Colour(StudioColours::green));
+            graphics.setFont(juce::Font(juce::FontOptions(8.5f,
+                                                         juce::Font::bold)));
+            graphics.drawText("ACTIVE",
+                              viewportPositionX + 112,
+                              y + 51,
+                              52,
+                              18,
+                              juce::Justification::centredRight);
+        }
+        if (!childTrack)
+        {
+            if (const auto* group = project->editGroupForTrack(track.id))
+            {
+                graphics.setColour(juce::Colour(group->enabled
+                                                    ? StudioColours::violet
+                                                    : StudioColours::secondaryText));
+                graphics.setFont(juce::Font(juce::FontOptions(8.5f,
+                                                              juce::Font::bold)));
+                graphics.drawText(group->timingReferenceTrackId == track.id
+                                      ? "LINK REF"
+                                      : "LINK",
+                                  viewportPositionX + 104,
+                                  y + 51,
+                                  60,
+                                  18,
+                                  juce::Justification::centredRight);
+            }
+            if (project->reampRouteForReturn(track.id) != nullptr)
+            {
+                graphics.setColour(juce::Colour(StudioColours::amber));
+                graphics.setFont(juce::Font(juce::FontOptions(8.0f,
+                                                              juce::Font::bold)));
+                graphics.drawText("TONE RETURN",
+                                  viewportPositionX + 88,
+                                  y + 67,
+                                  76,
+                                  15,
+                                  juce::Justification::centredRight);
+            }
+            else if (std::any_of(project->reampRoutes.cbegin(),
+                                 project->reampRoutes.cend(),
+                                 [&track](const auto& route)
+                                 {
+                                     return route.sourceTrackId == track.id;
+                                 }))
+            {
+                graphics.setColour(juce::Colour(StudioColours::amber));
+                graphics.setFont(juce::Font(juce::FontOptions(8.0f,
+                                                              juce::Font::bold)));
+                graphics.drawText("DI SOURCE",
+                                  viewportPositionX + 96,
+                                  y + 67,
+                                  68,
+                                  15,
+                                  juce::Justification::centredRight);
+            }
+        }
     }
 
     const auto addTrackY = rulerHeight + static_cast<int>(tracks.size()) * trackHeight;
@@ -286,6 +427,30 @@ void TimelineComponent::paint(juce::Graphics& graphics)
                 graphics.drawRoundedRectangle(aggregate, 5.0f, 1.0f);
             }
         }
+
+        for (const auto& region : parent.compRegions)
+        {
+            const auto* source = project->findTrack(region.sourceTrackId);
+            const juce::Rectangle<float> compBounds(
+                secondsToX(region.startSeconds),
+                static_cast<float>(parentY),
+                static_cast<float>(std::max(20.0,
+                                            region.durationSeconds
+                                                * pixelsPerSecond)),
+                trackHeight - 24.0f);
+            const auto colour = source != nullptr ? source->colour : parent.colour;
+            graphics.setColour(colour.withAlpha(0.42f));
+            graphics.fillRoundedRectangle(compBounds, 5.0f);
+            graphics.setColour(juce::Colours::white.withAlpha(0.55f));
+            graphics.drawRoundedRectangle(compBounds, 5.0f, 1.5f);
+            graphics.setFont(juce::Font(juce::FontOptions(9.0f,
+                                                          juce::Font::bold)));
+            graphics.drawText("COMP "
+                                  + (source != nullptr ? source->name
+                                                       : juce::String("MISSING")),
+                              compBounds.toNearestInt().reduced(6, 2),
+                              juce::Justification::bottomLeft);
+        }
     }
 
     for (const auto& hit : clipHits())
@@ -293,6 +458,40 @@ void TimelineComponent::paint(juce::Graphics& graphics)
         const auto* clip = project->findClip(hit.clipId);
         if (clip == nullptr)
             continue;
+
+        const auto recoverableStart = clip->recoverableStartSeconds();
+        const auto recoverableEnd = clip->recoverableEndSeconds();
+        if (recoverableStart < clip->startSeconds - 0.0001
+            || recoverableEnd > clip->endSeconds() + 0.0001)
+        {
+            const juce::Rectangle<float> ghostBounds(
+                secondsToX(recoverableStart),
+                hit.bounds.getY(),
+                static_cast<float>(std::max(20.0,
+                                            (recoverableEnd - recoverableStart)
+                                                * pixelsPerSecond)),
+                hit.bounds.getHeight());
+            auto recoverableClip = *clip;
+            recoverableClip.startSeconds = recoverableStart;
+            recoverableClip.sourceOffsetSeconds = clip->sourceRangeStartSeconds;
+            recoverableClip.durationSeconds = clip->sourceRangeEnd()
+                - clip->sourceRangeStartSeconds;
+
+            graphics.setColour(clip->colour.withAlpha(0.10f));
+            graphics.fillRoundedRectangle(ghostBounds, 5.0f);
+            drawClipWaveform(graphics, recoverableClip, ghostBounds, 0.12f);
+            graphics.setColour(juce::Colours::white.withAlpha(
+                hit.clipId == selectedClipId ? 0.30f : 0.18f));
+            const float dashLengths[] { 4.0f, 4.0f };
+            juce::Path ghostShape;
+            ghostShape.addRoundedRectangle(ghostBounds, 5.0f);
+            juce::Path dashedGhost;
+            juce::PathStrokeType(1.0f).createDashedStroke(dashedGhost,
+                                                          ghostShape,
+                                                          dashLengths,
+                                                          2);
+            graphics.fillPath(dashedGhost);
+        }
 
         auto bounds = hit.bounds;
         if (draggedClipId == hit.clipId)
@@ -340,30 +539,81 @@ void TimelineComponent::paint(juce::Graphics& graphics)
 
         drawClipWaveform(graphics, *clip, bounds, 0.28f);
 
+        graphics.setColour(juce::Colour(StudioColours::green).withAlpha(0.55f));
+        for (const auto transient : clip->transientSourceSeconds)
+        {
+            const auto offset = clip->timelineOffsetForSourceSeconds(transient);
+            const auto x = bounds.getX()
+                + static_cast<float>(offset * pixelsPerSecond);
+            if (x >= bounds.getX() && x <= bounds.getRight())
+                graphics.drawVerticalLine(static_cast<int>(x),
+                                          bounds.getY() + 6.0f,
+                                          bounds.getBottom() - 6.0f);
+        }
+        graphics.setColour(juce::Colour(StudioColours::orange));
+        for (const auto& marker : clip->warpMarkers)
+        {
+            const auto x = bounds.getX()
+                + static_cast<float>(marker.timelineOffsetSeconds
+                                     * pixelsPerSecond);
+            juce::Path markerShape;
+            markerShape.addTriangle(x - 4.0f,
+                                    bounds.getBottom() - 3.0f,
+                                    x + 4.0f,
+                                    bounds.getBottom() - 3.0f,
+                                    x,
+                                    bounds.getBottom() - 10.0f);
+            graphics.fillPath(markerShape);
+        }
+        graphics.setColour(juce::Colours::white.withAlpha(0.52f));
+        if (clip->fadeInSeconds > 0.0)
+        {
+            graphics.drawLine(bounds.getX(),
+                              bounds.getBottom() - 4.0f,
+                              bounds.getX()
+                                  + static_cast<float>(clip->fadeInSeconds
+                                                       * pixelsPerSecond),
+                              bounds.getY() + 4.0f,
+                              1.0f);
+        }
+        if (clip->fadeOutSeconds > 0.0)
+        {
+            graphics.drawLine(bounds.getRight()
+                                  - static_cast<float>(clip->fadeOutSeconds
+                                                       * pixelsPerSecond),
+                              bounds.getY() + 4.0f,
+                              bounds.getRight(),
+                              bounds.getBottom() - 4.0f,
+                              1.0f);
+        }
+
         graphics.setColour(juce::Colours::white);
         graphics.setFont(12.5f);
-        graphics.drawText(clip->name,
+        const auto processingLabel = (clip->reversed ? " REV" : "")
+            + juce::String(clip->polarityInverted ? " INV" : "");
+        graphics.drawText(clip->name + processingLabel,
                           bounds.toNearestInt().withHeight(24).reduced(8, 0),
                           juce::Justification::centredLeft);
     }
 
-    if (recordingTrackId.isNotEmpty())
+    const auto visible = visibleTracks();
+    for (const auto& recordingPreview : recordingPreviews)
     {
-        const auto visible = visibleTracks();
         const auto iterator = std::find_if(visible.cbegin(),
                                            visible.cend(),
-                                           [this](const auto* track)
+                                           [&recordingPreview](const auto* track)
         {
-            return track->id == recordingTrackId;
+            return track->id == recordingPreview.trackId;
         });
         if (iterator != visible.cend())
         {
             const auto index = static_cast<int>(std::distance(visible.cbegin(), iterator));
             const auto y = rulerHeight + index * trackHeight + 12;
             const juce::Rectangle<float> preview(
-                secondsToX(recordingStartSeconds),
+                secondsToX(recordingPreview.startSeconds),
                 static_cast<float>(y),
-                static_cast<float>(std::max(96.0, recordingDurationSeconds * pixelsPerSecond)),
+                static_cast<float>(std::max(96.0,
+                                            recordingPreview.durationSeconds * pixelsPerSecond)),
                 trackHeight - 24.0f);
             graphics.setColour(juce::Colour(StudioColours::orange).withAlpha(0.72f));
             graphics.fillRoundedRectangle(preview, 5.0f);
@@ -375,10 +625,12 @@ void TimelineComponent::paint(juce::Graphics& graphics)
                                         preview.getX() + 6.0f,
                                         preview.getRight() - 6.0f);
 
-            if (!recordingPeaks.empty())
+            if (!recordingPreview.waveformPeaks.empty())
             {
                 const auto columns = juce::jmax(1,
-                                                juce::jmin(static_cast<int>(recordingPeaks.size()),
+                                                juce::jmin(
+                                                    static_cast<int>(
+                                                        recordingPreview.waveformPeaks.size()),
                                                            static_cast<int>(preview.getWidth()) - 12));
                 const auto maximumHeight = preview.getHeight() * 0.32f;
                 graphics.setColour(juce::Colours::white.withAlpha(0.62f));
@@ -387,11 +639,14 @@ void TimelineComponent::paint(juce::Graphics& graphics)
                     const auto peakIndex = static_cast<std::size_t>(
                         static_cast<double>(column)
                         / static_cast<double>(columns)
-                        * static_cast<double>(recordingPeaks.size()));
+                        * static_cast<double>(
+                            recordingPreview.waveformPeaks.size()));
                     const auto peak = std::sqrt(juce::jlimit(
                         0.0f,
                         1.0f,
-                        recordingPeaks[std::min(peakIndex, recordingPeaks.size() - 1)]));
+                        recordingPreview.waveformPeaks[std::min(
+                           peakIndex,
+                           recordingPreview.waveformPeaks.size() - 1)]));
                     const auto x = preview.getX()
                         + 6.0f
                         + static_cast<float>(column)
@@ -405,7 +660,9 @@ void TimelineComponent::paint(juce::Graphics& graphics)
 
             graphics.setColour(juce::Colours::white);
             graphics.setFont(juce::Font(juce::FontOptions(12.0f, juce::Font::bold)));
-            graphics.drawText("RECORDING  " + juce::String(recordingDurationSeconds, 1) + " s",
+            graphics.drawText("RECORDING  "
+                                 + juce::String(recordingPreview.durationSeconds, 1)
+                                 + " s",
                               preview.toNearestInt().withHeight(24).reduced(8, 0),
                               juce::Justification::centredLeft);
         }
@@ -543,6 +800,44 @@ void TimelineComponent::mouseDown(const juce::MouseEvent& event)
     repaint();
 }
 
+void TimelineComponent::mouseDoubleClick(const juce::MouseEvent& event)
+{
+    if (project == nullptr)
+        return;
+    const auto inTrackHeader = event.position.x >= static_cast<float>(viewportPositionX)
+        && event.position.x < static_cast<float>(viewportPositionX + trackHeaderWidth);
+    if (!inTrackHeader)
+        return;
+
+    const auto tracks = visibleTracks();
+    const auto trackIndex = trackIndexAt(event.position.y);
+    if (trackIndex < 0 || trackIndex >= static_cast<int>(tracks.size()))
+        return;
+    const auto localY = static_cast<int>(event.position.y)
+        - rulerHeight
+        - trackIndex * trackHeight;
+    const auto localX = static_cast<int>(event.position.x) - viewportPositionX;
+    if (localY > 42 || localX < 22)
+        return;
+
+    const auto& track = *tracks[static_cast<std::size_t>(trackIndex)];
+    selectedTrackId = track.id;
+    selectedClipId.clear();
+    if (onTrackSelected)
+        onTrackSelected(track.id);
+    if (onEditTrack)
+    {
+        const auto indent = track.parentTrackId.isNotEmpty() ? 16 : 0;
+        const juce::Rectangle<int> nameBounds(
+            viewportPositionX + 24 + indent,
+            rulerHeight + trackIndex * trackHeight + 8,
+            trackHeaderWidth - 34 - indent,
+            32);
+        onEditTrack(track.id, localAreaToGlobal(nameBounds));
+    }
+    repaint();
+}
+
 void TimelineComponent::mouseDrag(const juce::MouseEvent& event)
 {
     if (draggedClipId.isEmpty())
@@ -570,8 +865,12 @@ void TimelineComponent::mouseDrag(const juce::MouseEvent& event)
     }
     else if (dragMode == DragMode::trimStart)
     {
-        const auto minimumStart = std::max(0.0,
-                                           dragOriginalStart - dragOriginalSourceOffset);
+        const auto* clip = project != nullptr ? project->findClip(draggedClipId) : nullptr;
+        const auto minimumStart = std::max(
+            0.0,
+            clip != nullptr
+                ? clip->recoverableStartSeconds()
+                : dragOriginalStart - dragOriginalSourceOffset);
         const auto maximumStart = dragOriginalStart + dragOriginalDuration - minimumDuration;
         const auto unsnapped = juce::jlimit(minimumStart,
                                            maximumStart,
@@ -584,8 +883,9 @@ void TimelineComponent::mouseDrag(const juce::MouseEvent& event)
     }
     else if (dragMode == DragMode::trimEnd)
     {
-        const auto sourceRemaining = project != nullptr
-            ? project->findClip(draggedClipId)->sourceLengthSeconds - dragOriginalSourceOffset
+        const auto* clip = project != nullptr ? project->findClip(draggedClipId) : nullptr;
+        const auto sourceRemaining = clip != nullptr
+            ? clip->sourceRangeEnd() - dragOriginalSourceOffset
             : dragOriginalDuration;
         const auto unsnappedDuration = juce::jlimit(minimumDuration,
                                                     sourceRemaining,
@@ -716,6 +1016,33 @@ void TimelineComponent::showContextMenu(const juce::MouseEvent& event)
             menu.addItem(std::move(arm));
         }
 
+        juce::PopupMenu::Item editTrack("Edit name and color...");
+        editTrack.action = [this, trackId]
+        {
+            if (onEditTrack)
+            {
+                const auto visible = visibleTracks();
+                const auto iterator = std::find_if(
+                    visible.cbegin(),
+                    visible.cend(),
+                    [&trackId](const auto* candidate)
+                    {
+                        return candidate->id == trackId;
+                    });
+                if (iterator == visible.cend())
+                    return;
+                const auto index = static_cast<int>(
+                    std::distance(visible.cbegin(), iterator));
+                const juce::Rectangle<int> nameBounds(
+                    viewportPositionX + 24,
+                    rulerHeight + index * trackHeight + 8,
+                    trackHeaderWidth - 34,
+                    32);
+                onEditTrack(trackId, localAreaToGlobal(nameBounds));
+            }
+        };
+        menu.addItem(std::move(editTrack));
+
         const auto hasVersions = std::any_of(project->tracks.cbegin(),
                                              project->tracks.cend(),
                                              [clickedTrack](const auto& candidate)
@@ -736,6 +1063,15 @@ void TimelineComponent::showContextMenu(const juce::MouseEvent& event)
         }
 
         menu.addSeparator();
+        juce::PopupMenu::Item duplicateTrack("Duplicate track");
+        duplicateTrack.isEnabled = clickedTrack->type != TrackType::master;
+        duplicateTrack.action = [this, trackId]
+        {
+            if (onDuplicateTrack)
+                onDuplicateTrack(trackId);
+        };
+        menu.addItem(std::move(duplicateTrack));
+
         juce::PopupMenu::Item deleteTrack("Delete track");
         deleteTrack.shortcutKeyDescription = "Delete";
         deleteTrack.isEnabled = clickedTrack->type != TrackType::master;
@@ -781,6 +1117,149 @@ void TimelineComponent::showContextMenu(const juce::MouseEvent& event)
         menu.addItem(std::move(trimEnd));
 
         menu.addSeparator();
+        const auto* selectedTrack = project->findTrack(selectedTrackId);
+        if (hasClip
+            && selectedTrack != nullptr
+            && selectedTrack->parentTrackId.isNotEmpty())
+        {
+            const auto takeId = selectedTrack->id;
+            const auto parentId = selectedTrack->parentTrackId;
+            juce::PopupMenu::Item useTake("Use this take as playlist");
+            useTake.isTicked = project->activeTakeTrackId(parentId) == takeId;
+            useTake.action = [this, takeId]
+            {
+                if (onUseTake)
+                    onUseTake(takeId);
+            };
+            menu.addItem(std::move(useTake));
+
+            juce::PopupMenu::Item useForComp("Use this clip range in comp");
+            useForComp.action = [this, clipId = selectedClipId]
+            {
+                if (onUseClipForComp)
+                    onUseClipForComp(clipId);
+            };
+            menu.addItem(std::move(useForComp));
+
+            const auto* parent = project->findTrack(parentId);
+            juce::PopupMenu::Item clearComp("Clear parent comp");
+            clearComp.isEnabled = parent != nullptr
+                && !parent->compRegions.empty();
+            clearComp.action = [this, parentId]
+            {
+                if (onClearComp)
+                    onClearComp(parentId);
+            };
+            menu.addItem(std::move(clearComp));
+            menu.addSeparator();
+        }
+
+        const auto* selectedClip = project->findClip(selectedClipId);
+        if (selectedClip != nullptr)
+        {
+            menu.addSectionHeader("Audio processing");
+            menu.addItem("Detect transients", [this, clipId = selectedClipId]
+            {
+                if (onAnalyseTransients)
+                    onAnalyseTransients(clipId);
+            });
+
+            juce::PopupMenu stretchMenu;
+            const std::array stretchModes {
+                std::pair { "Drums", StretchMode::drums },
+                std::pair { "Monophonic", StretchMode::monophonic },
+                std::pair { "Polyphonic", StretchMode::polyphonic },
+                std::pair { "Full mix", StretchMode::mix }
+            };
+            for (const auto& [name, mode] : stretchModes)
+            {
+                stretchMenu.addItem(name,
+                                    true,
+                                    selectedClip->stretchMode == mode,
+                                    [this, clipId = selectedClipId, mode]
+                                    {
+                                        if (onSetStretchMode)
+                                            onSetStretchMode(clipId, mode);
+                                    });
+            }
+            menu.addSubMenu("Stretch mode", stretchMenu);
+
+            juce::PopupMenu rateMenu;
+            for (const auto rate : { 0.5, 0.75, 1.0, 1.25, 1.5, 2.0 })
+            {
+                rateMenu.addItem(juce::String(rate, 2) + "x",
+                                 true,
+                                 std::abs(selectedClip->playbackRate - rate) < 0.0001,
+                                 [this, clipId = selectedClipId, rate]
+                                 {
+                                     if (onSetPlaybackRate)
+                                         onSetPlaybackRate(clipId, rate);
+                                 });
+            }
+            menu.addSubMenu("Playback rate", rateMenu);
+
+            menu.addItem("Warp nearest transient to playhead",
+                         !selectedClip->transientSourceSeconds.empty(),
+                         false,
+                         [this,
+                          clipId = selectedClipId,
+                          timelineSeconds = xToSeconds(event.position.x)]
+                         {
+                             if (onWarpTransientToTimeline)
+                                 onWarpTransientToTimeline(clipId,
+                                                           timelineSeconds);
+                         });
+            menu.addItem("Fade in to playhead",
+                         true,
+                         false,
+                         [this,
+                          clipId = selectedClipId,
+                          timelineSeconds = xToSeconds(event.position.x)]
+                         {
+                             if (onSetFadeIn)
+                                 onSetFadeIn(clipId, timelineSeconds);
+                         });
+            menu.addItem("Fade out from playhead",
+                         true,
+                         false,
+                         [this,
+                          clipId = selectedClipId,
+                          timelineSeconds = xToSeconds(event.position.x)]
+                         {
+                             if (onSetFadeOut)
+                                 onSetFadeOut(clipId, timelineSeconds);
+                         });
+            menu.addItem("Create crossfade with next clip",
+                         [this, clipId = selectedClipId]
+                         {
+                             if (onCreateCrossfade)
+                                 onCreateCrossfade(clipId);
+                         });
+            menu.addItem("Invert polarity",
+                         true,
+                         selectedClip->polarityInverted,
+                         [this, clipId = selectedClipId]
+                         {
+                             if (onToggleClipPolarity)
+                                 onToggleClipPolarity(clipId);
+                         });
+            menu.addItem("Reverse audio",
+                         true,
+                         selectedClip->reversed,
+                         [this, clipId = selectedClipId]
+                         {
+                             if (onToggleClipReverse)
+                                 onToggleClipReverse(clipId);
+                         });
+            menu.addItem("Consolidate processed clip",
+                         [this, clipId = selectedClipId]
+                         {
+                             if (onConsolidateClip)
+                                 onConsolidateClip(clipId);
+                         });
+            menu.addSeparator();
+        }
+
         juce::PopupMenu::Item remove("Delete clip");
         remove.shortcutKeyDescription = "Delete";
         remove.isEnabled = hasClip;
@@ -875,13 +1354,19 @@ void TimelineComponent::drawClipWaveform(juce::Graphics& graphics,
 {
     graphics.saveState();
     graphics.reduceClipRegion(bounds.toNearestInt().reduced(5));
-    const auto seed = static_cast<std::uint32_t>(clip.id.hashCode());
-    juce::Random random(seed);
     const auto middle = bounds.getCentreY() + 8.0f;
+    const auto waveformWidth = std::max(1.0f, bounds.getWidth() - 12.0f);
     graphics.setColour(juce::Colours::white.withAlpha(alpha));
     for (float x = bounds.getX() + 8.0f; x < bounds.getRight() - 4.0f; x += 4.0f)
     {
-        const auto amplitude = random.nextFloat() * (bounds.getHeight() * 0.23f);
+        const auto progress = juce::jlimit(0.0,
+                                           1.0,
+                                           static_cast<double>(x - bounds.getX() - 8.0f)
+                                               / waveformWidth);
+        const auto sourceSeconds = clip.sourceOffsetSeconds
+            + progress * clip.durationSeconds;
+        const auto amplitude = waveformAmplitude(clip, sourceSeconds)
+            * (bounds.getHeight() * 0.23f);
         graphics.drawVerticalLine(static_cast<int>(x),
                                   middle - amplitude,
                                   middle + amplitude);
