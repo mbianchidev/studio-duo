@@ -217,7 +217,9 @@ and participates in undo/redo. Track colors use the existing mix-state command;
 the inspector provides palette shortcuts and a full HSV/RGB selector with live
 preview before one final undoable color change is recorded. Timeline headers
 and mixer-strip titles open a shared anchored editor that batches simultaneous
-name and color changes into one undoable command.
+name and color changes into one undoable command. The mixer separates title,
+volume-fader, and pan-knob hit zones: only the title opens that editor, while
+fader and pan drags commit ordinary undoable mix-state commands.
 
 Recording creates flat-model child tracks with a stable `parentTrackId` and
 monotonic version number. They remain ordinary audio tracks for commands and

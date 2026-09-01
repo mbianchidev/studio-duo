@@ -141,9 +141,10 @@ entry, and uses a rotary control. Pan defaults to `Center` and displays `% L` or
 `% R`. Double-click the inspector track name to rename it. **COLOR** offers
 quick palette choices plus an HSV/RGB custom picker; name and color changes are
 persistent and undoable. Double-click a timeline track name or the title area of
-a lower mixer strip to edit both values in one anchored panel. Every lower mixer
-strip also has a draggable L/R pan knob; double-click the knob area to return it
-to center.
+a lower mixer strip to edit both values in one anchored panel. Drag the vertical
+mixer fader to change volume and double-click its lane to reset to `0.0 dB`.
+Every lower mixer strip also has a draggable L/R pan knob; double-click the knob
+area to return it to center.
 
 Selected clips show edge handles. Drag the body to move a clip, the left edge
 to change its timeline start and source offset, or the right edge to shorten or

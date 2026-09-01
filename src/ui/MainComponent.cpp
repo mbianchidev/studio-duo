@@ -158,6 +158,7 @@ public:
 
     std::function<void(const juce::String&)> onTrackSelected;
     std::function<void(const juce::String&, juce::Rectangle<int>)> onEditTrack;
+    std::function<void(const juce::String&, float)> onVolumeChanged;
     std::function<void(const juce::String&, float)> onPanChanged;
 
     void paint(juce::Graphics& graphics) override
@@ -200,7 +201,10 @@ public:
                                           static_cast<float>(faderHeight),
                                           3.0f);
 
-            const auto normalised = juce::jmap(juce::jlimit(-60.0f, 12.0f, track.volumeDecibels),
+            const auto volumeValue = track.id == draggingVolumeTrack
+                ? dragPreviewVolume
+                : track.volumeDecibels;
+            const auto normalised = juce::jmap(juce::jlimit(-60.0f, 12.0f, volumeValue),
                                                -60.0f,
                                                12.0f,
                                                1.0f,
@@ -236,7 +240,7 @@ public:
                     + (panValue < 0.0f ? "% L" : "% R");
             graphics.setColour(juce::Colour(StudioColours::secondaryText));
             graphics.setFont(juce::Font(juce::FontOptions(9.0f)));
-            graphics.drawText(juce::String(track.volumeDecibels, 1) + " dB",
+            graphics.drawText(juce::String(volumeValue, 1) + " dB",
                               strip.getX() + 6,
                               faderTop + faderHeight + 2,
                               strip.getWidth() - 12,
@@ -340,17 +344,44 @@ public:
                                          34,
                                          stripWidth,
                                          getHeight() - 44);
+        draggingVolumeTrack.clear();
+        draggingPanTrack.clear();
         if (event.position.y >= static_cast<float>(strip.getBottom() - 60))
         {
             draggingPanTrack = track->id;
             dragStartY = event.position.y;
             dragStartPan = track->pan;
             dragPreviewPan = track->pan;
+            return;
+        }
+
+        const auto faderTop = strip.getY() + 46;
+        const auto faderHeight = strip.getHeight() - 112;
+        if (event.position.y >= static_cast<float>(faderTop - 8)
+            && event.position.y <= static_cast<float>(faderTop + faderHeight + 8))
+        {
+            draggingVolumeTrack = track->id;
+            dragStartY = event.position.y;
+            dragStartVolume = track->volumeDecibels;
+            dragPreviewVolume = track->volumeDecibels;
+            dragFaderHeight = std::max(1, faderHeight);
         }
     }
 
     void mouseDrag(const juce::MouseEvent& event) override
     {
+        if (draggingVolumeTrack.isNotEmpty())
+        {
+            dragPreviewVolume = juce::jlimit(
+                -60.0f,
+                12.0f,
+                dragStartVolume
+                    + (dragStartY - event.position.y)
+                        * 72.0f
+                        / static_cast<float>(dragFaderHeight));
+            repaint();
+            return;
+        }
         if (draggingPanTrack.isEmpty())
             return;
 
@@ -362,15 +393,25 @@ public:
 
     void mouseUp(const juce::MouseEvent&) override
     {
-        if (draggingPanTrack.isEmpty())
+        if (draggingVolumeTrack.isNotEmpty())
+        {
+            const auto trackId = draggingVolumeTrack;
+            const auto value = dragPreviewVolume;
+            draggingVolumeTrack.clear();
+            if (onVolumeChanged)
+                onVolumeChanged(trackId, value);
+            repaint();
             return;
-
-        const auto trackId = draggingPanTrack;
-        const auto value = dragPreviewPan;
-        draggingPanTrack.clear();
-        if (onPanChanged)
-            onPanChanged(trackId, value);
-        repaint();
+        }
+        if (draggingPanTrack.isNotEmpty())
+        {
+            const auto trackId = draggingPanTrack;
+            const auto value = dragPreviewPan;
+            draggingPanTrack.clear();
+            if (onPanChanged)
+                onPanChanged(trackId, value);
+            repaint();
+        }
     }
 
     void mouseDoubleClick(const juce::MouseEvent& event) override
@@ -392,18 +433,32 @@ public:
                                          34,
                                          stripWidth,
                                          getHeight() - 44);
-        if (event.position.y >= static_cast<float>(strip.getBottom() - 60)
-            && onPanChanged)
+        const auto* track = mixerTracks[static_cast<std::size_t>(index)];
+        const auto titleBounds = strip.withHeight(42);
+        if (titleBounds.contains(event.getPosition()))
         {
-            onPanChanged(mixerTracks[static_cast<std::size_t>(index)]->id, 0.0f);
+            if (onEditTrack)
+            {
+                const auto nameBounds = strip.reduced(8).withHeight(28);
+                onEditTrack(track->id, localAreaToGlobal(nameBounds));
+            }
             return;
         }
 
-        if (onEditTrack)
+        if (event.position.y >= static_cast<float>(strip.getBottom() - 60)
+            && onPanChanged)
         {
-            const auto nameBounds = strip.reduced(8).withHeight(28);
-            onEditTrack(mixerTracks[static_cast<std::size_t>(index)]->id,
-                        localAreaToGlobal(nameBounds));
+            onPanChanged(track->id, 0.0f);
+            return;
+        }
+
+        const auto faderTop = strip.getY() + 46;
+        const auto faderHeight = strip.getHeight() - 112;
+        if (event.position.y >= static_cast<float>(faderTop - 8)
+            && event.position.y <= static_cast<float>(faderTop + faderHeight + 8)
+            && onVolumeChanged)
+        {
+            onVolumeChanged(track->id, 0.0f);
         }
     }
 
@@ -412,10 +467,14 @@ private:
     juce::String selectedTrack;
     float leftPeak = 0.0f;
     float rightPeak = 0.0f;
+    juce::String draggingVolumeTrack;
     juce::String draggingPanTrack;
     float dragStartY = 0.0f;
+    float dragStartVolume = 0.0f;
+    float dragPreviewVolume = 0.0f;
     float dragStartPan = 0.0f;
     float dragPreviewPan = 0.0f;
+    int dragFaderHeight = 1;
 };
 
 class MainComponent::InsertPanel final : public juce::Component
@@ -1136,6 +1195,17 @@ MainComponent::MainComponent()
     {
         selectTrack(trackId);
         showTrackQuickEditor(trackId, targetArea);
+    };
+    mixer->onVolumeChanged = [this](const auto& trackId, float volume)
+    {
+        const auto* track = project.findTrack(trackId);
+        if (track == nullptr)
+            return;
+
+        const auto before = TrackMixState::fromTrack(*track);
+        auto after = before;
+        after.volumeDecibels = juce::jlimit(-60.0f, 12.0f, volume);
+        perform(std::make_unique<SetTrackMixCommand>(trackId, before, after));
     };
     mixer->onPanChanged = [this](const auto& trackId, float pan)
     {
