@@ -955,6 +955,8 @@ void packagePersistence()
     expect(loaded.has_value(), error.toRawUTF8());
     expect(loaded.has_value() && loaded->id == project.id, "Saved package restores the project ID.");
     expect(package.getChildFile("manifest.json").existsAsFile(), "Package contains a manifest.");
+    expect(package.getChildFile("automation/generation-00000001.json").existsAsFile(),
+           "Package stores automation in its own generation document.");
     expect(package.getChildFile("recovery/latest.json").existsAsFile(), "Package contains a recovery point.");
 
     package.deleteRecursively();
@@ -1181,6 +1183,7 @@ int main()
     routingUiModelTests();
     pluginFormatTests();
     pluginRecoveryTests();
+    automationTests();
 
     if (failures == 0)
     {

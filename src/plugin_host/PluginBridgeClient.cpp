@@ -91,6 +91,36 @@ juce::Result PluginBridgeClient::startInternal(const juce::PluginDescription* de
                                std::memory_order_release);
     pluginTailSeconds.store(responseParts.size() > 2 ? responseParts[2].getDoubleValue() : 0.0,
                             std::memory_order_release);
+    parameters.clear();
+    if (responseParts.size() > 3)
+    {
+        juce::MemoryBlock metadata;
+        if (metadata.fromBase64Encoding(responseParts[3]))
+        {
+            const auto value = juce::JSON::parse(
+                metadata.toString());
+            if (value.isArray())
+            {
+                for (const auto& parameterValue : *value.getArray())
+                {
+                    const auto* object = parameterValue.getDynamicObject();
+                    if (object == nullptr)
+                        continue;
+                    PluginParameterDescriptor parameter;
+                    parameter.index = static_cast<int>(
+                        object->getProperty("index"));
+                    parameter.id = object->getProperty("id").toString();
+                    parameter.name = object->getProperty("name").toString();
+                    parameter.value = static_cast<float>(
+                        static_cast<double>(
+                            object->getProperty("value")));
+                    parameter.automatable = static_cast<bool>(
+                        object->getProperty("automatable"));
+                    parameters.push_back(std::move(parameter));
+                }
+            }
+        }
+    }
     ready.store(true, std::memory_order_release);
     processingBlockSize = blockSize;
     completedOutputSamples = 0;
@@ -132,6 +162,7 @@ void PluginBridgeClient::stop()
     responseMessage.clear();
     pluginLatencySamples.store(0, std::memory_order_relaxed);
     pluginTailSeconds.store(0.0, std::memory_order_relaxed);
+    parameters.clear();
 }
 
 juce::Result PluginBridgeClient::requestState(
@@ -397,6 +428,12 @@ int PluginBridgeClient::reportedLatencySamples() const noexcept
 double PluginBridgeClient::reportedTailSeconds() const noexcept
 {
     return pluginTailSeconds.load(std::memory_order_acquire);
+}
+
+const std::vector<PluginParameterDescriptor>&
+PluginBridgeClient::parameterDescriptors() const noexcept
+{
+    return parameters;
 }
 
 juce::String PluginBridgeClient::diagnosticState() const

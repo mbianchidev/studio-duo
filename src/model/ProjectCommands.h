@@ -377,6 +377,71 @@ private:
     TrackRoutingState newState;
 };
 
+class SetAutomationLaneCommand final : public ProjectCommand
+{
+public:
+    SetAutomationLaneCommand(AutomationLane before,
+                             AutomationLane after);
+
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    AutomationLane oldLane;
+    AutomationLane newLane;
+};
+
+class AddAutomationLaneCommand final : public ProjectCommand
+{
+public:
+    explicit AddAutomationLaneCommand(AutomationLane laneToAdd);
+
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    AutomationLane lane;
+    std::size_t insertionIndex = 0;
+};
+
+class RemoveAutomationLaneCommand final : public ProjectCommand
+{
+public:
+    explicit RemoveAutomationLaneCommand(juce::String laneToRemove);
+
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    juce::String laneId;
+    AutomationLane removedLane;
+    std::size_t removalIndex = 0;
+    bool capturedOriginal = false;
+};
+
+class SetTrackAutomationModeCommand final : public ProjectCommand
+{
+public:
+    SetTrackAutomationModeCommand(juce::String trackToChange,
+                                  AutomationMode mode,
+                                  bool armed);
+
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    juce::String trackId;
+    AutomationMode newMode = AutomationMode::read;
+    AutomationMode oldMode = AutomationMode::read;
+    bool newArmed = false;
+    bool oldArmed = false;
+    bool capturedOriginal = false;
+};
+
 class SetTrackMixCommand final : public ProjectCommand
 {
 public:
@@ -455,6 +520,8 @@ public:
 private:
     juce::String connectionId;
     RoutingConnection removedConnection;
+    std::vector<std::pair<std::size_t, AutomationLane>>
+        removedAutomationLanes;
     std::size_t removalIndex = 0;
     bool capturedOriginal = false;
 };
@@ -488,6 +555,8 @@ private:
     juce::String trackId;
     juce::String insertId;
     PluginInsert removedInsert;
+    std::vector<std::pair<std::size_t, AutomationLane>>
+        removedAutomationLanes;
     std::size_t removalIndex = 0;
     bool capturedOriginal = false;
 };
@@ -574,6 +643,7 @@ private:
     std::vector<EditGroup> oldEditGroups;
     std::vector<ReampRoute> oldReampRoutes;
     std::vector<RoutingConnection> oldRoutingConnections;
+    std::vector<AutomationLane> oldAutomationLanes;
     std::vector<std::pair<juce::String, TrackRoutingState>> oldTrackRoutingStates;
     std::vector<std::pair<juce::String, juce::String>> oldTrackOutputs;
     bool capturedOriginal = false;
@@ -595,6 +665,7 @@ private:
     std::vector<Track> duplicatedTracks;
     std::vector<ReampRoute> duplicatedRoutes;
     std::vector<RoutingConnection> duplicatedConnections;
+    std::vector<AutomationLane> duplicatedAutomationLanes;
     std::size_t insertionIndex = 0;
     bool createdDuplicate = false;
 };

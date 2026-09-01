@@ -269,10 +269,44 @@ void PluginBridgeWorker::startProcessing(std::unique_ptr<juce::AudioPluginInstan
                           true,
                           false);
     processBuffer.clear();
+    juce::Array<juce::var> parameterValues;
+    if (plugin != nullptr)
+    {
+        const auto& parameters = plugin->getParameters();
+        for (int index = 0; index < parameters.size(); ++index)
+        {
+            const auto* parameter = parameters[index];
+            auto object = std::make_unique<juce::DynamicObject>();
+            object->setProperty("index", index);
+            object->setProperty(
+                "id",
+                dynamic_cast<const juce::HostedAudioProcessorParameter*>(
+                    parameter) != nullptr
+                    ? dynamic_cast<
+                          const juce::HostedAudioProcessorParameter*>(
+                          parameter)
+                          ->getParameterID()
+                    : juce::String(index));
+            object->setProperty("name", parameter->getName(128));
+            object->setProperty("value", parameter->getValue());
+            object->setProperty(
+                "automatable",
+                parameter->isAutomatable());
+            parameterValues.add(juce::var(object.release()));
+        }
+    }
+    const auto parameterJson = juce::JSON::toString(
+        juce::var(parameterValues),
+        false);
+    const juce::MemoryBlock parameterMetadata(
+        parameterJson.toRawUTF8(),
+        parameterJson.getNumBytesAsUTF8());
     sendStatus("ready|"
                + juce::String(plugin != nullptr ? plugin->getLatencySamples() : 0)
                + "|"
-               + juce::String(plugin != nullptr ? plugin->getTailLengthSeconds() : 0.0, 6));
+               + juce::String(plugin != nullptr ? plugin->getTailLengthSeconds() : 0.0, 6)
+               + "|"
+               + parameterMetadata.toBase64Encoding());
     startThread(juce::Thread::Priority::high);
 }
 

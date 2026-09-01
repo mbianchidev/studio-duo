@@ -37,6 +37,8 @@ public:
     [[nodiscard]] std::uint64_t lateBlockCount() const noexcept;
     [[nodiscard]] int reportedLatencySamples() const noexcept;
     [[nodiscard]] double reportedTailSeconds() const noexcept;
+    [[nodiscard]] const std::vector<PluginParameterDescriptor>&
+        parameterDescriptors() const noexcept;
     [[nodiscard]] juce::String diagnosticState() const;
 
 private:
@@ -82,6 +84,7 @@ private:
     std::atomic<std::uint64_t> lateBlocks { 0 };
     std::atomic<int> pluginLatencySamples { 0 };
     std::atomic<double> pluginTailSeconds { 0.0 };
+    std::vector<PluginParameterDescriptor> parameters;
     std::mutex responseMutex;
     std::condition_variable responseCondition;
     juce::String responseMessage;

@@ -1,5 +1,6 @@
 #include "MainComponent.h"
 
+#include "automation/AutomationRecorder.h"
 #include "plugin_host/PluginStateStore.h"
 
 #include <StudioDuoBrandData.h>
@@ -173,6 +174,7 @@ MainComponent::MainComponent()
     configureButton(duplicateTrackButton, "Duplicate the selected track and its edits");
     configureButton(deleteTrackButton, "Delete the selected track");
     configureButton(trackingButton, "Configure tempo, meter, punch, count-in, and click routing");
+    configureButton(automationButton, "Edit and record mixer and plugin automation");
     configureButton(muteButton, "Mute selected track");
     configureButton(soloButton, "Solo selected track");
     configureButton(armButton, "Arm selected track for recording");
@@ -203,6 +205,7 @@ MainComponent::MainComponent()
     duplicateTrackButton.onClick = [this] { duplicateSelectedTrack(); };
     deleteTrackButton.onClick = [this] { deleteSelectedTrack(); };
     trackingButton.onClick = [this] { showTrackingMenu(); };
+    automationButton.onClick = [this] { showAutomationPanel(); };
     muteButton.onClick = [this]
     {
         changeSelectedTrackState([](auto& state) { state.muted = !state.muted; });
@@ -353,7 +356,10 @@ MainComponent::MainComponent()
         const auto before = TrackMixState::fromTrack(*track);
         auto after = before;
         after.inputChannel = inputSelector.getSelectedItemIndex();
-        perform(std::make_unique<SetTrackMixCommand>(track->id, before, after));
+        perform(std::make_unique<SetTrackMixCommand>(
+            track->id,
+            before,
+            after));
     };
 
     addAndMakeVisible(outputLabel);
@@ -447,7 +453,13 @@ MainComponent::MainComponent()
             static_cast<double>(volumeSlider.getProperties().getWithDefault("start",
                                                                             track->volumeDecibels)));
         const auto after = TrackMixState::fromTrack(*track);
-        perform(std::make_unique<SetTrackMixCommand>(track->id, before, after));
+        if (perform(std::make_unique<SetTrackMixCommand>(
+                track->id,
+                before,
+                after)))
+            recordTrackAutomation(
+                AutomationTargetType::trackVolume,
+                (after.volumeDecibels + 60.0) / 72.0);
     };
 
     panSlider.onDragStart = [this]
@@ -473,7 +485,13 @@ MainComponent::MainComponent()
         before.pan = static_cast<float>(
             static_cast<double>(panSlider.getProperties().getWithDefault("start", track->pan)));
         const auto after = TrackMixState::fromTrack(*track);
-        perform(std::make_unique<SetTrackMixCommand>(track->id, before, after));
+        if (perform(std::make_unique<SetTrackMixCommand>(
+                track->id,
+                before,
+                after)))
+            recordTrackAutomation(
+                AutomationTargetType::trackPan,
+                (after.pan + 1.0) * 0.5);
     };
 
     timelineViewport.setViewedComponent(&timeline, false);
@@ -697,7 +715,16 @@ MainComponent::MainComponent()
         const auto before = TrackMixState::fromTrack(*track);
         auto after = before;
         after.volumeDecibels = juce::jlimit(-60.0f, 12.0f, volume);
-        perform(std::make_unique<SetTrackMixCommand>(trackId, before, after));
+        if (perform(std::make_unique<SetTrackMixCommand>(
+                trackId,
+                before,
+                after)))
+        {
+            selectTrack(trackId);
+            recordTrackAutomation(
+                AutomationTargetType::trackVolume,
+                (after.volumeDecibels + 60.0) / 72.0);
+        }
     };
     mixer->onPanChanged = [this](const auto& trackId, float pan)
     {
@@ -708,7 +735,16 @@ MainComponent::MainComponent()
         const auto before = TrackMixState::fromTrack(*track);
         auto after = before;
         after.pan = juce::jlimit(-1.0f, 1.0f, pan);
-        perform(std::make_unique<SetTrackMixCommand>(trackId, before, after));
+        if (perform(std::make_unique<SetTrackMixCommand>(
+                trackId,
+                before,
+                after)))
+        {
+            selectTrack(trackId);
+            recordTrackAutomation(
+                AutomationTargetType::trackPan,
+                (after.pan + 1.0) * 0.5);
+        }
     };
     mixer->addKeyListener(this);
     addAndMakeVisible(*mixer);
@@ -972,6 +1008,8 @@ void MainComponent::resized()
     deleteTrackButton.setBounds(sessionPanel.removeFromTop(34));
     sessionPanel.removeFromTop(8);
     trackingButton.setBounds(sessionPanel.removeFromTop(34));
+    sessionPanel.removeFromTop(8);
+    automationButton.setBounds(sessionPanel.removeFromTop(34));
     sessionPanel.removeFromTop(18);
     pluginBrowser->setBounds(sessionPanel);
 
@@ -3817,6 +3855,65 @@ void MainComponent::showTrackingMenu()
     menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(trackingButton));
 }
 
+void MainComponent::showAutomationPanel()
+{
+    auto panel = std::make_unique<AutomationPanel>();
+    auto* panelPointer = panel.get();
+    panel->setProject(&project);
+    panel->setTrack(selectedTrackId);
+    panel->setPositionSeconds(audioEngine.positionSeconds());
+    panel->setRuntimeStatuses(audioEngine.pluginRuntimeStatuses());
+    const juce::Component::SafePointer<MainComponent> safe(this);
+    const juce::Component::SafePointer<AutomationPanel> panelSafe(
+        panelPointer);
+    panel->onModeChanged = [safe, panelSafe](
+                               const auto& trackId,
+                               auto mode,
+                               bool armed)
+    {
+        if (safe == nullptr)
+            return;
+        safe->perform(std::make_unique<SetTrackAutomationModeCommand>(
+            trackId,
+            mode,
+            armed));
+        if (panelSafe != nullptr)
+            panelSafe->refresh();
+    };
+    panel->onAddLane = [safe, panelSafe](auto lane)
+    {
+        if (safe == nullptr)
+            return;
+        safe->perform(std::make_unique<AddAutomationLaneCommand>(
+            std::move(lane)));
+        if (panelSafe != nullptr)
+            panelSafe->refresh();
+    };
+    panel->onUpdateLane = [safe, panelSafe](auto before, auto after)
+    {
+        if (safe == nullptr)
+            return;
+        safe->perform(std::make_unique<SetAutomationLaneCommand>(
+            std::move(before),
+            std::move(after)));
+        if (panelSafe != nullptr)
+            panelSafe->refresh();
+    };
+    panel->onRemoveLane = [safe, panelSafe](const auto& laneId)
+    {
+        if (safe == nullptr)
+            return;
+        safe->perform(std::make_unique<RemoveAutomationLaneCommand>(
+            laneId));
+        if (panelSafe != nullptr)
+            panelSafe->refresh();
+    };
+    juce::CallOutBox::launchAsynchronously(
+        std::move(panel),
+        automationButton.getScreenBounds(),
+        nullptr);
+}
+
 void MainComponent::promptTempoChange()
 {
     const auto position = audioEngine.positionSeconds();
@@ -4264,6 +4361,75 @@ void MainComponent::changeReampRoutes(
     change(updated);
     perform(std::make_unique<SetReampRoutesCommand>(project.reampRoutes,
                                                     std::move(updated)));
+}
+
+void MainComponent::recordTrackAutomation(
+    AutomationTargetType type,
+    double normalizedValue)
+{
+    const auto* track = project.findTrack(selectedTrackId);
+    if (track == nullptr
+        || !track->automationArmed
+        || track->automationMode == AutomationMode::read
+        || track->automationMode == AutomationMode::preview)
+        return;
+
+    const auto lane = std::find_if(
+        project.automationLanes.cbegin(),
+        project.automationLanes.cend(),
+        [this, type](const auto& candidate)
+        {
+            return candidate.target.trackId == selectedTrackId
+                && candidate.target.type == type
+                && candidate.target.routeId.isEmpty()
+                && candidate.target.insertId.isEmpty();
+        });
+    const auto positionSeconds = audioEngine.positionSeconds();
+    if (lane == project.automationLanes.cend())
+    {
+        AutomationLane created;
+        created.name = type == AutomationTargetType::trackPan
+            ? "Track pan"
+            : "Track volume";
+        created.target.type = type;
+        created.target.trackId = selectedTrackId;
+        created.points.push_back({
+            juce::Uuid().toString(),
+            positionSeconds,
+            juce::jlimit(0.0, 1.0, normalizedValue)
+        });
+        perform(std::make_unique<AddAutomationLaneCommand>(
+            std::move(created)));
+        return;
+    }
+
+    auto before = *lane;
+    auto after = before;
+    const auto position = after.timebase == AutomationTimebase::beats
+        ? project.beatsAt(positionSeconds)
+        : positionSeconds;
+    if (track->automationMode == AutomationMode::trim)
+    {
+        const auto reference = after.points.empty()
+            ? 0.5
+            : after.points.back().value;
+        after.trimOffset += normalizedValue - reference;
+    }
+    else
+    {
+        after = AutomationRecorder::applyGesture(
+            before,
+            track->automationMode,
+            {
+                position,
+                position,
+                juce::jlimit(0.0, 1.0, normalizedValue),
+                juce::jlimit(0.0, 1.0, normalizedValue)
+            });
+    }
+    perform(std::make_unique<SetAutomationLaneCommand>(
+        std::move(before),
+        std::move(after)));
 }
 
 const AudioClip* MainComponent::activeClipAt(const juce::String& parentTrackId,

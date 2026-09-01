@@ -32,6 +32,44 @@ struct RecordingCallbackScope
 
     std::atomic<int>* counter = nullptr;
 };
+
+float automatedVolumeGain(
+    const std::optional<CompiledAutomationLane>& automation,
+    std::int64_t sample,
+    float fallback) noexcept
+{
+    if (!automation.has_value())
+        return fallback;
+    const auto normalized = juce::jlimit(
+        0.0,
+        1.0,
+        automation->valueAt(sample));
+    return juce::Decibels::decibelsToGain(
+        static_cast<float>(-60.0 + normalized * 72.0));
+}
+
+float automatedPan(
+    const std::optional<CompiledAutomationLane>& automation,
+    std::int64_t sample,
+    float fallback) noexcept
+{
+    return automation.has_value()
+        ? static_cast<float>(
+              juce::jlimit(0.0, 1.0, automation->valueAt(sample))
+                  * 2.0
+              - 1.0)
+        : fallback;
+}
+
+bool automatedSwitch(
+    const std::optional<CompiledAutomationLane>& automation,
+    std::int64_t sample,
+    bool fallback) noexcept
+{
+    return automation.has_value()
+        ? automation->valueAt(sample) >= 0.5
+        : fallback;
+}
 }
 
 StudioAudioEngine::LockFreeRecorder::LockFreeRecorder()
@@ -1130,6 +1168,7 @@ std::optional<StudioAudioEngine::RenderSnapshot> StudioAudioEngine::buildSnapsho
             return std::nullopt;
 
         RenderSource parentSource;
+        parentSource.trackId = parent.id;
         parentSource.isParentContent = true;
         parentSource.audible = renderTrack.processing;
         parentSource.clips = std::move(*parentClips);
@@ -1162,6 +1201,7 @@ std::optional<StudioAudioEngine::RenderSnapshot> StudioAudioEngine::buildSnapsho
 
             RenderSource source;
             source.runtimeKey = runtimeKey(child.id);
+            source.trackId = child.id;
             source.volumeGain = juce::Decibels::decibelsToGain(child.volumeDecibels);
             source.pan = child.pan;
             source.audible = !parent.muted
@@ -1229,6 +1269,7 @@ std::optional<StudioAudioEngine::RenderSnapshot> StudioAudioEngine::buildSnapsho
             continue;
 
         RenderTrack::Route route;
+        route.id = compiledRoute.id;
         route.kind = compiledRoute.kind;
         route.tap = compiledRoute.tap;
         route.destinationIndex = compiledRoute.destinationTrackIndex;
@@ -1275,6 +1316,161 @@ std::optional<StudioAudioEngine::RenderSnapshot> StudioAudioEngine::buildSnapsho
     }
     snapshot.offlineTrackLeft.resize(snapshot.tracks.size(), 0.0f);
     snapshot.offlineTrackRight.resize(snapshot.tracks.size(), 0.0f);
+
+    for (const auto& lane : project.automationLanes)
+    {
+        if (!lane.enabled)
+            continue;
+        auto compiled = AutomationScheduler::compile(
+            project,
+            lane,
+            targetSampleRate,
+            error);
+        if (!compiled.has_value())
+            return std::nullopt;
+
+        if (lane.target.trackId == masterId)
+        {
+            switch (lane.target.type)
+            {
+                case AutomationTargetType::trackVolume:
+                    snapshot.masterVolumeAutomation = *compiled;
+                    break;
+                case AutomationTargetType::trackPan:
+                    snapshot.masterPanAutomation = *compiled;
+                    break;
+                case AutomationTargetType::trackMute:
+                    snapshot.masterMuteAutomation = *compiled;
+                    break;
+                case AutomationTargetType::trackPolarity:
+                case AutomationTargetType::vcaVolume:
+                case AutomationTargetType::sendGain:
+                case AutomationTargetType::sendPan:
+                case AutomationTargetType::sendMute:
+                case AutomationTargetType::controlRoomDim:
+                    break;
+                case AutomationTargetType::pluginParameter:
+                case AutomationTargetType::deviceParameter:
+                    snapshot.masterPluginAutomation.push_back({
+                        lane.target.insertId,
+                        lane.target.parameterIndex,
+                        *compiled
+                    });
+                    break;
+            }
+            continue;
+        }
+
+        const auto trackPosition = std::find(
+            routingOrder.cbegin(),
+            routingOrder.cend(),
+            lane.target.trackId);
+        if (lane.target.type == AutomationTargetType::vcaVolume)
+        {
+            const auto* vca = project.findTrack(lane.target.trackId);
+            if (vca == nullptr || vca->type != TrackType::vca)
+            {
+                error = "VCA automation targets an unavailable VCA.";
+                return std::nullopt;
+            }
+            for (const auto& controlledId : vca->controlledTrackIds)
+            {
+                const auto controlled = std::find(
+                    routingOrder.cbegin(),
+                    routingOrder.cend(),
+                    controlledId);
+                if (controlled != routingOrder.cend())
+                {
+                    snapshot.tracks[static_cast<std::size_t>(
+                        std::distance(routingOrder.cbegin(), controlled))]
+                        .vcaAutomation = *compiled;
+                }
+            }
+            continue;
+        }
+        if (trackPosition == routingOrder.cend())
+        {
+            if (lane.target.type == AutomationTargetType::pluginParameter
+                || lane.target.type
+                    == AutomationTargetType::deviceParameter)
+            {
+                for (auto& renderTrack : snapshot.tracks)
+                {
+                    const auto source = std::find_if(
+                        renderTrack.sources.begin(),
+                        renderTrack.sources.end(),
+                        [&lane](const auto& candidate)
+                        {
+                            return candidate.trackId
+                                == lane.target.trackId;
+                        });
+                    if (source != renderTrack.sources.end())
+                    {
+                        source->pluginAutomation.push_back({
+                            lane.target.insertId,
+                            lane.target.parameterIndex,
+                            *compiled
+                        });
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+
+        auto& renderTrack = snapshot.tracks[static_cast<std::size_t>(
+            std::distance(routingOrder.cbegin(), trackPosition))];
+        switch (lane.target.type)
+        {
+            case AutomationTargetType::trackVolume:
+                renderTrack.volumeAutomation = *compiled;
+                break;
+            case AutomationTargetType::trackPan:
+                renderTrack.panAutomation = *compiled;
+                break;
+            case AutomationTargetType::trackMute:
+                renderTrack.muteAutomation = *compiled;
+                break;
+            case AutomationTargetType::trackPolarity:
+                renderTrack.polarityAutomation = *compiled;
+                break;
+            case AutomationTargetType::sendGain:
+            case AutomationTargetType::sendPan:
+            case AutomationTargetType::sendMute:
+            {
+                const auto route = std::find_if(
+                    renderTrack.routes.begin(),
+                    renderTrack.routes.end(),
+                    [&lane](const auto& candidate)
+                    {
+                        return candidate.id == lane.target.routeId;
+                    });
+                if (route == renderTrack.routes.end())
+                {
+                    error = "Route automation target is unavailable.";
+                    return std::nullopt;
+                }
+                if (lane.target.type == AutomationTargetType::sendGain)
+                    route->gainAutomation = *compiled;
+                else if (lane.target.type == AutomationTargetType::sendPan)
+                    route->panAutomation = *compiled;
+                else
+                    route->muteAutomation = *compiled;
+                break;
+            }
+            case AutomationTargetType::vcaVolume:
+            case AutomationTargetType::controlRoomDim:
+                break;
+            case AutomationTargetType::pluginParameter:
+            case AutomationTargetType::deviceParameter:
+                renderTrack.pluginAutomation.push_back({
+                    lane.target.insertId,
+                    lane.target.parameterIndex,
+                    *compiled
+                });
+                break;
+        }
+    }
 
     configureRuntimeTiming(snapshot, pluginRequests);
 
@@ -1679,10 +1875,11 @@ void StudioAudioEngine::mixSample(RenderSnapshot& snapshot,
     auto masterLeft = 0.0f;
     auto masterRight = 0.0f;
 
-    const auto routeSample = [&snapshot](const RenderTrack& track,
-                                         RouteTap tap,
-                                         float sourceLeft,
-                                         float sourceRight)
+    const auto routeSample = [&snapshot, timelineSample](
+                                 const RenderTrack& track,
+                                 RouteTap tap,
+                                 float sourceLeft,
+                                 float sourceRight)
     {
         if (!track.audible)
             return;
@@ -1692,10 +1889,23 @@ void StudioAudioEngine::mixSample(RenderSnapshot& snapshot,
                 || route.tap != tap
                 || route.destinationIndex < 0)
                 continue;
-            const auto leftGain = route.gain
-                * (route.pan > 0.0f ? 1.0f - route.pan : 1.0f);
-            const auto rightGain = route.gain
-                * (route.pan < 0.0f ? 1.0f + route.pan : 1.0f);
+            if (automatedSwitch(
+                    route.muteAutomation,
+                    timelineSample,
+                    false))
+                continue;
+            const auto gain = automatedVolumeGain(
+                route.gainAutomation,
+                timelineSample,
+                route.gain);
+            const auto pan = automatedPan(
+                route.panAutomation,
+                timelineSample,
+                route.pan);
+            const auto leftGain = gain
+                * (pan > 0.0f ? 1.0f - pan : 1.0f);
+            const auto rightGain = gain
+                * (pan < 0.0f ? 1.0f + pan : 1.0f);
             const auto destination = static_cast<std::size_t>(
                 route.destinationIndex);
             snapshot.offlineTrackLeft[destination] += sourceLeft * leftGain;
@@ -1745,15 +1955,32 @@ void StudioAudioEngine::mixSample(RenderSnapshot& snapshot,
                     RouteTap::preFader,
                     trackLeft,
                     trackRight);
-        const auto leftPanGain = track.pan > 0.0f ? 1.0f - track.pan : 1.0f;
-        const auto rightPanGain = track.pan < 0.0f ? 1.0f + track.pan : 1.0f;
-        const auto polarity = track.polarityInverted ? -1.0f : 1.0f;
-        trackLeft *= track.volumeGain
-            * track.vcaGain
+        const auto pan = automatedPan(
+            track.panAutomation,
+            timelineSample,
+            track.pan);
+        const auto leftPanGain = pan > 0.0f ? 1.0f - pan : 1.0f;
+        const auto rightPanGain = pan < 0.0f ? 1.0f + pan : 1.0f;
+        const auto polarity = automatedSwitch(
+            track.polarityAutomation,
+            timelineSample,
+            track.polarityInverted)
+            ? -1.0f
+            : 1.0f;
+        const auto trackGain = automatedVolumeGain(
+            track.volumeAutomation,
+            timelineSample,
+            track.volumeGain);
+        const auto vcaGain = automatedVolumeGain(
+            track.vcaAutomation,
+            timelineSample,
+            track.vcaGain);
+        trackLeft *= trackGain
+            * vcaGain
             * polarity
             * leftPanGain;
-        trackRight *= track.volumeGain
-            * track.vcaGain
+        trackRight *= trackGain
+            * vcaGain
             * polarity
             * rightPanGain;
         routeSample(track,
@@ -1761,7 +1988,11 @@ void StudioAudioEngine::mixSample(RenderSnapshot& snapshot,
                     trackLeft,
                     trackRight);
 
-        if (!track.audible)
+        if (!track.audible
+            || automatedSwitch(
+                track.muteAutomation,
+                timelineSample,
+                false))
             continue;
         if (track.destinationIndex >= 0)
         {
@@ -1777,10 +2008,23 @@ void StudioAudioEngine::mixSample(RenderSnapshot& snapshot,
         }
     }
 
-    const auto masterLeftGain = snapshot.masterGain
-        * (snapshot.masterPan > 0.0f ? 1.0f - snapshot.masterPan : 1.0f);
-    const auto masterRightGain = snapshot.masterGain
-        * (snapshot.masterPan < 0.0f ? 1.0f + snapshot.masterPan : 1.0f);
+    if (automatedSwitch(
+            snapshot.masterMuteAutomation,
+            timelineSample,
+            false))
+        return;
+    const auto masterGain = automatedVolumeGain(
+        snapshot.masterVolumeAutomation,
+        timelineSample,
+        snapshot.masterGain);
+    const auto masterPan = automatedPan(
+        snapshot.masterPanAutomation,
+        timelineSample,
+        snapshot.masterPan);
+    const auto masterLeftGain = masterGain
+        * (masterPan > 0.0f ? 1.0f - masterPan : 1.0f);
+    const auto masterRightGain = masterGain
+        * (masterPan < 0.0f ? 1.0f + masterPan : 1.0f);
     left += masterLeft * masterLeftGain;
     right += masterRight * masterRightGain;
 }
@@ -1917,7 +2161,10 @@ void StudioAudioEngine::applyDelayCompensation(
 
 void StudioAudioEngine::processRuntimeChain(std::uint64_t key,
                                             juce::AudioBuffer<float>& buffer,
-                                            const juce::AudioBuffer<float>* sidechain) noexcept
+                                            const juce::AudioBuffer<float>* sidechain,
+                                            const std::vector<RenderSource::PluginAutomation>*
+                                                automation,
+                                            std::int64_t timelineSample) noexcept
 {
     if (key == 0)
         return;
@@ -1936,100 +2183,157 @@ void StudioAudioEngine::processRuntimeChain(std::uint64_t key,
     {
         for (auto& insert : track->inserts)
         {
+            insert.parameterEventCount = 0;
+            if (automation != nullptr)
+            {
+                const auto addEvent = [&insert](int parameterIndex,
+                                                int sampleOffset,
+                                                double value)
+                {
+                    if (parameterIndex < 0
+                        || insert.parameterEventCount
+                            >= PluginBridgeSharedState::maxParameterEvents)
+                        return;
+                    auto& event = insert.parameterEvents[
+                        static_cast<std::size_t>(
+                            insert.parameterEventCount++)];
+                    event.parameterIndex = static_cast<std::uint32_t>(
+                        parameterIndex);
+                    event.sampleOffset = static_cast<std::uint32_t>(
+                        sampleOffset);
+                    event.value = static_cast<float>(
+                        juce::jlimit(0.0, 1.0, value));
+                    event.flags = 0;
+                };
+                for (const auto& lane : *automation)
+                {
+                    if (lane.insertId != insert.insertId)
+                        continue;
+                    if (lane.lane.interpolation
+                        == AutomationInterpolation::linear)
+                    {
+                        for (int sample = 0;
+                             sample < buffer.getNumSamples();
+                             ++sample)
+                        {
+                            addEvent(
+                                lane.parameterIndex,
+                                sample,
+                                lane.lane.valueAt(timelineSample + sample));
+                        }
+                    }
+                    else
+                    {
+                        addEvent(lane.parameterIndex,
+                                 0,
+                                 lane.lane.valueAt(timelineSample));
+                        const auto blockEnd =
+                            timelineSample + buffer.getNumSamples();
+                        for (const auto& point : lane.lane.points)
+                        {
+                            if (point.sample <= timelineSample
+                                || point.sample >= blockEnd)
+                                continue;
+                            addEvent(
+                                lane.parameterIndex,
+                                static_cast<int>(
+                                    point.sample - timelineSample),
+                                point.value + lane.lane.trimOffset);
+                        }
+                    }
+                }
+                std::sort(
+                    insert.parameterEvents.begin(),
+                    insert.parameterEvents.begin()
+                        + insert.parameterEventCount,
+                    [](const auto& left, const auto& right)
+                    {
+                        return left.sampleOffset == right.sampleOffset
+                            ? left.parameterIndex < right.parameterIndex
+                            : left.sampleOffset < right.sampleOffset;
+                    });
+            }
+
             if (insert.bridge != nullptr && insert.bridge->isReady())
             {
                 const auto before = insert.bridge->lateBlockCount();
-                insert.bridge->processBlock(buffer, sidechain);
+                insert.bridge->processBlock(
+                    buffer,
+                    sidechain,
+                    std::span<const PluginBridgeParameterEvent>(
+                        insert.parameterEvents.data(),
+                        static_cast<std::size_t>(
+                            insert.parameterEventCount)));
                 const auto after = insert.bridge->lateBlockCount();
                 if (after > before)
                     pluginLateBlocks.fetch_add(after - before, std::memory_order_relaxed);
             }
             else if (insert.inProcess != nullptr)
             {
-                auto& processor = *insert.inProcess;
-                const auto useScratch = processor.getTotalNumInputChannels()
-                        > buffer.getNumChannels()
-                    || processor.getTotalNumOutputChannels()
-                        > buffer.getNumChannels()
-                    || (sidechain != nullptr
-                        && processor.getBusCount(true) > 1);
-                if (!useScratch)
+                if (insert.parameterEventCount == 0)
                 {
-                    insert.midi.clear();
-                    processor.processBlock(buffer, insert.midi);
+                    processInProcessRuntime(insert, buffer, sidechain);
                     continue;
                 }
 
-                auto& scratch = insert.inProcessBuffer;
-                scratch.clear();
-                const auto mainChannels = processor.getBusCount(true) > 0
-                    ? processor.getChannelCountOfBus(true, 0)
-                    : processor.getTotalNumInputChannels();
-                for (int channel = 0;
-                     channel < std::min(mainChannels, buffer.getNumChannels());
-                     ++channel)
+                auto processedSamples = 0;
+                auto eventIndex = 0;
+                while (eventIndex < insert.parameterEventCount)
                 {
-                    const auto destination =
-                        processor.getChannelIndexInProcessBlockBuffer(
-                            true,
-                            0,
-                            channel);
-                    scratch.copyFrom(destination,
-                                     0,
-                                     buffer,
-                                     channel,
-                                     0,
-                                     buffer.getNumSamples());
-                }
-                if (sidechain != nullptr
-                    && processor.getBusCount(true) > 1)
-                {
-                    const auto sidechainChannels =
-                        processor.getChannelCountOfBus(true, 1);
-                    for (int channel = 0;
-                         channel
-                             < std::min(sidechainChannels,
-                                        sidechain->getNumChannels());
-                         ++channel)
+                    const auto offset = std::min(
+                        buffer.getNumSamples(),
+                        static_cast<int>(
+                            insert.parameterEvents[
+                                static_cast<std::size_t>(eventIndex)]
+                                .sampleOffset));
+                    if (offset > processedSamples)
                     {
-                        const auto destination =
-                            processor.getChannelIndexInProcessBlockBuffer(
-                                true,
-                                1,
-                                channel);
-                        scratch.copyFrom(destination,
-                                         0,
-                                         *sidechain,
-                                         channel,
-                                         0,
-                                         buffer.getNumSamples());
+                        juce::AudioBuffer<float> segment(
+                            buffer.getArrayOfWritePointers(),
+                            buffer.getNumChannels(),
+                            processedSamples,
+                            offset - processedSamples);
+                        processInProcessRuntime(
+                            insert,
+                            segment,
+                            sidechain,
+                            processedSamples);
+                        processedSamples = offset;
+                    }
+                    while (eventIndex < insert.parameterEventCount
+                           && static_cast<int>(
+                                  insert.parameterEvents[
+                                      static_cast<std::size_t>(eventIndex)]
+                                      .sampleOffset)
+                               == offset)
+                    {
+                        const auto& event = insert.parameterEvents[
+                            static_cast<std::size_t>(eventIndex)];
+                        auto& parameters =
+                            insert.inProcess->getParameters();
+                        if (event.parameterIndex
+                            < static_cast<std::uint32_t>(
+                                  parameters.size()))
+                        {
+                            parameters[static_cast<int>(
+                                event.parameterIndex)]
+                                ->setValue(event.value);
+                        }
+                        ++eventIndex;
                     }
                 }
-                insert.midi.clear();
-                processor.processBlock(scratch, insert.midi);
-                const auto outputChannels = processor.getBusCount(false) > 0
-                    ? processor.getChannelCountOfBus(false, 0)
-                    : processor.getTotalNumOutputChannels();
-                for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
+                if (processedSamples < buffer.getNumSamples())
                 {
-                    if (channel < outputChannels)
-                    {
-                        const auto source =
-                            processor.getChannelIndexInProcessBlockBuffer(
-                                false,
-                                0,
-                                channel);
-                        buffer.copyFrom(channel,
-                                        0,
-                                        scratch,
-                                        source,
-                                        0,
-                                        buffer.getNumSamples());
-                    }
-                    else
-                    {
-                        buffer.clear(channel, 0, buffer.getNumSamples());
-                    }
+                    juce::AudioBuffer<float> segment(
+                        buffer.getArrayOfWritePointers(),
+                        buffer.getNumChannels(),
+                        processedSamples,
+                        buffer.getNumSamples() - processedSamples);
+                    processInProcessRuntime(
+                        insert,
+                        segment,
+                        sidechain,
+                        processedSamples);
                 }
             }
             else
@@ -2041,6 +2345,100 @@ void StudioAudioEngine::processRuntimeChain(std::uint64_t key,
         }
     }
 
+}
+
+void StudioAudioEngine::processInProcessRuntime(
+    InsertRuntime& insert,
+    juce::AudioBuffer<float>& buffer,
+    const juce::AudioBuffer<float>* sidechain,
+    int sidechainSampleOffset) noexcept
+{
+    auto& processor = *insert.inProcess;
+    const auto useScratch = processor.getTotalNumInputChannels()
+            > buffer.getNumChannels()
+        || processor.getTotalNumOutputChannels() > buffer.getNumChannels()
+        || (sidechain != nullptr && processor.getBusCount(true) > 1);
+    if (!useScratch)
+    {
+        insert.midi.clear();
+        processor.processBlock(buffer, insert.midi);
+        return;
+    }
+
+    auto& scratch = insert.inProcessBuffer;
+    scratch.clear();
+    const auto mainChannels = processor.getBusCount(true) > 0
+        ? processor.getChannelCountOfBus(true, 0)
+        : processor.getTotalNumInputChannels();
+    for (int channel = 0;
+         channel < std::min(mainChannels, buffer.getNumChannels());
+         ++channel)
+    {
+        const auto destination =
+            processor.getChannelIndexInProcessBlockBuffer(
+                true,
+                0,
+                channel);
+        scratch.copyFrom(destination,
+                         0,
+                         buffer,
+                         channel,
+                         0,
+                         buffer.getNumSamples());
+    }
+    if (sidechain != nullptr && processor.getBusCount(true) > 1)
+    {
+        const auto sidechainChannels =
+            processor.getChannelCountOfBus(true, 1);
+        for (int channel = 0;
+             channel
+                 < std::min(sidechainChannels,
+                            sidechain->getNumChannels());
+             ++channel)
+        {
+            const auto destination =
+                processor.getChannelIndexInProcessBlockBuffer(
+                    true,
+                    1,
+                    channel);
+            scratch.copyFrom(destination,
+                             0,
+                             *sidechain,
+                             channel,
+                             sidechainSampleOffset,
+                             buffer.getNumSamples());
+        }
+    }
+    insert.midi.clear();
+    juce::AudioBuffer<float> scratchView(
+        scratch.getArrayOfWritePointers(),
+        scratch.getNumChannels(),
+        buffer.getNumSamples());
+    processor.processBlock(scratchView, insert.midi);
+    const auto outputChannels = processor.getBusCount(false) > 0
+        ? processor.getChannelCountOfBus(false, 0)
+        : processor.getTotalNumOutputChannels();
+    for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
+    {
+        if (channel < outputChannels)
+        {
+            const auto source =
+                processor.getChannelIndexInProcessBlockBuffer(
+                    false,
+                    0,
+                    channel);
+            buffer.copyFrom(channel,
+                            0,
+                            scratch,
+                            source,
+                            0,
+                            buffer.getNumSamples());
+        }
+        else
+        {
+            buffer.clear(channel, 0, buffer.getNumSamples());
+        }
+    }
 }
 
 double StudioAudioEngine::tempoAt(const RenderSnapshot& snapshot,
@@ -2430,6 +2828,25 @@ void StudioAudioEngine::runPluginRuntimeBuilder()
                 insertRuntime.inProcessBuffer.clear();
                 status.latencySamples = instance->getLatencySamples();
                 status.tailSeconds = instance->getTailLengthSeconds();
+                {
+                    const auto& parameters = instance->getParameters();
+                    for (int index = 0; index < parameters.size(); ++index)
+                    {
+                        const auto* parameter = parameters[index];
+                        const auto* hosted = dynamic_cast<
+                            const juce::HostedAudioProcessorParameter*>(
+                            parameter);
+                        status.parameters.push_back({
+                            index,
+                            hosted != nullptr
+                                ? hosted->getParameterID()
+                                : juce::String(index),
+                            parameter->getName(128),
+                            parameter->getValue(),
+                            parameter->isAutomatable()
+                        });
+                    }
+                }
                 request.latencySamples = status.latencySamples;
                 request.tailSeconds = status.tailSeconds;
                 insertRuntime.inProcess = std::move(instance);
@@ -2523,6 +2940,8 @@ void StudioAudioEngine::runPluginRuntimeBuilder()
             status.message = "Sandbox ready";
             status.latencySamples = track->inserts.back().bridge->reportedLatencySamples();
             status.tailSeconds = track->inserts.back().bridge->reportedTailSeconds();
+            status.parameters =
+                track->inserts.back().bridge->parameterDescriptors();
             request.latencySamples = status.latencySamples;
             request.tailSeconds = status.tailSeconds;
             statuses.push_back(std::move(status));
@@ -2841,7 +3260,12 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
                                                         2,
                                                         samplesThisBlock);
                     if (!source.isParentContent)
-                        processRuntimeChain(source.runtimeKey, sourceView);
+                        processRuntimeChain(
+                            source.runtimeKey,
+                            sourceView,
+                            nullptr,
+                            &source.pluginAutomation,
+                            position);
                     applyDelayCompensation(source.processingBuffer,
                                            samplesThisBlock,
                                            source.compensation);
@@ -2872,7 +3296,9 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
                                                    samplesThisBlock);
                 processRuntimeChain(track.runtimeKey,
                                     trackView,
-                                    &track.sidechainBuffer);
+                                    &track.sidechainBuffer,
+                                    &track.pluginAutomation,
+                                    position);
                 const auto publishMeter = [&](bool postFader)
                 {
                     if (track.meterIndex < 0
@@ -2935,10 +3361,61 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
                             1,
                             0,
                             samplesThisBlock);
-                        applyTrackGainAndPan(route.processingBuffer,
-                                             samplesThisBlock,
-                                             route.gain,
-                                             route.pan);
+                        if (!route.gainAutomation.has_value()
+                            && !route.panAutomation.has_value()
+                            && !route.muteAutomation.has_value())
+                        {
+                            applyTrackGainAndPan(route.processingBuffer,
+                                                 samplesThisBlock,
+                                                 route.gain,
+                                                 route.pan);
+                        }
+                        else
+                        {
+                            for (int sample = 0;
+                                 sample < samplesThisBlock;
+                                 ++sample)
+                            {
+                                const auto absoluteSample = position + sample;
+                                if (automatedSwitch(
+                                        route.muteAutomation,
+                                        absoluteSample,
+                                        false))
+                                {
+                                    route.processingBuffer.setSample(
+                                        0,
+                                        sample,
+                                        0.0f);
+                                    route.processingBuffer.setSample(
+                                        1,
+                                        sample,
+                                        0.0f);
+                                    continue;
+                                }
+                                const auto gain = automatedVolumeGain(
+                                    route.gainAutomation,
+                                    absoluteSample,
+                                    route.gain);
+                                const auto pan = automatedPan(
+                                    route.panAutomation,
+                                    absoluteSample,
+                                    route.pan);
+                                route.processingBuffer.applyGain(
+                                    0,
+                                    sample,
+                                    1,
+                                    gain
+                                        * (pan > 0.0f ? 1.0f - pan
+                                                      : 1.0f));
+                                route.processingBuffer.applyGain(
+                                    1,
+                                    sample,
+                                    1,
+                                    gain
+                                        * (pan < 0.0f ? 1.0f + pan
+                                                      : 1.0f));
+                            }
+                        }
                         applyDelayCompensation(route.processingBuffer,
                                                samplesThisBlock,
                                                route.compensation);
@@ -2998,13 +3475,65 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
                     }
                 };
                 processRoutes(RouteTap::preFader);
-                applyTrackGainAndPan(track.processingBuffer,
-                                     samplesThisBlock,
-                                     track.volumeGain
-                                         * track.vcaGain
-                                         * (track.polarityInverted ? -1.0f
-                                                                  : 1.0f),
-                                     track.pan);
+                if (!track.volumeAutomation.has_value()
+                    && !track.panAutomation.has_value()
+                    && !track.muteAutomation.has_value()
+                    && !track.polarityAutomation.has_value()
+                    && !track.vcaAutomation.has_value())
+                {
+                    applyTrackGainAndPan(track.processingBuffer,
+                                         samplesThisBlock,
+                                         track.volumeGain
+                                             * track.vcaGain
+                                             * (track.polarityInverted
+                                                    ? -1.0f
+                                                    : 1.0f),
+                                         track.pan);
+                }
+                else
+                {
+                    for (int sample = 0; sample < samplesThisBlock; ++sample)
+                    {
+                        const auto absoluteSample = position + sample;
+                        if (automatedSwitch(
+                                track.muteAutomation,
+                                absoluteSample,
+                                false))
+                        {
+                            track.processingBuffer.setSample(0, sample, 0.0f);
+                            track.processingBuffer.setSample(1, sample, 0.0f);
+                            continue;
+                        }
+                        const auto gain = automatedVolumeGain(
+                            track.volumeAutomation,
+                            absoluteSample,
+                            track.volumeGain)
+                            * automatedVolumeGain(
+                                track.vcaAutomation,
+                                absoluteSample,
+                                track.vcaGain)
+                            * (automatedSwitch(
+                                   track.polarityAutomation,
+                                   absoluteSample,
+                                   track.polarityInverted)
+                                   ? -1.0f
+                                   : 1.0f);
+                        const auto pan = automatedPan(
+                            track.panAutomation,
+                            absoluteSample,
+                            track.pan);
+                        track.processingBuffer.applyGain(
+                            0,
+                            sample,
+                            1,
+                            gain * (pan > 0.0f ? 1.0f - pan : 1.0f));
+                        track.processingBuffer.applyGain(
+                            1,
+                            sample,
+                            1,
+                            gain * (pan < 0.0f ? 1.0f + pan : 1.0f));
+                    }
+                }
                 publishMeter(true);
                 processRoutes(RouteTap::postFader);
                 applyDelayCompensation(track.processingBuffer,
@@ -3062,12 +3591,58 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
             juce::AudioBuffer<float> masterView(masterChannels,
                                                 2,
                                                 samplesThisBlock);
-            processRuntimeChain(snapshot.masterRuntimeKey, masterView);
+            processRuntimeChain(
+                snapshot.masterRuntimeKey,
+                masterView,
+                nullptr,
+                &snapshot.masterPluginAutomation,
+                position);
             if (snapshot.masterAudible)
-                applyTrackGainAndPan(snapshot.masterBuffer,
-                                     samplesThisBlock,
-                                     snapshot.masterGain,
-                                     snapshot.masterPan);
+            {
+                if (!snapshot.masterVolumeAutomation.has_value()
+                    && !snapshot.masterPanAutomation.has_value()
+                    && !snapshot.masterMuteAutomation.has_value())
+                {
+                    applyTrackGainAndPan(snapshot.masterBuffer,
+                                         samplesThisBlock,
+                                         snapshot.masterGain,
+                                         snapshot.masterPan);
+                }
+                else
+                {
+                    for (int sample = 0; sample < samplesThisBlock; ++sample)
+                    {
+                        const auto absoluteSample = position + sample;
+                        if (automatedSwitch(
+                                snapshot.masterMuteAutomation,
+                                absoluteSample,
+                                false))
+                        {
+                            snapshot.masterBuffer.setSample(0, sample, 0.0f);
+                            snapshot.masterBuffer.setSample(1, sample, 0.0f);
+                            continue;
+                        }
+                        const auto gain = automatedVolumeGain(
+                            snapshot.masterVolumeAutomation,
+                            absoluteSample,
+                            snapshot.masterGain);
+                        const auto pan = automatedPan(
+                            snapshot.masterPanAutomation,
+                            absoluteSample,
+                            snapshot.masterPan);
+                        snapshot.masterBuffer.applyGain(
+                            0,
+                            sample,
+                            1,
+                            gain * (pan > 0.0f ? 1.0f - pan : 1.0f));
+                        snapshot.masterBuffer.applyGain(
+                            1,
+                            sample,
+                            1,
+                            gain * (pan < 0.0f ? 1.0f + pan : 1.0f));
+                    }
+                }
+            }
             else
                 snapshot.masterBuffer.clear();
 

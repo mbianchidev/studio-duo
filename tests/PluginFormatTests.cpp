@@ -107,8 +107,10 @@ void pluginFormatTests()
     expect(!statuses.empty()
                && statuses.front().state
                       == studio::StudioAudioEngine::PluginRuntimeStatus::State::ready
-               && statuses.front().message.containsIgnoreCase("in-process"),
-           "Trusted CLAP processing activates in process.");
+               && statuses.front().message.containsIgnoreCase("in-process")
+               && statuses.front().parameters.size() == 1
+               && statuses.front().parameters.front().name == "Gain",
+           "Trusted CLAP processing and parameter metadata activate in process.");
     const auto captures = engine.capturePluginStates(1000);
     expect(captures.size() == 1
                && captures.front().result.wasOk()

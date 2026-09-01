@@ -1,6 +1,7 @@
 #pragma once
 
 #include "StudioTheme.h"
+#include "AutomationPanel.h"
 #include "MixerPanel.h"
 #include "PluginInsertPanel.h"
 #include "RoutingPanel.h"
@@ -100,6 +101,7 @@ private:
     void showTrackQuickEditor(const juce::String& trackId,
                               juce::Rectangle<int> targetScreenArea);
     void showTrackingMenu();
+    void showAutomationPanel();
     void promptTempoChange();
     void promptMeterChange();
     void createPluginTonePath(const juce::String& sourceTrackId);
@@ -113,6 +115,8 @@ private:
     void changeTransportState(const std::function<void(ProjectTransportState&)>& change);
     void changeEditGroups(const std::function<void(std::vector<EditGroup>&)>& change);
     void changeReampRoutes(const std::function<void(std::vector<ReampRoute>&)>& change);
+    void recordTrackAutomation(AutomationTargetType type,
+                               double normalizedValue);
     [[nodiscard]] const AudioClip* activeClipAt(const juce::String& parentTrackId,
                                                 double seconds) const;
     [[nodiscard]] std::vector<juce::String> linkedClipIdsAt(
@@ -178,6 +182,7 @@ private:
     juce::TextButton duplicateTrackButton { "DUPLICATE TRACK" };
     juce::TextButton deleteTrackButton { "DELETE TRACK" };
     juce::TextButton trackingButton { "TRACKING SETUP" };
+    juce::TextButton automationButton { "AUTOMATION" };
 
     juce::Label inspectorName;
     juce::Label inspectorDetails;

@@ -2,6 +2,7 @@
 
 #include "AudioAnalysis.h"
 #include "RecordingWaveform.h"
+#include "automation/AutomationScheduler.h"
 #include "model/ProjectModel.h"
 #include "plugin_host/PluginBridgeClient.h"
 #include "plugin_host/AraDocumentHost.h"
@@ -85,6 +86,7 @@ public:
         juce::String message;
         int latencySamples = 0;
         double tailSeconds = 0.0;
+        std::vector<PluginParameterDescriptor> parameters;
     };
 
     struct TrackMeterSnapshot
@@ -175,6 +177,7 @@ private:
         };
 
         std::uint64_t runtimeKey = 0;
+        juce::String trackId;
         int runtimeLatencySamples = 0;
         float volumeGain = 1.0f;
         float pan = 0.0f;
@@ -186,12 +189,20 @@ private:
             PluginBridgeSharedState::maxBlockSize
         };
         DelayCompensator compensation;
+        struct PluginAutomation
+        {
+            juce::String insertId;
+            int parameterIndex = -1;
+            CompiledAutomationLane lane;
+        };
+        std::vector<PluginAutomation> pluginAutomation;
     };
 
     struct RenderTrack
     {
         struct Route
         {
+            juce::String id;
             RouteKind kind = RouteKind::send;
             RouteTap tap = RouteTap::postFader;
             int destinationIndex = -1;
@@ -200,6 +211,9 @@ private:
             int hardwareChannels = 0;
             float gain = 1.0f;
             float pan = 0.0f;
+            std::optional<CompiledAutomationLane> gainAutomation;
+            std::optional<CompiledAutomationLane> panAutomation;
+            std::optional<CompiledAutomationLane> muteAutomation;
             juce::AudioBuffer<float> processingBuffer {
                 2,
                 PluginBridgeSharedState::maxBlockSize
@@ -230,6 +244,12 @@ private:
             PluginBridgeSharedState::maxBlockSize
         };
         std::vector<Route> routes;
+        std::optional<CompiledAutomationLane> volumeAutomation;
+        std::optional<CompiledAutomationLane> panAutomation;
+        std::optional<CompiledAutomationLane> muteAutomation;
+        std::optional<CompiledAutomationLane> polarityAutomation;
+        std::optional<CompiledAutomationLane> vcaAutomation;
+        std::vector<RenderSource::PluginAutomation> pluginAutomation;
         RenderSource::DelayCompensator compensation;
     };
 
@@ -261,6 +281,10 @@ private:
         float masterGain = 1.0f;
         float masterPan = 0.0f;
         bool masterAudible = true;
+        std::optional<CompiledAutomationLane> masterVolumeAutomation;
+        std::optional<CompiledAutomationLane> masterPanAutomation;
+        std::optional<CompiledAutomationLane> masterMuteAutomation;
+        std::vector<RenderSource::PluginAutomation> masterPluginAutomation;
         bool controlRoomEnabled = false;
         std::uint64_t controlRoomRuntimeKey = 0;
         float controlRoomGain = 1.0f;
@@ -298,6 +322,9 @@ private:
         std::unique_ptr<AraDocumentHost> araDocument;
         juce::AudioBuffer<float> inProcessBuffer;
         juce::MidiBuffer midi;
+        std::array<PluginBridgeParameterEvent,
+                   PluginBridgeSharedState::maxParameterEvents> parameterEvents {};
+        int parameterEventCount = 0;
         RenderSource::DelayCompensator failureDelay;
     };
 
@@ -400,7 +427,15 @@ private:
                                        RenderSource::DelayCompensator& delay) noexcept;
     void processRuntimeChain(std::uint64_t runtimeKey,
                              juce::AudioBuffer<float>& buffer,
-                             const juce::AudioBuffer<float>* sidechain = nullptr) noexcept;
+                             const juce::AudioBuffer<float>* sidechain = nullptr,
+                             const std::vector<RenderSource::PluginAutomation>*
+                                 automation = nullptr,
+                             std::int64_t timelineSample = 0) noexcept;
+    static void processInProcessRuntime(
+        InsertRuntime& insert,
+        juce::AudioBuffer<float>& buffer,
+        const juce::AudioBuffer<float>* sidechain,
+        int sidechainSampleOffset = 0) noexcept;
     void requestPluginRuntime(std::vector<PluginRuntimeRequest> requests,
                               RenderSnapshot snapshot);
     void runPluginRuntimeBuilder();

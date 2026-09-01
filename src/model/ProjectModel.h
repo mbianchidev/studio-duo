@@ -1,6 +1,7 @@
 #pragma once
 
 #include "mix/RoutingTypes.h"
+#include "automation/AutomationTypes.h"
 
 #include <juce_data_structures/juce_data_structures.h>
 #include <juce_graphics/juce_graphics.h>
@@ -217,6 +218,8 @@ struct Track
     bool versionsCollapsed = false;
     juce::String activeTakeTrackId;
     std::vector<CompRegion> compRegions;
+    AutomationMode automationMode = AutomationMode::read;
+    bool automationArmed = false;
     TrackType type = TrackType::audio;
     juce::String outputTrackId;
     juce::String folderTrackId;
@@ -273,6 +276,7 @@ public:
     std::vector<EditGroup> editGroups;
     std::vector<ReampRoute> reampRoutes;
     std::vector<RoutingConnection> routingConnections;
+    std::vector<AutomationLane> automationLanes;
     std::vector<Track> tracks;
 
     static Project createDefault();

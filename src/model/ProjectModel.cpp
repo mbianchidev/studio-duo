@@ -615,6 +615,9 @@ juce::var Track::toVar() const
     object->setProperty("versionNumber", versionNumber);
     object->setProperty("versionsCollapsed", versionsCollapsed);
     object->setProperty("activeTakeTrackId", activeTakeTrackId);
+    object->setProperty("automationMode",
+                        automationModeToString(automationMode));
+    object->setProperty("automationArmed", automationArmed);
     object->setProperty("type", trackTypeToString(type));
     object->setProperty("outputTrackId", outputTrackId);
     object->setProperty("folderTrackId", folderTrackId);
@@ -673,6 +676,19 @@ std::optional<Track> Track::fromVar(const juce::var& value, juce::String& error)
     track.versionNumber = juce::jmax(0, integerProperty(*object, "versionNumber", 0));
     track.versionsCollapsed = booleanProperty(*object, "versionsCollapsed", false);
     track.activeTakeTrackId = object->getProperty("activeTakeTrackId").toString();
+    const auto automationMode = automationModeFromString(
+        object->getProperty("automationMode").toString());
+    if (object->hasProperty("automationMode")
+        && !automationMode.has_value())
+    {
+        error = "Track contains an unsupported automation mode.";
+        return std::nullopt;
+    }
+    track.automationMode = automationMode.value_or(AutomationMode::read);
+    track.automationArmed = booleanProperty(
+        *object,
+        "automationArmed",
+        false);
 
     const auto type = trackTypeFromString(object->getProperty("type").toString());
     if (!type.has_value())
@@ -1355,6 +1371,10 @@ juce::var Project::toVar() const
     for (const auto& connection : routingConnections)
         routingValues.add(connection.toVar());
     object->setProperty("routingConnections", juce::var(routingValues));
+    juce::Array<juce::var> automationValues;
+    for (const auto& lane : automationLanes)
+        automationValues.add(lane.toVar());
+    object->setProperty("automationLanes", juce::var(automationValues));
 
     juce::Array<juce::var> trackValues;
     trackValues.ensureStorageAllocated(static_cast<int>(tracks.size()));
@@ -1495,6 +1515,17 @@ std::optional<Project> Project::fromVar(const juce::var& value, juce::String& er
                     return std::nullopt;
                 project.routingConnections.push_back(std::move(*connection));
             }
+            const auto automationValues = object->getProperty("automationLanes");
+            if (automationValues.isArray())
+            {
+                for (const auto& automationValue : *automationValues.getArray())
+                {
+                    auto lane = AutomationLane::fromVar(automationValue, error);
+                    if (!lane.has_value())
+                        return std::nullopt;
+                    project.automationLanes.push_back(std::move(*lane));
+                }
+            }
         }
     }
 
@@ -1595,6 +1626,41 @@ std::optional<Project> Project::fromVar(const juce::var& value, juce::String& er
             return std::nullopt;
         }
         returnTracks.push_back(route.returnTrackId);
+    }
+    std::vector<juce::String> automationLaneIds;
+    for (const auto& lane : project.automationLanes)
+    {
+        if (project.findTrack(lane.target.trackId) == nullptr
+            || std::find(automationLaneIds.cbegin(),
+                         automationLaneIds.cend(),
+                         lane.id) != automationLaneIds.cend())
+        {
+            error = "Automation lanes reference unavailable tracks or duplicate IDs.";
+            return std::nullopt;
+        }
+        if (lane.target.routeId.isNotEmpty()
+            && project.findRoutingConnection(lane.target.routeId) == nullptr)
+        {
+            error = "Automation lane references an unavailable route.";
+            return std::nullopt;
+        }
+        if (lane.target.insertId.isNotEmpty())
+        {
+            const auto* track = project.findTrack(lane.target.trackId);
+            if (track == nullptr
+                || std::none_of(
+                    track->inserts.cbegin(),
+                    track->inserts.cend(),
+                    [&lane](const auto& insert)
+                    {
+                        return insert.id == lane.target.insertId;
+                    }))
+            {
+                error = "Automation lane references an unavailable insert.";
+                return std::nullopt;
+            }
+        }
+        automationLaneIds.push_back(lane.id);
     }
 
     return project;

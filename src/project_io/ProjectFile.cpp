@@ -54,8 +54,26 @@ juce::Result ProjectFile::save(const Project& project, const juce::File& request
     const auto generation = nextGeneration(manifestFile);
     const auto generationName = "generation-" + juce::String(generation).paddedLeft('0', 8) + ".json";
     const auto sessionFile = sessionDirectory.getChildFile(generationName);
+    const auto automationFile = automationDirectory.getChildFile(
+        generationName);
 
-    if (const auto result = writeJsonAtomically(sessionFile, project.toVar()); result.failed())
+    auto sessionValue = project.toVar();
+    if (auto* session = sessionValue.getDynamicObject())
+        session->removeProperty("automationLanes");
+    if (const auto result = writeJsonAtomically(sessionFile, sessionValue);
+        result.failed())
+        return result;
+    auto automation = std::make_unique<juce::DynamicObject>();
+    automation->setProperty("schemaVersion", 1);
+    automation->setProperty("projectId", project.id);
+    juce::Array<juce::var> laneValues;
+    for (const auto& lane : project.automationLanes)
+        laneValues.add(lane.toVar());
+    automation->setProperty("lanes", juce::var(laneValues));
+    if (const auto result = writeJsonAtomically(
+            automationFile,
+            juce::var(automation.release()));
+        result.failed())
         return result;
 
     auto manifest = std::make_unique<juce::DynamicObject>();
@@ -65,6 +83,8 @@ juce::Result ProjectFile::save(const Project& project, const juce::File& request
     manifest->setProperty("projectName", project.name);
     manifest->setProperty("generation", generation);
     manifest->setProperty("activeSession", "session/" + generationName);
+    manifest->setProperty("activeAutomation",
+                          "automation/" + generationName);
     manifest->setProperty("savedAt", juce::Time::getCurrentTime().toISO8601(true));
 
     if (const auto result = writeJsonAtomically(manifestFile, juce::var(manifest.release())); result.failed())
@@ -105,11 +125,61 @@ std::optional<Project> ProjectFile::load(const juce::File& requestedPackageDirec
         return std::nullopt;
     }
 
-    const auto sessionValue = juce::JSON::parse(sessionFile.loadFileAsString());
+    auto sessionValue = juce::JSON::parse(sessionFile.loadFileAsString());
     if (sessionValue.isVoid())
     {
         error = "The active project session is not valid JSON.";
         return std::nullopt;
+    }
+    const auto manifestVersion = static_cast<int>(
+        manifest->getProperty("formatVersion"));
+    const auto* sessionObject = sessionValue.getDynamicObject();
+    if (manifestVersion < 1
+        || manifestVersion > Project::currentFormatVersion
+        || sessionObject == nullptr
+        || static_cast<int>(
+               sessionObject->getProperty("formatVersion"))
+            != manifestVersion)
+    {
+        error = "The manifest and session format versions do not agree.";
+        return std::nullopt;
+    }
+
+    const auto activeAutomation =
+        manifest->getProperty("activeAutomation").toString();
+    if (activeAutomation.isNotEmpty())
+    {
+        if (activeAutomation.contains("..")
+            || juce::File::isAbsolutePath(activeAutomation))
+        {
+            error = "The project manifest contains an unsafe automation path.";
+            return std::nullopt;
+        }
+        const auto automationFile =
+            packageDirectory.getChildFile(activeAutomation);
+        if (!automationFile.isAChildOf(packageDirectory)
+            || !automationFile.existsAsFile())
+        {
+            error = "The active project automation is missing.";
+            return std::nullopt;
+        }
+        const auto automationValue = juce::JSON::parse(
+            automationFile.loadFileAsString());
+        const auto* automation = automationValue.getDynamicObject();
+        auto* session = sessionValue.getDynamicObject();
+        if (automation == nullptr
+            || session == nullptr
+            || static_cast<int>(
+                   automation->getProperty("schemaVersion")) != 1
+            || automation->getProperty("projectId").toString()
+                != session->getProperty("id").toString()
+            || !automation->getProperty("lanes").isArray())
+        {
+            error = "The active automation document is invalid.";
+            return std::nullopt;
+        }
+        session->setProperty("automationLanes",
+                             automation->getProperty("lanes"));
     }
 
     return Project::fromVar(sessionValue, error);

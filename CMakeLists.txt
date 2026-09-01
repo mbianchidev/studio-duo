@@ -74,6 +74,12 @@ juce_add_binary_data(
 )
 
 set(STUDIO_DUO_MODEL_SOURCES
+    src/automation/AutomationRecorder.cpp
+    src/automation/AutomationRecorder.h
+    src/automation/AutomationScheduler.cpp
+    src/automation/AutomationScheduler.h
+    src/automation/AutomationTypes.cpp
+    src/automation/AutomationTypes.h
     src/audio/AudioAnalysis.cpp
     src/audio/AudioAnalysis.h
     src/mix/RoutingTypes.cpp
@@ -143,6 +149,8 @@ target_sources(
         src/plugin_host/PluginScanWorker.h
         src/ui/MainComponent.cpp
         src/ui/MainComponent.h
+        src/ui/AutomationPanel.cpp
+        src/ui/AutomationPanel.h
         src/ui/MixerPanel.cpp
         src/ui/MixerPanel.h
         src/ui/PluginInsertPanel.cpp
@@ -264,6 +272,7 @@ if(STUDIO_DUO_BUILD_TESTS)
             tests/RoutingUiModelTests.cpp
             tests/PluginFormatTests.cpp
             tests/PluginRecoveryTests.cpp
+            tests/AutomationTests.cpp
             src/ui/RoutingUiModel.cpp
             src/ui/RoutingUiModel.h
             src/audio/StudioAudioEngine.cpp

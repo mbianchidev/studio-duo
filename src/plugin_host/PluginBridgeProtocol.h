@@ -11,6 +11,15 @@ namespace studio
 {
 inline constexpr auto pluginBridgeProcessId = "studioduopluginbridge";
 
+struct PluginParameterDescriptor
+{
+    int index = -1;
+    juce::String id;
+    juce::String name;
+    float value = 0.0f;
+    bool automatable = false;
+};
+
 struct PluginBridgeParameterEvent
 {
     std::uint32_t parameterIndex = 0;
@@ -25,7 +34,7 @@ struct alignas(64) PluginBridgeSharedState
     static constexpr std::uint32_t protocolVersion = 2;
     static constexpr int maxChannels = 8;
     static constexpr int maxBlockSize = 4096;
-    static constexpr int maxParameterEvents = 256;
+    static constexpr int maxParameterEvents = 16384;
 
     std::uint32_t magic = magicValue;
     std::uint32_t version = protocolVersion;

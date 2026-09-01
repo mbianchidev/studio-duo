@@ -301,6 +301,8 @@ void TimelineComponent::paint(juce::Graphics& graphics)
                 ? "TO " + output->name.substring(0, 5).toUpperCase()
                 : "NO OUT";
         }
+        if (track.automationArmed)
+            routingLabel << " A";
         graphics.drawText(routingLabel,
                           viewportPositionX + 128,
                           y + 48,
@@ -602,6 +604,60 @@ void TimelineComponent::paint(juce::Graphics& graphics)
         graphics.drawText(clip->name + processingLabel,
                           bounds.toNearestInt().withHeight(24).reduced(8, 0),
                           juce::Justification::centredLeft);
+    }
+
+    for (const auto& lane : project->automationLanes)
+    {
+        if (!lane.enabled || lane.points.empty())
+            continue;
+        const auto track = std::find_if(
+            tracks.cbegin(),
+            tracks.cend(),
+            [&lane](const auto* candidate)
+            {
+                return candidate->id == lane.target.trackId;
+            });
+        if (track == tracks.cend())
+            continue;
+        const auto index = static_cast<int>(
+            std::distance(tracks.cbegin(), track));
+        const auto top = static_cast<float>(
+            rulerHeight + index * trackHeight + 8);
+        const auto height = static_cast<float>(trackHeight - 16);
+        juce::Path path;
+        auto started = false;
+        graphics.setColour(
+            juce::Colour(StudioColours::amber).withAlpha(0.8f));
+        for (const auto& point : lane.points)
+        {
+            const auto pointSeconds =
+                lane.timebase == AutomationTimebase::beats
+                ? project->secondsAtBeat(point.position)
+                : point.position;
+            const auto x = secondsToX(pointSeconds);
+            const auto y = top
+                + (1.0f
+                   - static_cast<float>(
+                       juce::jlimit(0.0, 1.0, point.value)))
+                    * height;
+            if (!started)
+            {
+                path.startNewSubPath(x, y);
+                started = true;
+            }
+            else if (lane.interpolation == AutomationInterpolation::step)
+            {
+                const auto previous = path.getCurrentPosition();
+                path.lineTo(x, previous.y);
+                path.lineTo(x, y);
+            }
+            else
+            {
+                path.lineTo(x, y);
+            }
+            graphics.fillEllipse(x - 2.5f, y - 2.5f, 5.0f, 5.0f);
+        }
+        graphics.strokePath(path, juce::PathStrokeType(1.5f));
     }
 
     const auto visible = visibleTracks();
