@@ -218,6 +218,8 @@ public:
                                           3.5f);
 
             juce::String state;
+            if (track.type != TrackType::audio)
+                state << trackTypeToString(track.type).toUpperCase() << " ";
             if (track.muted) state << "M ";
             if (track.solo) state << "S ";
             if (track.armed) state << "R";
@@ -703,6 +705,7 @@ MainComponent::MainComponent()
     configureButton(loopButton, "Loop the project range");
     configureButton(metronomeButton, "Toggle the metronome");
     configureButton(addTrackButton, "Add an audio track");
+    configureButton(addBusButton, "Add a stereo bus track");
     configureButton(importButton, "Import WAV, AIFF, FLAC, or MP3 audio");
     configureButton(duplicateTrackButton, "Duplicate the selected track and its edits");
     configureButton(deleteTrackButton, "Delete the selected track");
@@ -732,6 +735,7 @@ MainComponent::MainComponent()
     stopButton.onClick = [this] { stopTransportAndRecording(); };
     recordButton.onClick = [this] { toggleRecording(); };
     addTrackButton.onClick = [this] { addAudioTrack(); };
+    addBusButton.onClick = [this] { addBusTrack(); };
     importButton.onClick = [this] { beginImportAudio(); };
     duplicateTrackButton.onClick = [this] { duplicateSelectedTrack(); };
     deleteTrackButton.onClick = [this] { deleteSelectedTrack(); };
@@ -849,7 +853,7 @@ MainComponent::MainComponent()
             return;
 
         const auto* track = project.findTrack(selectedTrackId);
-        if (track == nullptr || track->type != TrackType::audio)
+        if (track == nullptr || track->type == TrackType::master)
             return;
 
         const auto replacement = inspectorName.getText().trim();
@@ -887,6 +891,31 @@ MainComponent::MainComponent()
         auto after = before;
         after.inputChannel = inputSelector.getSelectedItemIndex();
         perform(std::make_unique<SetTrackMixCommand>(track->id, before, after));
+    };
+
+    addAndMakeVisible(outputLabel);
+    outputLabel.setText("OUTPUT", juce::dontSendNotification);
+    outputLabel.setColour(juce::Label::textColourId,
+                          juce::Colour(StudioColours::secondaryText));
+    addAndMakeVisible(outputSelector);
+    outputSelector.setTooltip("Route this track through a bus or directly to the master");
+    outputSelector.onChange = [this]
+    {
+        const auto index = outputSelector.getSelectedItemIndex();
+        if (updatingOutputControls
+            || index < 0
+            || index >= static_cast<int>(outputTrackIds.size()))
+            return;
+
+        const auto* track = project.findTrack(selectedTrackId);
+        if (track == nullptr
+            || track->type == TrackType::master
+            || track->parentTrackId.isNotEmpty())
+            return;
+        const auto& destinationId = outputTrackIds[static_cast<std::size_t>(index)];
+        if (track->outputTrackId == destinationId)
+            return;
+        perform(std::make_unique<SetTrackOutputCommand>(track->id, destinationId));
     };
 
     addAndMakeVisible(volumeLabel);
@@ -1389,6 +1418,8 @@ void MainComponent::resized()
     auto sessionPanel = left.reduced(14, 42);
     addTrackButton.setBounds(sessionPanel.removeFromTop(34));
     sessionPanel.removeFromTop(8);
+    addBusButton.setBounds(sessionPanel.removeFromTop(34));
+    sessionPanel.removeFromTop(8);
     importButton.setBounds(sessionPanel.removeFromTop(34));
     sessionPanel.removeFromTop(8);
     duplicateTrackButton.setBounds(sessionPanel.removeFromTop(34));
@@ -1409,7 +1440,10 @@ void MainComponent::resized()
     auto inputToggles = inspector.removeFromTop(28);
     stereoInputButton.setBounds(inputToggles.removeFromLeft(94).reduced(2));
     monitorButton.setBounds(inputToggles.removeFromLeft(100).reduced(2));
-    inspector.removeFromTop(12);
+    inspector.removeFromTop(8);
+    outputLabel.setBounds(inspector.removeFromTop(20));
+    outputSelector.setBounds(inspector.removeFromTop(30));
+    inspector.removeFromTop(8);
     auto mixLabels = inspector.removeFromTop(20);
     volumeLabel.setBounds(mixLabels.removeFromLeft(109));
     panLabel.setBounds(mixLabels);
@@ -1900,7 +1934,7 @@ void MainComponent::importAudioFile(const juce::File& source)
     }
 
     auto* destination = project.findTrack(selectedTrackId);
-    if (destination == nullptr || destination->type == TrackType::master)
+    if (destination == nullptr || destination->type != TrackType::audio)
         destination = recordingTrack();
     if (destination == nullptr)
     {
@@ -2283,6 +2317,29 @@ void MainComponent::addAudioTrack()
         juce::Colour(0xffb47ac4)
     };
     track.colour = colours[static_cast<std::size_t>(audioTrackCount) % colours.size()];
+    const auto trackId = track.id;
+    if (perform(std::make_unique<AddTrackCommand>(track)))
+        selectTrack(trackId);
+}
+
+void MainComponent::addBusTrack()
+{
+    Track track;
+    track.type = TrackType::bus;
+    const auto busCount = static_cast<int>(std::count_if(project.tracks.cbegin(),
+                                                         project.tracks.cend(),
+                                                         [](const auto& candidate)
+    {
+        return candidate.type == TrackType::bus;
+    }));
+    track.name = "Bus " + juce::String(busCount + 1);
+    const std::array colours {
+        juce::Colour(0xff7da9d9),
+        juce::Colour(0xffb47ac4),
+        juce::Colour(0xff67c7d4),
+        juce::Colour(0xff8f969c)
+    };
+    track.colour = colours[static_cast<std::size_t>(busCount) % colours.size()];
     const auto trackId = track.id;
     if (perform(std::make_unique<AddTrackCommand>(track)))
         selectTrack(trackId);
@@ -2984,16 +3041,18 @@ void MainComponent::updateInspector()
         inputSelector.setEnabled(false);
         stereoInputButton.setEnabled(false);
         monitorButton.setEnabled(false);
+        outputSelector.setEnabled(false);
+        refreshOutputControls();
         return;
     }
 
-    const auto canRenameTrack = clip == nullptr && track->type == TrackType::audio;
+    const auto canRenameTrack = clip == nullptr && track->type != TrackType::master;
     updatingTrackName = true;
     inspectorName.setText(clip != nullptr ? clip->name : track->name, juce::dontSendNotification);
     updatingTrackName = false;
     inspectorName.setEditable(false, canRenameTrack, false);
     inspectorName.setTooltip(canRenameTrack
-                                 ? "Double-click to rename this audio track"
+                                 ? "Double-click to rename this track"
                                  : juce::String());
     auto details = clip != nullptr
         ? juce::String(clip->durationSeconds, 2)
@@ -3028,7 +3087,7 @@ void MainComponent::updateInspector()
     muteButton.setEnabled(track->type != TrackType::master || !track->muted);
     soloButton.setEnabled(track->type != TrackType::master);
     armButton.setEnabled(track->type == TrackType::audio);
-    trackColourButton.setEnabled(track->type == TrackType::audio);
+    trackColourButton.setEnabled(track->type != TrackType::master);
     splitClipButton.setEnabled(clip != nullptr);
     deleteClipButton.setEnabled(clip != nullptr);
     trimClipStartButton.setEnabled(clip != nullptr);
@@ -3037,6 +3096,7 @@ void MainComponent::updateInspector()
     stereoInputButton.setEnabled(track->type == TrackType::audio
                                  && track->inputChannel + 1 < inputSelector.getNumItems());
     monitorButton.setEnabled(track->type == TrackType::audio);
+    refreshOutputControls();
     volumeSlider.setValue(track->volumeDecibels, juce::dontSendNotification);
     panSlider.setValue(track->pan, juce::dontSendNotification);
     muteButton.setColour(juce::TextButton::buttonColourId,
@@ -3046,7 +3106,7 @@ void MainComponent::updateInspector()
     armButton.setColour(juce::TextButton::buttonColourId,
                         juce::Colour(track->armed ? StudioColours::orange : StudioColours::raised));
     armButton.setButtonText(track->armed ? "ARMED" : "ARM");
-    const auto colourButtonBackground = track->type == TrackType::audio
+    const auto colourButtonBackground = track->type != TrackType::master
         ? track->colour
         : juce::Colour(StudioColours::raised);
     trackColourButton.setColour(juce::TextButton::buttonColourId,
@@ -3059,6 +3119,68 @@ void MainComponent::updateInspector()
     updatingInputControls = true;
     inputSelector.setSelectedItemIndex(track->inputChannel, juce::dontSendNotification);
     updatingInputControls = false;
+}
+
+void MainComponent::refreshOutputControls()
+{
+    updatingOutputControls = true;
+    outputSelector.clear(juce::dontSendNotification);
+    outputTrackIds.clear();
+
+    const auto* track = project.findTrack(selectedTrackId);
+    if (track == nullptr)
+    {
+        outputSelector.addItem("No track selected", 1);
+        outputSelector.setSelectedItemIndex(0, juce::dontSendNotification);
+        outputSelector.setEnabled(false);
+        updatingOutputControls = false;
+        return;
+    }
+    if (track->type == TrackType::master)
+    {
+        outputSelector.addItem("Hardware output 1-2", 1);
+        outputSelector.setSelectedItemIndex(0, juce::dontSendNotification);
+        outputSelector.setEnabled(false);
+        updatingOutputControls = false;
+        return;
+    }
+    if (track->parentTrackId.isNotEmpty())
+    {
+        const auto* parent = project.findTrack(track->parentTrackId);
+        outputSelector.addItem("Follows "
+                                   + (parent != nullptr ? parent->name
+                                                        : juce::String("parent")),
+                               1);
+        outputSelector.setSelectedItemIndex(0, juce::dontSendNotification);
+        outputSelector.setEnabled(false);
+        updatingOutputControls = false;
+        return;
+    }
+
+    outputSelector.addItem("Master", 1);
+    outputTrackIds.emplace_back();
+    auto selectedIndex = 0;
+    for (const auto& candidate : project.tracks)
+    {
+        if (candidate.type != TrackType::bus
+            || candidate.parentTrackId.isNotEmpty()
+            || candidate.id == track->id)
+            continue;
+
+        juce::String error;
+        if (!project.validateTrackOutput(track->id, candidate.id, error))
+            continue;
+        outputSelector.addItem("Bus: " + candidate.name,
+                               outputSelector.getNumItems() + 1);
+        outputTrackIds.push_back(candidate.id);
+        if (track->outputTrackId == candidate.id)
+            selectedIndex = static_cast<int>(outputTrackIds.size()) - 1;
+    }
+
+    outputSelector.setSelectedItemIndex(selectedIndex,
+                                        juce::dontSendNotification);
+    outputSelector.setEnabled(true);
+    updatingOutputControls = false;
 }
 
 void MainComponent::refreshInputControls()
@@ -3106,7 +3228,7 @@ void MainComponent::refreshInputControls()
 void MainComponent::showTrackColourMenu()
 {
     const auto* track = project.findTrack(selectedTrackId);
-    if (track == nullptr || track->type != TrackType::audio)
+    if (track == nullptr || track->type == TrackType::master)
         return;
 
     struct ColourChoice

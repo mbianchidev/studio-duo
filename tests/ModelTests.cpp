@@ -107,6 +107,12 @@ void serializationRoundTrip()
         1.5,
         1.0
     });
+    studio::Track bus;
+    bus.name = "Guitar Bus";
+    bus.type = studio::TrackType::bus;
+    const auto busId = bus.id;
+    project.tracks.insert(project.tracks.end() - 1, bus);
+    project.tracks.front().outputTrackId = busId;
 
     juce::String error;
     const auto decoded = studio::Project::fromVar(project.toVar(), error);
@@ -189,6 +195,31 @@ void serializationRoundTrip()
                && decoded->tracks.front().inserts.front().latencySamples == 128
                && std::abs(decoded->tracks.front().inserts.front().tailSeconds - 1.5) < 0.0001,
            "Plugin latency and tail metadata survive serialization.");
+    expect(decoded.has_value()
+               && decoded->tracks.front().outputTrackId == busId
+               && decoded->findTrack(busId) != nullptr
+               && decoded->findTrack(busId)->type == studio::TrackType::bus,
+           "Bus output routing survives serialization.");
+}
+
+void legacyProjectMigration()
+{
+    auto legacy = studio::Project::createDefault().toVar();
+    auto* object = legacy.getDynamicObject();
+    object->setProperty("formatVersion", 1);
+    if (auto* tracks = object->getProperty("tracks").getArray())
+        for (auto& track : *tracks)
+            if (auto* trackObject = track.getDynamicObject())
+                trackObject->removeProperty("outputTrackId");
+
+    juce::String error;
+    const auto migrated = studio::Project::fromVar(legacy, error);
+    expect(migrated.has_value(), error.toRawUTF8());
+    expect(migrated.has_value()
+               && migrated->tracks.front().outputTrackId.isEmpty()
+               && migrated->resolvedOutputTrackId(migrated->tracks.front())
+                      == migrated->masterTrackId(),
+           "Version 1 projects migrate to direct master outputs.");
 }
 
 void commandHistory()
@@ -553,6 +584,99 @@ void splitClipBoundaries()
     expect(std::abs(project.findClip(leftId)->endSeconds() - 5.0) < 0.0001
                && std::abs(project.findClip(rightId)->startSeconds - 5.0) < 0.0001,
            "Both split halves can expand back to their shared boundary.");
+}
+
+void busRouting()
+{
+    auto project = studio::Project::createDefault();
+    studio::CommandStack history;
+    juce::String error;
+
+    studio::Track guitarBus;
+    guitarBus.name = "Guitars";
+    guitarBus.type = studio::TrackType::bus;
+    const auto guitarBusId = guitarBus.id;
+    expect(history.perform(std::make_unique<studio::AddTrackCommand>(guitarBus),
+                           project,
+                           error),
+           error.toRawUTF8());
+
+    studio::Track mixBus;
+    mixBus.name = "Mix Bus";
+    mixBus.type = studio::TrackType::bus;
+    const auto mixBusId = mixBus.id;
+    expect(history.perform(std::make_unique<studio::AddTrackCommand>(mixBus),
+                           project,
+                           error),
+           error.toRawUTF8());
+
+    const auto audioTrackId = project.tracks.front().id;
+    expect(history.perform(std::make_unique<studio::SetTrackOutputCommand>(
+                               audioTrackId,
+                               guitarBusId),
+                           project,
+                           error),
+           error.toRawUTF8());
+    expect(history.perform(std::make_unique<studio::SetTrackOutputCommand>(
+                               guitarBusId,
+                               mixBusId),
+                           project,
+                           error),
+           error.toRawUTF8());
+    expect(project.findTrack(audioTrackId)->outputTrackId == guitarBusId
+               && project.findTrack(guitarBusId)->outputTrackId == mixBusId,
+           "Tracks can route through nested buses.");
+
+    const auto order = project.routingOrder(error);
+    const auto audioPosition = order.has_value()
+        ? std::find(order->cbegin(), order->cend(), audioTrackId)
+        : std::vector<juce::String>::const_iterator {};
+    const auto guitarPosition = order.has_value()
+        ? std::find(order->cbegin(), order->cend(), guitarBusId)
+        : std::vector<juce::String>::const_iterator {};
+    const auto mixPosition = order.has_value()
+        ? std::find(order->cbegin(), order->cend(), mixBusId)
+        : std::vector<juce::String>::const_iterator {};
+    expect(order.has_value()
+               && audioPosition < guitarPosition
+               && guitarPosition < mixPosition,
+           "Routing order processes sources before destination buses.");
+
+    error.clear();
+    expect(!history.perform(std::make_unique<studio::SetTrackOutputCommand>(
+                                mixBusId,
+                                guitarBusId),
+                            project,
+                            error)
+               && error.containsIgnoreCase("cycle"),
+           "Routing rejects cycles.");
+
+    const auto unrelatedAudioId = project.tracks[1].id;
+    error.clear();
+    expect(!history.perform(std::make_unique<studio::SetTrackOutputCommand>(
+                                guitarBusId,
+                                unrelatedAudioId),
+                            project,
+                            error),
+           "Routing rejects audio-track destinations.");
+
+    expect(history.undo(project), "Track output changes can be undone.");
+    expect(project.findTrack(guitarBusId)->outputTrackId.isEmpty(),
+           "Undo restores the prior master output.");
+    expect(history.redo(project, error), error.toRawUTF8());
+    expect(project.findTrack(guitarBusId)->outputTrackId == mixBusId,
+           "Redo restores a bus output.");
+
+    expect(history.perform(std::make_unique<studio::RemoveTrackCommand>(guitarBusId),
+                           project,
+                           error),
+           error.toRawUTF8());
+    expect(project.findTrack(audioTrackId)->outputTrackId.isEmpty(),
+           "Deleting a bus reroutes its sources to the master.");
+    expect(history.undo(project), "Bus deletion can be undone.");
+    expect(project.findTrack(guitarBusId) != nullptr
+               && project.findTrack(audioTrackId)->outputTrackId == guitarBusId,
+           "Undo restores a deleted bus and its incoming routes.");
 }
 
 void transportMaps()
@@ -1032,8 +1156,10 @@ void multitrackRecordingCommand()
 int main()
 {
     serializationRoundTrip();
+    legacyProjectMigration();
     commandHistory();
     splitClipBoundaries();
+    busRouting();
     transportMaps();
     playlistsAndComping();
     linkedMultitrackEditing();

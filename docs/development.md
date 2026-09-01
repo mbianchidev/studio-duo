@@ -123,6 +123,15 @@ inserts process the group result, and master inserts process the final mix.
 Snapshots and worker graphs share one published generation descriptor, so the
 audio callback never combines routing from different project states.
 
+Root tracks are ordered as an acyclic output graph before a snapshot is
+published. Audio, instrument, aux, and bus tracks can feed a stereo bus or the
+master, and buses can feed later buses. Every summing destination aligns its
+incoming plugin latencies before processing its own inserts. The audio callback
+clears all route buffers once per block, processes source tracks before their
+destinations, and adds each completed buffer only to its selected output.
+Offline export follows the same nested bus gain, pan, mute, and solo path when
+active inserts are absent.
+
 Each bridge reports plugin latency and tail duration after preparation. The
 engine aligns child sources, parent tracks, the master path, and the metronome,
 then feeds silence long enough to drain reported tails. Crashed or
@@ -146,6 +155,9 @@ printing its identity.
 Project saves use a `.studioduo` directory package. Session data is written to
 a new generation before `manifest.json` is atomically replaced. The latest
 complete state is also copied to `recovery/latest.json`.
+
+Project format version 2 adds explicit root-track output routing. Version 1
+projects migrate with every non-master track routed directly to the master.
 
 Audio files remain immutable. Clips store source references and non-destructive
 start, offset, duration, gain, and mute decisions.

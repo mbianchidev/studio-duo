@@ -289,10 +289,18 @@ void TimelineComponent::paint(juce::Graphics& graphics)
 
         graphics.setColour(juce::Colour(StudioColours::secondaryText));
         graphics.setFont(juce::Font(juce::FontOptions(9.5f)));
-        const auto routingLabel = track.type == TrackType::audio
+        auto routingLabel = track.type == TrackType::audio
             ? "IN " + juce::String(track.inputChannel + 1)
                 + (track.stereoInput ? "+" + juce::String(track.inputChannel + 2) : juce::String())
             : trackTypeToString(track.type).toUpperCase();
+        if (track.type == TrackType::bus)
+        {
+            const auto* output = project->findTrack(
+                project->resolvedOutputTrackId(track));
+            routingLabel = output != nullptr
+                ? "TO " + output->name.substring(0, 5).toUpperCase()
+                : "NO OUT";
+        }
         graphics.drawText(routingLabel,
                           viewportPositionX + 128,
                           y + 48,

@@ -359,6 +359,23 @@ private:
     TrackMixState newState;
 };
 
+class SetTrackOutputCommand final : public ProjectCommand
+{
+public:
+    SetTrackOutputCommand(juce::String sourceTrackId,
+                          juce::String destinationTrackId);
+
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    juce::String trackId;
+    juce::String newOutputTrackId;
+    juce::String oldOutputTrackId;
+    bool capturedOriginal = false;
+};
+
 class AddPluginInsertCommand final : public ProjectCommand
 {
 public:
@@ -430,6 +447,7 @@ private:
     std::vector<CompRegion> oldCompRegions;
     std::vector<EditGroup> oldEditGroups;
     std::vector<ReampRoute> oldReampRoutes;
+    std::vector<std::pair<juce::String, juce::String>> oldTrackOutputs;
     bool capturedOriginal = false;
 };
 

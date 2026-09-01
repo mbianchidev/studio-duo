@@ -896,6 +896,10 @@ std::optional<StudioAudioEngine::RenderSnapshot> StudioAudioEngine::buildSnapsho
     {
         return track.solo && track.type != TrackType::master;
     });
+    const auto routingOrder = project.routingOrder(error);
+    if (!routingOrder.has_value())
+        return std::nullopt;
+    const auto masterId = project.masterTrackId();
 
     if (const auto master = std::find_if(project.tracks.cbegin(), project.tracks.cend(), [](const auto& track)
         {
@@ -976,16 +980,80 @@ std::optional<StudioAudioEngine::RenderSnapshot> StudioAudioEngine::buildSnapsho
         return clips;
     };
 
-    for (const auto& parent : project.tracks)
+    const auto rootHasSolo = [&project](const Track& root)
     {
-        if (parent.type == TrackType::master || parent.parentTrackId.isNotEmpty())
-            continue;
+        return root.solo
+            || std::any_of(project.tracks.cbegin(),
+                           project.tracks.cend(),
+                           [&root](const auto& child)
+                           {
+                               return child.parentTrackId == root.id && child.solo;
+                           });
+    };
+    const auto routeContains = [&project](const juce::String& sourceId,
+                                          const juce::String& targetId)
+    {
+        auto currentId = sourceId;
+        while (currentId.isNotEmpty())
+        {
+            if (currentId == targetId)
+                return true;
+            const auto* current = project.findTrack(currentId);
+            if (current == nullptr || current->type == TrackType::master)
+                break;
+            currentId = project.resolvedOutputTrackId(*current);
+        }
+        return false;
+    };
+    const auto hasSoloDestination = [&project](const Track& source)
+    {
+        if (source.solo)
+            return true;
+        auto destinationId = project.resolvedOutputTrackId(source);
+        while (destinationId.isNotEmpty())
+        {
+            const auto* destination = project.findTrack(destinationId);
+            if (destination == nullptr || destination->type == TrackType::master)
+                break;
+            if (destination->solo)
+                return true;
+            destinationId = project.resolvedOutputTrackId(*destination);
+        }
+        return false;
+    };
+    const auto hasSoloUpstream = [&project, &routingOrder, &rootHasSolo, &routeContains](
+                                     const juce::String& targetId)
+    {
+        return std::any_of(routingOrder->cbegin(),
+                           routingOrder->cend(),
+                           [&project, &rootHasSolo, &routeContains, &targetId](
+                               const auto& candidateId)
+                           {
+                               const auto* candidate = project.findTrack(candidateId);
+                               return candidate != nullptr
+                                   && rootHasSolo(*candidate)
+                                   && routeContains(candidateId, targetId);
+                           });
+    };
+
+    for (const auto& trackId : *routingOrder)
+    {
+        const auto* parentPointer = project.findTrack(trackId);
+        if (parentPointer == nullptr)
+        {
+            error = "A routed track became unavailable.";
+            return std::nullopt;
+        }
+        const auto& parent = *parentPointer;
+        const auto wholeContentSoloActive = !anySolo || hasSoloDestination(parent);
+        const auto trackSoloActive = wholeContentSoloActive
+            || hasSoloUpstream(parent.id);
 
         RenderTrack renderTrack;
         renderTrack.runtimeKey = runtimeKey(parent.id);
         renderTrack.volumeGain = juce::Decibels::decibelsToGain(parent.volumeDecibels);
         renderTrack.pan = parent.pan;
-        renderTrack.audible = !parent.muted;
+        renderTrack.audible = !parent.muted && trackSoloActive;
 
         auto parentClips = buildClips(parent, nullptr);
         if (!parentClips.has_value())
@@ -993,7 +1061,7 @@ std::optional<StudioAudioEngine::RenderSnapshot> StudioAudioEngine::buildSnapsho
 
         RenderSource parentSource;
         parentSource.isParentContent = true;
-        parentSource.audible = !parent.muted && (!anySolo || parent.solo);
+        parentSource.audible = !parent.muted && wholeContentSoloActive;
         parentSource.clips = std::move(*parentClips);
         renderTrack.sources.push_back(std::move(parentSource));
 
@@ -1028,25 +1096,58 @@ std::optional<StudioAudioEngine::RenderSnapshot> StudioAudioEngine::buildSnapsho
             source.pan = child.pan;
             source.audible = !parent.muted
                 && !child.muted
-                && (!anySolo || parent.solo || child.solo);
+                && (wholeContentSoloActive || child.solo);
             source.clips = std::move(*childClips);
             renderTrack.sources.push_back(std::move(source));
         }
 
-        if (renderTrack.sources.size() == 1 && anySolo && !parent.solo)
-            renderTrack.audible = false;
-        else if (renderTrack.sources.size() > 1
-                 && anySolo
-                 && !parent.solo
-                 && std::none_of(project.tracks.cbegin(),
-                                 project.tracks.cend(),
-                                 [&parent](const auto& child)
-        {
-            return child.parentTrackId == parent.id && child.solo;
-        }))
-            renderTrack.audible = false;
-
         snapshot.tracks.push_back(std::move(renderTrack));
+    }
+
+    for (std::size_t index = 0; index < snapshot.tracks.size(); ++index)
+    {
+        const auto* source = project.findTrack((*routingOrder)[index]);
+        if (source == nullptr)
+            continue;
+
+        auto destinationId = project.resolvedOutputTrackId(*source);
+        if (destinationId != masterId)
+        {
+            const auto destination = std::find(routingOrder->cbegin(),
+                                               routingOrder->cend(),
+                                               destinationId);
+            if (destination == routingOrder->cend())
+            {
+                error = "A routed bus became unavailable.";
+                return std::nullopt;
+            }
+            snapshot.tracks[index].destinationIndex = static_cast<int>(
+                std::distance(routingOrder->cbegin(), destination));
+        }
+
+        while (destinationId.isNotEmpty() && destinationId != masterId)
+        {
+            const auto* destination = project.findTrack(destinationId);
+            if (destination == nullptr)
+                break;
+            const auto destinationPosition = std::find(routingOrder->cbegin(),
+                                                       routingOrder->cend(),
+                                                       destinationId);
+            if (destinationPosition == routingOrder->cend())
+                break;
+            const auto destinationIndex = static_cast<std::size_t>(
+                std::distance(routingOrder->cbegin(), destinationPosition));
+            const auto gain = juce::Decibels::decibelsToGain(
+                destination->volumeDecibels);
+            snapshot.tracks[index].offlineRoutingGainLeft *= gain
+                * (destination->pan > 0.0f ? 1.0f - destination->pan : 1.0f);
+            snapshot.tracks[index].offlineRoutingGainRight *= gain
+                * (destination->pan < 0.0f ? 1.0f + destination->pan : 1.0f);
+            snapshot.tracks[index].offlineRouteAudible =
+                snapshot.tracks[index].offlineRouteAudible
+                && snapshot.tracks[destinationIndex].audible;
+            destinationId = project.resolvedOutputTrackId(*destination);
+        }
     }
 
     configureRuntimeTiming(snapshot, pluginRequests);
@@ -1106,10 +1207,14 @@ void StudioAudioEngine::configureRuntimeTiming(
         delay.buffer.clear();
     };
 
-    auto maximumTrackLatency = 0;
-    auto maximumTrackTailSeconds = 0.0;
-    for (auto& track : snapshot.tracks)
+    std::vector<int> inputLatencies(snapshot.tracks.size(), 0);
+    std::vector<double> inputTails(snapshot.tracks.size(), 0.0);
+    std::vector<double> outputTails(snapshot.tracks.size(), 0.0);
+    auto masterInputLatency = 0;
+    auto masterInputTail = 0.0;
+    for (std::size_t index = 0; index < snapshot.tracks.size(); ++index)
     {
+        auto& track = snapshot.tracks[index];
         auto maximumSourceLatency = 0;
         auto maximumSourceTail = 0.0;
         for (auto& source : track.sources)
@@ -1125,30 +1230,50 @@ void StudioAudioEngine::configureRuntimeTiming(
                                              : tailForKey(source.runtimeKey));
         }
 
+        const auto alignedInputLatency = std::max(maximumSourceLatency,
+                                                 inputLatencies[index]);
         for (auto& source : track.sources)
             resetDelay(source.compensation,
-                       maximumSourceLatency - source.runtimeLatencySamples);
+                       alignedInputLatency - source.runtimeLatencySamples);
 
-        track.runtimeLatencySamples = maximumSourceLatency
+        track.runtimeLatencySamples = alignedInputLatency
             + latencyForKey(track.runtimeKey);
-        maximumTrackLatency = std::max(maximumTrackLatency,
-                                       track.runtimeLatencySamples);
-        maximumTrackTailSeconds = std::max(maximumTrackTailSeconds,
-                                           maximumSourceTail + tailForKey(track.runtimeKey));
+        outputTails[index] = std::max(maximumSourceTail, inputTails[index])
+            + tailForKey(track.runtimeKey);
+        if (track.destinationIndex >= 0)
+        {
+            const auto destination = static_cast<std::size_t>(
+                track.destinationIndex);
+            inputLatencies[destination] = std::max(inputLatencies[destination],
+                                                  track.runtimeLatencySamples);
+            inputTails[destination] = std::max(inputTails[destination],
+                                              outputTails[index]);
+        }
+        else
+        {
+            masterInputLatency = std::max(masterInputLatency,
+                                          track.runtimeLatencySamples);
+            masterInputTail = std::max(masterInputTail, outputTails[index]);
+        }
     }
 
     for (auto& track : snapshot.tracks)
+    {
+        const auto destinationLatency = track.destinationIndex >= 0
+            ? inputLatencies[static_cast<std::size_t>(track.destinationIndex)]
+            : masterInputLatency;
         resetDelay(track.compensation,
-                   maximumTrackLatency - track.runtimeLatencySamples);
+                   destinationLatency - track.runtimeLatencySamples);
+    }
 
     const auto masterLatency = latencyForKey(snapshot.masterRuntimeKey);
     resetDelay(snapshot.clickCompensation,
-               maximumTrackLatency + masterLatency);
+               masterInputLatency + masterLatency);
     snapshot.lengthSamples = snapshot.contentLengthSamples
-        + maximumTrackLatency
+        + masterInputLatency
         + masterLatency
         + static_cast<std::int64_t>(
-            std::ceil((maximumTrackTailSeconds + tailForKey(snapshot.masterRuntimeKey))
+            std::ceil((masterInputTail + tailForKey(snapshot.masterRuntimeKey))
                       * snapshot.sampleRate));
 }
 
@@ -1396,7 +1521,7 @@ void StudioAudioEngine::mixSample(const RenderSnapshot& snapshot,
 
     for (const auto& track : snapshot.tracks)
     {
-        if (!track.audible)
+        if (!track.audible || !track.offlineRouteAudible)
             continue;
 
         float trackLeft = 0.0f;
@@ -1431,8 +1556,14 @@ void StudioAudioEngine::mixSample(const RenderSnapshot& snapshot,
 
         const auto leftPanGain = track.pan > 0.0f ? 1.0f - track.pan : 1.0f;
         const auto rightPanGain = track.pan < 0.0f ? 1.0f + track.pan : 1.0f;
-        left += trackLeft * track.volumeGain * leftPanGain;
-        right += trackRight * track.volumeGain * rightPanGain;
+        left += trackLeft
+            * track.volumeGain
+            * leftPanGain
+            * track.offlineRoutingGainLeft;
+        right += trackRight
+            * track.volumeGain
+            * rightPanGain
+            * track.offlineRoutingGainRight;
     }
 
     const auto masterLeftGain = snapshot.masterGain
@@ -2222,12 +2353,14 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
 
             snapshot.masterBuffer.clear(0, 0, samplesThisBlock);
             snapshot.masterBuffer.clear(1, 0, samplesThisBlock);
-
             for (auto& track : snapshot.tracks)
             {
                 track.processingBuffer.clear(0, 0, samplesThisBlock);
                 track.processingBuffer.clear(1, 0, samplesThisBlock);
+            }
 
+            for (auto& track : snapshot.tracks)
+            {
                 for (auto& source : track.sources)
                 {
                     renderSourceBlock(source,
@@ -2308,18 +2441,22 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
                 }
                 if (track.audible)
                 {
-                    snapshot.masterBuffer.addFrom(0,
-                                                  0,
-                                                  track.processingBuffer,
-                                                  0,
-                                                  0,
-                                                  samplesThisBlock);
-                    snapshot.masterBuffer.addFrom(1,
-                                                  0,
-                                                  track.processingBuffer,
-                                                  1,
-                                                  0,
-                                                  samplesThisBlock);
+                    auto& destination = track.destinationIndex >= 0
+                        ? snapshot.tracks[static_cast<std::size_t>(
+                              track.destinationIndex)].processingBuffer
+                        : snapshot.masterBuffer;
+                    destination.addFrom(0,
+                                        0,
+                                        track.processingBuffer,
+                                        0,
+                                        0,
+                                        samplesThisBlock);
+                    destination.addFrom(1,
+                                        0,
+                                        track.processingBuffer,
+                                        1,
+                                        0,
+                                        samplesThisBlock);
                 }
             }
 

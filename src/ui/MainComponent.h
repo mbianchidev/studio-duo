@@ -58,6 +58,7 @@ private:
     void completeRecording(std::vector<ActiveRecordingTarget> targets,
                            std::vector<StudioAudioEngine::RecordingResult> recordings);
     void addAudioTrack();
+    void addBusTrack();
     void duplicateSelectedTrack();
     void deleteSelectedTrack();
     void addPluginToSelectedTrack(const PluginCatalogEntry& entry);
@@ -88,6 +89,7 @@ private:
     void selectClip(const juce::String& trackId, const juce::String& clipId);
     void updateInspector();
     void refreshInputControls();
+    void refreshOutputControls();
     void updateInputMonitoring();
     void showTrackColourMenu();
     void showTrackQuickEditor(const juce::String& trackId,
@@ -137,6 +139,7 @@ private:
     bool recordingFinalizationInProgress = false;
     bool playAfterRuntimeTransition = false;
     bool updatingInputControls = false;
+    bool updatingOutputControls = false;
     bool updatingTrackName = false;
     bool tempoEditActive = false;
     ProjectTransportState tempoEditStart;
@@ -162,6 +165,7 @@ private:
     juce::Label projectLabel;
 
     juce::TextButton addTrackButton { "+ AUDIO TRACK" };
+    juce::TextButton addBusButton { "+ BUS TRACK" };
     juce::TextButton importButton { "IMPORT AUDIO" };
     juce::TextButton duplicateTrackButton { "DUPLICATE TRACK" };
     juce::TextButton deleteTrackButton { "DELETE TRACK" };
@@ -173,6 +177,9 @@ private:
     juce::ComboBox inputSelector;
     juce::ToggleButton stereoInputButton { "STEREO" };
     juce::ToggleButton monitorButton { "MONITOR" };
+    juce::Label outputLabel;
+    juce::ComboBox outputSelector;
+    std::vector<juce::String> outputTrackIds;
     juce::Label volumeLabel;
     juce::Label panLabel;
     juce::Slider volumeSlider;

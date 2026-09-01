@@ -30,6 +30,9 @@ The repository now contains a working native C++20 and JUCE 9 application with:
 - Active parent, version-lane, and master insert chains during playback with
   matched graph/snapshot publication, delay compensation, tail draining, and
   metronome alignment
+- Persistent cycle-safe stereo output routing through nested bus tracks, with
+  bus insert processing, solo/mute propagation, and latency alignment at every
+  summing point
 - A dark single-window arrangement, inspector, transport, and mixer workspace
 - Versioned `.studioduo` directory packages with generation-based saves and a
   recovery point
@@ -37,10 +40,11 @@ The repository now contains a working native C++20 and JUCE 9 application with:
 - Automated model, command-history, and project-persistence tests on macOS and
   Windows
 
-This now includes the Phase 1 vertical slice and Phase 2 professional tracking
-and editing workflows, not the full 1.0 feature set. Plugin editors, automation,
-real-time plugin-inclusive bounce, MIDI, mastering, DAWproject exchange, and the
-bundled device suite remain on the accepted roadmap.
+This now includes the Phase 1 vertical slice, Phase 2 professional tracking and
+editing workflows, and the first Phase 3 routing foundation, not the full 1.0
+feature set. Sends, sidechains, VCAs, control-room routing, plugin editors,
+automation, real-time plugin-inclusive bounce, MIDI, mastering, DAWproject
+exchange, and the bundled device suite remain on the accepted roadmap.
 
 ## Build
 
@@ -145,6 +149,12 @@ a lower mixer strip to edit both values in one anchored panel. Drag the vertical
 mixer fader to change volume and double-click its lane to reset to `0.0 dB`.
 Every lower mixer strip also has a draggable L/R pan knob; double-click the knob
 area to return it to center.
+
+Use **+ BUS TRACK** to create a stereo summing bus. Select any audio, instrument,
+aux, or bus track and choose its **OUTPUT** in the inspector. Buses can feed
+other buses or the master; destinations that would create a routing cycle are
+excluded. Deleting a bus safely reroutes its incoming tracks to the master, and
+undo restores the complete routing.
 
 Selected clips show edge handles. Drag the body to move a clip, the left edge
 to change its timeline start and source offset, or the right edge to shorten or

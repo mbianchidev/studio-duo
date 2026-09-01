@@ -209,6 +209,7 @@ struct Track
     juce::String activeTakeTrackId;
     std::vector<CompRegion> compRegions;
     TrackType type = TrackType::audio;
+    juce::String outputTrackId;
     float volumeDecibels = 0.0f;
     float pan = 0.0f;
     bool muted = false;
@@ -228,7 +229,7 @@ struct Track
 class Project
 {
 public:
-    static constexpr int currentFormatVersion = 1;
+    static constexpr int currentFormatVersion = 2;
 
     juce::String id { juce::Uuid().toString() };
     juce::String name { "Untitled" };
@@ -269,6 +270,13 @@ public:
     [[nodiscard]] const EditGroup* editGroupForTrack(const juce::String& trackId) const;
     [[nodiscard]] const ReampRoute* reampRouteForReturn(
         const juce::String& trackId) const;
+    [[nodiscard]] juce::String masterTrackId() const;
+    [[nodiscard]] juce::String resolvedOutputTrackId(const Track& track) const;
+    [[nodiscard]] bool validateTrackOutput(const juce::String& sourceTrackId,
+                                           const juce::String& destinationTrackId,
+                                           juce::String& error) const;
+    [[nodiscard]] std::optional<std::vector<juce::String>> routingOrder(
+        juce::String& error) const;
     [[nodiscard]] double tempoAt(double seconds) const noexcept;
     [[nodiscard]] MeterChange meterAt(double seconds) const noexcept;
     [[nodiscard]] double beatsAt(double seconds) const noexcept;

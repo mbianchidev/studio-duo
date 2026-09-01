@@ -166,6 +166,10 @@ private:
         float pan = 0.0f;
         bool audible = true;
         int runtimeLatencySamples = 0;
+        int destinationIndex = -1;
+        float offlineRoutingGainLeft = 1.0f;
+        float offlineRoutingGainRight = 1.0f;
+        bool offlineRouteAudible = true;
         std::vector<RenderSource> sources;
         juce::AudioBuffer<float> processingBuffer {
             2,

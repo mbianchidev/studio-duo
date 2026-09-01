@@ -120,6 +120,11 @@ bool AddTrackCommand::perform(Project& project, juce::String& error)
 
     if (track.parentTrackId.isNotEmpty())
     {
+        if (track.outputTrackId.isNotEmpty())
+        {
+            error = "Version lanes follow their parent track output.";
+            return false;
+        }
         const auto parent = std::find_if(project.tracks.begin(),
                                          project.tracks.end(),
                                          [this](const auto& candidate)
@@ -148,6 +153,13 @@ bool AddTrackCommand::perform(Project& project, juce::String& error)
 
     insertionIndex = static_cast<std::size_t>(std::distance(project.tracks.begin(), master));
     project.tracks.insert(project.tracks.begin() + static_cast<std::ptrdiff_t>(insertionIndex), track);
+    if (track.type != TrackType::master
+        && !project.validateTrackOutput(track.id, track.outputTrackId, error))
+    {
+        project.tracks.erase(project.tracks.begin()
+                             + static_cast<std::ptrdiff_t>(insertionIndex));
+        return false;
+    }
     return true;
 }
 
@@ -1158,6 +1170,44 @@ void SetTrackMixCommand::apply(Track& track, const TrackMixState& state)
     track.colour = state.colour;
 }
 
+SetTrackOutputCommand::SetTrackOutputCommand(juce::String sourceTrackId,
+                                             juce::String destinationTrackId)
+    : trackId(std::move(sourceTrackId)),
+      newOutputTrackId(std::move(destinationTrackId))
+{
+}
+
+juce::String SetTrackOutputCommand::name() const
+{
+    return "Change track output";
+}
+
+bool SetTrackOutputCommand::perform(Project& project, juce::String& error)
+{
+    auto* track = project.findTrack(trackId);
+    if (track == nullptr)
+    {
+        error = "The track to route no longer exists.";
+        return false;
+    }
+    if (!project.validateTrackOutput(trackId, newOutputTrackId, error))
+        return false;
+
+    if (!capturedOriginal)
+    {
+        oldOutputTrackId = track->outputTrackId;
+        capturedOriginal = true;
+    }
+    track->outputTrackId = newOutputTrackId;
+    return true;
+}
+
+void SetTrackOutputCommand::undo(Project& project)
+{
+    if (auto* track = project.findTrack(trackId))
+        track->outputTrackId = oldOutputTrackId;
+}
+
 AddPluginInsertCommand::AddPluginInsertCommand(juce::String destinationTrackId,
                                                PluginInsert insertToAdd)
     : trackId(std::move(destinationTrackId)),
@@ -1350,6 +1400,8 @@ bool RemoveTrackCommand::perform(Project& project, juce::String& error)
         }
         oldEditGroups = project.editGroups;
         oldReampRoutes = project.reampRoutes;
+        for (const auto& candidate : project.tracks)
+            oldTrackOutputs.emplace_back(candidate.id, candidate.outputTrackId);
 
         std::vector<juce::String> rootIdsToRemove;
         if (iterator->parentTrackId.isEmpty())
@@ -1466,6 +1518,16 @@ bool RemoveTrackCommand::perform(Project& project, juce::String& error)
                                });
                        }),
         project.reampRoutes.end());
+    for (auto& candidate : project.tracks)
+    {
+        if (std::any_of(removedTracks.cbegin(),
+                        removedTracks.cend(),
+                        [&candidate](const auto& removed)
+                        {
+                            return removed.second.id == candidate.outputTrackId;
+                        }))
+            candidate.outputTrackId.clear();
+    }
     return true;
 }
 
@@ -1483,6 +1545,9 @@ void RemoveTrackCommand::undo(Project& project)
     }
     project.editGroups = oldEditGroups;
     project.reampRoutes = oldReampRoutes;
+    for (const auto& [restoredTrackId, outputTrackId] : oldTrackOutputs)
+        if (auto* track = project.findTrack(restoredTrackId))
+            track->outputTrackId = outputTrackId;
 }
 
 DuplicateTrackCommand::DuplicateTrackCommand(juce::String trackToDuplicate)

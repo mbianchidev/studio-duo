@@ -604,6 +604,7 @@ juce::var Track::toVar() const
     object->setProperty("versionsCollapsed", versionsCollapsed);
     object->setProperty("activeTakeTrackId", activeTakeTrackId);
     object->setProperty("type", trackTypeToString(type));
+    object->setProperty("outputTrackId", outputTrackId);
     object->setProperty("volumeDecibels", volumeDecibels);
     object->setProperty("pan", pan);
     object->setProperty("muted", muted);
@@ -657,6 +658,7 @@ std::optional<Track> Track::fromVar(const juce::var& value, juce::String& error)
     }
 
     track.type = *type;
+    track.outputTrackId = object->getProperty("outputTrackId").toString();
     track.volumeDecibels = static_cast<float>(numberProperty(*object, "volumeDecibels", 0.0));
     track.pan = juce::jlimit(-1.0f, 1.0f, static_cast<float>(numberProperty(*object, "pan", 0.0)));
     track.muted = booleanProperty(*object, "muted", false);
@@ -894,6 +896,158 @@ const ReampRoute* Project::reampRouteForReturn(const juce::String& trackId) cons
         return route.returnTrackId == rootId;
     });
     return iterator == reampRoutes.cend() ? nullptr : &*iterator;
+}
+
+juce::String Project::masterTrackId() const
+{
+    const auto master = std::find_if(tracks.cbegin(), tracks.cend(), [](const auto& track)
+    {
+        return track.type == TrackType::master && track.parentTrackId.isEmpty();
+    });
+    return master == tracks.cend() ? juce::String() : master->id;
+}
+
+juce::String Project::resolvedOutputTrackId(const Track& track) const
+{
+    if (track.type == TrackType::master)
+        return {};
+    return track.outputTrackId.isNotEmpty() ? track.outputTrackId : masterTrackId();
+}
+
+bool Project::validateTrackOutput(const juce::String& sourceTrackId,
+                                  const juce::String& destinationTrackId,
+                                  juce::String& error) const
+{
+    const auto* source = findTrack(sourceTrackId);
+    if (source == nullptr)
+    {
+        error = "The source track no longer exists.";
+        return false;
+    }
+    if (source->parentTrackId.isNotEmpty())
+    {
+        error = "Version lanes follow their parent track output.";
+        return false;
+    }
+    if (source->type == TrackType::master)
+    {
+        error = "The master track cannot be routed.";
+        return false;
+    }
+
+    const auto masterId = masterTrackId();
+    if (masterId.isEmpty())
+    {
+        error = "The project does not contain a master track.";
+        return false;
+    }
+
+    auto currentId = destinationTrackId.isNotEmpty() ? destinationTrackId : masterId;
+    std::vector<juce::String> visited;
+    while (currentId.isNotEmpty())
+    {
+        if (currentId == sourceTrackId)
+        {
+            error = "Track routing cannot contain a cycle.";
+            return false;
+        }
+        if (std::find(visited.cbegin(), visited.cend(), currentId) != visited.cend())
+        {
+            error = "The existing track routing contains a cycle.";
+            return false;
+        }
+        visited.push_back(currentId);
+
+        const auto* destination = findTrack(currentId);
+        if (destination == nullptr || destination->parentTrackId.isNotEmpty())
+        {
+            error = "The selected output track is unavailable.";
+            return false;
+        }
+        if (destination->type == TrackType::master)
+            return true;
+        if (destination->type != TrackType::bus)
+        {
+            error = "Tracks can route only to a bus or the master.";
+            return false;
+        }
+        currentId = resolvedOutputTrackId(*destination);
+    }
+
+    error = "The track output does not reach the master.";
+    return false;
+}
+
+std::optional<std::vector<juce::String>> Project::routingOrder(juce::String& error) const
+{
+    const auto masterId = masterTrackId();
+    if (masterId.isEmpty())
+    {
+        error = "The project does not contain a master track.";
+        return std::nullopt;
+    }
+
+    std::vector<juce::String> rootTrackIds;
+    for (const auto& track : tracks)
+        if (track.parentTrackId.isEmpty() && track.type != TrackType::master)
+            rootTrackIds.push_back(track.id);
+
+    std::vector<int> incoming(rootTrackIds.size(), 0);
+    for (std::size_t sourceIndex = 0; sourceIndex < rootTrackIds.size(); ++sourceIndex)
+    {
+        const auto* source = findTrack(rootTrackIds[sourceIndex]);
+        if (source == nullptr
+            || !validateTrackOutput(source->id, source->outputTrackId, error))
+            return std::nullopt;
+
+        const auto destinationId = resolvedOutputTrackId(*source);
+        if (destinationId == masterId)
+            continue;
+        const auto destination = std::find(rootTrackIds.cbegin(),
+                                           rootTrackIds.cend(),
+                                           destinationId);
+        if (destination == rootTrackIds.cend())
+        {
+            error = "A track routes to an unavailable bus.";
+            return std::nullopt;
+        }
+        ++incoming[static_cast<std::size_t>(
+            std::distance(rootTrackIds.cbegin(), destination))];
+    }
+
+    std::vector<juce::String> order;
+    order.reserve(rootTrackIds.size());
+    std::vector<bool> emitted(rootTrackIds.size(), false);
+    while (order.size() < rootTrackIds.size())
+    {
+        auto emittedTrack = false;
+        for (std::size_t index = 0; index < rootTrackIds.size(); ++index)
+        {
+            if (emitted[index] || incoming[index] != 0)
+                continue;
+
+            emitted[index] = true;
+            emittedTrack = true;
+            order.push_back(rootTrackIds[index]);
+            const auto* source = findTrack(rootTrackIds[index]);
+            const auto destinationId = source != nullptr
+                ? resolvedOutputTrackId(*source)
+                : juce::String();
+            const auto destination = std::find(rootTrackIds.cbegin(),
+                                               rootTrackIds.cend(),
+                                               destinationId);
+            if (destination != rootTrackIds.cend())
+                --incoming[static_cast<std::size_t>(
+                    std::distance(rootTrackIds.cbegin(), destination))];
+        }
+        if (!emittedTrack)
+        {
+            error = "Track routing cannot contain a cycle.";
+            return std::nullopt;
+        }
+    }
+
+    return order;
 }
 
 double Project::tempoAt(double seconds) const noexcept
@@ -1169,7 +1323,7 @@ std::optional<Project> Project::fromVar(const juce::var& value, juce::String& er
         return std::nullopt;
 
     const auto version = integerProperty(*object, "formatVersion", 0);
-    if (version != currentFormatVersion)
+    if (version < 1 || version > currentFormatVersion)
     {
         error = "Unsupported Studio Duo project format version " + juce::String(version) + ".";
         return std::nullopt;
@@ -1304,6 +1458,14 @@ std::optional<Project> Project::fromVar(const juce::var& value, juce::String& er
 
     for (const auto& track : project.tracks)
     {
+        if ((track.parentTrackId.isNotEmpty() || track.type == TrackType::master)
+            && track.outputTrackId.isNotEmpty())
+        {
+            error = track.type == TrackType::master
+                ? "The master track cannot have a project output route."
+                : "Version lanes cannot override their parent track output.";
+            return std::nullopt;
+        }
         if (track.activeTakeTrackId.isNotEmpty())
         {
             const auto* activeTake = project.findTrack(track.activeTakeTrackId);
@@ -1323,6 +1485,8 @@ std::optional<Project> Project::fromVar(const juce::var& value, juce::String& er
             }
         }
     }
+    if (!project.routingOrder(error).has_value())
+        return std::nullopt;
     std::vector<juce::String> groupedTracks;
     for (const auto& group : project.editGroups)
     {
