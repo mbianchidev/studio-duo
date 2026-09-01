@@ -3,6 +3,7 @@
 #include "StudioTheme.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 
@@ -509,9 +510,59 @@ void TimelineComponent::paint(juce::Graphics& graphics)
 
         drawClipWaveform(graphics, *clip, bounds, 0.28f);
 
+        graphics.setColour(juce::Colour(StudioColours::green).withAlpha(0.55f));
+        for (const auto transient : clip->transientSourceSeconds)
+        {
+            const auto offset = clip->timelineOffsetForSourceSeconds(transient);
+            const auto x = bounds.getX()
+                + static_cast<float>(offset * pixelsPerSecond);
+            if (x >= bounds.getX() && x <= bounds.getRight())
+                graphics.drawVerticalLine(static_cast<int>(x),
+                                          bounds.getY() + 6.0f,
+                                          bounds.getBottom() - 6.0f);
+        }
+        graphics.setColour(juce::Colour(StudioColours::orange));
+        for (const auto& marker : clip->warpMarkers)
+        {
+            const auto x = bounds.getX()
+                + static_cast<float>(marker.timelineOffsetSeconds
+                                     * pixelsPerSecond);
+            juce::Path markerShape;
+            markerShape.addTriangle(x - 4.0f,
+                                    bounds.getBottom() - 3.0f,
+                                    x + 4.0f,
+                                    bounds.getBottom() - 3.0f,
+                                    x,
+                                    bounds.getBottom() - 10.0f);
+            graphics.fillPath(markerShape);
+        }
+        graphics.setColour(juce::Colours::white.withAlpha(0.52f));
+        if (clip->fadeInSeconds > 0.0)
+        {
+            graphics.drawLine(bounds.getX(),
+                              bounds.getBottom() - 4.0f,
+                              bounds.getX()
+                                  + static_cast<float>(clip->fadeInSeconds
+                                                       * pixelsPerSecond),
+                              bounds.getY() + 4.0f,
+                              1.0f);
+        }
+        if (clip->fadeOutSeconds > 0.0)
+        {
+            graphics.drawLine(bounds.getRight()
+                                  - static_cast<float>(clip->fadeOutSeconds
+                                                       * pixelsPerSecond),
+                              bounds.getY() + 4.0f,
+                              bounds.getRight(),
+                              bounds.getBottom() - 4.0f,
+                              1.0f);
+        }
+
         graphics.setColour(juce::Colours::white);
         graphics.setFont(12.5f);
-        graphics.drawText(clip->name,
+        const auto processingLabel = (clip->reversed ? " REV" : "")
+            + juce::String(clip->polarityInverted ? " INV" : "");
+        graphics.drawText(clip->name + processingLabel,
                           bounds.toNearestInt().withHeight(24).reduced(8, 0),
                           juce::Justification::centredLeft);
     }
@@ -997,6 +1048,112 @@ void TimelineComponent::showContextMenu(const juce::MouseEvent& event)
                     onClearComp(parentId);
             };
             menu.addItem(std::move(clearComp));
+            menu.addSeparator();
+        }
+
+        const auto* selectedClip = project->findClip(selectedClipId);
+        if (selectedClip != nullptr)
+        {
+            menu.addSectionHeader("Audio processing");
+            menu.addItem("Detect transients", [this, clipId = selectedClipId]
+            {
+                if (onAnalyseTransients)
+                    onAnalyseTransients(clipId);
+            });
+
+            juce::PopupMenu stretchMenu;
+            const std::array stretchModes {
+                std::pair { "Drums", StretchMode::drums },
+                std::pair { "Monophonic", StretchMode::monophonic },
+                std::pair { "Polyphonic", StretchMode::polyphonic },
+                std::pair { "Full mix", StretchMode::mix }
+            };
+            for (const auto& [name, mode] : stretchModes)
+            {
+                stretchMenu.addItem(name,
+                                    true,
+                                    selectedClip->stretchMode == mode,
+                                    [this, clipId = selectedClipId, mode]
+                                    {
+                                        if (onSetStretchMode)
+                                            onSetStretchMode(clipId, mode);
+                                    });
+            }
+            menu.addSubMenu("Stretch mode", stretchMenu);
+
+            juce::PopupMenu rateMenu;
+            for (const auto rate : { 0.5, 0.75, 1.0, 1.25, 1.5, 2.0 })
+            {
+                rateMenu.addItem(juce::String(rate, 2) + "x",
+                                 true,
+                                 std::abs(selectedClip->playbackRate - rate) < 0.0001,
+                                 [this, clipId = selectedClipId, rate]
+                                 {
+                                     if (onSetPlaybackRate)
+                                         onSetPlaybackRate(clipId, rate);
+                                 });
+            }
+            menu.addSubMenu("Playback rate", rateMenu);
+
+            menu.addItem("Warp nearest transient to playhead",
+                         !selectedClip->transientSourceSeconds.empty(),
+                         false,
+                         [this,
+                          clipId = selectedClipId,
+                          timelineSeconds = xToSeconds(event.position.x)]
+                         {
+                             if (onWarpTransientToTimeline)
+                                 onWarpTransientToTimeline(clipId,
+                                                           timelineSeconds);
+                         });
+            menu.addItem("Fade in to playhead",
+                         true,
+                         false,
+                         [this,
+                          clipId = selectedClipId,
+                          timelineSeconds = xToSeconds(event.position.x)]
+                         {
+                             if (onSetFadeIn)
+                                 onSetFadeIn(clipId, timelineSeconds);
+                         });
+            menu.addItem("Fade out from playhead",
+                         true,
+                         false,
+                         [this,
+                          clipId = selectedClipId,
+                          timelineSeconds = xToSeconds(event.position.x)]
+                         {
+                             if (onSetFadeOut)
+                                 onSetFadeOut(clipId, timelineSeconds);
+                         });
+            menu.addItem("Create crossfade with next clip",
+                         [this, clipId = selectedClipId]
+                         {
+                             if (onCreateCrossfade)
+                                 onCreateCrossfade(clipId);
+                         });
+            menu.addItem("Invert polarity",
+                         true,
+                         selectedClip->polarityInverted,
+                         [this, clipId = selectedClipId]
+                         {
+                             if (onToggleClipPolarity)
+                                 onToggleClipPolarity(clipId);
+                         });
+            menu.addItem("Reverse audio",
+                         true,
+                         selectedClip->reversed,
+                         [this, clipId = selectedClipId]
+                         {
+                             if (onToggleClipReverse)
+                                 onToggleClipReverse(clipId);
+                         });
+            menu.addItem("Consolidate processed clip",
+                         [this, clipId = selectedClipId]
+                         {
+                             if (onConsolidateClip)
+                                 onConsolidateClip(clipId);
+                         });
             menu.addSeparator();
         }
 

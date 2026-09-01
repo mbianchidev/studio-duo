@@ -14,10 +14,10 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 option(STUDIO_DUO_BUILD_TESTS "Build Studio Duo tests" ON)
 set(STUDIO_DUO_BUNDLE_ID "dev.mbianchi.studioduo")
 
+include(FetchContent)
 find_package(JUCE CONFIG QUIET)
 
 if(NOT TARGET juce::juce_gui_extra)
-    include(FetchContent)
     FetchContent_Declare(
         JUCE
         GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
@@ -27,7 +27,17 @@ if(NOT TARGET juce::juce_gui_extra)
     FetchContent_MakeAvailable(JUCE)
 endif()
 
+FetchContent_Declare(
+    signalsmith_stretch
+    GIT_REPOSITORY https://github.com/Signalsmith-Audio/signalsmith-stretch.git
+    GIT_TAG 1.1.0
+    GIT_SHALLOW TRUE
+)
+FetchContent_MakeAvailable(signalsmith_stretch)
+
 set(STUDIO_DUO_MODEL_SOURCES
+    src/audio/AudioAnalysis.cpp
+    src/audio/AudioAnalysis.h
     src/model/ProjectCommands.cpp
     src/model/ProjectCommands.h
     src/model/ProjectModel.cpp
@@ -78,7 +88,12 @@ target_sources(
         ${STUDIO_DUO_PLUGIN_SOURCES}
 )
 
-target_include_directories(StudioDuo PRIVATE src)
+target_include_directories(
+    StudioDuo
+    PRIVATE
+        src
+        ${signalsmith_stretch_SOURCE_DIR}
+)
 
 target_compile_definitions(
     StudioDuo

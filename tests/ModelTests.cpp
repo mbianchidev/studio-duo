@@ -1,4 +1,5 @@
 #include "model/ProjectCommands.h"
+#include "audio/AudioAnalysis.h"
 #include "audio/RecordingWaveform.h"
 #include "plugin_host/PluginCatalog.h"
 #include "plugin_host/PluginBridgeProtocol.h"
@@ -63,6 +64,14 @@ void serializationRoundTrip()
     clip.durationSeconds = 3.25;
     clip.sourceLengthSeconds = 4.0;
     clip.sourceRangeEndSeconds = 3.25;
+    clip.stretchMode = studio::StretchMode::drums;
+    clip.playbackRate = 1.25;
+    clip.fadeInSeconds = 0.25;
+    clip.fadeOutSeconds = 0.5;
+    clip.polarityInverted = true;
+    clip.reversed = true;
+    clip.warpMarkers.push_back({ 1.0, 1.5 });
+    clip.transientSourceSeconds = { 0.5, 1.5 };
     project.tracks.front().clips.push_back(clip);
 
     studio::PluginInsert insert;
@@ -125,6 +134,15 @@ void serializationRoundTrip()
     expect(decoded.has_value()
                && std::abs(decoded->tracks.front().clips.front().sourceRangeEnd() - 3.25) < 0.0001,
            "Clip recovery bounds survive serialization.");
+    expect(decoded.has_value()
+               && decoded->tracks.front().clips.front().stretchMode
+                      == studio::StretchMode::drums
+               && std::abs(decoded->tracks.front().clips.front().playbackRate - 1.25) < 0.0001
+               && decoded->tracks.front().clips.front().warpMarkers.size() == 1
+               && decoded->tracks.front().clips.front().transientSourceSeconds.size() == 2
+               && decoded->tracks.front().clips.front().polarityInverted
+               && decoded->tracks.front().clips.front().reversed,
+           "Clip stretch, warp, transient, fade, and polarity data survive serialization.");
     expect(decoded.has_value() && decoded->tracks.front().inserts.size() == 1,
            "Plugin inserts survive serialization.");
     expect(decoded.has_value()
@@ -608,6 +626,64 @@ void linkedMultitrackEditing()
            "Undo restores every clip in a linked edit.");
 }
 
+void audioProcessingTools()
+{
+    studio::AudioClip clip;
+    clip.durationSeconds = 4.0;
+    clip.sourceLengthSeconds = 8.0;
+    clip.sourceRangeEndSeconds = 8.0;
+    clip.playbackRate = 2.0;
+    expect(std::abs(clip.sourceSecondsAt(1.0) - 2.0) < 0.0001,
+           "Playback rate maps timeline time into source time.");
+
+    clip.warpMarkers = { { 1.0, 3.0 } };
+    expect(std::abs(clip.sourceSecondsAt(0.5) - 1.5) < 0.0001
+               && std::abs(clip.sourceSecondsAt(2.0) - 4.6666667) < 0.0002,
+           "Warp markers piecewise-map timeline positions into source audio.");
+    expect(std::abs(clip.timelineOffsetForSourceSeconds(3.0) - 1.0) < 0.0001,
+           "Source markers map back to their warped timeline position.");
+
+    clip.fadeInSeconds = 1.0;
+    clip.fadeOutSeconds = 1.0;
+    expect(std::abs(clip.envelopeGainAt(0.5) - 0.5f) < 0.0001f
+               && std::abs(clip.envelopeGainAt(3.5) - 0.5f) < 0.0001f,
+           "Clip fades expose deterministic envelope gain.");
+
+    juce::AudioBuffer<float> buffer(2, 48000);
+    buffer.clear();
+    buffer.setSample(0, 4800, 1.0f);
+    buffer.setSample(1, 4800, 0.8f);
+    buffer.setSample(0, 24000, 0.9f);
+    buffer.setSample(1, 24000, 0.7f);
+    const auto transients = studio::AudioAnalysis::detectTransients(buffer, 48000.0);
+    expect(transients.size() == 2
+               && std::abs(transients[0] - 0.1) < 0.01
+               && std::abs(transients[1] - 0.5) < 0.01,
+           "Transient analysis deterministically finds separated attacks.");
+
+    auto project = studio::Project::createDefault();
+    project.tracks.front().clips = { clip };
+    const auto before = project.tracks.front().clips.front();
+    auto after = before;
+    after.fadeInSeconds = 0.25;
+    after.transientSourceSeconds = transients;
+    studio::CommandStack history;
+    juce::String error;
+    expect(history.perform(std::make_unique<studio::SetClipStateCommand>(
+                               project.tracks.front().id,
+                               before,
+                               after,
+                               "Process clip"),
+                           project,
+                           error),
+           error.toRawUTF8());
+    expect(project.tracks.front().clips.front().transientSourceSeconds.size() == 2,
+           "Clip processing changes are applied atomically.");
+    expect(history.undo(project), "Clip processing changes can be undone.");
+    expect(project.tracks.front().clips.front().transientSourceSeconds.empty(),
+           "Undo restores the original clip processing state.");
+}
+
 void packagePersistence()
 {
     auto project = studio::Project::createDefault();
@@ -811,6 +887,7 @@ int main()
     transportMaps();
     playlistsAndComping();
     linkedMultitrackEditing();
+    audioProcessingTools();
     packagePersistence();
     pluginAwareExportGuard();
     pluginCatalogFiltering();

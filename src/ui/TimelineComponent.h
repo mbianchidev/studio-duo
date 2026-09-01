@@ -52,6 +52,16 @@ public:
     std::function<void(const juce::String&)> onUseTake;
     std::function<void(const juce::String&)> onUseClipForComp;
     std::function<void(const juce::String&)> onClearComp;
+    std::function<void(const juce::String&)> onAnalyseTransients;
+    std::function<void(const juce::String&, StretchMode)> onSetStretchMode;
+    std::function<void(const juce::String&, double)> onSetPlaybackRate;
+    std::function<void(const juce::String&, double)> onWarpTransientToTimeline;
+    std::function<void(const juce::String&, double)> onSetFadeIn;
+    std::function<void(const juce::String&, double)> onSetFadeOut;
+    std::function<void(const juce::String&)> onCreateCrossfade;
+    std::function<void(const juce::String&)> onToggleClipPolarity;
+    std::function<void(const juce::String&)> onToggleClipReverse;
+    std::function<void(const juce::String&)> onConsolidateClip;
 
     void paint(juce::Graphics& graphics) override;
     void mouseDown(const juce::MouseEvent& event) override;

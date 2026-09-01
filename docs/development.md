@@ -2,7 +2,8 @@
 
 Studio Duo is a C++20 desktop application built with JUCE 9. The default CMake
 configuration fetches the pinned JUCE source when a compatible package is not
-already installed.
+already installed. It also fetches the MIT-licensed Signalsmith Stretch 1.1.0
+headers used for pitch-preserving elastic audio.
 
 ## Prerequisites
 
@@ -161,6 +162,17 @@ waveform ghost behind a shortened clip. Cursor trims preserve the selected clip
 while the playhead is repositioned on the same track; `[` trims the start and
 `]` trims the end. Dragging an edge back over the ghost restores the hidden
 source audio without changing the underlying file.
+
+Transient analysis scans immutable source audio with deterministic threshold and
+minimum-distance rules. Clips persist source-relative markers, stretch mode,
+playback rate, piecewise warp points, fades, polarity, and reverse state.
+Snapshot construction renders each warp segment through Signalsmith Stretch
+before real-time playback, using a shorter-window preset for drums and the
+default preset for monophonic, polyphonic, and full-mix material. Crossfade
+generation closes gaps when needed and applies matched fades across linked
+tracks. Consolidation renders the processed selection into new WAV files and
+replaces clip state through one undoable command while leaving original media
+untouched.
 
 Clip move commands capture the original track, clip index, and timeline
 position. Horizontal drags change time; vertical drags transfer the same clip

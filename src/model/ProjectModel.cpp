@@ -53,6 +53,34 @@ bool validMeterDenominator(int denominator)
 }
 }
 
+juce::var WarpMarker::toVar() const
+{
+    auto object = std::make_unique<juce::DynamicObject>();
+    object->setProperty("timelineOffsetSeconds", timelineOffsetSeconds);
+    object->setProperty("sourceSeconds", sourceSeconds);
+    return juce::var(object.release());
+}
+
+std::optional<WarpMarker> WarpMarker::fromVar(const juce::var& value,
+                                              juce::String& error)
+{
+    const auto* object = requireObject(value, error, "Warp marker");
+    if (object == nullptr)
+        return std::nullopt;
+
+    WarpMarker marker;
+    marker.timelineOffsetSeconds = numberProperty(*object,
+                                                  "timelineOffsetSeconds",
+                                                  0.0);
+    marker.sourceSeconds = numberProperty(*object, "sourceSeconds", 0.0);
+    if (marker.timelineOffsetSeconds < 0.0 || marker.sourceSeconds < 0.0)
+    {
+        error = "Warp markers cannot contain negative positions.";
+        return std::nullopt;
+    }
+    return marker;
+}
+
 juce::var TempoChange::toVar() const
 {
     auto object = std::make_unique<juce::DynamicObject>();
@@ -270,6 +298,85 @@ double AudioClip::recoverableEndSeconds() const noexcept
     return startSeconds + (sourceRangeEnd() - sourceOffsetSeconds);
 }
 
+double AudioClip::sourceSecondsAt(double timelineOffsetSeconds) const noexcept
+{
+    const auto timelinePosition = juce::jlimit(0.0,
+                                               durationSeconds,
+                                               timelineOffsetSeconds);
+    const auto sourceStart = sourceOffsetSeconds;
+    const auto sourceEnd = std::min(sourceRangeEnd(),
+                                    sourceOffsetSeconds
+                                        + durationSeconds
+                                            * std::max(0.01, playbackRate));
+
+    auto previousTimeline = 0.0;
+    auto previousSource = sourceStart;
+    auto mapped = sourceEnd;
+    auto mappedWithinSegment = false;
+    for (const auto& marker : warpMarkers)
+    {
+        if (marker.timelineOffsetSeconds <= previousTimeline
+            || marker.timelineOffsetSeconds >= durationSeconds)
+            continue;
+        const auto markerSource = juce::jlimit(sourceStart,
+                                               sourceEnd,
+                                               marker.sourceSeconds);
+        if (timelinePosition <= marker.timelineOffsetSeconds)
+        {
+            const auto progress = (timelinePosition - previousTimeline)
+                / (marker.timelineOffsetSeconds - previousTimeline);
+            mapped = previousSource + (markerSource - previousSource) * progress;
+            mappedWithinSegment = true;
+            break;
+        }
+        previousTimeline = marker.timelineOffsetSeconds;
+        previousSource = markerSource;
+    }
+    if (!mappedWithinSegment && timelinePosition > previousTimeline)
+    {
+        const auto remaining = durationSeconds - previousTimeline;
+        const auto progress = remaining > 0.0
+            ? (timelinePosition - previousTimeline) / remaining
+            : 0.0;
+        mapped = previousSource + (sourceEnd - previousSource) * progress;
+    }
+
+    mapped = juce::jlimit(sourceStart, sourceEnd, mapped);
+    return reversed ? sourceStart + sourceEnd - mapped : mapped;
+}
+
+double AudioClip::timelineOffsetForSourceSeconds(double sourceSeconds) const noexcept
+{
+    const auto target = juce::jlimit(sourceOffsetSeconds,
+                                     sourceRangeEnd(),
+                                     sourceSeconds);
+    auto lower = 0.0;
+    auto upper = durationSeconds;
+    for (int iteration = 0; iteration < 50; ++iteration)
+    {
+        const auto middle = (lower + upper) * 0.5;
+        const auto mapped = sourceSecondsAt(middle);
+        if ((!reversed && mapped < target) || (reversed && mapped > target))
+            lower = middle;
+        else
+            upper = middle;
+    }
+    return (lower + upper) * 0.5;
+}
+
+float AudioClip::envelopeGainAt(double timelineOffsetSeconds) const noexcept
+{
+    const auto position = juce::jlimit(0.0,
+                                       durationSeconds,
+                                       timelineOffsetSeconds);
+    auto gain = 1.0;
+    if (fadeInSeconds > 0.0)
+        gain = std::min(gain, position / fadeInSeconds);
+    if (fadeOutSeconds > 0.0)
+        gain = std::min(gain, (durationSeconds - position) / fadeOutSeconds);
+    return static_cast<float>(juce::jlimit(0.0, 1.0, gain));
+}
+
 juce::var AudioClip::toVar() const
 {
     auto object = std::make_unique<juce::DynamicObject>();
@@ -282,6 +389,20 @@ juce::var AudioClip::toVar() const
     object->setProperty("sourceRangeStartSeconds", sourceRangeStartSeconds);
     object->setProperty("sourceRangeEndSeconds", sourceRangeEnd());
     object->setProperty("durationSeconds", durationSeconds);
+    object->setProperty("stretchMode", stretchModeToString(stretchMode));
+    object->setProperty("playbackRate", playbackRate);
+    object->setProperty("fadeInSeconds", fadeInSeconds);
+    object->setProperty("fadeOutSeconds", fadeOutSeconds);
+    object->setProperty("polarityInverted", polarityInverted);
+    object->setProperty("reversed", reversed);
+    juce::Array<juce::var> warpValues;
+    for (const auto& marker : warpMarkers)
+        warpValues.add(marker.toVar());
+    object->setProperty("warpMarkers", juce::var(warpValues));
+    juce::Array<juce::var> transientValues;
+    for (const auto transient : transientSourceSeconds)
+        transientValues.add(transient);
+    object->setProperty("transientSourceSeconds", juce::var(transientValues));
     object->setProperty("gainDecibels", gainDecibels);
     object->setProperty("muted", muted);
     object->setProperty("colour", colour.toString());
@@ -308,6 +429,46 @@ std::optional<AudioClip> AudioClip::fromVar(const juce::var& value, juce::String
     clip.sourceRangeEndSeconds = numberProperty(*object,
                                                 "sourceRangeEndSeconds",
                                                 clip.sourceLengthSeconds);
+    const auto stretchMode = stretchModeFromString(
+        object->getProperty("stretchMode").toString());
+    if (!stretchMode.has_value())
+    {
+        error = "Clip contains an unsupported stretch mode.";
+        return std::nullopt;
+    }
+    clip.stretchMode = *stretchMode;
+    clip.playbackRate = juce::jlimit(
+        0.25,
+        4.0,
+        numberProperty(*object, "playbackRate", 1.0));
+    clip.fadeInSeconds = std::max(0.0,
+                                  numberProperty(*object, "fadeInSeconds", 0.0));
+    clip.fadeOutSeconds = std::max(0.0,
+                                   numberProperty(*object, "fadeOutSeconds", 0.0));
+    clip.polarityInverted = booleanProperty(*object, "polarityInverted", false);
+    clip.reversed = booleanProperty(*object, "reversed", false);
+    const auto warpValues = object->getProperty("warpMarkers");
+    if (warpValues.isArray())
+    {
+        for (const auto& warpValue : *warpValues.getArray())
+        {
+            auto marker = WarpMarker::fromVar(warpValue, error);
+            if (!marker.has_value())
+                return std::nullopt;
+            clip.warpMarkers.push_back(*marker);
+        }
+        std::stable_sort(clip.warpMarkers.begin(),
+                         clip.warpMarkers.end(),
+                         [](const auto& left, const auto& right)
+                         {
+                             return left.timelineOffsetSeconds
+                                 < right.timelineOffsetSeconds;
+                         });
+    }
+    const auto transientValues = object->getProperty("transientSourceSeconds");
+    if (transientValues.isArray())
+        for (const auto& transient : *transientValues.getArray())
+            clip.transientSourceSeconds.push_back(static_cast<double>(transient));
     clip.gainDecibels = static_cast<float>(numberProperty(*object, "gainDecibels", 0.0));
     clip.muted = booleanProperty(*object, "muted", false);
     clip.colour = colourProperty(*object, "colour", juce::Colour(0xffdd5b3f));
@@ -318,7 +479,15 @@ std::optional<AudioClip> AudioClip::fromVar(const juce::var& value, juce::String
         || clip.sourceRangeStartSeconds > clip.sourceOffsetSeconds + 0.0001
         || clip.sourceRangeStartSeconds >= clip.sourceRangeEnd() - 0.0001
         || clip.sourceRangeEnd() > clip.sourceLengthSeconds + 0.0001
-        || clip.sourceRangeEnd() < clip.sourceOffsetSeconds + clip.durationSeconds - 0.0001)
+        || clip.fadeInSeconds > clip.durationSeconds
+        || clip.fadeOutSeconds > clip.durationSeconds
+        || std::any_of(clip.transientSourceSeconds.cbegin(),
+                       clip.transientSourceSeconds.cend(),
+                       [&clip](double transient)
+                       {
+                           return transient < clip.sourceRangeStartSeconds
+                               || transient > clip.sourceRangeEnd();
+                       }))
     {
         error = "Clip contains an invalid ID or time range.";
         return std::nullopt;
@@ -1132,6 +1301,27 @@ std::optional<PluginBridgeMode> pluginBridgeModeFromString(const juce::String& v
     if (value == "sandboxed") return PluginBridgeMode::sandboxed;
     if (value == "araCompatibility") return PluginBridgeMode::araCompatibility;
     if (value == "trustedInProcess") return PluginBridgeMode::trustedInProcess;
+    return std::nullopt;
+}
+
+juce::String stretchModeToString(StretchMode mode)
+{
+    switch (mode)
+    {
+        case StretchMode::drums: return "drums";
+        case StretchMode::monophonic: return "monophonic";
+        case StretchMode::polyphonic: return "polyphonic";
+        case StretchMode::mix: return "mix";
+    }
+    return "polyphonic";
+}
+
+std::optional<StretchMode> stretchModeFromString(const juce::String& value)
+{
+    if (value == "drums") return StretchMode::drums;
+    if (value == "monophonic") return StretchMode::monophonic;
+    if (value == "polyphonic" || value.isEmpty()) return StretchMode::polyphonic;
+    if (value == "mix") return StretchMode::mix;
     return std::nullopt;
 }
 

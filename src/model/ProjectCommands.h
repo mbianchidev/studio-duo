@@ -131,6 +131,25 @@ private:
     bool capturedOriginal = false;
 };
 
+class SetClipStateCommand final : public ProjectCommand
+{
+public:
+    SetClipStateCommand(juce::String trackId,
+                        AudioClip before,
+                        AudioClip after,
+                        juce::String commandName);
+
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    juce::String trackId;
+    AudioClip oldClip;
+    AudioClip newClip;
+    juce::String commandName;
+};
+
 class TrimClipCommand final : public ProjectCommand
 {
 public:
@@ -148,9 +167,7 @@ private:
     double newStartSeconds = 0.0;
     double newSourceOffsetSeconds = 0.0;
     double newDurationSeconds = 0.0;
-    double oldStartSeconds = 0.0;
-    double oldSourceOffsetSeconds = 0.0;
-    double oldDurationSeconds = 0.0;
+    AudioClip originalClip;
     bool capturedOriginal = false;
 };
 

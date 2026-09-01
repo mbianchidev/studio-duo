@@ -979,6 +979,46 @@ MainComponent::MainComponent()
                 std::move(commands)));
         }
     };
+    timeline.onAnalyseTransients = [this](const auto& clipId)
+    {
+        analyseClipTransients(clipId);
+    };
+    timeline.onSetStretchMode = [this](const auto& clipId, auto mode)
+    {
+        setClipStretchMode(clipId, mode);
+    };
+    timeline.onSetPlaybackRate = [this](const auto& clipId, double rate)
+    {
+        setClipPlaybackRate(clipId, rate);
+    };
+    timeline.onWarpTransientToTimeline = [this](const auto& clipId, double seconds)
+    {
+        warpClipTransient(clipId, seconds);
+    };
+    timeline.onSetFadeIn = [this](const auto& clipId, double seconds)
+    {
+        setClipFade(clipId, seconds, true);
+    };
+    timeline.onSetFadeOut = [this](const auto& clipId, double seconds)
+    {
+        setClipFade(clipId, seconds, false);
+    };
+    timeline.onCreateCrossfade = [this](const auto& clipId)
+    {
+        createClipCrossfade(clipId);
+    };
+    timeline.onToggleClipPolarity = [this](const auto& clipId)
+    {
+        toggleClipPolarity(clipId);
+    };
+    timeline.onToggleClipReverse = [this](const auto& clipId)
+    {
+        toggleClipReverse(clipId);
+    };
+    timeline.onConsolidateClip = [this](const auto& clipId)
+    {
+        consolidateClip(clipId);
+    };
 
     mixer = std::make_unique<MixerPanel>();
     mixer->setProject(&project);
@@ -2298,19 +2338,327 @@ void MainComponent::quantizeSelectedGroup()
         return;
     }
 
-    const auto meter = project.meterAt(clip->startSeconds);
+    const auto referenceTime = clip->startSeconds + clip->durationSeconds * 0.5;
+    const auto* timingClip = activeClipAt(group->timingReferenceTrackId,
+                                          referenceTime);
+    auto timingEventSeconds = timingClip != nullptr
+        ? timingClip->startSeconds
+        : clip->startSeconds;
+    if (timingClip != nullptr && !timingClip->transientSourceSeconds.empty())
+    {
+        const auto expectedSource = timingClip->sourceSecondsAt(
+            juce::jlimit(0.0,
+                         timingClip->durationSeconds,
+                         referenceTime - timingClip->startSeconds));
+        const auto transient = std::min_element(
+            timingClip->transientSourceSeconds.cbegin(),
+            timingClip->transientSourceSeconds.cend(),
+            [expectedSource](double left, double right)
+            {
+                return std::abs(left - expectedSource)
+                    < std::abs(right - expectedSource);
+            });
+        timingEventSeconds = timingClip->startSeconds
+            + timingClip->timelineOffsetForSourceSeconds(*transient);
+    }
+
+    const auto meter = project.meterAt(timingEventSeconds);
     const auto beatStep = 4.0 / static_cast<double>(meter.denominator);
-    const auto currentBeat = project.beatsAt(clip->startSeconds);
+    const auto currentBeat = project.beatsAt(timingEventSeconds);
     const auto targetBeat = std::round(currentBeat / beatStep) * beatStep;
     const auto targetSeconds = project.secondsAtBeat(targetBeat);
     const auto destination = clip->startSeconds
-        + (targetSeconds - clip->startSeconds) * group->quantizeStrength;
+        + (targetSeconds - timingEventSeconds) * group->quantizeStrength;
     if (std::abs(destination - clip->startSeconds) < 0.0001)
     {
         setStatus("The linked edit is already on the selected grid.");
         return;
     }
     moveClip(clip->id, track->id, destination);
+}
+
+void MainComponent::analyseClipTransients(const juce::String& clipId)
+{
+    updateLinkedClips(
+        clipId,
+        "Detect transients",
+        [this](AudioClip& after, const AudioClip& before, juce::String& error)
+        {
+            after.transientSourceSeconds = audioEngine.analyseTransients(before,
+                                                                         error);
+            return error.isEmpty();
+        });
+}
+
+void MainComponent::setClipStretchMode(const juce::String& clipId,
+                                       StretchMode mode)
+{
+    updateLinkedClips(
+        clipId,
+        "Change stretch mode",
+        [mode](AudioClip& after, const AudioClip&, juce::String&)
+        {
+            after.stretchMode = mode;
+            return true;
+        });
+}
+
+void MainComponent::setClipPlaybackRate(const juce::String& clipId, double rate)
+{
+    updateLinkedClips(
+        clipId,
+        "Change playback rate",
+        [rate](AudioClip& after, const AudioClip&, juce::String&)
+        {
+            after.playbackRate = juce::jlimit(0.25, 4.0, rate);
+            return true;
+        });
+}
+
+void MainComponent::warpClipTransient(const juce::String& clipId,
+                                      double timelineSeconds)
+{
+    const auto* selected = project.findClip(clipId);
+    if (selected == nullptr
+        || timelineSeconds <= selected->startSeconds
+        || timelineSeconds >= selected->endSeconds())
+    {
+        setStatus("Place the playhead inside the clip before adding a warp marker.", true);
+        return;
+    }
+    const auto timelineOffset = timelineSeconds - selected->startSeconds;
+    updateLinkedClips(
+        clipId,
+        "Warp linked transients",
+        [timelineOffset](AudioClip& after,
+                         const AudioClip& before,
+                         juce::String& error)
+        {
+            if (before.transientSourceSeconds.empty())
+            {
+                error = "Detect transients on every linked clip before warping.";
+                return false;
+            }
+            const auto currentSource = before.sourceSecondsAt(timelineOffset);
+            const auto nearest = std::min_element(
+                before.transientSourceSeconds.cbegin(),
+                before.transientSourceSeconds.cend(),
+                [currentSource](double left, double right)
+                {
+                    return std::abs(left - currentSource)
+                        < std::abs(right - currentSource);
+                });
+            after.warpMarkers.erase(
+                std::remove_if(after.warpMarkers.begin(),
+                               after.warpMarkers.end(),
+                               [timelineOffset](const auto& marker)
+                               {
+                                   return std::abs(marker.timelineOffsetSeconds
+                                                   - timelineOffset)
+                                       < 0.001;
+                               }),
+                after.warpMarkers.end());
+            after.warpMarkers.push_back({ timelineOffset, *nearest });
+            std::stable_sort(after.warpMarkers.begin(),
+                             after.warpMarkers.end(),
+                             [](const auto& left, const auto& right)
+                             {
+                                 return left.timelineOffsetSeconds
+                                     < right.timelineOffsetSeconds;
+                             });
+            return true;
+        });
+}
+
+void MainComponent::setClipFade(const juce::String& clipId,
+                                double timelineSeconds,
+                                bool fadeIn)
+{
+    const auto* selected = project.findClip(clipId);
+    if (selected == nullptr)
+        return;
+    const auto offset = juce::jlimit(0.0,
+                                     selected->durationSeconds,
+                                     timelineSeconds - selected->startSeconds);
+    updateLinkedClips(
+        clipId,
+        fadeIn ? "Set linked fade in" : "Set linked fade out",
+        [offset, fadeIn](AudioClip& after,
+                         const AudioClip& before,
+                         juce::String&)
+        {
+            if (fadeIn)
+                after.fadeInSeconds = juce::jlimit(0.0,
+                                                   before.durationSeconds,
+                                                   offset);
+            else
+                after.fadeOutSeconds = juce::jlimit(
+                    0.0,
+                    before.durationSeconds,
+                    before.durationSeconds - offset);
+            return true;
+        });
+}
+
+void MainComponent::createClipCrossfade(const juce::String& clipId)
+{
+    const auto* selected = project.findClip(clipId);
+    if (selected == nullptr)
+        return;
+    const auto linkedIds = linkedClipIdsAt(
+        clipId,
+        selected->startSeconds + selected->durationSeconds * 0.5);
+    std::vector<std::unique_ptr<ProjectCommand>> commands;
+    for (const auto& linkedId : linkedIds)
+    {
+        const auto* current = project.findClip(linkedId);
+        const auto* track = project.findTrackContainingClip(linkedId);
+        if (current == nullptr || track == nullptr)
+            continue;
+        const AudioClip* next = nullptr;
+        for (const auto& candidate : track->clips)
+        {
+            if (candidate.startSeconds <= current->startSeconds)
+                continue;
+            if (next == nullptr || candidate.startSeconds < next->startSeconds)
+                next = &candidate;
+        }
+        if (next == nullptr)
+        {
+            setStatus("Crossfades require a following clip on every linked track.", true);
+            return;
+        }
+
+        const auto existingOverlap = current->endSeconds() - next->startSeconds;
+        const auto overlap = existingOverlap > 0.0
+            ? existingOverlap
+            : std::min({ 0.01,
+                         current->durationSeconds * 0.5,
+                         next->durationSeconds * 0.5 });
+        auto currentAfter = *current;
+        currentAfter.fadeOutSeconds = std::max(currentAfter.fadeOutSeconds,
+                                               overlap);
+        auto nextAfter = *next;
+        if (existingOverlap <= 0.0)
+            nextAfter.startSeconds = current->endSeconds() - overlap;
+        nextAfter.fadeInSeconds = std::max(nextAfter.fadeInSeconds,
+                                          overlap);
+        commands.push_back(std::make_unique<SetClipStateCommand>(
+            track->id,
+            *current,
+            currentAfter,
+            "Create crossfade"));
+        commands.push_back(std::make_unique<SetClipStateCommand>(
+            track->id,
+            *next,
+            nextAfter,
+            "Create crossfade"));
+    }
+    perform(std::make_unique<BatchProjectCommand>(
+        linkedIds.size() > 1 ? "Create linked crossfades" : "Create crossfade",
+        std::move(commands)));
+}
+
+void MainComponent::toggleClipPolarity(const juce::String& clipId)
+{
+    updateLinkedClips(
+        clipId,
+        "Invert clip polarity",
+        [](AudioClip& after, const AudioClip& before, juce::String&)
+        {
+            after.polarityInverted = !before.polarityInverted;
+            return true;
+        });
+}
+
+void MainComponent::toggleClipReverse(const juce::String& clipId)
+{
+    updateLinkedClips(
+        clipId,
+        "Reverse clip",
+        [](AudioClip& after, const AudioClip& before, juce::String&)
+        {
+            after.reversed = !before.reversed;
+            return true;
+        });
+}
+
+void MainComponent::consolidateClip(const juce::String& clipId)
+{
+    if (!activeRecordingTargets.empty() || recordingFinalizationInProgress)
+    {
+        setStatus("Stop and finalize recording before consolidating clips.", true);
+        return;
+    }
+    const auto* selected = project.findClip(clipId);
+    if (selected == nullptr)
+        return;
+    const auto linkedIds = linkedClipIdsAt(
+        clipId,
+        selected->startSeconds + selected->durationSeconds * 0.5);
+    auto folder = projectPackage.exists()
+        ? projectPackage.getChildFile("media")
+        : juce::File::getSpecialLocation(juce::File::userMusicDirectory)
+              .getChildFile("Studio Duo Consolidated");
+    if (const auto result = folder.createDirectory(); result.failed())
+    {
+        showError("Consolidation failed", result.getErrorMessage());
+        return;
+    }
+
+    std::vector<juce::File> createdFiles;
+    std::vector<std::unique_ptr<ProjectCommand>> commands;
+    for (const auto& linkedId : linkedIds)
+    {
+        const auto* current = project.findClip(linkedId);
+        const auto* track = project.findTrackContainingClip(linkedId);
+        if (current == nullptr || track == nullptr)
+            continue;
+        const auto destination = folder.getNonexistentChildFile(
+            juce::File::createLegalFileName(current->name) + "-consolidated",
+            ".wav",
+            false);
+        const auto renderResult = audioEngine.renderClipToWav(
+            *current,
+            destination,
+            audioEngine.currentSampleRate());
+        if (renderResult.failed())
+        {
+            for (const auto& file : createdFiles)
+                file.deleteFile();
+            showError("Consolidation failed", renderResult.getErrorMessage());
+            return;
+        }
+        createdFiles.push_back(destination);
+
+        auto after = *current;
+        after.name += " consolidated";
+        after.sourceFile = destination;
+        after.sourceOffsetSeconds = 0.0;
+        after.sourceLengthSeconds = current->durationSeconds;
+        after.sourceRangeStartSeconds = 0.0;
+        after.sourceRangeEndSeconds = current->durationSeconds;
+        after.playbackRate = 1.0;
+        after.fadeInSeconds = 0.0;
+        after.fadeOutSeconds = 0.0;
+        after.polarityInverted = false;
+        after.reversed = false;
+        after.warpMarkers.clear();
+        after.transientSourceSeconds.clear();
+        after.gainDecibels = 0.0f;
+        commands.push_back(std::make_unique<SetClipStateCommand>(
+            track->id,
+            *current,
+            after,
+            "Consolidate clip"));
+    }
+    if (!perform(std::make_unique<BatchProjectCommand>(
+            linkedIds.size() > 1 ? "Consolidate linked clips" : "Consolidate clip",
+            std::move(commands))))
+    {
+        for (const auto& file : createdFiles)
+            file.deleteFile();
+    }
 }
 
 void MainComponent::undo()
@@ -3383,6 +3731,52 @@ std::vector<juce::String> MainComponent::linkedClipIdsAt(
             clipIds.push_back(clip->id);
     }
     return clipIds;
+}
+
+bool MainComponent::updateLinkedClips(
+    const juce::String& clipId,
+    const juce::String& commandName,
+    const std::function<bool(AudioClip&, const AudioClip&, juce::String&)>& update)
+{
+    const auto* selected = project.findClip(clipId);
+    const auto* selectedTrack = project.findTrackContainingClip(clipId);
+    if (selected == nullptr || selectedTrack == nullptr)
+        return false;
+    const auto reference = selected->startSeconds + selected->durationSeconds * 0.5;
+    const auto clipIds = linkedClipIdsAt(clipId, reference);
+    const auto* group = project.editGroupForTrack(selectedTrack->id);
+    if (group != nullptr
+        && group->enabled
+        && clipIds.size() != group->trackIds.size())
+    {
+        setStatus("Every linked track needs an active clip for this operation.", true);
+        return false;
+    }
+
+    juce::String error;
+    std::vector<std::unique_ptr<ProjectCommand>> commands;
+    for (const auto& linkedId : clipIds)
+    {
+        const auto* before = project.findClip(linkedId);
+        const auto* track = project.findTrackContainingClip(linkedId);
+        if (before == nullptr || track == nullptr)
+            continue;
+        auto after = *before;
+        if (!update(after, *before, error))
+        {
+            showError(commandName + " failed",
+                      error.isNotEmpty() ? error : "The clip could not be updated.");
+            return false;
+        }
+        commands.push_back(std::make_unique<SetClipStateCommand>(
+            track->id,
+            *before,
+            std::move(after),
+            commandName));
+    }
+    return perform(std::make_unique<BatchProjectCommand>(
+        clipIds.size() > 1 ? commandName + " on linked clips" : commandName,
+        std::move(commands)));
 }
 
 Track MainComponent::makeRecordingVersionTrack(const Track& parent) const

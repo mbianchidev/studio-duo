@@ -73,6 +73,15 @@ private:
                   double sourceOffsetSeconds,
                   double durationSeconds);
     void quantizeSelectedGroup();
+    void analyseClipTransients(const juce::String& clipId);
+    void setClipStretchMode(const juce::String& clipId, StretchMode mode);
+    void setClipPlaybackRate(const juce::String& clipId, double rate);
+    void warpClipTransient(const juce::String& clipId, double timelineSeconds);
+    void setClipFade(const juce::String& clipId, double timelineSeconds, bool fadeIn);
+    void createClipCrossfade(const juce::String& clipId);
+    void toggleClipPolarity(const juce::String& clipId);
+    void toggleClipReverse(const juce::String& clipId);
+    void consolidateClip(const juce::String& clipId);
     void undo();
     void redo();
     void selectTrack(const juce::String& trackId);
@@ -97,6 +106,10 @@ private:
     [[nodiscard]] std::vector<juce::String> linkedClipIdsAt(
         const juce::String& clipId,
         double seconds) const;
+    bool updateLinkedClips(
+        const juce::String& clipId,
+        const juce::String& commandName,
+        const std::function<bool(AudioClip&, const AudioClip&, juce::String&)>& update);
     [[nodiscard]] Track makeRecordingVersionTrack(const Track& parent) const;
     Track* recordingTrack();
     void setStatus(const juce::String& message, bool error = false);

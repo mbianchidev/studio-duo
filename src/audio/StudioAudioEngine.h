@@ -1,5 +1,6 @@
 #pragma once
 
+#include "AudioAnalysis.h"
 #include "RecordingWaveform.h"
 #include "model/ProjectModel.h"
 #include "plugin_host/PluginBridgeClient.h"
@@ -109,15 +110,21 @@ public:
     std::vector<RecordingResult> stopRecording();
     void stopRecordingAsync(std::function<void(std::vector<RecordingResult>)> completion);
     std::optional<double> audioFileDuration(const juce::File& source, juce::String& error);
+    std::vector<double> analyseTransients(const AudioClip& clip, juce::String& error);
+    juce::Result renderClipToWav(const AudioClip& clip,
+                                 const juce::File& destination,
+                                 double sampleRate);
     juce::Result renderToWav(const Project& project, const juce::File& destination, double sampleRate);
 
 private:
     struct RenderClip
     {
         std::int64_t startSample = 0;
-        std::int64_t sourceOffsetSamples = 0;
         std::int64_t lengthSamples = 0;
+        double timelineOffsetBaseSeconds = 0.0;
+        double sampleRate = 48000.0;
         float gain = 1.0f;
+        AudioClip processing;
         juce::AudioBuffer<float> samples;
     };
 
@@ -260,6 +267,11 @@ private:
     std::optional<juce::AudioBuffer<float>> readAndResample(const juce::File& source,
                                                            double targetSampleRate,
                                                            juce::String& error);
+    std::optional<juce::AudioBuffer<float>> processClipAudio(
+        const AudioClip& clip,
+        const juce::AudioBuffer<float>& source,
+        double targetSampleRate,
+        juce::String& error) const;
     void configureRuntimeTiming(RenderSnapshot& snapshot,
                                 const std::vector<PluginRuntimeRequest>& pluginRequests) const;
     static void mixSample(const RenderSnapshot& snapshot,
@@ -272,6 +284,10 @@ private:
                                   bool loopEnabled,
                                   std::int64_t loopStartSample,
                                   std::int64_t loopEndSample) noexcept;
+    static bool readRenderClipSample(const RenderClip& clip,
+                                    std::int64_t relativeSample,
+                                    float& left,
+                                    float& right) noexcept;
     static void applyTrackGainAndPan(juce::AudioBuffer<float>& buffer,
                                      int samples,
                                      float gain,

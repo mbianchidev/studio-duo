@@ -471,6 +471,60 @@ void MoveClipCommand::undo(Project& project)
                                 std::move(movedClip));
 }
 
+SetClipStateCommand::SetClipStateCommand(juce::String targetTrackId,
+                                         AudioClip before,
+                                         AudioClip after,
+                                         juce::String name)
+    : trackId(std::move(targetTrackId)),
+      oldClip(std::move(before)),
+      newClip(std::move(after)),
+      commandName(std::move(name))
+{
+}
+
+juce::String SetClipStateCommand::name() const
+{
+    return commandName;
+}
+
+bool SetClipStateCommand::perform(Project& project, juce::String& error)
+{
+    auto* track = project.findTrack(trackId);
+    if (track == nullptr || oldClip.id != newClip.id)
+    {
+        error = "The clip processing target is unavailable.";
+        return false;
+    }
+    const auto clip = std::find_if(track->clips.begin(),
+                                   track->clips.end(),
+                                   [this](const auto& candidate)
+    {
+        return candidate.id == newClip.id;
+    });
+    if (clip == track->clips.end())
+    {
+        error = "The clip processing target no longer exists.";
+        return false;
+    }
+    *clip = newClip;
+    return true;
+}
+
+void SetClipStateCommand::undo(Project& project)
+{
+    auto* track = project.findTrack(trackId);
+    if (track == nullptr)
+        return;
+    const auto clip = std::find_if(track->clips.begin(),
+                                   track->clips.end(),
+                                   [this](const auto& candidate)
+    {
+        return candidate.id == oldClip.id;
+    });
+    if (clip != track->clips.end())
+        *clip = oldClip;
+}
+
 TrimClipCommand::TrimClipCommand(juce::String clipToTrim,
                                  double destinationStartSeconds,
                                  double destinationSourceOffsetSeconds,
@@ -509,26 +563,51 @@ bool TrimClipCommand::perform(Project& project, juce::String& error)
 
     if (!capturedOriginal)
     {
-        oldStartSeconds = clip->startSeconds;
-        oldSourceOffsetSeconds = clip->sourceOffsetSeconds;
-        oldDurationSeconds = clip->durationSeconds;
+        originalClip = *clip;
         capturedOriginal = true;
     }
 
-    clip->startSeconds = newStartSeconds;
-    clip->sourceOffsetSeconds = newSourceOffsetSeconds;
-    clip->durationSeconds = newDurationSeconds;
+    auto updated = originalClip;
+    const auto startDelta = newStartSeconds - originalClip.startSeconds;
+    updated.startSeconds = newStartSeconds;
+    updated.sourceOffsetSeconds = newSourceOffsetSeconds;
+    updated.durationSeconds = newDurationSeconds;
+    if (std::abs(startDelta) > 0.0001)
+    {
+        for (auto& marker : updated.warpMarkers)
+            marker.timelineOffsetSeconds -= startDelta;
+        updated.warpMarkers.erase(
+            std::remove_if(updated.warpMarkers.begin(),
+                           updated.warpMarkers.end(),
+                           [](const auto& marker)
+                           {
+                               return marker.timelineOffsetSeconds <= 0.0;
+                           }),
+            updated.warpMarkers.end());
+        updated.fadeInSeconds = std::max(0.0,
+                                         originalClip.fadeInSeconds - startDelta);
+    }
+    updated.warpMarkers.erase(
+        std::remove_if(updated.warpMarkers.begin(),
+                       updated.warpMarkers.end(),
+                       [&updated](const auto& marker)
+                       {
+                           return marker.timelineOffsetSeconds
+                               >= updated.durationSeconds;
+                       }),
+        updated.warpMarkers.end());
+    updated.fadeInSeconds = std::min(updated.fadeInSeconds,
+                                     updated.durationSeconds);
+    updated.fadeOutSeconds = std::min(updated.fadeOutSeconds,
+                                      updated.durationSeconds);
+    *clip = std::move(updated);
     return true;
 }
 
 void TrimClipCommand::undo(Project& project)
 {
     if (auto* clip = project.findClip(clipId))
-    {
-        clip->startSeconds = oldStartSeconds;
-        clip->sourceOffsetSeconds = oldSourceOffsetSeconds;
-        clip->durationSeconds = oldDurationSeconds;
-    }
+        *clip = originalClip;
 }
 
 SplitClipCommand::SplitClipCommand(juce::String clipToSplit, double splitPositionSeconds)
@@ -557,6 +636,11 @@ bool SplitClipCommand::perform(Project& project, juce::String& error)
         error = "Move the playhead inside the selected clip before splitting.";
         return false;
     }
+    if (clip->reversed)
+    {
+        error = "Consolidate a reversed clip before splitting it.";
+        return false;
+    }
 
     const auto iterator = std::find_if(track->clips.begin(), track->clips.end(), [this](const auto& candidate)
     {
@@ -575,15 +659,38 @@ bool SplitClipCommand::perform(Project& project, juce::String& error)
     }
 
     const auto leftDuration = splitSeconds - original.startSeconds;
-    const auto splitSourceSeconds = original.sourceOffsetSeconds + leftDuration;
+    const auto splitSourceSeconds = original.sourceSecondsAt(leftDuration);
     auto leftSide = original;
     leftSide.durationSeconds = leftDuration;
     leftSide.sourceRangeEndSeconds = splitSourceSeconds;
+    leftSide.fadeOutSeconds = 0.0;
+    leftSide.warpMarkers.erase(
+        std::remove_if(leftSide.warpMarkers.begin(),
+                       leftSide.warpMarkers.end(),
+                       [leftDuration](const auto& marker)
+                       {
+                           return marker.timelineOffsetSeconds
+                               >= leftDuration;
+                       }),
+        leftSide.warpMarkers.end());
     rightSide.startSeconds = splitSeconds;
     rightSide.sourceOffsetSeconds = splitSourceSeconds;
     rightSide.sourceRangeStartSeconds = splitSourceSeconds;
     rightSide.sourceRangeEndSeconds = original.sourceRangeEnd();
     rightSide.durationSeconds = original.durationSeconds - leftDuration;
+    rightSide.fadeInSeconds = 0.0;
+    for (auto& marker : rightSide.warpMarkers)
+        marker.timelineOffsetSeconds -= leftDuration;
+    rightSide.warpMarkers.erase(
+        std::remove_if(rightSide.warpMarkers.begin(),
+                       rightSide.warpMarkers.end(),
+                       [this](const auto& marker)
+                       {
+                           return marker.timelineOffsetSeconds <= 0.0
+                               || marker.timelineOffsetSeconds
+                                      >= rightSide.durationSeconds;
+                       }),
+        rightSide.warpMarkers.end());
 
     *iterator = std::move(leftSide);
     track->clips.insert(iterator + 1, rightSide);

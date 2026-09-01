@@ -24,6 +24,24 @@ enum class PluginBridgeMode
     trustedInProcess
 };
 
+enum class StretchMode
+{
+    drums,
+    monophonic,
+    polyphonic,
+    mix
+};
+
+struct WarpMarker
+{
+    double timelineOffsetSeconds = 0.0;
+    double sourceSeconds = 0.0;
+
+    [[nodiscard]] juce::var toVar() const;
+    static std::optional<WarpMarker> fromVar(const juce::var& value,
+                                             juce::String& error);
+};
+
 struct TempoChange
 {
     double timeSeconds = 0.0;
@@ -132,6 +150,14 @@ struct AudioClip
     double sourceRangeStartSeconds = 0.0;
     double sourceRangeEndSeconds = 0.0;
     double durationSeconds = 4.0;
+    StretchMode stretchMode = StretchMode::polyphonic;
+    double playbackRate = 1.0;
+    double fadeInSeconds = 0.0;
+    double fadeOutSeconds = 0.0;
+    bool polarityInverted = false;
+    bool reversed = false;
+    std::vector<WarpMarker> warpMarkers;
+    std::vector<double> transientSourceSeconds;
     float gainDecibels = 0.0f;
     bool muted = false;
     juce::Colour colour { 0xffdd5b3f };
@@ -140,6 +166,9 @@ struct AudioClip
     [[nodiscard]] double sourceRangeEnd() const noexcept;
     [[nodiscard]] double recoverableStartSeconds() const noexcept;
     [[nodiscard]] double recoverableEndSeconds() const noexcept;
+    [[nodiscard]] double sourceSecondsAt(double timelineOffsetSeconds) const noexcept;
+    [[nodiscard]] double timelineOffsetForSourceSeconds(double sourceSeconds) const noexcept;
+    [[nodiscard]] float envelopeGainAt(double timelineOffsetSeconds) const noexcept;
     [[nodiscard]] juce::var toVar() const;
     static std::optional<AudioClip> fromVar(const juce::var& value, juce::String& error);
 };
@@ -228,6 +257,8 @@ juce::String trackTypeToString(TrackType type);
 std::optional<TrackType> trackTypeFromString(const juce::String& value);
 juce::String pluginBridgeModeToString(PluginBridgeMode mode);
 std::optional<PluginBridgeMode> pluginBridgeModeFromString(const juce::String& value);
+juce::String stretchModeToString(StretchMode mode);
+std::optional<StretchMode> stretchModeFromString(const juce::String& value);
 std::vector<CompRegion> replaceCompRegion(const std::vector<CompRegion>& existing,
                                           CompRegion replacement);
 std::vector<RecordingPass> recordingPasses(double capturedDurationSeconds,

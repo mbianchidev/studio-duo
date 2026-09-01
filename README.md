@@ -14,7 +14,8 @@ The repository now contains a working native C++20 and JUCE 9 application with:
   subdivided metronome, punch/count-in/pre/post-roll transport, looping, and
   sample-aligned lock-free multitrack audio recording
 - Audio import, playback, track arm/mute/solo, gain, pan, clip move, split,
-  delete, undo, and redo
+  delete, transient detection, pitch-preserving stretch/warp, fades,
+  crossfades, consolidation, undo, and redo
 - Out-of-process VST3 and Audio Unit discovery with a persistent searchable
   catalog, timeout isolation, and crash blacklisting
 - Persistent per-track plugin insert chains with sandbox mode, bypass, removal,
@@ -141,6 +142,13 @@ the playhead without dropping clip selection, so the command bar and shortcuts
 act at that cursor. Drag a clip vertically to move it to another audio track
 while preserving its source and edit history.
 
+Right-click a clip for deterministic transient detection, source-specific
+stretch modes, playback-rate presets, transient-to-playhead warp markers,
+fade-in/out placement, linked crossfade and gap closing, polarity inversion,
+reverse playback, and consolidation to a new immutable WAV. Green lines mark
+transients, orange triangles mark warp points, and fade curves remain visible
+on the clip.
+
 Recording draws a live waveform from lock-free peak buckets. Stopping creates
 and flushes the WAV before adding its clip; the inspector shows the saved WAV
 filename and the status bar reports the completed file. The waveform baseline
@@ -170,4 +178,5 @@ shortcuts alongside each action, and the menu opens at the gesture point.
 
 Studio Duo is licensed under the
 [GNU Affero General Public License v3.0 only](LICENSE). JUCE 9 is consumed under
-its AGPLv3 option for this open-source application.
+its AGPLv3 option for this open-source application. Signalsmith Stretch 1.1.0
+is fetched under its MIT license for pitch-preserving elastic audio.

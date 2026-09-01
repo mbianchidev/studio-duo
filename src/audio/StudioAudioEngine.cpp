@@ -1,5 +1,7 @@
 #include "StudioAudioEngine.h"
 
+#include "signalsmith-stretch.h"
+
 #include <algorithm>
 #include <cmath>
 #include <span>
@@ -658,6 +660,97 @@ std::optional<double> StudioAudioEngine::audioFileDuration(const juce::File& sou
     return static_cast<double>(reader->lengthInSamples) / reader->sampleRate;
 }
 
+std::vector<double> StudioAudioEngine::analyseTransients(const AudioClip& clip,
+                                                         juce::String& error)
+{
+    auto audio = readAndResample(clip.sourceFile, currentSampleRate(), error);
+    if (!audio.has_value())
+        return {};
+
+    auto transients = AudioAnalysis::detectTransients(*audio,
+                                                      currentSampleRate());
+    transients.erase(
+        std::remove_if(transients.begin(),
+                       transients.end(),
+                       [&clip](double transient)
+                       {
+                           return transient < clip.sourceRangeStartSeconds
+                               || transient > clip.sourceRangeEnd();
+                       }),
+        transients.end());
+    return transients;
+}
+
+juce::Result StudioAudioEngine::renderClipToWav(const AudioClip& clip,
+                                                const juce::File& destination,
+                                                double renderSampleRate)
+{
+    juce::String error;
+    auto audio = readAndResample(clip.sourceFile, renderSampleRate, error);
+    if (!audio.has_value())
+        return juce::Result::fail(error);
+    auto processed = processClipAudio(clip,
+                                      *audio,
+                                      renderSampleRate,
+                                      error);
+    if (!processed.has_value())
+        return juce::Result::fail(error);
+    if (!destination.getParentDirectory().createDirectory())
+        return juce::Result::fail("Could not create the consolidation directory.");
+    if (destination.existsAsFile() && !destination.deleteFile())
+        return juce::Result::fail("Could not replace the consolidated audio file.");
+
+    std::unique_ptr<juce::OutputStream> stream = destination.createOutputStream();
+    if (stream == nullptr)
+        return juce::Result::fail("Could not open the consolidated audio file.");
+    juce::WavAudioFormat wav;
+    auto writer = wav.createWriterFor(stream,
+                                      writerOptions(renderSampleRate, 2));
+    if (writer == nullptr)
+        return juce::Result::fail("Could not create the consolidated WAV writer.");
+
+    RenderClip renderClip;
+    renderClip.lengthSamples = static_cast<std::int64_t>(
+        std::llround(clip.durationSeconds * renderSampleRate));
+    renderClip.sampleRate = renderSampleRate;
+    renderClip.gain = juce::Decibels::decibelsToGain(clip.gainDecibels);
+    renderClip.processing = clip;
+    renderClip.processing.sourceOffsetSeconds = 0.0;
+    renderClip.processing.sourceLengthSeconds = clip.durationSeconds;
+    renderClip.processing.sourceRangeStartSeconds = 0.0;
+    renderClip.processing.sourceRangeEndSeconds = clip.durationSeconds;
+    renderClip.processing.playbackRate = 1.0;
+    renderClip.processing.reversed = false;
+    renderClip.processing.warpMarkers.clear();
+    renderClip.samples = std::move(*processed);
+
+    juce::AudioBuffer<float> block(2, 2048);
+    std::int64_t position = 0;
+    while (position < renderClip.lengthSamples)
+    {
+        const auto samples = static_cast<int>(std::min<std::int64_t>(
+            block.getNumSamples(),
+            renderClip.lengthSamples - position));
+        block.clear();
+        for (int sample = 0; sample < samples; ++sample)
+        {
+            float left = 0.0f;
+            float right = 0.0f;
+            readRenderClipSample(renderClip,
+                                 position + sample,
+                                 left,
+                                 right);
+            block.setSample(0, sample, juce::jlimit(-1.0f, 1.0f, left));
+            block.setSample(1, sample, juce::jlimit(-1.0f, 1.0f, right));
+        }
+        if (!writer->writeFromAudioSampleBuffer(block, 0, samples))
+            return juce::Result::fail("Consolidation stopped while writing audio.");
+        position += samples;
+    }
+    writer->flush();
+    return juce::Result::ok();
+}
+
 juce::Result StudioAudioEngine::renderToWav(const Project& project,
                                             const juce::File& destination,
                                             double renderSampleRate)
@@ -771,6 +864,20 @@ std::optional<StudioAudioEngine::RenderSnapshot> StudioAudioEngine::buildSnapsho
             auto audio = readAndResample(clip.sourceFile, targetSampleRate, error);
             if (!audio.has_value())
                 return std::nullopt;
+            auto processed = processClipAudio(clip,
+                                              *audio,
+                                              targetSampleRate,
+                                              error);
+            if (!processed.has_value())
+                return std::nullopt;
+            auto preparedClip = clip;
+            preparedClip.sourceOffsetSeconds = 0.0;
+            preparedClip.sourceLengthSeconds = clip.durationSeconds;
+            preparedClip.sourceRangeStartSeconds = 0.0;
+            preparedClip.sourceRangeEndSeconds = clip.durationSeconds;
+            preparedClip.playbackRate = 1.0;
+            preparedClip.reversed = false;
+            preparedClip.warpMarkers.clear();
 
             const auto addRange = [&](double rangeStart, double rangeEnd)
             {
@@ -782,23 +889,15 @@ std::optional<StudioAudioEngine::RenderSnapshot> StudioAudioEngine::buildSnapsho
                 RenderClip renderClip;
                 renderClip.startSample = static_cast<std::int64_t>(
                     std::llround(intersectionStart * targetSampleRate));
-                renderClip.sourceOffsetSamples = static_cast<std::int64_t>(
-                    std::llround((clip.sourceOffsetSeconds
-                                  + intersectionStart
-                                      - clip.startSeconds)
-                                 * targetSampleRate));
                 renderClip.lengthSamples = static_cast<std::int64_t>(
                     std::llround((intersectionEnd - intersectionStart)
                                  * targetSampleRate));
+                renderClip.timelineOffsetBaseSeconds = intersectionStart
+                    - clip.startSeconds;
+                renderClip.sampleRate = targetSampleRate;
                 renderClip.gain = juce::Decibels::decibelsToGain(clip.gainDecibels);
-                renderClip.samples = *audio;
-
-                const auto available = static_cast<std::int64_t>(
-                    renderClip.samples.getNumSamples())
-                    - renderClip.sourceOffsetSamples;
-                renderClip.lengthSamples = std::max<std::int64_t>(
-                    0,
-                    std::min(renderClip.lengthSamples, available));
+                renderClip.processing = preparedClip;
+                renderClip.samples = *processed;
                 if (renderClip.lengthSamples > 0)
                     clips.push_back(std::move(renderClip));
             };
@@ -1049,6 +1148,183 @@ std::optional<juce::AudioBuffer<float>> StudioAudioEngine::readAndResample(
     return targetBuffer;
 }
 
+std::optional<juce::AudioBuffer<float>> StudioAudioEngine::processClipAudio(
+    const AudioClip& clip,
+    const juce::AudioBuffer<float>& source,
+    double targetSampleRate,
+    juce::String& error) const
+{
+    if (targetSampleRate <= 0.0
+        || source.getNumChannels() <= 0
+        || source.getNumSamples() <= 0
+        || clip.durationSeconds <= 0.0)
+    {
+        error = "The clip cannot be prepared for elastic playback.";
+        return std::nullopt;
+    }
+
+    const auto channels = juce::jlimit(1, 2, source.getNumChannels());
+    const auto outputLength = std::max(
+        1,
+        static_cast<int>(std::llround(clip.durationSeconds
+                                      * targetSampleRate)));
+    juce::AudioBuffer<float> output(channels, outputLength);
+    output.clear();
+
+    std::vector<std::pair<double, double>> points;
+    points.emplace_back(0.0, clip.sourceSecondsAt(0.0));
+    for (const auto& marker : clip.warpMarkers)
+    {
+        if (marker.timelineOffsetSeconds > 0.0
+            && marker.timelineOffsetSeconds < clip.durationSeconds)
+            points.emplace_back(marker.timelineOffsetSeconds,
+                                clip.sourceSecondsAt(
+                                    marker.timelineOffsetSeconds));
+    }
+    points.emplace_back(clip.durationSeconds,
+                        clip.sourceSecondsAt(clip.durationSeconds));
+    std::stable_sort(points.begin(),
+                     points.end(),
+                     [](const auto& left, const auto& right)
+                     {
+                         return left.first < right.first;
+                     });
+
+    for (std::size_t point = 0; point + 1 < points.size(); ++point)
+    {
+        const auto timelineStart = points[point].first;
+        const auto timelineEnd = points[point + 1].first;
+        const auto sourceStart = points[point].second;
+        const auto sourceEnd = points[point + 1].second;
+        const auto segmentOutputStart = static_cast<int>(
+            std::llround(timelineStart * targetSampleRate));
+        const auto segmentOutputEnd = std::min(
+            outputLength,
+            static_cast<int>(std::llround(timelineEnd * targetSampleRate)));
+        const auto segmentOutputLength = segmentOutputEnd - segmentOutputStart;
+        const auto segmentInputLength = std::max(
+            1,
+            static_cast<int>(std::llround(std::abs(sourceEnd - sourceStart)
+                                          * targetSampleRate)));
+        if (segmentOutputLength <= 0)
+            continue;
+
+        juce::AudioBuffer<float> input(channels, segmentInputLength);
+        for (int channel = 0; channel < channels; ++channel)
+        {
+            for (int sample = 0; sample < segmentInputLength; ++sample)
+            {
+                const auto progress = segmentInputLength > 1
+                    ? static_cast<double>(sample)
+                        / static_cast<double>(segmentInputLength - 1)
+                    : 0.0;
+                const auto sourceSeconds = sourceStart
+                    + (sourceEnd - sourceStart) * progress;
+                const auto sourceSample = juce::jlimit(
+                    0.0,
+                    static_cast<double>(source.getNumSamples() - 1),
+                    sourceSeconds * targetSampleRate);
+                const auto first = static_cast<int>(std::floor(sourceSample));
+                const auto second = std::min(first + 1,
+                                             source.getNumSamples() - 1);
+                const auto fraction = static_cast<float>(
+                    sourceSample - static_cast<double>(first));
+                const auto firstValue = source.getSample(channel, first);
+                const auto secondValue = source.getSample(channel, second);
+                input.setSample(channel,
+                                sample,
+                                firstValue + (secondValue - firstValue) * fraction);
+            }
+        }
+
+        if (std::abs(static_cast<double>(segmentInputLength)
+                     / static_cast<double>(segmentOutputLength)
+                     - 1.0)
+            < 0.0001)
+        {
+            for (int channel = 0; channel < channels; ++channel)
+                output.copyFrom(channel,
+                                segmentOutputStart,
+                                input,
+                                channel,
+                                0,
+                                std::min(segmentInputLength,
+                                         segmentOutputLength));
+            continue;
+        }
+
+        signalsmith::stretch::SignalsmithStretch<float> stretch;
+        if (clip.stretchMode == StretchMode::drums)
+            stretch.presetCheaper(channels, targetSampleRate);
+        else
+            stretch.presetDefault(channels, targetSampleRate);
+        const auto inputLatency = stretch.inputLatency();
+        const auto outputLatency = stretch.outputLatency();
+        juce::AudioBuffer<float> paddedInput(channels,
+                                             segmentInputLength
+                                                 + inputLatency);
+        paddedInput.clear();
+        for (int channel = 0; channel < channels; ++channel)
+            paddedInput.copyFrom(channel,
+                                 0,
+                                 input,
+                                 channel,
+                                 0,
+                                 segmentInputLength);
+        juce::AudioBuffer<float> paddedOutput(channels,
+                                              segmentOutputLength
+                                                  + outputLatency);
+        paddedOutput.clear();
+
+        std::array<float*, 2> inputPointers {};
+        std::array<float*, 2> outputPointers {};
+        for (int channel = 0; channel < channels; ++channel)
+        {
+            inputPointers[static_cast<std::size_t>(channel)]
+                = paddedInput.getWritePointer(channel);
+            outputPointers[static_cast<std::size_t>(channel)]
+                = paddedOutput.getWritePointer(channel);
+        }
+        stretch.seek(inputPointers.data(),
+                     inputLatency,
+                     static_cast<double>(segmentInputLength)
+                         / static_cast<double>(segmentOutputLength));
+        for (int channel = 0; channel < channels; ++channel)
+            inputPointers[static_cast<std::size_t>(channel)] += inputLatency;
+        stretch.process(inputPointers.data(),
+                        segmentInputLength,
+                        outputPointers.data(),
+                        segmentOutputLength);
+        for (int channel = 0; channel < channels; ++channel)
+            outputPointers[static_cast<std::size_t>(channel)]
+                += segmentOutputLength;
+        stretch.flush(outputPointers.data(), outputLatency);
+
+        for (int channel = 0; channel < channels; ++channel)
+        {
+            for (int sample = 0;
+                 sample < outputLatency
+                     && outputLatency + sample < paddedOutput.getNumSamples();
+                 ++sample)
+            {
+                const auto trimmed = paddedOutput.getSample(
+                    channel,
+                    outputLatency - 1 - sample);
+                paddedOutput.addSample(channel,
+                                       outputLatency + sample,
+                                       -trimmed);
+            }
+            output.copyFrom(channel,
+                            segmentOutputStart,
+                            paddedOutput,
+                            channel,
+                            outputLatency,
+                            segmentOutputLength);
+        }
+    }
+    return output;
+}
+
 void StudioAudioEngine::mixSample(const RenderSnapshot& snapshot,
                                   std::int64_t timelineSample,
                                   float& left,
@@ -1077,17 +1353,13 @@ void StudioAudioEngine::mixSample(const RenderSnapshot& snapshot,
                 if (relative < 0 || relative >= clip.lengthSamples)
                     continue;
 
-                const auto sourceSample = clip.sourceOffsetSamples + relative;
-                if (sourceSample < 0 || sourceSample >= clip.samples.getNumSamples())
-                    continue;
-
-                const auto index = static_cast<int>(sourceSample);
-                const auto clipLeft = clip.samples.getSample(0, index);
-                const auto clipRight = clip.samples.getNumChannels() > 1
-                    ? clip.samples.getSample(1, index)
-                    : clipLeft;
-                sourceLeft += clipLeft * clip.gain;
-                sourceRight += clipRight * clip.gain;
+                float clipLeft = 0.0f;
+                float clipRight = 0.0f;
+                if (readRenderClipSample(clip, relative, clipLeft, clipRight))
+                {
+                    sourceLeft += clipLeft;
+                    sourceRight += clipRight;
+                }
             }
 
             const auto leftPanGain = source.pan > 0.0f ? 1.0f - source.pan : 1.0f;
@@ -1139,17 +1411,13 @@ void StudioAudioEngine::renderSourceBlock(RenderSource& source,
             if (relative < 0 || relative >= clip.lengthSamples)
                 continue;
 
-            const auto sourceSample = clip.sourceOffsetSamples + relative;
-            if (sourceSample < 0 || sourceSample >= clip.samples.getNumSamples())
-                continue;
-
-            const auto index = static_cast<int>(sourceSample);
-            const auto clipLeft = clip.samples.getSample(0, index);
-            const auto clipRight = clip.samples.getNumChannels() > 1
-                ? clip.samples.getSample(1, index)
-                : clipLeft;
-            left += clipLeft * clip.gain;
-            right += clipRight * clip.gain;
+            float clipLeft = 0.0f;
+            float clipRight = 0.0f;
+            if (readRenderClipSample(clip, relative, clipLeft, clipRight))
+            {
+                left += clipLeft;
+                right += clipRight;
+            }
         }
 
         source.processingBuffer.setSample(0, sample, left);
@@ -1160,6 +1428,50 @@ void StudioAudioEngine::renderSourceBlock(RenderSource& source,
                          samples,
                          source.volumeGain,
                          source.pan);
+}
+
+bool StudioAudioEngine::readRenderClipSample(const RenderClip& clip,
+                                             std::int64_t relativeSample,
+                                             float& left,
+                                             float& right) noexcept
+{
+    const auto timelineOffsetSeconds = clip.timelineOffsetBaseSeconds
+        + static_cast<double>(relativeSample) / clip.sampleRate;
+    const auto sourceSample = clip.processing.sourceSecondsAt(
+        timelineOffsetSeconds)
+        * clip.sampleRate;
+    if (sourceSample < 0.0
+        || sourceSample >= static_cast<double>(clip.samples.getNumSamples()))
+        return false;
+
+    const auto firstIndex = static_cast<int>(std::floor(sourceSample));
+    const auto secondIndex = std::min(firstIndex + 1,
+                                      clip.samples.getNumSamples() - 1);
+    const auto fraction = static_cast<float>(
+        sourceSample - static_cast<double>(firstIndex));
+    const auto preserveAttack = clip.processing.stretchMode == StretchMode::drums;
+    const auto sampleChannel = [&clip, firstIndex, secondIndex, fraction](int channel)
+    {
+        const auto first = clip.samples.getSample(channel, firstIndex);
+        const auto second = clip.samples.getSample(channel, secondIndex);
+        return first + (second - first) * fraction;
+    };
+    const auto nearestIndex = fraction < 0.5f ? firstIndex : secondIndex;
+    left = preserveAttack
+        ? clip.samples.getSample(0, nearestIndex)
+        : sampleChannel(0);
+    right = clip.samples.getNumChannels() > 1
+        ? preserveAttack
+            ? clip.samples.getSample(1, nearestIndex)
+            : sampleChannel(1)
+        : left;
+    auto gain = clip.gain
+        * clip.processing.envelopeGainAt(timelineOffsetSeconds);
+    if (clip.processing.polarityInverted)
+        gain = -gain;
+    left *= gain;
+    right *= gain;
+    return true;
 }
 
 void StudioAudioEngine::applyTrackGainAndPan(juce::AudioBuffer<float>& buffer,
