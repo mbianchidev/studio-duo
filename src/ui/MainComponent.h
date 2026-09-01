@@ -121,6 +121,7 @@ private:
     static juce::String positionText(double seconds, const Project& project);
 
     StudioTheme theme;
+    std::unique_ptr<juce::Drawable> brandLogo;
     juce::AudioDeviceManager deviceManager;
     StudioAudioEngine audioEngine;
     Project project { Project::createDefault() };

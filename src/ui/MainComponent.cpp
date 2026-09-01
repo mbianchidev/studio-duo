@@ -1,5 +1,7 @@
 #include "MainComponent.h"
 
+#include <StudioDuoBrandData.h>
+
 #include <algorithm>
 #include <cmath>
 #include <numeric>
@@ -617,6 +619,10 @@ MainComponent::MainComponent()
     setWantsKeyboardFocus(true);
     addKeyListener(this);
 
+    brandLogo = juce::Drawable::createFromImageData(
+        studio_brand::studioduoicon_svg,
+        static_cast<std::size_t>(studio_brand::studioduoicon_svgSize));
+
     const auto configureButton = [this](juce::Button& button, const juce::String& tooltip)
     {
         addAndMakeVisible(button);
@@ -1203,6 +1209,13 @@ void MainComponent::paint(juce::Graphics& graphics)
     graphics.fillRect(header);
     graphics.setColour(juce::Colour(StudioColours::border));
     graphics.drawHorizontalLine(header.getBottom() - 1, 0.0f, static_cast<float>(getWidth()));
+    if (brandLogo != nullptr)
+    {
+        brandLogo->drawWithin(graphics,
+                              juce::Rectangle<float>(16.0f, 12.0f, 52.0f, 52.0f),
+                              juce::RectanglePlacement::centred,
+                              1.0f);
+    }
 
     const auto bodyTop = 76;
     const auto mixerTop = getHeight() - 248;
@@ -1272,8 +1285,8 @@ void MainComponent::resized()
     timelineViewport.setBounds(bounds);
 
     auto topRow = header.reduced(14, 8);
-    auto brand = topRow.removeFromLeft(120);
-    projectLabel.setBounds(brand.withTrimmedTop(24).withHeight(28));
+    auto brand = topRow.removeFromLeft(170);
+    projectLabel.setBounds(brand.withTrimmedLeft(60).withTrimmedTop(24).withHeight(28));
 
     auto fileControls = topRow.removeFromLeft(320);
     newButton.setBounds(fileControls.removeFromLeft(58).reduced(3, 12));

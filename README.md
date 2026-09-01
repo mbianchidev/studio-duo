@@ -189,8 +189,9 @@ shortcuts alongside each action, and the menu opens at the gesture point.
 ## Brand assets
 
 The editable vector logo, app icon, PNG sizes, macOS ICNS, and Windows ICO are
-kept in [`assets/branding`](assets/branding). The packaged JUCE application uses
-the 512 px and 32 px icon sources for native platform icon generation.
+kept in [`assets/branding`](assets/branding). The JUCE application embeds the
+SVG mark in its window header and uses the 512 px and 32 px icon sources for
+native platform icon generation.
 
 ## License
 

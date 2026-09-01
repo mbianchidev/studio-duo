@@ -1314,9 +1314,11 @@ std::optional<juce::AudioBuffer<float>> StudioAudioEngine::processClipAudio(
 
         signalsmith::stretch::SignalsmithStretch<float> stretch;
         if (clip.stretchMode == StretchMode::drums)
-            stretch.presetCheaper(channels, targetSampleRate);
+            stretch.presetCheaper(channels,
+                                  static_cast<float>(targetSampleRate));
         else
-            stretch.presetDefault(channels, targetSampleRate);
+            stretch.presetDefault(channels,
+                                  static_cast<float>(targetSampleRate));
         const auto inputLatency = stretch.inputLatency();
         const auto outputLatency = stretch.outputLatency();
         juce::AudioBuffer<float> paddedInput(channels,

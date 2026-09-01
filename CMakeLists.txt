@@ -35,6 +35,14 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(signalsmith_stretch)
 
+juce_add_binary_data(
+    StudioDuoBrandData
+    HEADER_NAME StudioDuoBrandData.h
+    NAMESPACE studio_brand
+    SOURCES
+        assets/branding/studio-duo-icon.svg
+)
+
 set(STUDIO_DUO_MODEL_SOURCES
     src/audio/AudioAnalysis.cpp
     src/audio/AudioAnalysis.h
@@ -123,6 +131,7 @@ target_link_libraries(
         juce::juce_audio_utils
         juce::juce_data_structures
         juce::juce_gui_extra
+        StudioDuoBrandData
     PUBLIC
         juce::juce_recommended_config_flags
         juce::juce_recommended_lto_flags
