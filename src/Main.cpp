@@ -2,6 +2,7 @@
 #include "plugin_host/PluginBridgeClient.h"
 #include "plugin_host/PluginBridgeWorker.h"
 #include "plugin_host/PluginScanWorker.h"
+#include "platform/ApplicationIcon.h"
 
 #include <juce_gui_extra/juce_gui_extra.h>
 
@@ -59,6 +60,9 @@ public:
             return;
         }
 
+#if JUCE_MAC
+        applyPlatformApplicationIcon();
+#endif
         mainWindow = std::make_unique<MainWindow>(getApplicationName());
     }
 

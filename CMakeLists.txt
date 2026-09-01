@@ -41,6 +41,7 @@ juce_add_binary_data(
     NAMESPACE studio_brand
     SOURCES
         assets/branding/studio-duo-icon.svg
+        assets/branding/studio-duo-icon-512.png
 )
 
 set(STUDIO_DUO_MODEL_SOURCES
@@ -97,6 +98,15 @@ target_sources(
         ${STUDIO_DUO_MODEL_SOURCES}
         ${STUDIO_DUO_PLUGIN_SOURCES}
 )
+
+if(APPLE)
+    target_sources(
+        StudioDuo
+        PRIVATE
+            src/platform/ApplicationIcon.h
+            src/platform/MacApplicationIcon.mm
+    )
+endif()
 
 target_include_directories(
     StudioDuo

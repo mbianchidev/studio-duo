@@ -280,3 +280,8 @@ requirement `dev.mbianchi.studioduo`. This keeps the TCC microphone grant tied
 to the app identity instead of the changing binary hash during local rebuilds.
 A release build should replace this development signature with the project
 Developer ID signature.
+
+The bundle includes the generated ICNS and also embeds the 512 px PNG. Normal
+macOS startup assigns that image to `NSApplication` explicitly so Dock previews
+do not retain the generic development icon while the bundle is rebuilt in
+place. Worker and command-line diagnostic modes skip this UI-only step.
