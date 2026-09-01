@@ -4,6 +4,7 @@
 #include "plugin_host/PluginCatalog.h"
 #include "plugin_host/PluginBridgeProtocol.h"
 #include "project_io/ProjectFile.h"
+#include "TestHarness.h"
 
 #include <array>
 #include <cmath>
@@ -11,17 +12,6 @@
 
 namespace
 {
-int failures = 0;
-
-void expect(bool condition, const char* message)
-{
-    if (!condition)
-    {
-        ++failures;
-        std::cerr << "FAIL: " << message << '\n';
-    }
-}
-
 void serializationRoundTrip()
 {
     auto project = studio::Project::createDefault();

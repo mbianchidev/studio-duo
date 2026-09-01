@@ -92,6 +92,10 @@ target_sources(
         src/plugin_host/PluginScanWorker.h
         src/ui/MainComponent.cpp
         src/ui/MainComponent.h
+        src/ui/MixerPanel.cpp
+        src/ui/MixerPanel.h
+        src/ui/PluginInsertPanel.cpp
+        src/ui/PluginInsertPanel.h
         src/ui/StudioTheme.h
         src/ui/TimelineComponent.cpp
         src/ui/TimelineComponent.h

@@ -1,6 +1,8 @@
 #pragma once
 
 #include "StudioTheme.h"
+#include "MixerPanel.h"
+#include "PluginInsertPanel.h"
 #include "TimelineComponent.h"
 #include "audio/StudioAudioEngine.h"
 #include "model/ProjectCommands.h"
@@ -27,9 +29,6 @@ public:
     void resized() override;
 
 private:
-    class MixerPanel;
-    class InsertPanel;
-
     struct ActiveRecordingTarget
     {
         juce::String parentTrackId;
@@ -201,7 +200,7 @@ private:
     std::unique_ptr<MixerPanel> mixer;
     PluginCatalog pluginCatalog;
     std::unique_ptr<PluginBrowserComponent> pluginBrowser;
-    std::unique_ptr<InsertPanel> insertPanel;
+    std::unique_ptr<PluginInsertPanel> insertPanel;
     juce::Label statusLabel;
     std::unique_ptr<juce::FileChooser> fileChooser;
     juce::TooltipWindow tooltipWindow { this, 700 };
