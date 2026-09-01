@@ -62,6 +62,8 @@ public:
         int latencySamples = 0;
         double tailSeconds = 0.0;
         std::uint64_t catalogRevision = 0;
+        juce::String deviceIdentifier;
+        int sidechainChannels = 0;
         PluginBridgeMode bridgeMode = PluginBridgeMode::sandboxed;
         bool bypassed = false;
         bool missing = false;
@@ -133,6 +135,10 @@ public:
     [[nodiscard]] std::vector<TrackMeterSnapshot> trackMeterSnapshots() const;
     [[nodiscard]] std::vector<PluginStateCapture> capturePluginStates(
         int timeoutMilliseconds);
+    bool setPluginParameter(const juce::String& insertId,
+                            int parameterIndex,
+                            float normalizedValue,
+                            juce::String& error);
     [[nodiscard]] std::uint64_t pluginLateBlockCount() const noexcept;
     [[nodiscard]] bool pluginRuntimeTransitionPending() const;
     void forcePluginRuntimeReload(const Project& project,
@@ -318,7 +324,7 @@ private:
         juce::String insertId;
         juce::String name;
         std::unique_ptr<PluginBridgeClient> bridge;
-        std::unique_ptr<juce::AudioPluginInstance> inProcess;
+        std::unique_ptr<juce::AudioProcessor> inProcess;
         std::unique_ptr<AraDocumentHost> araDocument;
         juce::AudioBuffer<float> inProcessBuffer;
         juce::MidiBuffer midi;

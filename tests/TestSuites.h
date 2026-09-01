@@ -6,3 +6,4 @@ void routingUiModelTests();
 void pluginFormatTests();
 void pluginRecoveryTests();
 void automationTests();
+void deviceTests();

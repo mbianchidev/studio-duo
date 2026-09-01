@@ -3,6 +3,7 @@
 #include "mix/RoutingGraphCompiler.h"
 #include "plugin_host/PluginFormats.h"
 #include "plugin_host/ClapPluginInstance.h"
+#include "devices/DeviceRegistry.h"
 
 #include "signalsmith-stretch.h"
 
@@ -565,6 +566,77 @@ StudioAudioEngine::capturePluginStates(int timeoutMilliseconds)
         }
     }
     return captures;
+}
+
+bool StudioAudioEngine::setPluginParameter(
+    const juce::String& insertId,
+    int parameterIndex,
+    float normalizedValue,
+    juce::String& error)
+{
+    if (parameterIndex < 0)
+    {
+        error = "Plugin parameter index cannot be negative.";
+        return false;
+    }
+    const auto value = juce::jlimit(0.0f, 1.0f, normalizedValue);
+    {
+        const juce::ScopedLock lock(pluginRequestLock);
+        auto& graph = pluginRuntimeGraphs[static_cast<std::size_t>(
+            activePluginRuntime.load(std::memory_order_acquire))];
+        for (auto& track : graph.tracks)
+        {
+            const auto insert = std::find_if(
+                track.inserts.begin(),
+                track.inserts.end(),
+                [&insertId](const auto& candidate)
+                {
+                    return candidate.insertId == insertId;
+                });
+            if (insert == track.inserts.end())
+                continue;
+            if (insert->bridge != nullptr)
+            {
+                if (!insert->bridge->setParameter(parameterIndex, value))
+                {
+                    error = "Could not send the parameter to the plugin worker.";
+                    return false;
+                }
+            }
+            else if (insert->inProcess != nullptr
+                     && parameterIndex
+                         < insert->inProcess->getParameters().size())
+            {
+                insert->inProcess->getParameters()[parameterIndex]
+                    ->setValueNotifyingHost(value);
+            }
+            else
+            {
+                error = "The plugin parameter is unavailable.";
+                return false;
+            }
+
+            const juce::ScopedLock statusLock(pluginStatusLock);
+            for (auto& status : pluginStatuses)
+            {
+                if (status.insertId != insertId)
+                    continue;
+                const auto parameter = std::find_if(
+                    status.parameters.begin(),
+                    status.parameters.end(),
+                    [parameterIndex](const auto& candidate)
+                    {
+                        return candidate.index == parameterIndex;
+                    });
+                if (parameter != status.parameters.end())
+                    parameter->value = value;
+                break;
+            }
+            return true;
+        }
+    }
+    error = "The plugin runtime is unavailable.";
+    return false;
 }
 
 std::uint64_t StudioAudioEngine::pluginLateBlockCount() const noexcept
@@ -1491,7 +1563,8 @@ void StudioAudioEngine::configureRuntimeTiming(
             if (runtimeKey(request.trackId) != key
                 || request.bypassed
                 || request.missing
-                || !request.description.has_value())
+                || (!request.description.has_value()
+                    && request.deviceIdentifier.isEmpty()))
                 return total;
 
             return total
@@ -1511,7 +1584,8 @@ void StudioAudioEngine::configureRuntimeTiming(
             if (runtimeKey(request.trackId) != key
                 || request.bypassed
                 || request.missing
-                || !request.description.has_value())
+                || (!request.description.has_value()
+                    && request.deviceIdentifier.isEmpty()))
                 return total;
             return total + std::max(0.0, request.tailSeconds);
         });
@@ -2705,7 +2779,9 @@ void StudioAudioEngine::runPluginRuntimeBuilder()
                 continue;
             }
 
-            if (request.missing || !request.description.has_value())
+            if (request.missing
+                || (!request.description.has_value()
+                    && request.deviceIdentifier.isEmpty()))
             {
                 status.state = PluginRuntimeStatus::State::missing;
                 status.message = "Plugin unavailable";
@@ -2733,7 +2809,8 @@ void StudioAudioEngine::runPluginRuntimeBuilder()
             if (request.bridgeMode != PluginBridgeMode::sandboxed)
             {
                 if (request.bridgeMode == PluginBridgeMode::araCompatibility
-                    && !request.description->hasARAExtension)
+                    && (!request.description.has_value()
+                        || !request.description->hasARAExtension))
                 {
                     status.state = PluginRuntimeStatus::State::failed;
                     status.message = "Plugin does not advertise ARA 2";
@@ -2742,20 +2819,32 @@ void StudioAudioEngine::runPluginRuntimeBuilder()
                 }
 
                 juce::String creationError;
-                auto instance =
-                    request.description->pluginFormatName == "CLAP"
-                    ? std::unique_ptr<juce::AudioPluginInstance>(
-                          ClapPluginInstance::create(
+                std::unique_ptr<juce::AudioProcessor> processor;
+                juce::AudioPluginInstance* externalInstance = nullptr;
+                if (request.deviceIdentifier.isNotEmpty())
+                {
+                    processor = DeviceRegistry::create(
+                        request.deviceIdentifier);
+                }
+                else
+                {
+                    auto instance =
+                        request.description->pluginFormatName == "CLAP"
+                        ? std::unique_ptr<juce::AudioPluginInstance>(
+                              ClapPluginInstance::create(
+                                  *request.description,
+                                  currentSampleRate(),
+                                  PluginBridgeSharedState::maxBlockSize,
+                                  creationError))
+                        : inProcessFormats.createPluginInstance(
                               *request.description,
                               currentSampleRate(),
                               PluginBridgeSharedState::maxBlockSize,
-                              creationError))
-                    : inProcessFormats.createPluginInstance(
-                          *request.description,
-                          currentSampleRate(),
-                          PluginBridgeSharedState::maxBlockSize,
-                          creationError);
-                if (instance == nullptr)
+                              creationError);
+                    externalInstance = instance.get();
+                    processor = std::move(instance);
+                }
+                if (processor == nullptr)
                 {
                     status.state = PluginRuntimeStatus::State::failed;
                     status.message = creationError.isNotEmpty()
@@ -2764,21 +2853,49 @@ void StudioAudioEngine::runPluginRuntimeBuilder()
                     statuses.push_back(std::move(status));
                     continue;
                 }
+                if (request.sidechainChannels > 0
+                    && processor->getBusCount(true) > 1)
+                {
+                    auto layout = processor->getBusesLayout();
+                    layout.inputBuses.set(
+                        1,
+                        request.sidechainChannels == 1
+                            ? juce::AudioChannelSet::mono()
+                            : juce::AudioChannelSet::stereo());
+                    if (!processor->setBusesLayout(layout))
+                    {
+                        status.state = PluginRuntimeStatus::State::failed;
+                        status.message =
+                            "Processor rejected the requested sidechain layout.";
+                        statuses.push_back(std::move(status));
+                        continue;
+                    }
+                }
                 if (!request.state.isEmpty())
-                    instance->setStateInformation(
+                    processor->setStateInformation(
                         request.state.getData(),
                         static_cast<int>(request.state.getSize()));
-                instance->prepareToPlay(
+                processor->prepareToPlay(
                     currentSampleRate(),
                     PluginBridgeSharedState::maxBlockSize);
                 std::unique_ptr<AraDocumentHost> araDocument;
                 if (request.bridgeMode == PluginBridgeMode::araCompatibility)
                 {
                     araDocument = std::make_unique<AraDocumentHost>();
-                    if (const auto result = araDocument->bind(*instance);
+                    if (externalInstance == nullptr)
+                    {
+                        processor->releaseResources();
+                        status.state = PluginRuntimeStatus::State::failed;
+                        status.message =
+                            "ARA mode requires an external plugin instance.";
+                        statuses.push_back(std::move(status));
+                        continue;
+                    }
+                    if (const auto result = araDocument->bind(
+                            *externalInstance);
                         result.failed())
                     {
-                        instance->releaseResources();
+                        processor->releaseResources();
                         status.state = PluginRuntimeStatus::State::failed;
                         status.message = result.getErrorMessage();
                         statuses.push_back(std::move(status));
@@ -2808,7 +2925,7 @@ void StudioAudioEngine::runPluginRuntimeBuilder()
                 insertRuntime.insertId = request.insertId;
                 insertRuntime.name = request.name;
                 insertRuntime.failureDelay.delaySamples =
-                    std::max(0, instance->getLatencySamples());
+                    std::max(0, processor->getLatencySamples());
                 insertRuntime.failureDelay.buffer.setSize(
                     2,
                     insertRuntime.failureDelay.delaySamples
@@ -2818,18 +2935,18 @@ void StudioAudioEngine::runPluginRuntimeBuilder()
                 insertRuntime.inProcessBuffer.setSize(
                     std::max({
                         2,
-                        instance->getTotalNumInputChannels(),
-                        instance->getTotalNumOutputChannels()
+                        processor->getTotalNumInputChannels(),
+                        processor->getTotalNumOutputChannels()
                     }),
                     PluginBridgeSharedState::maxBlockSize,
                     false,
                     true,
                     false);
                 insertRuntime.inProcessBuffer.clear();
-                status.latencySamples = instance->getLatencySamples();
-                status.tailSeconds = instance->getTailLengthSeconds();
+                status.latencySamples = processor->getLatencySamples();
+                status.tailSeconds = processor->getTailLengthSeconds();
                 {
-                    const auto& parameters = instance->getParameters();
+                    const auto& parameters = processor->getParameters();
                     for (int index = 0; index < parameters.size(); ++index)
                     {
                         const auto* parameter = parameters[index];
@@ -2849,12 +2966,14 @@ void StudioAudioEngine::runPluginRuntimeBuilder()
                 }
                 request.latencySamples = status.latencySamples;
                 request.tailSeconds = status.tailSeconds;
-                insertRuntime.inProcess = std::move(instance);
+                insertRuntime.inProcess = std::move(processor);
                 insertRuntime.araDocument = std::move(araDocument);
                 track->inserts.push_back(std::move(insertRuntime));
                 status.state = PluginRuntimeStatus::State::ready;
                 status.message =
-                    request.bridgeMode == PluginBridgeMode::araCompatibility
+                    request.deviceIdentifier.isNotEmpty()
+                    ? "Bundled device ready"
+                    : request.bridgeMode == PluginBridgeMode::araCompatibility
                     ? "ARA compatibility ready - reduced isolation"
                     : "Trusted in-process ready";
                 statuses.push_back(std::move(status));
@@ -2865,7 +2984,8 @@ void StudioAudioEngine::runPluginRuntimeBuilder()
             const auto result = bridge->startPlugin(*request.description,
                                                     currentSampleRate(),
                                                     PluginBridgeSharedState::maxBlockSize,
-                                                    request.state);
+                                                    request.state,
+                                                    request.sidechainChannels);
             if (result.failed())
             {
                 auto track = std::find_if(graph.tracks.begin(),
@@ -3025,6 +3145,10 @@ juce::String StudioAudioEngine::pluginRuntimeFingerprint(
                     << juce::String(request.catalogRevision)
                     << ":"
                     << juce::String::toHexString(static_cast<juce::int64>(stateHash))
+                    << ":";
+        fingerprint << request.deviceIdentifier
+                    << ":"
+                    << request.sidechainChannels
                     << ":";
         if (request.description.has_value())
             fingerprint << request.description->createIdentifierString();

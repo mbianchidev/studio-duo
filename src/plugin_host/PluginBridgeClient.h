@@ -24,10 +24,12 @@ public:
     juce::Result startPlugin(const juce::PluginDescription& description,
                              double sampleRate,
                              int blockSize,
-                             const juce::MemoryBlock& state = {});
+                             const juce::MemoryBlock& state = {},
+                             int sidechainChannels = 0);
     void stop();
     juce::Result requestState(juce::MemoryBlock& state,
                               std::chrono::milliseconds timeout);
+    bool setParameter(int parameterIndex, float normalizedValue);
     void processBlock(
         juce::AudioBuffer<float>& audio,
         const juce::AudioBuffer<float>* sidechain = nullptr,
@@ -48,7 +50,8 @@ private:
     juce::Result startInternal(const juce::PluginDescription* description,
                                double sampleRate,
                                int blockSize,
-                               const juce::MemoryBlock& state);
+                               const juce::MemoryBlock& state,
+                               int sidechainChannels);
     void fetchWorkerOutput() noexcept;
     void publishInputBlock(int samples) noexcept;
     void writeOutputBlock(juce::AudioBuffer<float>& audio,

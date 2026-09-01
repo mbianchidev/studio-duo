@@ -293,6 +293,7 @@ juce::var PluginInsert::toVar() const
     object->setProperty("tailSeconds", tailSeconds);
     object->setProperty("bypassed", bypassed);
     object->setProperty("missing", missing);
+    object->setProperty("bundledDevice", bundledDevice);
     object->setProperty("araCapable", araCapable);
     object->setProperty("recoveryDisabled", recoveryDisabled);
     return juce::var(object.release());
@@ -319,6 +320,10 @@ std::optional<PluginInsert> PluginInsert::fromVar(const juce::var& value, juce::
     insert.tailSeconds = std::max(0.0, numberProperty(*object, "tailSeconds", 0.0));
     insert.bypassed = booleanProperty(*object, "bypassed", false);
     insert.missing = booleanProperty(*object, "missing", false);
+    insert.bundledDevice = booleanProperty(
+        *object,
+        "bundledDevice",
+        false);
     insert.araCapable = booleanProperty(*object, "araCapable", false);
     insert.recoveryDisabled = booleanProperty(
         *object,

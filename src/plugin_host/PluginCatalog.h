@@ -24,6 +24,7 @@ struct PluginCatalogEntry
     int outputChannels = 0;
     bool instrument = false;
     bool araCapable = false;
+    bool bundledDevice = false;
 };
 
 class PluginCatalog final : private juce::Thread

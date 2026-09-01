@@ -15,7 +15,7 @@ PluginBrowserComponent::PluginBrowserComponent(PluginCatalog& catalogToDisplay)
     search.onTextChange = [this] { rebuildFilter(); };
 
     addAndMakeVisible(scanButton);
-    scanButton.setTooltip("Scan default VST3 and Audio Unit locations in a worker process");
+    scanButton.setTooltip("Scan default VST3, Audio Unit, and CLAP locations in a worker process");
     scanButton.onClick = [this]
     {
         if (catalog.isScanning())
@@ -65,7 +65,7 @@ void PluginBrowserComponent::paint(juce::Graphics& graphics)
     graphics.fillAll(juce::Colour(StudioColours::panel));
     graphics.setColour(juce::Colour(StudioColours::secondaryText));
     graphics.setFont(juce::Font(juce::FontOptions(10.5f, juce::Font::bold)));
-    graphics.drawText("PLUGIN CATALOG",
+    graphics.drawText("PROCESSOR CATALOG",
                       0,
                       0,
                       getWidth(),
@@ -126,6 +126,8 @@ void PluginBrowserComponent::paintListBoxItem(int row,
     if (detail.isNotEmpty())
         detail << "  |  ";
     detail << entry.format;
+    if (entry.bundledDevice)
+        detail << "  |  BUNDLED";
     if (entry.instrument)
         detail << "  |  INSTRUMENT";
 

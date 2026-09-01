@@ -111,6 +111,17 @@ void pluginFormatTests()
                && statuses.front().parameters.size() == 1
                && statuses.front().parameters.front().name == "Gain",
            "Trusted CLAP processing and parameter metadata activate in process.");
+    error.clear();
+    expect(engine.setPluginParameter(insert.id, 0, 0.25f, error),
+           error.toRawUTF8());
+    const auto changedStatuses = engine.pluginRuntimeStatuses();
+    expect(!changedStatuses.empty()
+               && !changedStatuses.front().parameters.empty()
+               && std::abs(
+                      changedStatuses.front().parameters.front().value
+                      - 0.25f)
+                      < 0.0001f,
+           "Hosted parameters can be edited through the runtime.");
     const auto captures = engine.capturePluginStates(1000);
     expect(captures.size() == 1
                && captures.front().result.wasOk()

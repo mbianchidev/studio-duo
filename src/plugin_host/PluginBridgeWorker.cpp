@@ -40,6 +40,16 @@ void PluginBridgeWorker::handleMessageFromCoordinator(const juce::MemoryBlock& m
             }
             sendStatus("state|" + state.toBase64Encoding());
         }
+        else if (command == "set-parameter")
+        {
+            const auto parameterIndex = stream.readInt();
+            const auto value = stream.readFloat();
+            const std::lock_guard lock(pluginMutex);
+            if (plugin != nullptr
+                && parameterIndex >= 0
+                && parameterIndex < plugin->getParameters().size())
+                plugin->getParameters()[parameterIndex]->setValue(value);
+        }
         return;
     }
 
@@ -48,6 +58,7 @@ void PluginBridgeWorker::handleMessageFromCoordinator(const juce::MemoryBlock& m
     const auto stateBase64 = stream.readString();
     const auto sampleRate = stream.readDouble();
     const auto blockSize = stream.readInt();
+    const auto requestedSidechainChannels = stream.readInt();
     auto newMapping = std::make_unique<juce::MemoryMappedFile>(
         sharedFile,
         juce::MemoryMappedFile::readWrite,
@@ -79,7 +90,11 @@ void PluginBridgeWorker::handleMessageFromCoordinator(const juce::MemoryBlock& m
 
     if (pluginXml.isEmpty())
     {
-        startProcessing(nullptr, pluginState, sampleRate, blockSize);
+        startProcessing(nullptr,
+                        pluginState,
+                        sampleRate,
+                        blockSize,
+                        requestedSidechainChannels);
         return;
     }
 
@@ -95,8 +110,13 @@ void PluginBridgeWorker::handleMessageFromCoordinator(const juce::MemoryBlock& m
         description,
         sampleRate,
         blockSize,
-        [this, pluginState, sampleRate, blockSize](std::unique_ptr<juce::AudioPluginInstance> instance,
-                                                   const juce::String& error)
+        [this,
+         pluginState,
+         sampleRate,
+         blockSize,
+         requestedSidechainChannels](
+            std::unique_ptr<juce::AudioPluginInstance> instance,
+            const juce::String& error)
         {
             if (instance == nullptr)
             {
@@ -104,7 +124,11 @@ void PluginBridgeWorker::handleMessageFromCoordinator(const juce::MemoryBlock& m
                 return;
             }
 
-            startProcessing(std::move(instance), pluginState, sampleRate, blockSize);
+            startProcessing(std::move(instance),
+                            pluginState,
+                            sampleRate,
+                            blockSize,
+                            requestedSidechainChannels);
         });
 }
 
@@ -232,10 +256,26 @@ void PluginBridgeWorker::run()
 void PluginBridgeWorker::startProcessing(std::unique_ptr<juce::AudioPluginInstance> newPlugin,
                                          const juce::MemoryBlock& state,
                                          double sampleRate,
-                                         int blockSize)
+                                         int blockSize,
+                                         int requestedSidechainChannels)
 {
     if (newPlugin != nullptr)
     {
+        if (requestedSidechainChannels > 0
+            && newPlugin->getBusCount(true) > 1)
+        {
+            auto layout = newPlugin->getBusesLayout();
+            layout.inputBuses.set(
+                1,
+                requestedSidechainChannels == 1
+                    ? juce::AudioChannelSet::mono()
+                    : juce::AudioChannelSet::stereo());
+            if (!newPlugin->setBusesLayout(layout))
+            {
+                sendStatus("error:unsupported-sidechain-layout");
+                return;
+            }
+        }
         const auto inputChannels = newPlugin->getTotalNumInputChannels();
         const auto outputChannels = newPlugin->getTotalNumOutputChannels();
         mainInputChannels = newPlugin->getBusCount(true) > 0

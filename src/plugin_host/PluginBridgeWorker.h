@@ -25,7 +25,8 @@ private:
     void startProcessing(std::unique_ptr<juce::AudioPluginInstance> newPlugin,
                          const juce::MemoryBlock& state,
                          double sampleRate,
-                         int blockSize);
+                         int blockSize,
+                         int sidechainChannels);
     void sendStatus(const juce::String& status);
 
     std::unique_ptr<juce::MemoryMappedFile> mapping;

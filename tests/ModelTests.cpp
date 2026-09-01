@@ -1184,6 +1184,7 @@ int main()
     pluginFormatTests();
     pluginRecoveryTests();
     automationTests();
+    deviceTests();
 
     if (failures == 0)
     {

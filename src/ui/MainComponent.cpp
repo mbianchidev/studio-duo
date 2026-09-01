@@ -813,6 +813,10 @@ MainComponent::MainComponent()
         replacementInsertId = insertId;
         setStatus("Choose a catalog plugin to replace the missing insert.");
     };
+    insertPanel->onEdit = [this](const auto& trackId, const auto& insertId)
+    {
+        showPluginParameters(trackId, insertId);
+    };
     insertPanel->onReload = [this](const auto& trackId, const auto& insertId)
     {
         if (const auto* track = project.findTrack(trackId))
@@ -875,7 +879,8 @@ MainComponent::~MainComponent()
                 track.inserts.cend(),
                 [](const auto& insert)
                 {
-                    return insert.recoveryDisabled;
+                    return !insert.bundledDevice
+                        && insert.recoveryDisabled;
                 });
         });
     if (projectPackage.exists() && !recoveryPending)
@@ -1597,7 +1602,8 @@ void MainComponent::openProjectFrom(const juce::File& package)
     {
         for (auto& insert : track.inserts)
         {
-            if (insert.bridgeMode != PluginBridgeMode::sandboxed
+            if (!insert.bundledDevice
+                && insert.bridgeMode != PluginBridgeMode::sandboxed
                 && std::find(recoveryInsertIds.cbegin(),
                              recoveryInsertIds.cend(),
                              insert.id) != recoveryInsertIds.cend())
@@ -1663,7 +1669,10 @@ void MainComponent::exportMixTo(const juce::File& destination)
     for (auto& track : exportProject.tracks)
         for (auto& insert : track.inserts)
         {
-            insert.missing = !pluginCatalog.descriptionForIdentifier(insert.pluginIdentifier).has_value();
+            insert.missing = !insert.bundledDevice
+                && !pluginCatalog.descriptionForIdentifier(
+                        insert.pluginIdentifier)
+                        .has_value();
             if (!insert.missing && insert.stateFile.isNotEmpty())
             {
                 juce::MemoryBlock state;
@@ -2188,8 +2197,11 @@ void MainComponent::addPluginToSelectedTrack(const PluginCatalogEntry& entry)
     insert.version = entry.version;
     insert.architecture = entry.architecture;
     insert.fileOrIdentifier = entry.fileOrIdentifier;
+    insert.bundledDevice = entry.bundledDevice;
     insert.araCapable = entry.araCapable;
-    insert.bridgeMode = PluginBridgeMode::sandboxed;
+    insert.bridgeMode = entry.bundledDevice
+        ? PluginBridgeMode::trustedInProcess
+        : PluginBridgeMode::sandboxed;
 
     if (replacementInsertId.isNotEmpty())
     {
@@ -2263,6 +2275,57 @@ void MainComponent::changePluginMode(const juce::String& trackId,
                     PluginBridgeMode::araCompatibility));
             }),
         true);
+}
+
+void MainComponent::showPluginParameters(const juce::String& trackId,
+                                         const juce::String& insertId)
+{
+    const auto statuses = audioEngine.pluginRuntimeStatuses();
+    const auto status = std::find_if(
+        statuses.cbegin(),
+        statuses.cend(),
+        [&insertId](const auto& candidate)
+        {
+            return candidate.insertId == insertId;
+        });
+    if (status == statuses.cend()
+        || status->state
+            != StudioAudioEngine::PluginRuntimeStatus::State::ready)
+    {
+        setStatus("The processor must be ready before editing parameters.", true);
+        return;
+    }
+    if (status->parameters.empty())
+    {
+        setStatus("This processor exposes no editable parameters.", true);
+        return;
+    }
+
+    auto panel = std::make_unique<PluginParameterPanel>(
+        status->name,
+        insertId,
+        status->parameters);
+    const juce::Component::SafePointer<MainComponent> safe(this);
+    panel->onValueChanged = [safe](
+                                const auto& changedInsertId,
+                                int parameterIndex,
+                                float value)
+    {
+        if (safe == nullptr)
+            return;
+        juce::String error;
+        if (!safe->audioEngine.setPluginParameter(
+                changedInsertId,
+                parameterIndex,
+                value,
+                error))
+            safe->setStatus(error, true);
+    };
+    juce::CallOutBox::launchAsynchronously(
+        std::move(panel),
+        insertPanel->getScreenBounds(),
+        nullptr);
+    selectTrack(trackId);
 }
 
 void MainComponent::splitSelectedClip()
@@ -4228,7 +4291,8 @@ void MainComponent::updateReducedIsolationMarker()
     std::vector<juce::String> insertIds;
     for (const auto& track : project.tracks)
         for (const auto& insert : track.inserts)
-            if (insert.bridgeMode != PluginBridgeMode::sandboxed)
+            if (!insert.bundledDevice
+                && insert.bridgeMode != PluginBridgeMode::sandboxed)
                 insertIds.push_back(insert.id);
     std::sort(insertIds.begin(), insertIds.end());
     juce::StringArray signatureParts;
@@ -4262,11 +4326,28 @@ std::vector<StudioAudioEngine::PluginRuntimeRequest> MainComponent::pluginRuntim
             request.missing = false;
             request.bridgeMode = insert.bridgeMode;
             request.recoveryDisabled = insert.recoveryDisabled;
+            request.deviceIdentifier = insert.bundledDevice
+                ? insert.pluginIdentifier
+                : juce::String();
+            request.sidechainChannels = std::any_of(
+                project.routingConnections.cbegin(),
+                project.routingConnections.cend(),
+                [&insert](const auto& route)
+                {
+                    return route.enabled
+                        && route.kind == RouteKind::sidechain
+                        && route.destination.insertId == insert.id;
+                })
+                ? 2
+                : 0;
             request.latencySamples = insert.latencySamples;
             request.tailSeconds = insert.tailSeconds;
             request.catalogRevision = pluginCatalog.revision();
-            request.description = pluginCatalog.descriptionForIdentifier(insert.pluginIdentifier);
-            if (!request.description.has_value())
+            request.description = insert.bundledDevice
+                ? std::optional<juce::PluginDescription> {}
+                : pluginCatalog.descriptionForIdentifier(
+                      insert.pluginIdentifier);
+            if (!insert.bundledDevice && !request.description.has_value())
                 request.missing = true;
 
             if (insert.stateFile.isNotEmpty())

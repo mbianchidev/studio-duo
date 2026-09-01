@@ -101,6 +101,10 @@ set(STUDIO_DUO_MODEL_SOURCES
 )
 
 set(STUDIO_DUO_PLUGIN_SOURCES
+    src/devices/DeviceRegistry.cpp
+    src/devices/DeviceRegistry.h
+    src/devices/UtilityDeviceProcessor.cpp
+    src/devices/UtilityDeviceProcessor.h
     src/plugin_host/AraDocumentHost.cpp
     src/plugin_host/AraDocumentHost.h
     src/plugin_host/ClapPluginFormat.cpp
@@ -155,6 +159,8 @@ target_sources(
         src/ui/MixerPanel.h
         src/ui/PluginInsertPanel.cpp
         src/ui/PluginInsertPanel.h
+        src/ui/PluginParameterPanel.cpp
+        src/ui/PluginParameterPanel.h
         src/ui/RoutingUiModel.cpp
         src/ui/RoutingUiModel.h
         src/ui/RoutingPanel.cpp
@@ -209,6 +215,7 @@ target_link_libraries(
         juce::juce_audio_utils
         juce::juce_cryptography
         juce::juce_data_structures
+        juce::juce_dsp
         juce::juce_gui_extra
         clap
         clap-helpers
@@ -273,6 +280,7 @@ if(STUDIO_DUO_BUILD_TESTS)
             tests/PluginFormatTests.cpp
             tests/PluginRecoveryTests.cpp
             tests/AutomationTests.cpp
+            tests/DeviceTests.cpp
             src/ui/RoutingUiModel.cpp
             src/ui/RoutingUiModel.h
             src/audio/StudioAudioEngine.cpp
@@ -292,6 +300,10 @@ if(STUDIO_DUO_BUILD_TESTS)
             src/plugin_host/PluginCompatibilityDatabase.h
             src/plugin_host/PluginStateStore.cpp
             src/plugin_host/PluginStateStore.h
+            src/devices/DeviceRegistry.cpp
+            src/devices/DeviceRegistry.h
+            src/devices/UtilityDeviceProcessor.cpp
+            src/devices/UtilityDeviceProcessor.h
             ${STUDIO_DUO_MODEL_SOURCES}
     )
 
@@ -337,6 +349,7 @@ if(STUDIO_DUO_BUILD_TESTS)
             juce::juce_audio_utils
             juce::juce_cryptography
             juce::juce_data_structures
+            juce::juce_dsp
             juce::juce_graphics
             clap
             clap-helpers

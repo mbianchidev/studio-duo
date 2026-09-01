@@ -168,6 +168,7 @@ struct PluginInsert
     double tailSeconds = 0.0;
     bool bypassed = false;
     bool missing = false;
+    bool bundledDevice = false;
     bool araCapable = false;
     bool recoveryDisabled = false;
 

@@ -2040,6 +2040,12 @@ bool SetPluginBridgeModeCommand::perform(Project& project,
         error = "This plugin does not advertise an ARA extension.";
         return false;
     }
+    if (insert->bundledDevice
+        && newMode != PluginBridgeMode::trustedInProcess)
+    {
+        error = "Bundled devices run in the trusted Studio Duo DSP process.";
+        return false;
+    }
 
     if (!capturedOriginal)
     {

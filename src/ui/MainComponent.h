@@ -4,6 +4,7 @@
 #include "AutomationPanel.h"
 #include "MixerPanel.h"
 #include "PluginInsertPanel.h"
+#include "PluginParameterPanel.h"
 #include "RoutingPanel.h"
 #include "TimelineComponent.h"
 #include "audio/StudioAudioEngine.h"
@@ -68,6 +69,8 @@ private:
     void changePluginMode(const juce::String& trackId,
                           const juce::String& insertId,
                           PluginBridgeMode mode);
+    void showPluginParameters(const juce::String& trackId,
+                              const juce::String& insertId);
     void splitSelectedClip();
     void trimSelectedClipStartToPlayhead();
     void trimSelectedClipEndToPlayhead();

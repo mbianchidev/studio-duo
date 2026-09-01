@@ -13,21 +13,27 @@ PluginBridgeClient::~PluginBridgeClient()
 
 juce::Result PluginBridgeClient::start()
 {
-    return startInternal(nullptr, 48000.0, 512, {});
+    return startInternal(nullptr, 48000.0, 512, {}, 0);
 }
 
 juce::Result PluginBridgeClient::startPlugin(const juce::PluginDescription& description,
                                              double pluginSampleRate,
                                              int blockSize,
-                                             const juce::MemoryBlock& state)
+                                             const juce::MemoryBlock& state,
+                                             int requestedSidechainChannels)
 {
-    return startInternal(&description, pluginSampleRate, blockSize, state);
+    return startInternal(&description,
+                         pluginSampleRate,
+                         blockSize,
+                         state,
+                         requestedSidechainChannels);
 }
 
 juce::Result PluginBridgeClient::startInternal(const juce::PluginDescription* description,
                                                double pluginSampleRate,
                                                int blockSize,
-                                               const juce::MemoryBlock& state)
+                                               const juce::MemoryBlock& state,
+                                               int requestedSidechainChannels)
 {
     stop();
 
@@ -57,6 +63,7 @@ juce::Result PluginBridgeClient::startInternal(const juce::PluginDescription* de
     stream.writeString(state.toBase64Encoding());
     stream.writeDouble(pluginSampleRate);
     stream.writeInt(blockSize);
+    stream.writeInt(std::max(0, requestedSidechainChannels));
     if (!sendMessageToWorker(request))
     {
         stop();
@@ -214,6 +221,19 @@ juce::Result PluginBridgeClient::requestState(
         return juce::Result::fail(
             "Plugin bridge returned invalid state data.");
     return juce::Result::ok();
+}
+
+bool PluginBridgeClient::setParameter(int parameterIndex,
+                                      float normalizedValue)
+{
+    if (!isReady() || parameterIndex < 0)
+        return false;
+    juce::MemoryBlock request;
+    juce::MemoryOutputStream stream(request, true);
+    stream.writeString("set-parameter");
+    stream.writeInt(parameterIndex);
+    stream.writeFloat(juce::jlimit(0.0f, 1.0f, normalizedValue));
+    return sendMessageToWorker(request);
 }
 
 void PluginBridgeClient::processBlock(

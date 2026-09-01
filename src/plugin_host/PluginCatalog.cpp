@@ -2,6 +2,7 @@
 
 #include "PluginFormats.h"
 #include "PluginScanWorker.h"
+#include "devices/DeviceRegistry.h"
 
 #include <algorithm>
 #include <chrono>
@@ -296,7 +297,26 @@ std::vector<PluginCatalogEntry> PluginCatalog::entries() const
             description.numInputChannels,
             description.numOutputChannels,
             description.isInstrument,
-            description.hasARAExtension
+            description.hasARAExtension,
+            false
+        });
+    }
+    for (const auto& device : DeviceRegistry::descriptors())
+    {
+        result.push_back({
+            device.name,
+            "Studio Duo",
+            "Utility",
+            "Studio Duo",
+            STUDIO_DUO_VERSION,
+            currentArchitecture(),
+            device.identifier,
+            device.identifier,
+            2,
+            2,
+            false,
+            false,
+            true
         });
     }
 

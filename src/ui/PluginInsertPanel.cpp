@@ -192,7 +192,7 @@ void PluginInsertPanel::mouseDown(const juce::MouseEvent& event)
         juce::PopupMenu menu;
         menu.addItem(
             "Sandboxed DSP",
-            true,
+            !insert.bundledDevice,
             insert.bridgeMode == PluginBridgeMode::sandboxed,
             [this, selectedTrackId = track->id, insertId = insert.id]
             {
@@ -203,7 +203,7 @@ void PluginInsertPanel::mouseDown(const juce::MouseEvent& event)
             });
         menu.addItem(
             "ARA 2 compatibility (reduced isolation)",
-            insert.araCapable,
+            insert.araCapable && !insert.bundledDevice,
             insert.bridgeMode == PluginBridgeMode::araCompatibility,
             [this, selectedTrackId = track->id, insertId = insert.id]
             {
@@ -263,5 +263,18 @@ void PluginInsertPanel::mouseDown(const juce::MouseEvent& event)
     {
         onReplace(track->id, insert.id);
     }
+}
+
+void PluginInsertPanel::mouseDoubleClick(const juce::MouseEvent& event)
+{
+    const auto* track = project != nullptr ? project->findTrack(trackId) : nullptr;
+    if (track == nullptr || event.position.y < 24.0f)
+        return;
+    const auto index = static_cast<int>((event.position.y - 24.0f) / 54.0f);
+    if (index >= 0
+        && index < static_cast<int>(track->inserts.size())
+        && onEdit)
+        onEdit(track->id,
+               track->inserts[static_cast<std::size_t>(index)].id);
 }
 }
