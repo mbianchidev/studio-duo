@@ -35,6 +35,21 @@ private:
     std::size_t nextCommand = 0;
 };
 
+class BatchProjectCommand final : public ProjectCommand
+{
+public:
+    BatchProjectCommand(juce::String commandName,
+                        std::vector<std::unique_ptr<ProjectCommand>> commands);
+
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    juce::String commandName;
+    std::vector<std::unique_ptr<ProjectCommand>> commands;
+};
+
 class AddTrackCommand final : public ProjectCommand
 {
 public:
@@ -214,6 +229,25 @@ private:
     std::vector<CompRegion> newRegions;
 };
 
+class SetEditGroupsCommand final : public ProjectCommand
+{
+public:
+    SetEditGroupsCommand(std::vector<EditGroup> before,
+                         std::vector<EditGroup> after);
+
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    static bool validate(const Project& project,
+                         const std::vector<EditGroup>& groups,
+                         juce::String& error);
+
+    std::vector<EditGroup> oldGroups;
+    std::vector<EditGroup> newGroups;
+};
+
 struct ProjectTransportState
 {
     double tempo = 120.0;
@@ -358,6 +392,7 @@ private:
     juce::String affectedParentId;
     juce::String oldActiveTakeId;
     std::vector<CompRegion> oldCompRegions;
+    std::vector<EditGroup> oldEditGroups;
     bool capturedOriginal = false;
 };
 

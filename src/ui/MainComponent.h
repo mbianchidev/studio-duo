@@ -65,6 +65,14 @@ private:
     void trimSelectedClipStartToPlayhead();
     void trimSelectedClipEndToPlayhead();
     void deleteSelectedClip();
+    void moveClip(const juce::String& clipId,
+                  const juce::String& destinationTrackId,
+                  double startSeconds);
+    void trimClip(const juce::String& clipId,
+                  double startSeconds,
+                  double sourceOffsetSeconds,
+                  double durationSeconds);
+    void quantizeSelectedGroup();
     void undo();
     void redo();
     void selectTrack(const juce::String& trackId);
@@ -83,6 +91,12 @@ private:
     bool perform(std::unique_ptr<ProjectCommand> command);
     void changeSelectedTrackState(const std::function<void(TrackMixState&)>& change);
     void changeTransportState(const std::function<void(ProjectTransportState&)>& change);
+    void changeEditGroups(const std::function<void(std::vector<EditGroup>&)>& change);
+    [[nodiscard]] const AudioClip* activeClipAt(const juce::String& parentTrackId,
+                                                double seconds) const;
+    [[nodiscard]] std::vector<juce::String> linkedClipIdsAt(
+        const juce::String& clipId,
+        double seconds) const;
     [[nodiscard]] Track makeRecordingVersionTrack(const Track& parent) const;
     Track* recordingTrack();
     void setStatus(const juce::String& message, bool error = false);

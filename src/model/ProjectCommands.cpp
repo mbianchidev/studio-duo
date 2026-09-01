@@ -62,6 +62,44 @@ juce::String CommandStack::redoName() const
     return canRedo() ? commands[nextCommand]->name() : juce::String();
 }
 
+BatchProjectCommand::BatchProjectCommand(
+    juce::String name,
+    std::vector<std::unique_ptr<ProjectCommand>> commandsToRun)
+    : commandName(std::move(name)),
+      commands(std::move(commandsToRun))
+{
+}
+
+juce::String BatchProjectCommand::name() const
+{
+    return commandName;
+}
+
+bool BatchProjectCommand::perform(Project& project, juce::String& error)
+{
+    auto completed = std::size_t { 0 };
+    for (; completed < commands.size(); ++completed)
+    {
+        if (commands[completed] != nullptr
+            && commands[completed]->perform(project, error))
+            continue;
+
+        while (completed > 0)
+            commands[--completed]->undo(project);
+        if (error.isEmpty())
+            error = "A linked edit command could not be completed.";
+        return false;
+    }
+    return true;
+}
+
+void BatchProjectCommand::undo(Project& project)
+{
+    for (auto iterator = commands.rbegin(); iterator != commands.rend(); ++iterator)
+        if (*iterator != nullptr)
+            (*iterator)->undo(project);
+}
+
 AddTrackCommand::AddTrackCommand(Track trackToAdd)
     : track(std::move(trackToAdd))
 {
@@ -715,6 +753,85 @@ bool SetCompRegionsCommand::validate(const Project& project,
     return true;
 }
 
+SetEditGroupsCommand::SetEditGroupsCommand(std::vector<EditGroup> before,
+                                           std::vector<EditGroup> after)
+    : oldGroups(std::move(before)),
+      newGroups(std::move(after))
+{
+}
+
+juce::String SetEditGroupsCommand::name() const
+{
+    return "Change edit groups";
+}
+
+bool SetEditGroupsCommand::perform(Project& project, juce::String& error)
+{
+    if (!validate(project, newGroups, error))
+        return false;
+    project.editGroups = newGroups;
+    return true;
+}
+
+void SetEditGroupsCommand::undo(Project& project)
+{
+    project.editGroups = oldGroups;
+}
+
+bool SetEditGroupsCommand::validate(const Project& project,
+                                    const std::vector<EditGroup>& groups,
+                                    juce::String& error)
+{
+    std::vector<juce::String> assignedTracks;
+    for (const auto& group : groups)
+    {
+        if (group.id.isEmpty()
+            || group.name.trim().isEmpty()
+            || group.trackIds.size() < 2
+            || group.quantizeStrength < 0.0
+            || group.quantizeStrength > 1.0)
+        {
+            error = "Edit groups need a name, at least two tracks, and valid quantize strength.";
+            return false;
+        }
+
+        for (const auto& trackId : group.trackIds)
+        {
+            const auto* track = project.findTrack(trackId);
+            if (track == nullptr
+                || track->type != TrackType::audio
+                || track->parentTrackId.isNotEmpty()
+                || std::find(assignedTracks.cbegin(),
+                             assignedTracks.cend(),
+                             trackId) != assignedTracks.cend())
+            {
+                error = "Edit group tracks must be unique audio parent tracks.";
+                return false;
+            }
+            assignedTracks.push_back(trackId);
+        }
+
+        if (std::find(group.trackIds.cbegin(),
+                      group.trackIds.cend(),
+                      group.timingReferenceTrackId) == group.trackIds.cend())
+        {
+            error = "The timing reference must belong to its edit group.";
+            return false;
+        }
+        if (std::any_of(group.protectedAnchorsSeconds.cbegin(),
+                        group.protectedAnchorsSeconds.cend(),
+                        [](double anchor)
+                        {
+                            return anchor < 0.0;
+                        }))
+        {
+            error = "Protected edit anchors cannot be negative.";
+            return false;
+        }
+    }
+    return true;
+}
+
 ProjectTransportState ProjectTransportState::fromProject(const Project& project)
 {
     return {
@@ -1056,6 +1173,7 @@ bool RemoveTrackCommand::perform(Project& project, juce::String& error)
                 oldCompRegions = parent->compRegions;
             }
         }
+        oldEditGroups = project.editGroups;
 
         for (std::size_t index = 0; index < project.tracks.size(); ++index)
         {
@@ -1099,6 +1217,36 @@ bool RemoveTrackCommand::perform(Project& project, juce::String& error)
                            }),
             parent->compRegions.end());
     }
+    for (auto& group : project.editGroups)
+    {
+        group.trackIds.erase(
+            std::remove_if(group.trackIds.begin(),
+                           group.trackIds.end(),
+                           [this](const auto& candidateId)
+                           {
+                               return std::any_of(
+                                   removedTracks.cbegin(),
+                                   removedTracks.cend(),
+                                   [&candidateId](const auto& removed)
+                                   {
+                                       return removed.second.id == candidateId;
+                                   });
+                           }),
+            group.trackIds.end());
+        if (std::find(group.trackIds.cbegin(),
+                      group.trackIds.cend(),
+                      group.timingReferenceTrackId) == group.trackIds.cend()
+            && !group.trackIds.empty())
+            group.timingReferenceTrackId = group.trackIds.front();
+    }
+    project.editGroups.erase(
+        std::remove_if(project.editGroups.begin(),
+                       project.editGroups.end(),
+                       [](const auto& group)
+                       {
+                           return group.trackIds.size() < 2;
+                       }),
+        project.editGroups.end());
     return true;
 }
 
@@ -1114,6 +1262,7 @@ void RemoveTrackCommand::undo(Project& project)
         parent->activeTakeTrackId = oldActiveTakeId;
         parent->compRegions = oldCompRegions;
     }
+    project.editGroups = oldEditGroups;
 }
 
 DuplicateTrackCommand::DuplicateTrackCommand(juce::String trackToDuplicate)

@@ -180,6 +180,19 @@ void TimelineComponent::paint(juce::Graphics& graphics)
                           12,
                           juce::Justification::centredLeft);
     }
+    for (const auto& group : project->editGroups)
+    {
+        if (!group.enabled)
+            continue;
+        for (const auto anchor : group.protectedAnchorsSeconds)
+        {
+            const auto x = secondsToX(anchor);
+            graphics.setColour(juce::Colour(StudioColours::violet).withAlpha(0.55f));
+            graphics.drawVerticalLine(static_cast<int>(x),
+                                      static_cast<float>(rulerHeight),
+                                      static_cast<float>(getHeight()));
+        }
+    }
     for (const auto& meterChange : project->meterChanges)
     {
         const auto x = static_cast<int>(secondsToX(meterChange.timeSeconds));
@@ -310,6 +323,25 @@ void TimelineComponent::paint(juce::Graphics& graphics)
                               52,
                               18,
                               juce::Justification::centredRight);
+        }
+        if (!childTrack)
+        {
+            if (const auto* group = project->editGroupForTrack(track.id))
+            {
+                graphics.setColour(juce::Colour(group->enabled
+                                                    ? StudioColours::violet
+                                                    : StudioColours::secondaryText));
+                graphics.setFont(juce::Font(juce::FontOptions(8.5f,
+                                                              juce::Font::bold)));
+                graphics.drawText(group->timingReferenceTrackId == track.id
+                                      ? "LINK REF"
+                                      : "LINK",
+                                  viewportPositionX + 104,
+                                  y + 51,
+                                  60,
+                                  18,
+                                  juce::Justification::centredRight);
+            }
         }
     }
 

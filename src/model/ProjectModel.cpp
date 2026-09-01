@@ -126,6 +126,64 @@ std::optional<MeterChange> MeterChange::fromVar(const juce::var& value,
     return change;
 }
 
+juce::var EditGroup::toVar() const
+{
+    auto object = std::make_unique<juce::DynamicObject>();
+    object->setProperty("id", id);
+    object->setProperty("name", name);
+    juce::Array<juce::var> trackValues;
+    for (const auto& trackId : trackIds)
+        trackValues.add(trackId);
+    object->setProperty("trackIds", juce::var(trackValues));
+    object->setProperty("timingReferenceTrackId", timingReferenceTrackId);
+    object->setProperty("quantizeStrength", quantizeStrength);
+    juce::Array<juce::var> anchorValues;
+    for (const auto anchor : protectedAnchorsSeconds)
+        anchorValues.add(anchor);
+    object->setProperty("protectedAnchorsSeconds", juce::var(anchorValues));
+    object->setProperty("enabled", enabled);
+    return juce::var(object.release());
+}
+
+std::optional<EditGroup> EditGroup::fromVar(const juce::var& value,
+                                            juce::String& error)
+{
+    const auto* object = requireObject(value, error, "Edit group");
+    if (object == nullptr)
+        return std::nullopt;
+
+    EditGroup group;
+    group.id = object->getProperty("id").toString();
+    group.name = object->getProperty("name").toString();
+    const auto trackValues = object->getProperty("trackIds");
+    if (!trackValues.isArray())
+    {
+        error = "Edit group track IDs must be an array.";
+        return std::nullopt;
+    }
+    for (const auto& trackValue : *trackValues.getArray())
+        group.trackIds.push_back(trackValue.toString());
+    group.timingReferenceTrackId
+        = object->getProperty("timingReferenceTrackId").toString();
+    group.quantizeStrength = numberProperty(*object, "quantizeStrength", 1.0);
+    const auto anchorValues = object->getProperty("protectedAnchorsSeconds");
+    if (anchorValues.isArray())
+        for (const auto& anchorValue : *anchorValues.getArray())
+            group.protectedAnchorsSeconds.push_back(static_cast<double>(anchorValue));
+    group.enabled = booleanProperty(*object, "enabled", true);
+
+    if (group.id.isEmpty()
+        || group.name.trim().isEmpty()
+        || group.trackIds.size() < 2
+        || group.quantizeStrength < 0.0
+        || group.quantizeStrength > 1.0)
+    {
+        error = "Edit groups require an ID, name, tracks, and valid strength.";
+        return std::nullopt;
+    }
+    return group;
+}
+
 juce::var PluginInsert::toVar() const
 {
     auto object = std::make_unique<juce::DynamicObject>();
@@ -573,6 +631,30 @@ juce::String Project::activeTakeTrackId(const juce::String& parentTrackId) const
     return latest != nullptr ? latest->id : juce::String();
 }
 
+juce::String Project::rootTrackId(const juce::String& trackId) const
+{
+    const auto* track = findTrack(trackId);
+    if (track == nullptr)
+        return {};
+    return track->parentTrackId.isNotEmpty() ? track->parentTrackId : track->id;
+}
+
+const EditGroup* Project::editGroupForTrack(const juce::String& trackId) const
+{
+    const auto rootId = rootTrackId(trackId);
+    if (rootId.isEmpty())
+        return nullptr;
+    const auto iterator = std::find_if(editGroups.cbegin(),
+                                       editGroups.cend(),
+                                       [&rootId](const auto& group)
+    {
+        return std::find(group.trackIds.cbegin(),
+                         group.trackIds.cend(),
+                         rootId) != group.trackIds.cend();
+    });
+    return iterator == editGroups.cend() ? nullptr : &*iterator;
+}
+
 double Project::tempoAt(double seconds) const noexcept
 {
     if (tempoChanges.empty())
@@ -821,6 +903,10 @@ juce::var Project::toVar() const
     object->setProperty("loopEnabled", loopEnabled);
     object->setProperty("loopStartSeconds", loopStartSeconds);
     object->setProperty("loopEndSeconds", loopEndSeconds);
+    juce::Array<juce::var> editGroupValues;
+    for (const auto& group : editGroups)
+        editGroupValues.add(group.toVar());
+    object->setProperty("editGroups", juce::var(editGroupValues));
 
     juce::Array<juce::var> trackValues;
     trackValues.ensureStorageAllocated(static_cast<int>(tracks.size()));
@@ -921,6 +1007,17 @@ std::optional<Project> Project::fromVar(const juce::var& value, juce::String& er
     project.loopEnabled = booleanProperty(*object, "loopEnabled", false);
     project.loopStartSeconds = std::max(0.0, numberProperty(*object, "loopStartSeconds", 0.0));
     project.loopEndSeconds = std::max(project.loopStartSeconds, numberProperty(*object, "loopEndSeconds", 8.0));
+    const auto editGroupValues = object->getProperty("editGroups");
+    if (editGroupValues.isArray())
+    {
+        for (const auto& groupValue : *editGroupValues.getArray())
+        {
+            auto group = EditGroup::fromVar(groupValue, error);
+            if (!group.has_value())
+                return std::nullopt;
+            project.editGroups.push_back(std::move(*group));
+        }
+    }
 
     const auto trackValues = object->getProperty("tracks");
     if (!trackValues.isArray())
@@ -963,6 +1060,31 @@ std::optional<Project> Project::fromVar(const juce::var& value, juce::String& er
                 error = "A comp region references an invalid take lane.";
                 return std::nullopt;
             }
+        }
+    }
+    std::vector<juce::String> groupedTracks;
+    for (const auto& group : project.editGroups)
+    {
+        if (std::find(group.trackIds.cbegin(),
+                      group.trackIds.cend(),
+                      group.timingReferenceTrackId) == group.trackIds.cend())
+        {
+            error = "An edit group has an invalid timing reference.";
+            return std::nullopt;
+        }
+        for (const auto& trackId : group.trackIds)
+        {
+            const auto* track = project.findTrack(trackId);
+            if (track == nullptr
+                || track->parentTrackId.isNotEmpty()
+                || std::find(groupedTracks.cbegin(),
+                             groupedTracks.cend(),
+                             trackId) != groupedTracks.cend())
+            {
+                error = "An edit group references an unavailable or duplicate track.";
+                return std::nullopt;
+            }
+            groupedTracks.push_back(trackId);
         }
     }
 

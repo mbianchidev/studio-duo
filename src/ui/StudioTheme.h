@@ -15,6 +15,7 @@ struct StudioColours
     static constexpr std::uint32_t orange = 0xffdd5b3f;
     static constexpr std::uint32_t amber = 0xffd99a42;
     static constexpr std::uint32_t green = 0xff78c6a3;
+    static constexpr std::uint32_t violet = 0xffb47ac4;
 };
 
 class StudioTheme final : public juce::LookAndFeel_V4

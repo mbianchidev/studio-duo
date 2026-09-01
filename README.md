@@ -100,6 +100,12 @@ or ramp transitions, punch points, count-in bars, pre/post-roll, loop bounds,
 click subdivision, and the hardware output used by the metronome. All settings
 are saved with the project and participate in undo/redo.
 
+Arm two or more parent tracks and choose **Link armed parent tracks** in
+**TRACKING SETUP** to create a phase-locked edit group. Split, trim, move,
+delete, and comp operations then apply as one undoable command across the active
+takes at the same timeline position. The same menu selects the timing reference,
+quantize strength, protected anchors, group suspension, and unlinking.
+
 Each completed pass creates grouped `v1`, `v2`, `v3`, ... child tracks directly
 below every recorded parent. A multitrack pass enters the project as one
 undoable command, so every synchronized lane is added, undone, or redone

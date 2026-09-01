@@ -869,20 +869,14 @@ MainComponent::MainComponent()
     };
     timeline.onClipMoved = [this](const auto& clipId, const auto& destinationTrackId, double start)
     {
-        if (perform(std::make_unique<MoveClipCommand>(clipId,
-                                                      start,
-                                                      destinationTrackId)))
-            selectClip(destinationTrackId, clipId);
+        moveClip(clipId, destinationTrackId, start);
     };
     timeline.onClipTrimmed = [this](const auto& clipId,
                                     double start,
                                     double sourceOffset,
                                     double duration)
     {
-        perform(std::make_unique<TrimClipCommand>(clipId,
-                                                  start,
-                                                  sourceOffset,
-                                                  duration));
+        trimClip(clipId, start, sourceOffset, duration);
     };
     timeline.onSeek = [this](double seconds)
     {
@@ -919,23 +913,71 @@ MainComponent::MainComponent()
         if (parent == nullptr)
             return;
 
-        CompRegion region;
-        region.sourceTrackId = take->id;
-        region.startSeconds = clip->startSeconds;
-        region.durationSeconds = clip->durationSeconds;
-        auto updated = replaceCompRegion(parent->compRegions, std::move(region));
-        perform(std::make_unique<SetCompRegionsCommand>(parent->id,
-                                                        parent->compRegions,
-                                                        std::move(updated)));
+        const auto* group = project.editGroupForTrack(parent->id);
+        const auto reference = clip->startSeconds + clip->durationSeconds * 0.5;
+        const auto parentIds = group != nullptr && group->enabled
+            ? group->trackIds
+            : std::vector<juce::String> { parent->id };
+        std::vector<std::unique_ptr<ProjectCommand>> commands;
+        for (const auto& parentId : parentIds)
+        {
+            const auto* compParent = project.findTrack(parentId);
+            const auto* sourceClip = parentId == parent->id
+                ? clip
+                : activeClipAt(parentId, reference);
+            const auto* sourceTake = sourceClip != nullptr
+                ? project.findTrackContainingClip(sourceClip->id)
+                : nullptr;
+            if (compParent == nullptr
+                || sourceTake == nullptr
+                || sourceTake->parentTrackId != parentId)
+            {
+                setStatus("Every linked parent needs a take at the comp range.", true);
+                return;
+            }
+
+            CompRegion region;
+            region.sourceTrackId = sourceTake->id;
+            region.startSeconds = clip->startSeconds;
+            region.durationSeconds = clip->durationSeconds;
+            auto updated = replaceCompRegion(compParent->compRegions,
+                                             std::move(region));
+            commands.push_back(std::make_unique<SetCompRegionsCommand>(
+                compParent->id,
+                compParent->compRegions,
+                std::move(updated)));
+        }
+        perform(std::make_unique<BatchProjectCommand>(
+            commands.size() > 1 ? "Comp linked takes" : "Change comp",
+            std::move(commands)));
     };
     timeline.onClearComp = [this](const auto& parentTrackId)
     {
         const auto* parent = project.findTrack(parentTrackId);
         if (parent == nullptr || parent->compRegions.empty())
             return;
-        perform(std::make_unique<SetCompRegionsCommand>(parent->id,
-                                                        parent->compRegions,
-                                                        std::vector<CompRegion> {}));
+        const auto* group = project.editGroupForTrack(parentTrackId);
+        const auto parentIds = group != nullptr && group->enabled
+            ? group->trackIds
+            : std::vector<juce::String> { parentTrackId };
+        std::vector<std::unique_ptr<ProjectCommand>> commands;
+        for (const auto& parentId : parentIds)
+        {
+            const auto* compParent = project.findTrack(parentId);
+            if (compParent != nullptr && !compParent->compRegions.empty())
+            {
+                commands.push_back(std::make_unique<SetCompRegionsCommand>(
+                    parentId,
+                    compParent->compRegions,
+                    std::vector<CompRegion> {}));
+            }
+        }
+        if (!commands.empty())
+        {
+            perform(std::make_unique<BatchProjectCommand>(
+                commands.size() > 1 ? "Clear linked comps" : "Clear comp",
+                std::move(commands)));
+        }
     };
 
     mixer = std::make_unique<MixerPanel>();
@@ -2048,7 +2090,23 @@ void MainComponent::splitSelectedClip()
         return;
     }
 
-    perform(std::make_unique<SplitClipCommand>(selectedClipId, audioEngine.positionSeconds()));
+    const auto cursor = audioEngine.positionSeconds();
+    const auto clipIds = linkedClipIdsAt(selectedClipId, cursor);
+    const auto* group = project.editGroupForTrack(selectedTrackId);
+    if (group != nullptr
+        && group->enabled
+        && clipIds.size() != group->trackIds.size())
+    {
+        setStatus("Every linked track needs an active clip at the split position.", true);
+        return;
+    }
+
+    std::vector<std::unique_ptr<ProjectCommand>> commands;
+    for (const auto& clipId : clipIds)
+        commands.push_back(std::make_unique<SplitClipCommand>(clipId, cursor));
+    perform(std::make_unique<BatchProjectCommand>(
+        clipIds.size() > 1 ? "Split linked clips" : "Split clip",
+        std::move(commands)));
 }
 
 void MainComponent::trimSelectedClipStartToPlayhead()
@@ -2068,10 +2126,10 @@ void MainComponent::trimSelectedClipStartToPlayhead()
     }
 
     const auto removedDuration = cursor - clip->startSeconds;
-    perform(std::make_unique<TrimClipCommand>(clip->id,
-                                              cursor,
-                                              clip->sourceOffsetSeconds + removedDuration,
-                                              clip->durationSeconds - removedDuration));
+    trimClip(clip->id,
+             cursor,
+             clip->sourceOffsetSeconds + removedDuration,
+             clip->durationSeconds - removedDuration);
 }
 
 void MainComponent::trimSelectedClipEndToPlayhead()
@@ -2090,10 +2148,10 @@ void MainComponent::trimSelectedClipEndToPlayhead()
         return;
     }
 
-    perform(std::make_unique<TrimClipCommand>(clip->id,
-                                              clip->startSeconds,
-                                              clip->sourceOffsetSeconds,
-                                              cursor - clip->startSeconds));
+    trimClip(clip->id,
+             clip->startSeconds,
+             clip->sourceOffsetSeconds,
+             cursor - clip->startSeconds);
 }
 
 void MainComponent::deleteSelectedClip()
@@ -2101,12 +2159,158 @@ void MainComponent::deleteSelectedClip()
     if (selectedClipId.isEmpty())
         return;
 
-    if (perform(std::make_unique<DeleteClipCommand>(selectedClipId)))
+    const auto* selected = project.findClip(selectedClipId);
+    const auto reference = selected != nullptr
+        ? selected->startSeconds + selected->durationSeconds * 0.5
+        : audioEngine.positionSeconds();
+    const auto clipIds = linkedClipIdsAt(selectedClipId, reference);
+    std::vector<std::unique_ptr<ProjectCommand>> commands;
+    for (const auto& clipId : clipIds)
+        commands.push_back(std::make_unique<DeleteClipCommand>(clipId));
+    if (perform(std::make_unique<BatchProjectCommand>(
+            clipIds.size() > 1 ? "Delete linked clips" : "Delete clip",
+            std::move(commands))))
     {
         selectedClipId.clear();
         timeline.setSelection(selectedTrackId, {});
         updateInspector();
     }
+}
+
+void MainComponent::moveClip(const juce::String& clipId,
+                             const juce::String& destinationTrackId,
+                             double startSeconds)
+{
+    const auto* clip = project.findClip(clipId);
+    const auto* sourceTrack = project.findTrackContainingClip(clipId);
+    if (clip == nullptr || sourceTrack == nullptr)
+        return;
+
+    const auto* group = project.editGroupForTrack(sourceTrack->id);
+    if (group != nullptr
+        && group->enabled
+        && project.rootTrackId(sourceTrack->id)
+            != project.rootTrackId(destinationTrackId))
+    {
+        setStatus("Unlink this track before moving a phase-locked clip to another track.", true);
+        return;
+    }
+
+    const auto reference = clip->startSeconds + clip->durationSeconds * 0.5;
+    const auto linkedIds = linkedClipIdsAt(clipId, reference);
+    if (group != nullptr
+        && group->enabled
+        && linkedIds.size() != group->trackIds.size())
+    {
+        setStatus("Every linked track needs an active clip for a phase-locked move.", true);
+        return;
+    }
+
+    const auto delta = startSeconds - clip->startSeconds;
+    std::vector<std::unique_ptr<ProjectCommand>> commands;
+    for (const auto& linkedId : linkedIds)
+    {
+        const auto* linkedClip = project.findClip(linkedId);
+        const auto* linkedTrack = project.findTrackContainingClip(linkedId);
+        if (linkedClip == nullptr || linkedTrack == nullptr)
+            continue;
+        commands.push_back(std::make_unique<MoveClipCommand>(
+            linkedId,
+            std::max(0.0, linkedClip->startSeconds + delta),
+            linkedId == clipId ? destinationTrackId : linkedTrack->id));
+    }
+    if (perform(std::make_unique<BatchProjectCommand>(
+            linkedIds.size() > 1 ? "Move linked clips" : "Move clip",
+            std::move(commands))))
+        selectClip(destinationTrackId, clipId);
+}
+
+void MainComponent::trimClip(const juce::String& clipId,
+                             double startSeconds,
+                             double sourceOffsetSeconds,
+                             double durationSeconds)
+{
+    const auto* clip = project.findClip(clipId);
+    if (clip == nullptr)
+        return;
+
+    const auto reference = clip->startSeconds + clip->durationSeconds * 0.5;
+    const auto linkedIds = linkedClipIdsAt(clipId, reference);
+    const auto* group = project.editGroupForTrack(
+        project.findTrackContainingClip(clipId)->id);
+    if (group != nullptr && linkedIds.size() != group->trackIds.size())
+    {
+        setStatus("Every linked track needs an active clip for a phase-locked trim.", true);
+        return;
+    }
+
+    const auto startDelta = startSeconds - clip->startSeconds;
+    const auto sourceDelta = sourceOffsetSeconds - clip->sourceOffsetSeconds;
+    const auto durationDelta = durationSeconds - clip->durationSeconds;
+    std::vector<std::unique_ptr<ProjectCommand>> commands;
+    for (const auto& linkedId : linkedIds)
+    {
+        const auto* linkedClip = project.findClip(linkedId);
+        if (linkedClip == nullptr)
+            continue;
+
+        if (std::abs(startDelta) > 0.0001)
+        {
+            commands.push_back(std::make_unique<TrimClipCommand>(
+                linkedId,
+                linkedClip->startSeconds + startDelta,
+                linkedClip->sourceOffsetSeconds + sourceDelta,
+                linkedClip->durationSeconds - startDelta));
+        }
+        else
+        {
+            commands.push_back(std::make_unique<TrimClipCommand>(
+                linkedId,
+                linkedClip->startSeconds,
+                linkedClip->sourceOffsetSeconds,
+                linkedClip->durationSeconds + durationDelta));
+        }
+    }
+    perform(std::make_unique<BatchProjectCommand>(
+        linkedIds.size() > 1 ? "Trim linked clips" : "Trim clip",
+        std::move(commands)));
+}
+
+void MainComponent::quantizeSelectedGroup()
+{
+    const auto* clip = project.findClip(selectedClipId);
+    const auto* track = project.findTrackContainingClip(selectedClipId);
+    const auto* group = track != nullptr ? project.editGroupForTrack(track->id) : nullptr;
+    if (clip == nullptr || track == nullptr || group == nullptr || !group->enabled)
+    {
+        setStatus("Select a clip on a linked track before quantizing.", true);
+        return;
+    }
+    if (std::any_of(group->protectedAnchorsSeconds.cbegin(),
+                    group->protectedAnchorsSeconds.cend(),
+                    [clip](double anchor)
+                    {
+                        return anchor >= clip->startSeconds
+                            && anchor <= clip->endSeconds();
+                    }))
+    {
+        setStatus("This edit is protected by an anchor inside the selected clip.", true);
+        return;
+    }
+
+    const auto meter = project.meterAt(clip->startSeconds);
+    const auto beatStep = 4.0 / static_cast<double>(meter.denominator);
+    const auto currentBeat = project.beatsAt(clip->startSeconds);
+    const auto targetBeat = std::round(currentBeat / beatStep) * beatStep;
+    const auto targetSeconds = project.secondsAtBeat(targetBeat);
+    const auto destination = clip->startSeconds
+        + (targetSeconds - clip->startSeconds) * group->quantizeStrength;
+    if (std::abs(destination - clip->startSeconds) < 0.0001)
+    {
+        setStatus("The linked edit is already on the selected grid.");
+        return;
+    }
+    moveClip(clip->id, track->id, destination);
 }
 
 void MainComponent::undo()
@@ -2567,6 +2771,200 @@ void MainComponent::showTrackingMenu()
         clickOutputMenu.addItem("No audio outputs", false, false, [] {});
     menu.addSubMenu("Click output", clickOutputMenu);
 
+    menu.addSeparator();
+    menu.addSectionHeader("Linked performance editing");
+    menu.addItem("Link armed parent tracks", [this]
+    {
+        const auto trackIds = project.armedAudioParentTrackIds();
+        if (trackIds.size() < 2)
+        {
+            setStatus("Arm at least two parent tracks before linking them.", true);
+            return;
+        }
+
+        changeEditGroups([trackIds](auto& groups)
+        {
+            for (auto& group : groups)
+            {
+                group.trackIds.erase(
+                    std::remove_if(group.trackIds.begin(),
+                                   group.trackIds.end(),
+                                   [&trackIds](const auto& trackId)
+                                   {
+                                       return std::find(trackIds.cbegin(),
+                                                        trackIds.cend(),
+                                                        trackId)
+                                           != trackIds.cend();
+                                   }),
+                    group.trackIds.end());
+                if (std::find(group.trackIds.cbegin(),
+                              group.trackIds.cend(),
+                              group.timingReferenceTrackId)
+                    == group.trackIds.cend()
+                    && !group.trackIds.empty())
+                    group.timingReferenceTrackId = group.trackIds.front();
+            }
+            groups.erase(std::remove_if(groups.begin(),
+                                        groups.end(),
+                                        [](const auto& group)
+                                        {
+                                            return group.trackIds.size() < 2;
+                                        }),
+                         groups.end());
+
+            EditGroup group;
+            group.name = "Edit group " + juce::String(static_cast<int>(groups.size() + 1));
+            group.trackIds = trackIds;
+            group.timingReferenceTrackId = trackIds.front();
+            groups.push_back(std::move(group));
+        });
+    });
+
+    const auto selectedRootId = project.rootTrackId(selectedTrackId);
+    const auto* selectedGroup = project.editGroupForTrack(selectedRootId);
+    if (selectedGroup != nullptr)
+    {
+        const auto groupId = selectedGroup->id;
+        menu.addItem("Linked edits enabled",
+                     true,
+                     selectedGroup->enabled,
+                     [this, groupId]
+                     {
+                         changeEditGroups([groupId](auto& groups)
+                         {
+                             const auto group = std::find_if(
+                                 groups.begin(),
+                                 groups.end(),
+                                 [&groupId](const auto& candidate)
+                                 {
+                                     return candidate.id == groupId;
+                                 });
+                             if (group != groups.end())
+                                 group->enabled = !group->enabled;
+                         });
+                     });
+        menu.addItem("Use selected track as timing reference",
+                     selectedGroup->timingReferenceTrackId != selectedRootId,
+                     false,
+                     [this, groupId, selectedRootId]
+                     {
+                         changeEditGroups([groupId, selectedRootId](auto& groups)
+                         {
+                             const auto group = std::find_if(
+                                 groups.begin(),
+                                 groups.end(),
+                                 [&groupId](const auto& candidate)
+                                 {
+                                     return candidate.id == groupId;
+                                 });
+                             if (group != groups.end())
+                                 group->timingReferenceTrackId = selectedRootId;
+                         });
+                     });
+
+        juce::PopupMenu strengthMenu;
+        for (const auto strength : { 0.25, 0.5, 0.75, 1.0 })
+        {
+            strengthMenu.addItem(juce::String(static_cast<int>(strength * 100.0)) + "%",
+                                 true,
+                                 std::abs(selectedGroup->quantizeStrength - strength) < 0.0001,
+                                 [this, groupId, strength]
+                                 {
+                                     changeEditGroups([groupId, strength](auto& groups)
+                                     {
+                                         const auto group = std::find_if(
+                                             groups.begin(),
+                                             groups.end(),
+                                             [&groupId](const auto& candidate)
+                                             {
+                                                 return candidate.id == groupId;
+                                             });
+                                         if (group != groups.end())
+                                             group->quantizeStrength = strength;
+                                     });
+                                 });
+        }
+        menu.addSubMenu("Quantize strength", strengthMenu);
+        menu.addItem("Quantize selected linked edit", [this]
+        {
+            quantizeSelectedGroup();
+        });
+        menu.addItem("Add protected anchor at playhead", [this, groupId, position]
+        {
+            changeEditGroups([groupId, position](auto& groups)
+            {
+                const auto group = std::find_if(
+                    groups.begin(),
+                    groups.end(),
+                    [&groupId](const auto& candidate)
+                    {
+                        return candidate.id == groupId;
+                    });
+                if (group == groups.end())
+                    return;
+                group->protectedAnchorsSeconds.push_back(position);
+                std::sort(group->protectedAnchorsSeconds.begin(),
+                          group->protectedAnchorsSeconds.end());
+                group->protectedAnchorsSeconds.erase(
+                    std::unique(group->protectedAnchorsSeconds.begin(),
+                                group->protectedAnchorsSeconds.end(),
+                                [](double left, double right)
+                                {
+                                    return std::abs(left - right) < 0.0001;
+                                }),
+                    group->protectedAnchorsSeconds.end());
+            });
+        });
+        menu.addItem("Remove nearby protected anchor", [this, groupId, position]
+        {
+            changeEditGroups([groupId, position](auto& groups)
+            {
+                const auto group = std::find_if(
+                    groups.begin(),
+                    groups.end(),
+                    [&groupId](const auto& candidate)
+                    {
+                        return candidate.id == groupId;
+                    });
+                if (group == groups.end() || group->protectedAnchorsSeconds.empty())
+                    return;
+                const auto anchor = std::min_element(
+                    group->protectedAnchorsSeconds.begin(),
+                    group->protectedAnchorsSeconds.end(),
+                    [position](double left, double right)
+                    {
+                        return std::abs(left - position) < std::abs(right - position);
+                    });
+                if (std::abs(*anchor - position) <= 0.25)
+                    group->protectedAnchorsSeconds.erase(anchor);
+            });
+        });
+        menu.addItem("Unlink selected track", [this, groupId, selectedRootId]
+        {
+            changeEditGroups([groupId, selectedRootId](auto& groups)
+            {
+                const auto group = std::find_if(
+                    groups.begin(),
+                    groups.end(),
+                    [&groupId](const auto& candidate)
+                    {
+                        return candidate.id == groupId;
+                    });
+                if (group == groups.end())
+                    return;
+                group->trackIds.erase(std::remove(group->trackIds.begin(),
+                                                  group->trackIds.end(),
+                                                  selectedRootId),
+                                      group->trackIds.end());
+                if (!group->trackIds.empty()
+                    && group->timingReferenceTrackId == selectedRootId)
+                    group->timingReferenceTrackId = group->trackIds.front();
+                if (group->trackIds.size() < 2)
+                    groups.erase(group);
+            });
+        });
+    }
+
     menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(trackingButton));
 }
 
@@ -2914,6 +3312,77 @@ void MainComponent::changeTransportState(
         && same(before.loopEndSeconds, after.loopEndSeconds))
         return;
     perform(std::make_unique<SetProjectTransportCommand>(before, after));
+}
+
+void MainComponent::changeEditGroups(
+    const std::function<void(std::vector<EditGroup>&)>& change)
+{
+    auto updated = project.editGroups;
+    change(updated);
+    perform(std::make_unique<SetEditGroupsCommand>(project.editGroups,
+                                                   std::move(updated)));
+}
+
+const AudioClip* MainComponent::activeClipAt(const juce::String& parentTrackId,
+                                             double seconds) const
+{
+    const auto* parent = project.findTrack(parentTrackId);
+    if (parent == nullptr)
+        return nullptr;
+
+    juce::String sourceTrackId;
+    const auto compRegion = std::find_if(
+        parent->compRegions.cbegin(),
+        parent->compRegions.cend(),
+        [seconds](const auto& region)
+        {
+            return seconds >= region.startSeconds - 0.0001
+                && seconds < region.endSeconds() + 0.0001;
+        });
+    if (compRegion != parent->compRegions.cend())
+        sourceTrackId = compRegion->sourceTrackId;
+    else
+        sourceTrackId = project.activeTakeTrackId(parentTrackId);
+    if (sourceTrackId.isEmpty())
+        sourceTrackId = parentTrackId;
+
+    const auto* source = project.findTrack(sourceTrackId);
+    if (source == nullptr)
+        return nullptr;
+    const auto clip = std::find_if(source->clips.cbegin(),
+                                   source->clips.cend(),
+                                   [seconds](const auto& candidate)
+    {
+        return seconds >= candidate.startSeconds - 0.0001
+            && seconds < candidate.endSeconds() + 0.0001;
+    });
+    return clip == source->clips.cend() ? nullptr : &*clip;
+}
+
+std::vector<juce::String> MainComponent::linkedClipIdsAt(
+    const juce::String& clipId,
+    double seconds) const
+{
+    const auto* selectedTrack = project.findTrackContainingClip(clipId);
+    const auto* group = selectedTrack != nullptr
+        ? project.editGroupForTrack(selectedTrack->id)
+        : nullptr;
+    if (group == nullptr || !group->enabled)
+        return { clipId };
+
+    const auto selectedRoot = project.rootTrackId(selectedTrack->id);
+    std::vector<juce::String> clipIds;
+    for (const auto& rootTrackId : group->trackIds)
+    {
+        if (rootTrackId == selectedRoot)
+        {
+            clipIds.push_back(clipId);
+            continue;
+        }
+        if (const auto* clip = activeClipAt(rootTrackId, seconds))
+            clipIds.push_back(clip->id);
+    }
+    return clipIds;
 }
 
 Track MainComponent::makeRecordingVersionTrack(const Track& parent) const

@@ -194,6 +194,14 @@ only the active playlist or the source ranges referenced by the comp. Loop
 recording partitions each continuous capture into source-bounded alternate
 passes while preserving a shared WAV and sample alignment across tracks.
 
+Edit groups reference audio parent tracks and designate one timing reference.
+The UI resolves the active or comped clip on each parent at the edit position,
+then runs split, trim, move, delete, and comp changes through an atomic batch
+command. Any invalid member operation rolls the whole group back. Quantize
+strength moves the group proportionally toward the musical grid, while saved
+protected anchors reject edits that would disturb guarded material. Groups can
+be suspended without deleting their membership or settings.
+
 The left track-header context menu targets the clicked parent or version lane.
 Delete removes one version or the complete parent group, while the master
 remains protected. The lower mixer filters out child lanes and exposes an

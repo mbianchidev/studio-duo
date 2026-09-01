@@ -85,6 +85,21 @@ struct CompRegion
                                              juce::String& error);
 };
 
+struct EditGroup
+{
+    juce::String id { juce::Uuid().toString() };
+    juce::String name { "Edit group" };
+    std::vector<juce::String> trackIds;
+    juce::String timingReferenceTrackId;
+    double quantizeStrength = 1.0;
+    std::vector<double> protectedAnchorsSeconds;
+    bool enabled = true;
+
+    [[nodiscard]] juce::var toVar() const;
+    static std::optional<EditGroup> fromVar(const juce::var& value,
+                                            juce::String& error);
+};
+
 struct PluginInsert
 {
     juce::String id { juce::Uuid().toString() };
@@ -181,6 +196,7 @@ public:
     bool loopEnabled = false;
     double loopStartSeconds = 0.0;
     double loopEndSeconds = 8.0;
+    std::vector<EditGroup> editGroups;
     std::vector<Track> tracks;
 
     static Project createDefault();
@@ -193,6 +209,8 @@ public:
     [[nodiscard]] const Track* findTrackContainingClip(const juce::String& clipId) const;
     [[nodiscard]] std::vector<juce::String> armedAudioParentTrackIds() const;
     [[nodiscard]] juce::String activeTakeTrackId(const juce::String& parentTrackId) const;
+    [[nodiscard]] juce::String rootTrackId(const juce::String& trackId) const;
+    [[nodiscard]] const EditGroup* editGroupForTrack(const juce::String& trackId) const;
     [[nodiscard]] double tempoAt(double seconds) const noexcept;
     [[nodiscard]] MeterChange meterAt(double seconds) const noexcept;
     [[nodiscard]] double beatsAt(double seconds) const noexcept;

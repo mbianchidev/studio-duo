@@ -43,6 +43,16 @@ void serializationRoundTrip()
     project.countInBars = 2;
     project.preRollSeconds = 1.0;
     project.postRollSeconds = 1.5;
+    studio::EditGroup editGroup;
+    editGroup.name = "Rhythm guitars";
+    editGroup.trackIds = {
+        project.tracks[0].id,
+        project.tracks[1].id
+    };
+    editGroup.timingReferenceTrackId = project.tracks[0].id;
+    editGroup.quantizeStrength = 0.75;
+    editGroup.protectedAnchorsSeconds = { 1.0, 4.0 };
+    project.editGroups.push_back(editGroup);
     project.tracks.front().inputChannel = 1;
     project.tracks.front().stereoInput = true;
     project.tracks.front().inputMonitoring = true;
@@ -102,6 +112,14 @@ void serializationRoundTrip()
                && std::abs(decoded->preRollSeconds - 1.0) < 0.0001
                && std::abs(decoded->postRollSeconds - 1.5) < 0.0001,
            "Recording transport settings survive serialization.");
+    expect(decoded.has_value()
+               && decoded->editGroups.size() == 1
+               && decoded->editGroups.front().trackIds.size() == 2
+               && decoded->editGroups.front().timingReferenceTrackId
+                      == decoded->tracks[0].id
+               && std::abs(decoded->editGroups.front().quantizeStrength - 0.75) < 0.0001
+               && decoded->editGroups.front().protectedAnchorsSeconds.size() == 2,
+           "Linked edit groups survive serialization.");
     expect(decoded.has_value() && decoded->tracks.front().clips.size() == 1,
            "Clips survive serialization.");
     expect(decoded.has_value()
@@ -533,6 +551,63 @@ void playlistsAndComping()
            "Loop recordings split continuous capture into alternate takes.");
 }
 
+void linkedMultitrackEditing()
+{
+    auto project = studio::Project::createDefault();
+    project.tracks[0].clips.clear();
+    project.tracks[1].clips.clear();
+
+    studio::AudioClip first;
+    first.name = "Mic 1";
+    first.startSeconds = 2.0;
+    first.durationSeconds = 6.0;
+    first.sourceLengthSeconds = 6.0;
+    first.sourceRangeEndSeconds = 6.0;
+    const auto firstId = first.id;
+    project.tracks[0].clips.push_back(first);
+
+    studio::AudioClip second = first;
+    second.id = juce::Uuid().toString();
+    second.name = "Mic 2";
+    const auto secondId = second.id;
+    project.tracks[1].clips.push_back(second);
+
+    studio::EditGroup group;
+    group.name = "Drums";
+    group.trackIds = { project.tracks[0].id, project.tracks[1].id };
+    group.timingReferenceTrackId = project.tracks[0].id;
+    group.quantizeStrength = 0.5;
+    group.protectedAnchorsSeconds = { 4.0 };
+
+    studio::CommandStack history;
+    juce::String error;
+    expect(history.perform(std::make_unique<studio::SetEditGroupsCommand>(
+                               project.editGroups,
+                               std::vector<studio::EditGroup> { group }),
+                           project,
+                           error),
+           error.toRawUTF8());
+    expect(project.editGroupForTrack(project.tracks[1].id) != nullptr,
+           "Linked tracks resolve to their edit group.");
+
+    std::vector<std::unique_ptr<studio::ProjectCommand>> splitCommands;
+    splitCommands.push_back(std::make_unique<studio::SplitClipCommand>(firstId, 5.0));
+    splitCommands.push_back(std::make_unique<studio::SplitClipCommand>(secondId, 5.0));
+    expect(history.perform(std::make_unique<studio::BatchProjectCommand>(
+                               "Split linked clips",
+                               std::move(splitCommands)),
+                           project,
+                           error),
+           error.toRawUTF8());
+    expect(project.tracks[0].clips.size() == 2
+               && project.tracks[1].clips.size() == 2,
+           "A linked split preserves phase across every group track.");
+    expect(history.undo(project), "A linked edit can be undone in one step.");
+    expect(project.tracks[0].clips.size() == 1
+               && project.tracks[1].clips.size() == 1,
+           "Undo restores every clip in a linked edit.");
+}
+
 void packagePersistence()
 {
     auto project = studio::Project::createDefault();
@@ -735,6 +810,7 @@ int main()
     splitClipBoundaries();
     transportMaps();
     playlistsAndComping();
+    linkedMultitrackEditing();
     packagePersistence();
     pluginAwareExportGuard();
     pluginCatalogFiltering();
