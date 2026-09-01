@@ -961,6 +961,11 @@ MainComponent::MainComponent()
             state.versionsCollapsed = !state.versionsCollapsed;
         });
     };
+    timeline.onDuplicateTrack = [this](const auto& trackId)
+    {
+        selectTrack(trackId);
+        duplicateSelectedTrack();
+    };
     timeline.onDeleteTrack = [this](const auto& trackId)
     {
         selectTrack(trackId);
@@ -3989,6 +3994,7 @@ void MainComponent::createPluginTonePath(const juce::String& sourceTrackId)
     route.type = TonePathType::plugin;
     route.sourceTrackId = sourceTrackId;
     route.returnTrackId = toneTrack.id;
+    route.ownsReturnTrack = true;
     auto routes = project.reampRoutes;
     routes.push_back(route);
 

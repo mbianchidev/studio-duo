@@ -1351,12 +1351,40 @@ bool RemoveTrackCommand::perform(Project& project, juce::String& error)
         oldEditGroups = project.editGroups;
         oldReampRoutes = project.reampRoutes;
 
+        std::vector<juce::String> rootIdsToRemove;
+        if (iterator->parentTrackId.isEmpty())
+        {
+            rootIdsToRemove.push_back(iterator->id);
+            for (auto addedRoute = true; addedRoute;)
+            {
+                addedRoute = false;
+                for (const auto& route : project.reampRoutes)
+                {
+                    if (!route.ownsReturnTrack
+                        || std::find(rootIdsToRemove.cbegin(),
+                                     rootIdsToRemove.cend(),
+                                     route.sourceTrackId) == rootIdsToRemove.cend()
+                        || std::find(rootIdsToRemove.cbegin(),
+                                     rootIdsToRemove.cend(),
+                                     route.returnTrackId) != rootIdsToRemove.cend())
+                        continue;
+                    rootIdsToRemove.push_back(route.returnTrackId);
+                    addedRoute = true;
+                }
+            }
+        }
+
         for (std::size_t index = 0; index < project.tracks.size(); ++index)
         {
             const auto& candidate = project.tracks[index];
-            if (candidate.id == trackId
+            if ((iterator->parentTrackId.isNotEmpty() && candidate.id == trackId)
                 || (iterator->parentTrackId.isEmpty()
-                    && candidate.parentTrackId == trackId))
+                    && (std::find(rootIdsToRemove.cbegin(),
+                                  rootIdsToRemove.cend(),
+                                  candidate.id) != rootIdsToRemove.cend()
+                        || std::find(rootIdsToRemove.cbegin(),
+                                     rootIdsToRemove.cend(),
+                                     candidate.parentTrackId) != rootIdsToRemove.cend())))
                 removedTracks.emplace_back(index, candidate);
         }
         capturedOriginal = true;
@@ -1483,15 +1511,157 @@ bool DuplicateTrackCommand::perform(Project& project, juce::String& error)
             return false;
         }
 
-        duplicatedTrack = *source;
-        duplicatedTrack.id = juce::Uuid().toString();
-        duplicatedTrack.name = source->name + " Copy";
-        duplicatedTrack.armed = false;
-        duplicatedTrack.activeTakeTrackId.clear();
-        duplicatedTrack.compRegions.clear();
+        std::vector<juce::String> rootIds;
+        if (source->parentTrackId.isEmpty())
+        {
+            rootIds.push_back(source->id);
+            for (auto addedRoute = true; addedRoute;)
+            {
+                addedRoute = false;
+                for (const auto& route : project.reampRoutes)
+                {
+                    if (!route.ownsReturnTrack)
+                        continue;
+                    const auto sourceIncluded = std::find(
+                        rootIds.cbegin(),
+                        rootIds.cend(),
+                        route.sourceTrackId) != rootIds.cend();
+                    const auto returnIncluded = std::find(
+                        rootIds.cbegin(),
+                        rootIds.cend(),
+                        route.returnTrackId) != rootIds.cend();
+                    if (sourceIncluded && !returnIncluded)
+                    {
+                        rootIds.push_back(route.returnTrackId);
+                        addedRoute = true;
+                    }
+                }
+            }
+        }
+
+        std::vector<Track> sourceTracks;
+        std::vector<std::pair<juce::String, juce::String>> idMap;
+        std::vector<juce::String> sendReturnTemplateIds;
+        auto maximumSourceIndex = std::size_t { 0 };
+        for (std::size_t index = 0; index < project.tracks.size(); ++index)
+        {
+            const auto& candidate = project.tracks[index];
+            const auto include = source->parentTrackId.isNotEmpty()
+                ? candidate.id == source->id
+                : std::find(rootIds.cbegin(),
+                            rootIds.cend(),
+                            candidate.id) != rootIds.cend()
+                    || std::find(rootIds.cbegin(),
+                                 rootIds.cend(),
+                                 candidate.parentTrackId) != rootIds.cend();
+            if (!include)
+                continue;
+
+            sourceTracks.push_back(candidate);
+            idMap.emplace_back(candidate.id, juce::Uuid().toString());
+            maximumSourceIndex = std::max(maximumSourceIndex, index);
+        }
+        if (source->parentTrackId.isEmpty())
+        {
+            for (const auto& route : project.reampRoutes)
+            {
+                if (route.ownsReturnTrack
+                    || std::find(rootIds.cbegin(),
+                                 rootIds.cend(),
+                                 route.sourceTrackId) == rootIds.cend()
+                    || std::any_of(idMap.cbegin(),
+                                   idMap.cend(),
+                                   [&route](const auto& pair)
+                                   {
+                                       return pair.first == route.returnTrackId;
+                                   }))
+                    continue;
+
+                const auto* returnTrack = project.findTrack(route.returnTrackId);
+                if (returnTrack == nullptr
+                    || returnTrack->parentTrackId.isNotEmpty()
+                    || returnTrack->type == TrackType::master)
+                    continue;
+                sourceTracks.push_back(*returnTrack);
+                idMap.emplace_back(returnTrack->id, juce::Uuid().toString());
+                sendReturnTemplateIds.push_back(returnTrack->id);
+                const auto returnIterator = std::find_if(
+                    project.tracks.cbegin(),
+                    project.tracks.cend(),
+                    [returnTrack](const auto& candidate)
+                    {
+                        return candidate.id == returnTrack->id;
+                    });
+                maximumSourceIndex = std::max(
+                    maximumSourceIndex,
+                    static_cast<std::size_t>(
+                        std::distance(project.tracks.cbegin(),
+                                      returnIterator)));
+            }
+        }
+        if (sourceTracks.empty())
+        {
+            error = "The track family to duplicate is unavailable.";
+            return false;
+        }
+
+        const auto mappedId = [&idMap](const juce::String& originalId)
+        {
+            const auto mapping = std::find_if(
+                idMap.cbegin(),
+                idMap.cend(),
+                [&originalId](const auto& pair)
+                {
+                    return pair.first == originalId;
+                });
+            return mapping != idMap.cend() ? mapping->second : originalId;
+        };
+
+        duplicatedTracks.reserve(sourceTracks.size());
+        for (const auto& original : sourceTracks)
+        {
+            const auto sendReturnTemplate = std::find(
+                sendReturnTemplateIds.cbegin(),
+                sendReturnTemplateIds.cend(),
+                original.id) != sendReturnTemplateIds.cend();
+            auto duplicate = original;
+            duplicate.id = mappedId(original.id);
+            duplicate.armed = false;
+            if (original.parentTrackId.isEmpty())
+                duplicate.name = original.name
+                    + (sendReturnTemplate ? " Send Return" : " Copy");
+            else
+                duplicate.parentTrackId = mappedId(original.parentTrackId);
+            if (sendReturnTemplate)
+            {
+                duplicate.clips.clear();
+                duplicate.activeTakeTrackId.clear();
+                duplicate.compRegions.clear();
+            }
+            for (auto& clip : duplicate.clips)
+                clip.id = juce::Uuid().toString();
+            for (auto& insert : duplicate.inserts)
+                insert.id = juce::Uuid().toString();
+
+            if (original.parentTrackId.isEmpty())
+            {
+                duplicate.activeTakeTrackId = original.activeTakeTrackId.isNotEmpty()
+                    ? mappedId(original.activeTakeTrackId)
+                    : juce::String();
+                for (auto& region : duplicate.compRegions)
+                {
+                    region.id = juce::Uuid().toString();
+                    region.sourceTrackId = mappedId(region.sourceTrackId);
+                }
+            }
+            duplicatedTracks.push_back(std::move(duplicate));
+        }
+
         if (source->parentTrackId.isNotEmpty())
         {
-            duplicatedTrack.versionNumber = std::accumulate(
+            auto& duplicate = duplicatedTracks.front();
+            duplicate.parentTrackId = source->parentTrackId;
+            duplicate.versionNumber = std::accumulate(
                 project.tracks.cbegin(),
                 project.tracks.cend(),
                 0,
@@ -1502,34 +1672,62 @@ bool DuplicateTrackCommand::perform(Project& project, juce::String& error)
                         : maximum;
                 })
                 + 1;
-            duplicatedTrack.name = "v" + juce::String(duplicatedTrack.versionNumber);
+            duplicate.name = "v" + juce::String(duplicate.versionNumber);
+            const auto lastSibling = std::find_if(
+                project.tracks.crbegin(),
+                project.tracks.crend(),
+                [source](const auto& candidate)
+                {
+                    return candidate.parentTrackId == source->parentTrackId;
+                });
+            insertionIndex = lastSibling != project.tracks.crend()
+                ? static_cast<std::size_t>(
+                      std::distance(project.tracks.cbegin(),
+                                    lastSibling.base()))
+                : maximumSourceIndex + 1;
         }
-        for (auto& clip : duplicatedTrack.clips)
-            clip.id = juce::Uuid().toString();
-        for (auto& insert : duplicatedTrack.inserts)
-            insert.id = juce::Uuid().toString();
-
-        const auto sourceIterator = std::find_if(project.tracks.cbegin(),
-                                                 project.tracks.cend(),
-                                                 [this](const auto& candidate)
+        else
         {
-            return candidate.id == sourceTrackId;
-        });
-        insertionIndex = static_cast<std::size_t>(std::distance(project.tracks.cbegin(),
-                                                                 sourceIterator))
-            + 1;
+            insertionIndex = maximumSourceIndex + 1;
+        }
+
+        duplicatedRootTrackId = mappedId(source->id);
+        for (const auto& route : project.reampRoutes)
+        {
+            const auto returnMapped = mappedId(route.returnTrackId)
+                != route.returnTrackId;
+            if (!returnMapped)
+                continue;
+
+            auto duplicate = route;
+            duplicate.id = juce::Uuid().toString();
+            duplicate.name += " Copy";
+            duplicate.sourceTrackId = mappedId(route.sourceTrackId);
+            duplicate.returnTrackId = mappedId(route.returnTrackId);
+            duplicate.ownsReturnTrack = true;
+            duplicatedRoutes.push_back(std::move(duplicate));
+        }
         createdDuplicate = true;
     }
 
-    if (project.findTrack(duplicatedTrack.id) != nullptr)
+    if (std::any_of(duplicatedTracks.cbegin(),
+                    duplicatedTracks.cend(),
+                    [&project](const auto& track)
+                    {
+                        return project.findTrack(track.id) != nullptr;
+                    }))
     {
-        error = "The duplicated track already exists.";
+        error = "A duplicated track already exists.";
         return false;
     }
 
     const auto index = std::min(insertionIndex, project.tracks.size());
     project.tracks.insert(project.tracks.begin() + static_cast<std::ptrdiff_t>(index),
-                          duplicatedTrack);
+                          duplicatedTracks.begin(),
+                          duplicatedTracks.end());
+    project.reampRoutes.insert(project.reampRoutes.end(),
+                               duplicatedRoutes.begin(),
+                               duplicatedRoutes.end());
     return true;
 }
 
@@ -1539,12 +1737,31 @@ void DuplicateTrackCommand::undo(Project& project)
                                         project.tracks.end(),
                                         [this](const auto& candidate)
     {
-        return candidate.id == duplicatedTrack.id;
+        return std::any_of(duplicatedTracks.cbegin(),
+                           duplicatedTracks.cend(),
+                           [&candidate](const auto& duplicate)
+                           {
+                               return candidate.id == duplicate.id;
+                           });
     }), project.tracks.end());
+    project.reampRoutes.erase(
+        std::remove_if(project.reampRoutes.begin(),
+                       project.reampRoutes.end(),
+                       [this](const auto& candidate)
+                       {
+                           return std::any_of(
+                               duplicatedRoutes.cbegin(),
+                               duplicatedRoutes.cend(),
+                               [&candidate](const auto& duplicate)
+                               {
+                                   return candidate.id == duplicate.id;
+                               });
+                       }),
+        project.reampRoutes.end());
 }
 
 const juce::String& DuplicateTrackCommand::duplicatedTrackId() const noexcept
 {
-    return duplicatedTrack.id;
+    return duplicatedRootTrackId;
 }
 }

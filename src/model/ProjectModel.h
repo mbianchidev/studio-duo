@@ -137,6 +137,7 @@ struct ReampRoute
     int alignmentOffsetSamples = 0;
     bool polarityInverted = false;
     bool enabled = true;
+    bool ownsReturnTrack = false;
 
     [[nodiscard]] juce::var toVar() const;
     static std::optional<ReampRoute> fromVar(const juce::var& value,

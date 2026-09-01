@@ -445,7 +445,9 @@ public:
 
 private:
     juce::String sourceTrackId;
-    Track duplicatedTrack;
+    juce::String duplicatedRootTrackId;
+    std::vector<Track> duplicatedTracks;
+    std::vector<ReampRoute> duplicatedRoutes;
     std::size_t insertionIndex = 0;
     bool createdDuplicate = false;
 };

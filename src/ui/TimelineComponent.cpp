@@ -1063,6 +1063,15 @@ void TimelineComponent::showContextMenu(const juce::MouseEvent& event)
         }
 
         menu.addSeparator();
+        juce::PopupMenu::Item duplicateTrack("Duplicate track");
+        duplicateTrack.isEnabled = clickedTrack->type != TrackType::master;
+        duplicateTrack.action = [this, trackId]
+        {
+            if (onDuplicateTrack)
+                onDuplicateTrack(trackId);
+        };
+        menu.addItem(std::move(duplicateTrack));
+
         juce::PopupMenu::Item deleteTrack("Delete track");
         deleteTrack.shortcutKeyDescription = "Delete";
         deleteTrack.isEnabled = clickedTrack->type != TrackType::master;

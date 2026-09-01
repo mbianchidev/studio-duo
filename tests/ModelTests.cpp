@@ -280,6 +280,35 @@ void commandHistory()
                && project.findTrack(versionTrackId) != nullptr,
            "Undo restores the parent and version lanes.");
 
+    auto* restoredParent = project.findTrack(extraTrackId);
+    auto* restoredVersion = project.findTrack(versionTrackId);
+    restoredParent->volumeDecibels = -4.5f;
+    restoredParent->pan = -0.35f;
+    restoredParent->inputChannel = 2;
+    restoredParent->activeTakeTrackId = versionTrackId;
+    studio::AudioClip versionClip;
+    versionClip.name = "Version audio";
+    const auto sourceVersionClipId = versionClip.id;
+    restoredVersion->clips.push_back(versionClip);
+    restoredParent->compRegions.push_back({
+        juce::Uuid().toString(),
+        versionTrackId,
+        0.0,
+        2.0
+    });
+    studio::PluginInsert duplicatedInsert;
+    duplicatedInsert.pluginIdentifier = "VST3-duplicate-test";
+    duplicatedInsert.name = "Duplicate Test";
+    restoredParent->inserts.push_back(duplicatedInsert);
+    studio::ReampRoute duplicatedRoute;
+    duplicatedRoute.name = "Duplicated send";
+    duplicatedRoute.type = studio::TonePathType::hardware;
+    duplicatedRoute.sourceTrackId = extraTrackId;
+    duplicatedRoute.returnTrackId = project.tracks.front().id;
+    duplicatedRoute.outputChannel = 2;
+    duplicatedRoute.inputChannel = 1;
+    project.reampRoutes.push_back(duplicatedRoute);
+
     auto duplicate = std::make_unique<studio::DuplicateTrackCommand>(extraTrackId);
     auto* duplicatePointer = duplicate.get();
     expect(history.perform(std::move(duplicate), project, error), error.toRawUTF8());
@@ -287,12 +316,62 @@ void commandHistory()
     expect(project.findTrack(duplicateId) != nullptr, "Duplicate track command creates a track.");
     expect(project.findTrack(duplicateId)->id != extraTrackId,
            "Duplicated tracks receive a stable independent ID.");
+    const auto duplicatedVersion = std::find_if(
+        project.tracks.cbegin(),
+        project.tracks.cend(),
+        [&duplicateId](const auto& track)
+        {
+            return track.parentTrackId == duplicateId;
+        });
+    expect(duplicatedVersion != project.tracks.cend()
+               && duplicatedVersion->clips.size() == 1
+               && duplicatedVersion->clips.front().id != sourceVersionClipId,
+           "Duplicating a parent copies every take and audio clip with new IDs.");
+    const auto duplicatedVersionId = duplicatedVersion != project.tracks.cend()
+        ? duplicatedVersion->id
+        : juce::String();
+    expect(duplicatedVersionId.isNotEmpty()
+               && project.findTrack(duplicateId)->activeTakeTrackId
+                      == duplicatedVersionId
+               && project.findTrack(duplicateId)->compRegions.size() == 1
+               && project.findTrack(duplicateId)->compRegions.front().sourceTrackId
+                      == duplicatedVersionId,
+           "Duplicating a track remaps playlist and comp references.");
+    expect(std::abs(project.findTrack(duplicateId)->volumeDecibels + 4.5f) < 0.0001f
+               && std::abs(project.findTrack(duplicateId)->pan + 0.35f) < 0.0001f
+               && project.findTrack(duplicateId)->inputChannel == 2
+               && project.findTrack(duplicateId)->inserts.size() == 1,
+           "Duplicating a track preserves its mix, input, and insert settings.");
+    const auto clonedRoute = std::find_if(
+        project.reampRoutes.cbegin(),
+        project.reampRoutes.cend(),
+        [&duplicateId](const auto& route)
+        {
+            return route.sourceTrackId == duplicateId;
+        });
+    expect(clonedRoute != project.reampRoutes.cend()
+               && clonedRoute->returnTrackId != duplicatedRoute.returnTrackId,
+           "Duplicating a track copies connected sends and their return track.");
+    const auto sendReturn = clonedRoute != project.reampRoutes.cend()
+        ? project.findTrack(clonedRoute->returnTrackId)
+        : nullptr;
+    expect(sendReturn != nullptr
+               && sendReturn->clips.empty()
+               && sendReturn->inserts.size()
+                      == project.findTrack(duplicatedRoute.returnTrackId)->inserts.size(),
+           "Hardware sends copy return settings without unrelated return audio.");
+    const auto clonedReturnTrackId = clonedRoute != project.reampRoutes.cend()
+        ? clonedRoute->returnTrackId
+        : juce::String();
 
     expect(history.perform(std::make_unique<studio::RemoveTrackCommand>(duplicateId),
                            project,
                            error),
            error.toRawUTF8());
     expect(project.findTrack(duplicateId) == nullptr, "Remove track command deletes a track.");
+    expect(clonedReturnTrackId.isEmpty()
+               || project.findTrack(clonedReturnTrackId) == nullptr,
+           "Deleting a duplicate removes return tracks owned by its copied sends.");
     expect(history.undo(project), "Remove track command can be undone.");
     expect(project.findTrack(duplicateId) != nullptr, "Undo restores the removed track.");
 

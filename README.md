@@ -97,6 +97,9 @@ input into a separate sample-aligned WAV. If no track is armed, the selected
 audio track becomes the recording target for that pass. Press **REC** or
 **STOP** to finish all files at the same callback boundary. The session sidebar
 also duplicates or deletes the selected non-master track with full undo support.
+**Duplicate track** is available from the track-header context menu and copies
+the complete track family: audio clips, take lanes, inserts, input/mix settings,
+playlist/comp state, and connected tone-path sends and owned returns.
 
 **TRACKING SETUP** adds tempo or meter changes at the playhead, configures jump
 or ramp transitions, punch points, count-in bars, pre/post-roll, loop bounds,

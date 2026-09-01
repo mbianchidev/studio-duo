@@ -226,6 +226,7 @@ juce::var ReampRoute::toVar() const
     object->setProperty("alignmentOffsetSamples", alignmentOffsetSamples);
     object->setProperty("polarityInverted", polarityInverted);
     object->setProperty("enabled", enabled);
+    object->setProperty("ownsReturnTrack", ownsReturnTrack);
     return juce::var(object.release());
 }
 
@@ -258,6 +259,7 @@ std::optional<ReampRoute> ReampRoute::fromVar(const juce::var& value,
         = integerProperty(*object, "alignmentOffsetSamples", 0);
     route.polarityInverted = booleanProperty(*object, "polarityInverted", false);
     route.enabled = booleanProperty(*object, "enabled", true);
+    route.ownsReturnTrack = booleanProperty(*object, "ownsReturnTrack", false);
     if (route.id.isEmpty()
         || route.name.trim().isEmpty()
         || route.sourceTrackId.isEmpty()

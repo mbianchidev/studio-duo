@@ -202,8 +202,16 @@ during the pass cannot redirect recorded audio. With no armed track, the
 selected audio track supplies the single fallback target.
 
 Track creation, duplication, and deletion are typed commands. Duplication
-regenerates the track, clip, and insert IDs so later edits never alias the
-source track. The master track is protected from duplicate and delete actions.
+copies the complete parent/take family, audio references, inserts, input and mix
+settings, playlist/comp state, and connected reamp or plugin-tone routes. Returns
+already owned by a tone path are copied with their full track family. An
+independent hardware return is cloned as a settings-only private return so its
+unrelated audio and take lanes are not swept into the duplicate.
+Track, clip, insert, comp-region, route, and owned-return IDs are regenerated so
+later edits never alias the source family. Deleting the duplicate also removes
+only return tracks explicitly owned by its copied routes; user-owned hardware
+returns remain untouched. The master track is protected from duplicate and
+delete actions.
 Track labels are edited through a typed rename command that rejects blank names
 and participates in undo/redo. Track colors use the existing mix-state command;
 the inspector provides palette shortcuts and a full HSV/RGB selector with live
