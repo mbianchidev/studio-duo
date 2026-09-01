@@ -134,6 +134,57 @@ void PluginBridgeClient::stop()
     pluginTailSeconds.store(0.0, std::memory_order_relaxed);
 }
 
+juce::Result PluginBridgeClient::requestState(
+    juce::MemoryBlock& state,
+    std::chrono::milliseconds timeout)
+{
+    state.reset();
+    if (!isReady())
+        return juce::Result::fail("Plugin bridge is not ready.");
+
+    {
+        const std::lock_guard lock(responseMutex);
+        responseMessage.clear();
+    }
+    juce::MemoryBlock request;
+    juce::MemoryOutputStream stream(request, true);
+    stream.writeString("get-state");
+    if (!sendMessageToWorker(request))
+        return juce::Result::fail(
+            "Could not request state from the plugin bridge.");
+
+    {
+        std::unique_lock lock(responseMutex);
+        if (!responseCondition.wait_for(
+                lock,
+                timeout,
+                [this]
+                {
+                    return responseMessage.isNotEmpty()
+                        || connectionLost.load(std::memory_order_acquire);
+                }))
+            return juce::Result::fail(
+                "Plugin state request timed out.");
+    }
+
+    if (connectionLost.load(std::memory_order_acquire))
+        return juce::Result::fail(
+            "Plugin bridge disconnected while saving state.");
+    if (!responseMessage.startsWith("state|"))
+        return juce::Result::fail(
+            responseMessage.isNotEmpty()
+                ? responseMessage
+                : "Plugin bridge returned no state.");
+    const auto encoded =
+        responseMessage.fromFirstOccurrenceOf("|", false, false);
+    if (encoded.isEmpty())
+        return juce::Result::ok();
+    if (!state.fromBase64Encoding(encoded))
+        return juce::Result::fail(
+            "Plugin bridge returned invalid state data.");
+    return juce::Result::ok();
+}
+
 void PluginBridgeClient::processBlock(
     juce::AudioBuffer<float>& audio,
     const juce::AudioBuffer<float>* sidechain,

@@ -8,6 +8,7 @@
 #include <array>
 #include <atomic>
 #include <condition_variable>
+#include <chrono>
 #include <mutex>
 #include <span>
 
@@ -25,6 +26,8 @@ public:
                              int blockSize,
                              const juce::MemoryBlock& state = {});
     void stop();
+    juce::Result requestState(juce::MemoryBlock& state,
+                              std::chrono::milliseconds timeout);
     void processBlock(
         juce::AudioBuffer<float>& audio,
         const juce::AudioBuffer<float>* sidechain = nullptr,

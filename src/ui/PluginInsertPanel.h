@@ -22,7 +22,8 @@ public:
     std::function<void(const juce::String&,
                        const juce::String&,
                        PluginBridgeMode)> onModeChange;
-    std::function<void()> onReload;
+    std::function<void(const juce::String&, const juce::String&)> onReplace;
+    std::function<void(const juce::String&, const juce::String&)> onReload;
 
     void paint(juce::Graphics& graphics) override;
     void mouseDown(const juce::MouseEvent& event) override;

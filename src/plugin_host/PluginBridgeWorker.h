@@ -5,6 +5,8 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_events/juce_events.h>
 
+#include <mutex>
+
 namespace studio
 {
 class PluginBridgeWorker final : private juce::ChildProcessWorker,
@@ -32,6 +34,7 @@ private:
     std::unique_ptr<juce::AudioPluginInstance> plugin;
     juce::AudioBuffer<float> processBuffer;
     juce::MidiBuffer midiBuffer;
+    std::mutex pluginMutex;
     int mainInputChannels = 2;
     int sidechainInputChannels = 0;
     int mainOutputChannels = 2;

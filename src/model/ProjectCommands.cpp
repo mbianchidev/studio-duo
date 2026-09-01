@@ -1625,6 +1625,74 @@ void RemovePluginInsertCommand::undo(Project& project)
     }
 }
 
+ReplacePluginInsertCommand::ReplacePluginInsertCommand(
+    juce::String sourceTrackId,
+    juce::String insertToReplace,
+    PluginInsert replacement)
+    : trackId(std::move(sourceTrackId)),
+      insertId(std::move(insertToReplace)),
+      newInsert(std::move(replacement))
+{
+}
+
+juce::String ReplacePluginInsertCommand::name() const
+{
+    return "Replace plugin insert";
+}
+
+bool ReplacePluginInsertCommand::perform(Project& project,
+                                         juce::String& error)
+{
+    auto* insert = find(project);
+    if (insert == nullptr)
+    {
+        error = "The plugin insert to replace no longer exists.";
+        return false;
+    }
+    if (newInsert.pluginIdentifier.isEmpty()
+        || newInsert.name.trim().isEmpty())
+    {
+        error = "The replacement plugin is invalid.";
+        return false;
+    }
+
+    if (!capturedOriginal)
+    {
+        oldInsert = *insert;
+        newInsert.id = oldInsert.id;
+        newInsert.stateFile = oldInsert.stateFile;
+        newInsert.stateHash = oldInsert.stateHash;
+        newInsert.bypassed = oldInsert.bypassed;
+        newInsert.bridgeMode = oldInsert.bridgeMode;
+        newInsert.recoveryDisabled = false;
+        newInsert.missing = false;
+        capturedOriginal = true;
+    }
+    *insert = newInsert;
+    return true;
+}
+
+void ReplacePluginInsertCommand::undo(Project& project)
+{
+    if (auto* insert = find(project))
+        *insert = oldInsert;
+}
+
+PluginInsert* ReplacePluginInsertCommand::find(Project& project) const
+{
+    auto* track = project.findTrack(trackId);
+    if (track == nullptr)
+        return nullptr;
+    const auto iterator = std::find_if(
+        track->inserts.begin(),
+        track->inserts.end(),
+        [this](const auto& candidate)
+        {
+            return candidate.id == insertId;
+        });
+    return iterator == track->inserts.end() ? nullptr : &*iterator;
+}
+
 SetPluginBypassCommand::SetPluginBypassCommand(juce::String sourceTrackId,
                                                juce::String insertToChange,
                                                bool shouldBeBypassed)

@@ -492,6 +492,27 @@ private:
     bool capturedOriginal = false;
 };
 
+class ReplacePluginInsertCommand final : public ProjectCommand
+{
+public:
+    ReplacePluginInsertCommand(juce::String sourceTrackId,
+                               juce::String insertToReplace,
+                               PluginInsert replacement);
+
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    PluginInsert* find(Project& project) const;
+
+    juce::String trackId;
+    juce::String insertId;
+    PluginInsert oldInsert;
+    PluginInsert newInsert;
+    bool capturedOriginal = false;
+};
+
 class SetPluginBypassCommand final : public ProjectCommand
 {
 public:

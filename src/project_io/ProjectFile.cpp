@@ -5,6 +5,7 @@ namespace studio
 namespace
 {
 constexpr auto manifestName = "manifest.json";
+constexpr auto reducedIsolationMarkerName = "in-process-active.json";
 
 int nextGeneration(const juce::File& manifest)
 {
@@ -124,6 +125,63 @@ juce::Result ProjectFile::writeRecoveryPoint(const Project& project, const juce:
     recovery->setProperty("writtenAt", juce::Time::getCurrentTime().toISO8601(true));
     recovery->setProperty("project", project.toVar());
     return writeJsonAtomically(recoveryDirectory.getChildFile("latest.json"), juce::var(recovery.release()));
+}
+
+juce::Result ProjectFile::writeReducedIsolationMarker(
+    const juce::File& requestedPackageDirectory,
+    const std::vector<juce::String>& insertIds)
+{
+    const auto recoveryDirectory =
+        normalisePackagePath(requestedPackageDirectory)
+            .getChildFile("recovery");
+    if (!recoveryDirectory.createDirectory())
+        return juce::Result::fail(
+            "Could not create the recovery directory.");
+
+    juce::Array<juce::var> values;
+    for (const auto& insertId : insertIds)
+        if (insertId.isNotEmpty())
+            values.add(insertId);
+    auto marker = std::make_unique<juce::DynamicObject>();
+    marker->setProperty("writtenAt",
+                        juce::Time::getCurrentTime().toISO8601(true));
+    marker->setProperty("insertIds", juce::var(values));
+    return writeJsonAtomically(
+        recoveryDirectory.getChildFile(reducedIsolationMarkerName),
+        juce::var(marker.release()));
+}
+
+std::vector<juce::String> ProjectFile::reducedIsolationMarker(
+    const juce::File& requestedPackageDirectory)
+{
+    const auto marker =
+        normalisePackagePath(requestedPackageDirectory)
+            .getChildFile("recovery")
+            .getChildFile(reducedIsolationMarkerName);
+    if (!marker.existsAsFile())
+        return {};
+    const auto parsed = juce::JSON::parse(marker.loadFileAsString());
+    const auto* object = parsed.getDynamicObject();
+    if (object == nullptr || !object->getProperty("insertIds").isArray())
+        return {};
+    std::vector<juce::String> result;
+    for (const auto& value : *object->getProperty("insertIds").getArray())
+        if (value.toString().isNotEmpty())
+            result.push_back(value.toString());
+    return result;
+}
+
+juce::Result ProjectFile::clearReducedIsolationMarker(
+    const juce::File& requestedPackageDirectory)
+{
+    const auto marker =
+        normalisePackagePath(requestedPackageDirectory)
+            .getChildFile("recovery")
+            .getChildFile(reducedIsolationMarkerName);
+    if (!marker.existsAsFile() || marker.deleteFile())
+        return juce::Result::ok();
+    return juce::Result::fail(
+        "Could not clear the reduced-isolation recovery marker.");
 }
 
 juce::Result ProjectFile::writeJsonAtomically(const juce::File& destination, const juce::var& value)

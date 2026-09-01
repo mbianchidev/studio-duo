@@ -96,6 +96,15 @@ public:
         float postFaderRight = 0.0f;
     };
 
+    struct PluginStateCapture
+    {
+        juce::String trackId;
+        juce::String insertId;
+        juce::String name;
+        juce::Result result { juce::Result::ok() };
+        juce::MemoryBlock state;
+    };
+
     StudioAudioEngine();
     ~StudioAudioEngine() override;
 
@@ -120,10 +129,13 @@ public:
     [[nodiscard]] std::vector<RecordingProgress> recordingProgress() const;
     [[nodiscard]] std::vector<PluginRuntimeStatus> pluginRuntimeStatuses() const;
     [[nodiscard]] std::vector<TrackMeterSnapshot> trackMeterSnapshots() const;
+    [[nodiscard]] std::vector<PluginStateCapture> capturePluginStates(
+        int timeoutMilliseconds);
     [[nodiscard]] std::uint64_t pluginLateBlockCount() const noexcept;
     [[nodiscard]] bool pluginRuntimeTransitionPending() const;
     void forcePluginRuntimeReload(const Project& project,
-                                  std::vector<PluginRuntimeRequest> pluginRequests);
+                                  std::vector<PluginRuntimeRequest> pluginRequests,
+                                  juce::String insertId = {});
 
     juce::Result startRecording(const std::vector<RecordingRequest>& requests,
                                 const RecordingPlan& plan);
@@ -292,6 +304,7 @@ private:
     struct TrackRuntime
     {
         std::uint64_t key = 0;
+        juce::String trackId;
         std::vector<InsertRuntime> inserts;
     };
 

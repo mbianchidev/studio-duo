@@ -109,4 +109,9 @@ void pluginFormatTests()
                       == studio::StudioAudioEngine::PluginRuntimeStatus::State::ready
                && statuses.front().message.containsIgnoreCase("in-process"),
            "Trusted CLAP processing activates in process.");
+    const auto captures = engine.capturePluginStates(1000);
+    expect(captures.size() == 1
+               && captures.front().result.wasOk()
+               && !captures.front().state.isEmpty(),
+           "Active plugin state can be captured for project persistence.");
 }

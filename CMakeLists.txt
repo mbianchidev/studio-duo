@@ -106,8 +106,12 @@ set(STUDIO_DUO_PLUGIN_SOURCES
     src/plugin_host/PluginBridgeProtocol.h
     src/plugin_host/PluginCatalog.cpp
     src/plugin_host/PluginCatalog.h
+    src/plugin_host/PluginCompatibilityDatabase.cpp
+    src/plugin_host/PluginCompatibilityDatabase.h
     src/plugin_host/PluginFormats.cpp
     src/plugin_host/PluginFormats.h
+    src/plugin_host/PluginStateStore.cpp
+    src/plugin_host/PluginStateStore.h
 )
 
 juce_add_gui_app(
@@ -195,6 +199,7 @@ target_link_libraries(
         juce::juce_audio_formats
         juce::juce_audio_processors
         juce::juce_audio_utils
+        juce::juce_cryptography
         juce::juce_data_structures
         juce::juce_gui_extra
         clap
@@ -258,6 +263,7 @@ if(STUDIO_DUO_BUILD_TESTS)
             tests/RoutingEngineTests.cpp
             tests/RoutingUiModelTests.cpp
             tests/PluginFormatTests.cpp
+            tests/PluginRecoveryTests.cpp
             src/ui/RoutingUiModel.cpp
             src/ui/RoutingUiModel.h
             src/audio/StudioAudioEngine.cpp
@@ -273,6 +279,10 @@ if(STUDIO_DUO_BUILD_TESTS)
             src/plugin_host/ClapPluginInstance.h
             src/plugin_host/PluginFormats.cpp
             src/plugin_host/PluginFormats.h
+            src/plugin_host/PluginCompatibilityDatabase.cpp
+            src/plugin_host/PluginCompatibilityDatabase.h
+            src/plugin_host/PluginStateStore.cpp
+            src/plugin_host/PluginStateStore.h
             ${STUDIO_DUO_MODEL_SOURCES}
     )
 
@@ -316,6 +326,7 @@ if(STUDIO_DUO_BUILD_TESTS)
             juce::juce_audio_devices
             juce::juce_audio_processors
             juce::juce_audio_utils
+            juce::juce_cryptography
             juce::juce_data_structures
             juce::juce_graphics
             clap

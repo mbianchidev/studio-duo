@@ -1,5 +1,7 @@
 #pragma once
 
+#include "PluginCompatibilityDatabase.h"
+
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include <atomic>
@@ -41,6 +43,12 @@ public:
     [[nodiscard]] std::uint64_t revision() const noexcept;
     [[nodiscard]] juce::StringArray availableFormats() const;
     [[nodiscard]] juce::File dataDirectory() const;
+    void recordRuntimeReady(const PluginInsert& insert);
+    void recordRuntimeFailure(const PluginInsert& insert,
+                              PluginFailureKind failure,
+                              const juce::String& message);
+    [[nodiscard]] std::vector<PluginCompatibilityRecord>
+        compatibilityRecords() const;
     [[nodiscard]] std::optional<juce::PluginDescription> descriptionForIdentifier(
         const juce::String& identifier) const;
 
@@ -71,13 +79,17 @@ private:
     juce::File catalogDirectory;
     juce::File catalogFile;
     juce::File deadMansPedalFile;
+    PluginCompatibilityDatabase compatibilityDatabase;
     std::shared_ptr<std::atomic<bool>> cancelRequested;
     std::atomic<bool> scanning { false };
     std::atomic<bool> forceNextScan { false };
     std::atomic<float> scanProgress { 0.0f };
     std::atomic<std::uint64_t> catalogRevision { 0 };
     mutable juce::CriticalSection stateLock;
+    mutable juce::CriticalSection compatibilityLock;
     juce::String statusMessage;
+    std::vector<std::pair<juce::String, juce::String>>
+        recordedRuntimeStates;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PluginCatalog)
 };

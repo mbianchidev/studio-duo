@@ -1180,6 +1180,7 @@ int main()
     routingEngineTests();
     routingUiModelTests();
     pluginFormatTests();
+    pluginRecoveryTests();
 
     if (failures == 0)
     {

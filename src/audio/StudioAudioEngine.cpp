@@ -477,6 +477,58 @@ StudioAudioEngine::trackMeterSnapshots() const
     return result;
 }
 
+std::vector<StudioAudioEngine::PluginStateCapture>
+StudioAudioEngine::capturePluginStates(int timeoutMilliseconds)
+{
+    const auto timeout = std::max(1, timeoutMilliseconds);
+    for (auto waited = 0;
+         waited < timeout
+         && readingPluginRuntime.load(std::memory_order_acquire) >= 0;
+         ++waited)
+        juce::Thread::sleep(1);
+
+    std::vector<PluginStateCapture> captures;
+    if (readingPluginRuntime.load(std::memory_order_acquire) >= 0)
+    {
+        PluginStateCapture capture;
+        capture.result = juce::Result::fail(
+            "Audio processing did not stop before plugin state capture.");
+        captures.push_back(std::move(capture));
+        return captures;
+    }
+
+    const juce::ScopedLock lock(pluginRequestLock);
+    auto& graph = pluginRuntimeGraphs[static_cast<std::size_t>(
+        activePluginRuntime.load(std::memory_order_acquire))];
+    for (auto& track : graph.tracks)
+    {
+        for (auto& insert : track.inserts)
+        {
+            PluginStateCapture capture;
+            capture.trackId = track.trackId;
+            capture.insertId = insert.insertId;
+            capture.name = insert.name;
+            if (insert.bridge != nullptr)
+            {
+                capture.result = insert.bridge->requestState(
+                    capture.state,
+                    std::chrono::milliseconds(timeout));
+            }
+            else if (insert.inProcess != nullptr)
+            {
+                insert.inProcess->getStateInformation(capture.state);
+            }
+            else
+            {
+                capture.result = juce::Result::fail(
+                    "The plugin runtime is unavailable.");
+            }
+            captures.push_back(std::move(capture));
+        }
+    }
+    return captures;
+}
+
 std::uint64_t StudioAudioEngine::pluginLateBlockCount() const noexcept
 {
     return pluginLateBlocks.load(std::memory_order_relaxed);
@@ -492,8 +544,10 @@ bool StudioAudioEngine::pluginRuntimeTransitionPending() const
 
 void StudioAudioEngine::forcePluginRuntimeReload(
     const Project& project,
-    std::vector<PluginRuntimeRequest> pluginRequests)
+    std::vector<PluginRuntimeRequest> pluginRequests,
+    juce::String insertId)
 {
+    juce::ignoreUnused(insertId);
     {
         const juce::ScopedLock lock(pluginRequestLock);
         desiredPluginFingerprint.clear();
@@ -2345,10 +2399,12 @@ void StudioAudioEngine::runPluginRuntimeBuilder()
                 {
                     graph.tracks.push_back({
                         runtimeKey(request.trackId),
+                        request.trackId,
                         {}
                     });
                     track = std::prev(graph.tracks.end());
                 }
+                track->trackId = request.trackId;
 
                 InsertRuntime insertRuntime;
                 insertRuntime.insertId = request.insertId;
@@ -2403,9 +2459,14 @@ void StudioAudioEngine::runPluginRuntimeBuilder()
                 });
                 if (track == graph.tracks.end())
                 {
-                    graph.tracks.push_back({ runtimeKey(request.trackId), {} });
+                    graph.tracks.push_back({
+                        runtimeKey(request.trackId),
+                        request.trackId,
+                        {}
+                    });
                     track = std::prev(graph.tracks.end());
                 }
+                track->trackId = request.trackId;
 
                 InsertRuntime failedRuntime;
                 failedRuntime.insertId = request.insertId;
@@ -2435,9 +2496,14 @@ void StudioAudioEngine::runPluginRuntimeBuilder()
             });
             if (track == graph.tracks.end())
             {
-                graph.tracks.push_back({ runtimeKey(request.trackId), {} });
+                graph.tracks.push_back({
+                    runtimeKey(request.trackId),
+                    request.trackId,
+                    {}
+                });
                 track = std::prev(graph.tracks.end());
             }
+            track->trackId = request.trackId;
 
             InsertRuntime insertRuntime;
             insertRuntime.insertId = request.insertId;

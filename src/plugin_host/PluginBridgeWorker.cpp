@@ -23,10 +23,26 @@ bool PluginBridgeWorker::initialise(const juce::String& commandLine)
 
 void PluginBridgeWorker::handleMessageFromCoordinator(const juce::MemoryBlock& message)
 {
-    if (mapping != nullptr || message.isEmpty())
+    if (message.isEmpty())
         return;
 
     juce::MemoryInputStream stream(message, false);
+    if (mapping != nullptr)
+    {
+        const auto command = stream.readString();
+        if (command == "get-state")
+        {
+            juce::MemoryBlock state;
+            {
+                const std::lock_guard lock(pluginMutex);
+                if (plugin != nullptr)
+                    plugin->getStateInformation(state);
+            }
+            sendStatus("state|" + state.toBase64Encoding());
+        }
+        return;
+    }
+
     const juce::File sharedFile(stream.readString());
     const auto pluginXml = stream.readString();
     const auto stateBase64 = stream.readString();
@@ -117,6 +133,7 @@ void PluginBridgeWorker::run()
             continue;
         }
 
+        const std::lock_guard pluginLock(pluginMutex);
         const auto channels = std::min(
             static_cast<int>(sharedState->numChannels.load(std::memory_order_relaxed)),
             PluginBridgeSharedState::maxChannels);

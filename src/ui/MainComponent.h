@@ -106,6 +106,7 @@ private:
     void updateTimelineSize();
     void zoomTimeline(double factor, bool reset = false);
     void projectChanged(bool writeRecovery = true, bool markDirty = true);
+    void updateReducedIsolationMarker();
     [[nodiscard]] std::vector<StudioAudioEngine::PluginRuntimeRequest> pluginRuntimeRequests() const;
     bool perform(std::unique_ptr<ProjectCommand> command);
     void changeSelectedTrackState(const std::function<void(TrackMixState&)>& change);
@@ -139,6 +140,7 @@ private:
     double recordingStartSeconds = 0.0;
     juce::String selectedTrackId;
     juce::String selectedClipId;
+    juce::String replacementInsertId;
     bool dirty = false;
     bool statusIsError = false;
     bool recordingFinalizationInProgress = false;
@@ -151,6 +153,7 @@ private:
     juce::String inputConfigurationSignature;
     juce::String calibratingReampRouteId;
     std::uint64_t lastRuntimeCatalogRevision = 0;
+    juce::String reducedIsolationMarkerSignature;
 
     juce::TextButton newButton { "NEW" };
     juce::TextButton openButton { "OPEN" };

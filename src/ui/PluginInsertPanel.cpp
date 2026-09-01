@@ -235,6 +235,16 @@ void PluginInsertPanel::mouseDown(const juce::MouseEvent& event)
             return status.insertId == insert.id
                 && status.state == StudioAudioEngine::PluginRuntimeStatus::State::failed;
         });
+    const auto missing = insert.missing
+        || std::any_of(
+            runtimeStatuses.cbegin(),
+            runtimeStatuses.cend(),
+            [&insert](const auto& status)
+            {
+                return status.insertId == insert.id
+                    && status.state
+                        == StudioAudioEngine::PluginRuntimeStatus::State::missing;
+            });
     if (event.position.x >= static_cast<float>(getWidth() - 30))
     {
         if (onRemove)
@@ -247,7 +257,11 @@ void PluginInsertPanel::mouseDown(const juce::MouseEvent& event)
     }
     else if (failed && onReload)
     {
-        onReload();
+        onReload(track->id, insert.id);
+    }
+    else if (missing && onReplace)
+    {
+        onReplace(track->id, insert.id);
     }
 }
 }

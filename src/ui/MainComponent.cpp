@@ -1,5 +1,7 @@
 #include "MainComponent.h"
 
+#include "plugin_host/PluginStateStore.h"
+
 #include <StudioDuoBrandData.h>
 
 #include <algorithm>
@@ -767,10 +769,39 @@ MainComponent::MainComponent()
     {
         changePluginMode(trackId, insertId, mode);
     };
-    insertPanel->onReload = [this]
+    insertPanel->onReplace = [this](
+                                  const auto& trackId,
+                                  const auto& insertId)
     {
-        audioEngine.forcePluginRuntimeReload(project, pluginRuntimeRequests());
-        setStatus("Reloading sandboxed plugin workers...");
+        selectTrack(trackId);
+        replacementInsertId = insertId;
+        setStatus("Choose a catalog plugin to replace the missing insert.");
+    };
+    insertPanel->onReload = [this](const auto& trackId, const auto& insertId)
+    {
+        if (const auto* track = project.findTrack(trackId))
+        {
+            const auto insert = std::find_if(
+                track->inserts.cbegin(),
+                track->inserts.cend(),
+                [&insertId](const auto& candidate)
+                {
+                    return candidate.id == insertId;
+                });
+            if (insert != track->inserts.cend()
+                && insert->recoveryDisabled)
+            {
+                perform(std::make_unique<SetPluginBridgeModeCommand>(
+                    trackId,
+                    insertId,
+                    insert->bridgeMode));
+            }
+        }
+        audioEngine.forcePluginRuntimeReload(
+            project,
+            pluginRuntimeRequests(),
+            insertId);
+        setStatus("Reloading selected plugin runtime...");
     };
     insertPanel->addKeyListener(this);
     addAndMakeVisible(*insertPanel);
@@ -798,6 +829,21 @@ MainComponent::~MainComponent()
     if (audioEngine.isRecording())
         audioEngine.stopRecording();
     audioEngine.shutdown();
+    const auto recoveryPending = std::any_of(
+        project.tracks.cbegin(),
+        project.tracks.cend(),
+        [](const auto& track)
+        {
+            return std::any_of(
+                track.inserts.cbegin(),
+                track.inserts.cend(),
+                [](const auto& insert)
+                {
+                    return insert.recoveryDisabled;
+                });
+        });
+    if (projectPackage.exists() && !recoveryPending)
+        ProjectFile::clearReducedIsolationMarker(projectPackage);
     timelineViewport.setViewedComponent(nullptr, false);
     setLookAndFeel(nullptr);
 }
@@ -1021,9 +1067,6 @@ void MainComponent::timerCallback()
     auto runtimeMetadataChanged = false;
     for (const auto& status : runtimeStatuses)
     {
-        if (status.state != StudioAudioEngine::PluginRuntimeStatus::State::ready)
-            continue;
-
         for (auto& track : project.tracks)
         {
             const auto insert = std::find_if(track.inserts.begin(),
@@ -1035,12 +1078,41 @@ void MainComponent::timerCallback()
             if (insert == track.inserts.end())
                 continue;
 
-            if (insert->latencySamples != status.latencySamples
-                || std::abs(insert->tailSeconds - status.tailSeconds) > 0.000001)
+            if (status.state
+                    == StudioAudioEngine::PluginRuntimeStatus::State::ready
+                && (insert->latencySamples != status.latencySamples
+                    || std::abs(insert->tailSeconds - status.tailSeconds)
+                        > 0.000001))
             {
                 insert->latencySamples = status.latencySamples;
                 insert->tailSeconds = status.tailSeconds;
                 runtimeMetadataChanged = true;
+            }
+            if (status.state
+                == StudioAudioEngine::PluginRuntimeStatus::State::ready)
+            {
+                pluginCatalog.recordRuntimeReady(*insert);
+            }
+            else if (status.state
+                     == StudioAudioEngine::PluginRuntimeStatus::State::missing)
+            {
+                pluginCatalog.recordRuntimeFailure(
+                    *insert,
+                    PluginFailureKind::missing,
+                    status.message);
+            }
+            else if (status.state
+                     == StudioAudioEngine::PluginRuntimeStatus::State::failed)
+            {
+                const auto failure =
+                    status.message.containsIgnoreCase("timeout")
+                        || status.message.containsIgnoreCase("respond")
+                    ? PluginFailureKind::timeout
+                    : PluginFailureKind::runtimeCrash;
+                pluginCatalog.recordRuntimeFailure(
+                    *insert,
+                    failure,
+                    status.message);
             }
             break;
         }
@@ -1235,8 +1307,11 @@ void MainComponent::createNewProject()
     }
 
     audioEngine.stop();
+    if (projectPackage.exists())
+        ProjectFile::clearReducedIsolationMarker(projectPackage);
     project = Project::createDefault();
     projectPackage = juce::File();
+    reducedIsolationMarkerSignature.clear();
     commandStack.clear();
     selectedClipId.clear();
     selectedTrackId = project.tracks.front().id;
@@ -1383,17 +1458,80 @@ void MainComponent::saveProjectTo(const juce::File& package)
     if (project.name == "Untitled")
         project.name = normalised.getFileNameWithoutExtension();
 
+    const auto resumePlayback = audioEngine.isPlaying();
+    if (resumePlayback)
+        audioEngine.pause();
+    auto stateWarning = juce::String();
+    for (auto& capture : audioEngine.capturePluginStates(2000))
+    {
+        if (capture.insertId.isEmpty())
+        {
+            if (resumePlayback)
+                audioEngine.play();
+            showError("Project save failed",
+                      capture.result.getErrorMessage());
+            return;
+        }
+        auto* track = project.findTrack(capture.trackId);
+        if (track == nullptr)
+            continue;
+        const auto insert = std::find_if(
+            track->inserts.begin(),
+            track->inserts.end(),
+            [&capture](const auto& candidate)
+            {
+                return candidate.id == capture.insertId;
+            });
+        if (insert == track->inserts.end())
+            continue;
+        if (capture.result.failed())
+        {
+            stateWarning = capture.name
+                + ": "
+                + capture.result.getErrorMessage();
+            continue;
+        }
+        if (capture.state.isEmpty())
+            continue;
+
+        juce::String stateError;
+        const auto reference = PluginStateStore::store(
+            normalised,
+            capture.state,
+            stateError);
+        if (!reference.has_value())
+        {
+            if (resumePlayback)
+                audioEngine.play();
+            showError("Project save failed", stateError);
+            return;
+        }
+        insert->stateFile = reference->relativePath;
+        insert->stateHash = reference->hash;
+    }
+
     const auto result = ProjectFile::save(project, normalised);
     if (result.failed())
     {
+        if (resumePlayback)
+            audioEngine.play();
         showError("Project save failed", result.getErrorMessage());
         return;
     }
 
     projectPackage = normalised;
+    reducedIsolationMarkerSignature.clear();
+    updateReducedIsolationMarker();
     dirty = false;
     projectLabel.setText(project.name, juce::dontSendNotification);
-    setStatus("Saved " + projectPackage.getFullPathName());
+    if (resumePlayback)
+        audioEngine.play();
+    setStatus(
+        "Saved "
+            + projectPackage.getFullPathName()
+            + (stateWarning.isNotEmpty()
+                   ? " (preserved prior state: " + stateWarning + ")"
+                   : juce::String()));
 }
 
 void MainComponent::openProjectFrom(const juce::File& package)
@@ -1412,8 +1550,26 @@ void MainComponent::openProjectFrom(const juce::File& package)
         return;
     }
     audioEngine.stop();
-    project = std::move(*loaded);
     projectPackage = ProjectFile::normalisePackagePath(package);
+    reducedIsolationMarkerSignature.clear();
+    const auto recoveryInsertIds =
+        ProjectFile::reducedIsolationMarker(projectPackage);
+    auto recoveredInProcess = false;
+    for (auto& track : loaded->tracks)
+    {
+        for (auto& insert : track.inserts)
+        {
+            if (insert.bridgeMode != PluginBridgeMode::sandboxed
+                && std::find(recoveryInsertIds.cbegin(),
+                             recoveryInsertIds.cend(),
+                             insert.id) != recoveryInsertIds.cend())
+            {
+                insert.recoveryDisabled = true;
+                recoveredInProcess = true;
+            }
+        }
+    }
+    project = std::move(*loaded);
     commandStack.clear();
     selectedClipId.clear();
     selectedTrackId = project.tracks.empty() ? juce::String() : project.tracks.front().id;
@@ -1422,7 +1578,11 @@ void MainComponent::openProjectFrom(const juce::File& package)
     dirty = false;
     selectTrack(selectedTrackId);
     projectChanged(false, false);
-    setStatus("Opened " + projectPackage.getFullPathName());
+    setStatus(
+        recoveredInProcess
+            ? "Opened recovery-safe: in-process plugins are disabled until explicitly reloaded."
+            : "Opened " + projectPackage.getFullPathName(),
+        recoveredInProcess);
 }
 
 void MainComponent::importAudioFile(const juce::File& source)
@@ -1468,10 +1628,14 @@ void MainComponent::exportMixTo(const juce::File& destination)
             insert.missing = !pluginCatalog.descriptionForIdentifier(insert.pluginIdentifier).has_value();
             if (!insert.missing && insert.stateFile.isNotEmpty())
             {
-                const auto stateFile = projectPackage.getChildFile(insert.stateFile);
+                juce::MemoryBlock state;
+                juce::String stateError;
                 insert.missing = !projectPackage.exists()
-                    || !stateFile.isAChildOf(projectPackage)
-                    || !stateFile.existsAsFile();
+                    || !PluginStateStore::load(
+                        projectPackage,
+                        { insert.stateFile, insert.stateHash },
+                        state,
+                        stateError);
             }
         }
 
@@ -1988,6 +2152,18 @@ void MainComponent::addPluginToSelectedTrack(const PluginCatalogEntry& entry)
     insert.fileOrIdentifier = entry.fileOrIdentifier;
     insert.araCapable = entry.araCapable;
     insert.bridgeMode = PluginBridgeMode::sandboxed;
+
+    if (replacementInsertId.isNotEmpty())
+    {
+        const auto replacing = replacementInsertId;
+        replacementInsertId.clear();
+        if (perform(std::make_unique<ReplacePluginInsertCommand>(
+                track->id,
+                replacing,
+                insert)))
+            setStatus(entry.name + " replaced the missing insert.");
+        return;
+    }
 
     if (perform(std::make_unique<AddPluginInsertCommand>(track->id, insert)))
         setStatus(entry.name + " added as a sandboxed insert model.");
@@ -2627,6 +2803,8 @@ void MainComponent::redo()
 
 void MainComponent::selectTrack(const juce::String& trackId)
 {
+    if (trackId != selectedTrackId)
+        replacementInsertId.clear();
     selectedTrackId = trackId;
     selectedClipId.clear();
     timeline.setSelection(selectedTrackId, selectedClipId);
@@ -3934,6 +4112,7 @@ void MainComponent::projectChanged(bool writeRecovery, bool markDirty)
     redoButton.setEnabled(commandStack.canRedo());
     updateInspector();
     updateTimelineSize();
+    updateReducedIsolationMarker();
 
     if (const auto result = audioEngine.updateProject(project,
                                                       pluginRuntimeRequests()); result.failed())
@@ -3943,6 +4122,32 @@ void MainComponent::projectChanged(bool writeRecovery, bool markDirty)
     if (writeRecovery && projectPackage.exists())
         if (const auto result = ProjectFile::writeRecoveryPoint(project, projectPackage); result.failed())
             setStatus(result.getErrorMessage(), true);
+}
+
+void MainComponent::updateReducedIsolationMarker()
+{
+    if (!projectPackage.exists())
+        return;
+    std::vector<juce::String> insertIds;
+    for (const auto& track : project.tracks)
+        for (const auto& insert : track.inserts)
+            if (insert.bridgeMode != PluginBridgeMode::sandboxed)
+                insertIds.push_back(insert.id);
+    std::sort(insertIds.begin(), insertIds.end());
+    juce::StringArray signatureParts;
+    for (const auto& insertId : insertIds)
+        signatureParts.add(insertId);
+    const auto signature = signatureParts.joinIntoString("|");
+    if (signature == reducedIsolationMarkerSignature)
+        return;
+    reducedIsolationMarkerSignature = signature;
+    const auto result = insertIds.empty()
+        ? ProjectFile::clearReducedIsolationMarker(projectPackage)
+        : ProjectFile::writeReducedIsolationMarker(
+              projectPackage,
+              insertIds);
+    if (result.failed())
+        setStatus(result.getErrorMessage(), true);
 }
 
 std::vector<StudioAudioEngine::PluginRuntimeRequest> MainComponent::pluginRuntimeRequests() const
@@ -3969,11 +4174,13 @@ std::vector<StudioAudioEngine::PluginRuntimeRequest> MainComponent::pluginRuntim
 
             if (insert.stateFile.isNotEmpty())
             {
-                const auto stateFile = projectPackage.getChildFile(insert.stateFile);
+                juce::String stateError;
                 if (!projectPackage.exists()
-                    || !stateFile.isAChildOf(projectPackage)
-                    || !stateFile.existsAsFile()
-                    || !stateFile.loadFileAsData(request.state))
+                    || !PluginStateStore::load(
+                        projectPackage,
+                        { insert.stateFile, insert.stateHash },
+                        request.state,
+                        stateError))
                     request.missing = true;
             }
 
