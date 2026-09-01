@@ -60,6 +60,18 @@ controls.
    analysis, transient detection, pitch detection, and seeded humanization.
    It does not include AI assistants, generation, or cloud models.
 
+## Visual identity
+
+The Studio Duo mark is an engineered `D` chassis containing two synchronized
+signal paths and one precise edit playhead. It represents the product name,
+stereo and multitrack work, and non-destructive editing without relying on
+guitars, skulls, speakers, or generic play-button imagery.
+
+Brand colors inherit the application interface: near-black `#101214`, panel
+black `#171a1d`, warm off-white `#e7e4df`, ember `#dd5b3f`, mint `#78c6a3`,
+and amber `#d99a42`. The icon must remain legible at 16 px and the horizontal
+logo keeps the mark intact rather than redrawing it for marketing use.
+
 ## Version 1.0 scope
 
 Version 1.0 must support the whole production path.

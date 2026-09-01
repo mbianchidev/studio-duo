@@ -1,4 +1,6 @@
-# Studio Duo
+<p align="center">
+  <img src="assets/branding/studio-duo-logo.svg" alt="Studio Duo" width="720">
+</p>
 
 [![CI](https://github.com/mbianchidev/studio-duo/actions/workflows/ci.yml/badge.svg)](https://github.com/mbianchidev/studio-duo/actions/workflows/ci.yml)
 
@@ -181,6 +183,12 @@ shortcuts alongside each action, and the menu opens at the gesture point.
 - [Product and technical design](docs/design.md)
 - [Development and architecture](docs/development.md)
 - [Contributing](docs/contributing.md)
+
+## Brand assets
+
+The editable vector logo, app icon, PNG sizes, macOS ICNS, and Windows ICO are
+kept in [`assets/branding`](assets/branding). The packaged JUCE application uses
+the 512 px and 32 px icon sources for native platform icon generation.
 
 ## License
 

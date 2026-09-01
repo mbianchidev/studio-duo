@@ -60,6 +60,8 @@ juce_add_gui_app(
     COMPANY_NAME "Studio Duo"
     BUNDLE_ID "${STUDIO_DUO_BUNDLE_ID}"
     VERSION ${PROJECT_VERSION}
+    ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/assets/branding/studio-duo-icon-512.png"
+    ICON_SMALL "${CMAKE_CURRENT_SOURCE_DIR}/assets/branding/studio-duo-icon-32.png"
     MICROPHONE_PERMISSION_ENABLED TRUE
     MICROPHONE_PERMISSION_TEXT "Studio Duo needs microphone access to record audio."
 )
