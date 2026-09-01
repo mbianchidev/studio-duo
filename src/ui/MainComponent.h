@@ -3,6 +3,7 @@
 #include "StudioTheme.h"
 #include "MixerPanel.h"
 #include "PluginInsertPanel.h"
+#include "RoutingPanel.h"
 #include "TimelineComponent.h"
 #include "audio/StudioAudioEngine.h"
 #include "model/ProjectCommands.h"
@@ -58,6 +59,8 @@ private:
                            std::vector<StudioAudioEngine::RecordingResult> recordings);
     void addAudioTrack();
     void addBusTrack();
+    void addTrack(TrackType type);
+    void showAddTrackMenu();
     void duplicateSelectedTrack();
     void deleteSelectedTrack();
     void addPluginToSelectedTrack(const PluginCatalogEntry& entry);
@@ -163,7 +166,7 @@ private:
     juce::Label positionLabel;
     juce::Label projectLabel;
 
-    juce::TextButton addTrackButton { "+ AUDIO TRACK" };
+    juce::TextButton addTrackButton { "+ TRACK" };
     juce::TextButton addBusButton { "+ BUS TRACK" };
     juce::TextButton importButton { "IMPORT AUDIO" };
     juce::TextButton duplicateTrackButton { "DUPLICATE TRACK" };
@@ -200,6 +203,7 @@ private:
     std::unique_ptr<MixerPanel> mixer;
     PluginCatalog pluginCatalog;
     std::unique_ptr<PluginBrowserComponent> pluginBrowser;
+    std::unique_ptr<RoutingPanel> routingPanel;
     std::unique_ptr<PluginInsertPanel> insertPanel;
     juce::Label statusLabel;
     std::unique_ptr<juce::FileChooser> fileChooser;

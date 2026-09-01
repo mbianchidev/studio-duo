@@ -2,3 +2,4 @@
 
 void routingModelTests();
 void routingEngineTests();
+void routingUiModelTests();

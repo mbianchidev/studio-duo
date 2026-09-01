@@ -106,6 +106,10 @@ target_sources(
         src/ui/MixerPanel.h
         src/ui/PluginInsertPanel.cpp
         src/ui/PluginInsertPanel.h
+        src/ui/RoutingUiModel.cpp
+        src/ui/RoutingUiModel.h
+        src/ui/RoutingPanel.cpp
+        src/ui/RoutingPanel.h
         src/ui/StudioTheme.h
         src/ui/TimelineComponent.cpp
         src/ui/TimelineComponent.h
@@ -189,6 +193,9 @@ if(STUDIO_DUO_BUILD_TESTS)
             tests/ModelTests.cpp
             tests/RoutingModelTests.cpp
             tests/RoutingEngineTests.cpp
+            tests/RoutingUiModelTests.cpp
+            src/ui/RoutingUiModel.cpp
+            src/ui/RoutingUiModel.h
             src/audio/StudioAudioEngine.cpp
             src/audio/StudioAudioEngine.h
             src/plugin_host/PluginBridgeClient.cpp

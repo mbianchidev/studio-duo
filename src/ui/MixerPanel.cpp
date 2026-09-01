@@ -2,6 +2,7 @@
 
 #include "StudioTheme.h"
 
+#include <algorithm>
 #include <cmath>
 
 namespace studio
@@ -22,6 +23,13 @@ void MixerPanel::setPeaks(float left, float right)
 {
     leftPeak = left;
     rightPeak = right;
+    repaint();
+}
+
+void MixerPanel::setMeters(
+    std::vector<StudioAudioEngine::TrackMeterSnapshot> value)
+{
+    meters = std::move(value);
     repaint();
 }
 
@@ -55,6 +63,56 @@ void MixerPanel::paint(juce::Graphics& graphics)
         graphics.fillRoundedRectangle(strip.toFloat(), 5.0f);
         graphics.setColour(selected ? track->colour : juce::Colour(StudioColours::border));
         graphics.drawRoundedRectangle(strip.toFloat(), 5.0f, selected ? 1.5f : 1.0f);
+
+        const auto meter = std::find_if(
+            meters.cbegin(),
+            meters.cend(),
+            [track](const auto& value)
+            {
+                return value.trackId == track->id;
+            });
+        if (meter != meters.cend())
+        {
+            const auto pre = juce::jlimit(
+                0.0f,
+                1.0f,
+                std::max(meter->preFaderLeft, meter->preFaderRight));
+            const auto post = juce::jlimit(
+                0.0f,
+                1.0f,
+                std::max(meter->postFaderLeft, meter->postFaderRight));
+            graphics.setColour(juce::Colour(StudioColours::window));
+            graphics.fillRect(strip.getX() + 4,
+                              strip.getY() + 46,
+                              3,
+                              strip.getHeight() - 112);
+            graphics.fillRect(strip.getRight() - 7,
+                              strip.getY() + 46,
+                              3,
+                              strip.getHeight() - 112);
+            graphics.setColour(juce::Colour(StudioColours::amber));
+            graphics.fillRect(
+                strip.getX() + 4,
+                strip.getY() + 46
+                    + static_cast<int>((1.0f - pre)
+                                       * static_cast<float>(
+                                           strip.getHeight() - 112)),
+                3,
+                static_cast<int>(pre
+                                 * static_cast<float>(
+                                     strip.getHeight() - 112)));
+            graphics.setColour(juce::Colour(StudioColours::green));
+            graphics.fillRect(
+                strip.getRight() - 7,
+                strip.getY() + 46
+                    + static_cast<int>((1.0f - post)
+                                       * static_cast<float>(
+                                           strip.getHeight() - 112)),
+                3,
+                static_cast<int>(post
+                                 * static_cast<float>(
+                                     strip.getHeight() - 112)));
+        }
 
         graphics.setColour(track->colour);
         graphics.fillRect(strip.getX(), strip.getY(), strip.getWidth(), 4);

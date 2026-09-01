@@ -1,5 +1,6 @@
 #pragma once
 
+#include "audio/StudioAudioEngine.h"
 #include "model/ProjectModel.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
@@ -14,6 +15,7 @@ public:
     void setProject(const Project* value);
     void setSelection(const juce::String& value);
     void setPeaks(float left, float right);
+    void setMeters(std::vector<StudioAudioEngine::TrackMeterSnapshot> value);
 
     std::function<void(const juce::String&)> onTrackSelected;
     std::function<void(const juce::String&, juce::Rectangle<int>)> onEditTrack;
@@ -33,6 +35,7 @@ private:
     juce::String selectedTrack;
     float leftPeak = 0.0f;
     float rightPeak = 0.0f;
+    std::vector<StudioAudioEngine::TrackMeterSnapshot> meters;
     juce::String draggingVolumeTrack;
     juce::String draggingPanTrack;
     float dragStartY = 0.0f;

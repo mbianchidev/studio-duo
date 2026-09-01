@@ -165,7 +165,7 @@ MainComponent::MainComponent()
     configureButton(recordButton, "Record the selected audio track");
     configureButton(loopButton, "Loop the project range");
     configureButton(metronomeButton, "Toggle the metronome");
-    configureButton(addTrackButton, "Add an audio track");
+    configureButton(addTrackButton, "Add an audio, aux, bus, folder, VCA, or control-room track");
     configureButton(addBusButton, "Add a stereo bus track");
     configureButton(importButton, "Import WAV, AIFF, FLAC, or MP3 audio");
     configureButton(duplicateTrackButton, "Duplicate the selected track and its edits");
@@ -195,7 +195,7 @@ MainComponent::MainComponent()
     playButton.onClick = [this] { togglePlayback(); };
     stopButton.onClick = [this] { stopTransportAndRecording(); };
     recordButton.onClick = [this] { toggleRecording(); };
-    addTrackButton.onClick = [this] { addAudioTrack(); };
+    addTrackButton.onClick = [this] { showAddTrackMenu(); };
     addBusButton.onClick = [this] { addBusTrack(); };
     importButton.onClick = [this] { beginImportAudio(); };
     duplicateTrackButton.onClick = [this] { duplicateSelectedTrack(); };
@@ -719,6 +719,37 @@ MainComponent::MainComponent()
     };
     addAndMakeVisible(*pluginBrowser);
 
+    routingPanel = std::make_unique<RoutingPanel>();
+    routingPanel->setProject(&project);
+    routingPanel->onAddConnection = [this](auto connection)
+    {
+        perform(std::make_unique<AddRoutingConnectionCommand>(
+            std::move(connection)));
+    };
+    routingPanel->onUpdateConnection = [this](auto before, auto after)
+    {
+        perform(std::make_unique<UpdateRoutingConnectionCommand>(
+            std::move(before),
+            std::move(after)));
+    };
+    routingPanel->onRemoveConnection = [this](const auto& connectionId)
+    {
+        perform(std::make_unique<RemoveRoutingConnectionCommand>(
+            connectionId));
+    };
+    routingPanel->onTrackRoutingChanged = [this](
+                                              const auto& trackId,
+                                              auto before,
+                                              auto after)
+    {
+        perform(std::make_unique<SetTrackRoutingStateCommand>(
+            trackId,
+            std::move(before),
+            std::move(after)));
+    };
+    routingPanel->addKeyListener(this);
+    addAndMakeVisible(*routingPanel);
+
     insertPanel = std::make_unique<PluginInsertPanel>();
     insertPanel->setProject(&project);
     insertPanel->onBypass = [this](const auto& trackId, const auto& insertId, bool bypassed)
@@ -917,7 +948,9 @@ void MainComponent::resized()
     soloButton.setBounds(toggles.removeFromLeft(52).reduced(2));
     armButton.setBounds(toggles.removeFromLeft(52).reduced(2));
     trackColourButton.setBounds(toggles.removeFromLeft(52).reduced(2));
-    inspector.removeFromTop(20);
+    inspector.removeFromTop(10);
+    routingPanel->setBounds(inspector.removeFromTop(154));
+    inspector.removeFromTop(10);
     insertPanel->setBounds(inspector);
 
     updateTimelineSize();
@@ -976,6 +1009,7 @@ void MainComponent::timerCallback()
                            juce::Colour(recording ? StudioColours::orange
                                                  : StudioColours::raised));
     mixer->setPeaks(audioEngine.leftPeak(), audioEngine.rightPeak());
+    mixer->setMeters(audioEngine.trackMeterSnapshots());
     auto runtimeStatuses = audioEngine.pluginRuntimeStatuses();
     auto runtimeMetadataChanged = false;
     for (const auto& status : runtimeStatuses)
@@ -1761,15 +1795,58 @@ void MainComponent::completeRecording(
 
 void MainComponent::addAudioTrack()
 {
-    Track track;
-    const auto audioTrackCount = static_cast<int>(std::count_if(project.tracks.cbegin(),
-                                                                project.tracks.cend(),
-                                                                [](const auto& candidate)
+    addTrack(TrackType::audio);
+}
+
+void MainComponent::addBusTrack()
+{
+    addTrack(TrackType::bus);
+}
+
+void MainComponent::addTrack(TrackType type)
+{
+    if (type == TrackType::controlRoom
+        && std::any_of(
+            project.tracks.cbegin(),
+            project.tracks.cend(),
+            [](const auto& track)
+            {
+                return track.type == TrackType::controlRoom;
+            }))
     {
-        return candidate.type == TrackType::audio;
+        setStatus("The project already has a control-room track.", true);
+        return;
+    }
+
+    Track track;
+    track.type = type;
+    const auto trackCount = static_cast<int>(std::count_if(
+        project.tracks.cbegin(),
+        project.tracks.cend(),
+        [type](const auto& candidate)
+    {
+        return candidate.type == type;
     }));
-    track.name = "Audio " + juce::String(audioTrackCount + 1);
-    track.armed = true;
+    const auto typeName = [&]
+    {
+        switch (type)
+        {
+            case TrackType::audio: return juce::String("Audio");
+            case TrackType::instrument: return juce::String("Instrument");
+            case TrackType::midi: return juce::String("MIDI");
+            case TrackType::aux: return juce::String("Aux");
+            case TrackType::bus: return juce::String("Bus");
+            case TrackType::folder: return juce::String("Folder");
+            case TrackType::vca: return juce::String("VCA");
+            case TrackType::controlRoom: return juce::String("Control Room");
+            case TrackType::master: return juce::String("Master");
+        }
+        return juce::String("Track");
+    }();
+    track.name = type == TrackType::controlRoom
+        ? typeName
+        : typeName + " " + juce::String(trackCount + 1);
+    track.armed = type == TrackType::audio;
     const std::array colours {
         juce::Colour(0xffdd5b3f),
         juce::Colour(0xffd99a42),
@@ -1777,33 +1854,58 @@ void MainComponent::addAudioTrack()
         juce::Colour(0xff7da9d9),
         juce::Colour(0xffb47ac4)
     };
-    track.colour = colours[static_cast<std::size_t>(audioTrackCount) % colours.size()];
+    track.colour = colours[static_cast<std::size_t>(trackCount)
+                           % colours.size()];
     const auto trackId = track.id;
+    if (type == TrackType::controlRoom)
+    {
+        RoutingConnection monitorRoute;
+        monitorRoute.name = "Master monitor";
+        monitorRoute.kind = RouteKind::controlRoom;
+        monitorRoute.sourceTrackId = project.masterTrackId();
+        monitorRoute.destination.type = RouteEndpointType::track;
+        monitorRoute.destination.trackId = trackId;
+        std::vector<std::unique_ptr<ProjectCommand>> commands;
+        commands.push_back(std::make_unique<AddTrackCommand>(track));
+        commands.push_back(std::make_unique<AddRoutingConnectionCommand>(
+            std::move(monitorRoute)));
+        if (perform(std::make_unique<BatchProjectCommand>(
+                "Add control room",
+                std::move(commands))))
+            selectTrack(trackId);
+        return;
+    }
+
     if (perform(std::make_unique<AddTrackCommand>(track)))
         selectTrack(trackId);
 }
 
-void MainComponent::addBusTrack()
+void MainComponent::showAddTrackMenu()
 {
-    Track track;
-    track.type = TrackType::bus;
-    const auto busCount = static_cast<int>(std::count_if(project.tracks.cbegin(),
-                                                         project.tracks.cend(),
-                                                         [](const auto& candidate)
+    juce::PopupMenu menu;
+    const auto add = [this](TrackType type)
     {
-        return candidate.type == TrackType::bus;
-    }));
-    track.name = "Bus " + juce::String(busCount + 1);
-    const std::array colours {
-        juce::Colour(0xff7da9d9),
-        juce::Colour(0xffb47ac4),
-        juce::Colour(0xff67c7d4),
-        juce::Colour(0xff8f969c)
+        return [this, type] { addTrack(type); };
     };
-    track.colour = colours[static_cast<std::size_t>(busCount) % colours.size()];
-    const auto trackId = track.id;
-    if (perform(std::make_unique<AddTrackCommand>(track)))
-        selectTrack(trackId);
+    menu.addItem("Audio track", add(TrackType::audio));
+    menu.addItem("Aux track", add(TrackType::aux));
+    menu.addItem("Bus track", add(TrackType::bus));
+    menu.addSeparator();
+    menu.addItem("Folder track", add(TrackType::folder));
+    menu.addItem("VCA track", add(TrackType::vca));
+    const auto hasControlRoom = std::any_of(
+        project.tracks.cbegin(),
+        project.tracks.cend(),
+        [](const auto& track)
+        {
+            return track.type == TrackType::controlRoom;
+        });
+    menu.addItem("Control-room track",
+                 !hasControlRoom,
+                 false,
+                 add(TrackType::controlRoom));
+    menu.showMenuAsync(
+        juce::PopupMenu::Options().withTargetComponent(addTrackButton));
 }
 
 void MainComponent::duplicateSelectedTrack()
@@ -2462,6 +2564,7 @@ void MainComponent::selectTrack(const juce::String& trackId)
     selectedClipId.clear();
     timeline.setSelection(selectedTrackId, selectedClipId);
     mixer->setSelection(selectedTrackId);
+    routingPanel->setTrack(selectedTrackId);
     insertPanel->setTrack(selectedTrackId);
     updateInspector();
 }
@@ -2472,6 +2575,7 @@ void MainComponent::selectClip(const juce::String& trackId, const juce::String& 
     selectedClipId = clipId;
     timeline.setSelection(selectedTrackId, selectedClipId);
     mixer->setSelection(selectedTrackId);
+    routingPanel->setTrack(selectedTrackId);
     insertPanel->setTrack(selectedTrackId);
     updateInspector();
 }
@@ -2605,6 +2709,29 @@ void MainComponent::refreshOutputControls()
         updatingOutputControls = false;
         return;
     }
+    if (track->type == TrackType::controlRoom)
+    {
+        outputSelector.addItem(
+            "Monitor hardware "
+                + juce::String(track->hardwareOutputChannel + 1)
+                + "-"
+                + juce::String(track->hardwareOutputChannel + 2),
+            1);
+        outputSelector.setSelectedItemIndex(0, juce::dontSendNotification);
+        outputSelector.setEnabled(false);
+        updatingOutputControls = false;
+        return;
+    }
+    if (track->type == TrackType::folder
+        || track->type == TrackType::vca
+        || track->type == TrackType::midi)
+    {
+        outputSelector.addItem("No audio output", 1);
+        outputSelector.setSelectedItemIndex(0, juce::dontSendNotification);
+        outputSelector.setEnabled(false);
+        updatingOutputControls = false;
+        return;
+    }
     if (track->parentTrackId.isNotEmpty())
     {
         const auto* parent = project.findTrack(track->parentTrackId);
@@ -2634,7 +2761,7 @@ void MainComponent::refreshOutputControls()
         outputSelector.addItem("Bus: " + candidate.name,
                                outputSelector.getNumItems() + 1);
         outputTrackIds.push_back(candidate.id);
-        if (track->outputTrackId == candidate.id)
+        if (project.resolvedOutputTrackId(*track) == candidate.id)
             selectedIndex = static_cast<int>(outputTrackIds.size()) - 1;
     }
 
@@ -2649,6 +2776,7 @@ void MainComponent::refreshInputControls()
     const auto selectedIndex = inputSelector.getSelectedItemIndex();
     updatingInputControls = true;
     inputSelector.clear(juce::dontSendNotification);
+    juce::StringArray outputNames;
 
     if (auto* device = deviceManager.getCurrentAudioDevice())
     {
@@ -2671,7 +2799,17 @@ void MainComponent::refreshInputControls()
                 : channelName;
             inputSelector.addItem(displayName, index + 1);
         }
+        outputNames = device->getOutputChannelNames();
+        for (int index = 0; index < outputNames.size(); ++index)
+        {
+            outputNames.set(
+                index,
+                outputNames[index].trim().isNotEmpty()
+                    ? outputNames[index].trim()
+                    : "Output " + juce::String(index + 1));
+        }
     }
+    routingPanel->setHardwareOutputs(std::move(outputNames));
 
     if (inputSelector.getNumItems() == 0)
         inputSelector.addItem("No active input", 1);
@@ -3720,6 +3858,7 @@ void MainComponent::projectChanged(bool writeRecovery, bool markDirty)
 
     timeline.setProject(&project);
     mixer->setProject(&project);
+    routingPanel->setProject(&project);
     insertPanel->setProject(&project);
     projectLabel.setText(project.name + (dirty ? " *" : ""), juce::dontSendNotification);
     loopButton.setToggleState(project.loopEnabled, juce::dontSendNotification);
