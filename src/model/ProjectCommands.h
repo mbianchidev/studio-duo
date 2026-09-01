@@ -265,6 +265,25 @@ private:
     std::vector<EditGroup> newGroups;
 };
 
+class SetReampRoutesCommand final : public ProjectCommand
+{
+public:
+    SetReampRoutesCommand(std::vector<ReampRoute> before,
+                          std::vector<ReampRoute> after);
+
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    static bool validate(const Project& project,
+                         const std::vector<ReampRoute>& routes,
+                         juce::String& error);
+
+    std::vector<ReampRoute> oldRoutes;
+    std::vector<ReampRoute> newRoutes;
+};
+
 struct ProjectTransportState
 {
     double tempo = 120.0;
@@ -410,6 +429,7 @@ private:
     juce::String oldActiveTakeId;
     std::vector<CompRegion> oldCompRegions;
     std::vector<EditGroup> oldEditGroups;
+    std::vector<ReampRoute> oldReampRoutes;
     bool capturedOriginal = false;
 };
 

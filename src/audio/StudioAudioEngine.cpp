@@ -266,6 +266,8 @@ void StudioAudioEngine::shutdown()
     shuttingDown.store(true, std::memory_order_release);
     playing.store(false, std::memory_order_release);
     recordingAccepting.store(false, std::memory_order_release);
+    calibrationActive.store(false, std::memory_order_release);
+    calibrationResultReady.store(false, std::memory_order_release);
 
     if (deviceManager != nullptr)
     {
@@ -751,6 +753,53 @@ juce::Result StudioAudioEngine::renderClipToWav(const AudioClip& clip,
     return juce::Result::ok();
 }
 
+juce::Result StudioAudioEngine::startLatencyCalibration(int outputChannel,
+                                                        int inputChannel)
+{
+    if (recordingAccepting.load(std::memory_order_acquire)
+        || recordingFinalizing.load(std::memory_order_acquire))
+        return juce::Result::fail("Stop recording before calibrating hardware latency.");
+    if (calibrationActive.load(std::memory_order_acquire))
+        return juce::Result::fail("A hardware latency calibration is already running.");
+    if (deviceManager == nullptr)
+        return juce::Result::fail("No audio device is available.");
+    if (outputChannel < 0 || inputChannel < 0)
+        return juce::Result::fail("Calibration channel numbers cannot be negative.");
+
+    auto* device = deviceManager->getCurrentAudioDevice();
+    if (device == nullptr
+        || !device->getActiveOutputChannels()[outputChannel]
+        || !device->getActiveInputChannels()[inputChannel])
+    {
+        return juce::Result::fail(
+            "Enable the selected reamp output and return input in audio I/O settings.");
+    }
+
+    playing.store(false, std::memory_order_release);
+    calibrationOutputChannel.store(outputChannel, std::memory_order_relaxed);
+    calibrationInputChannel.store(inputChannel, std::memory_order_relaxed);
+    calibrationSamplesElapsed.store(0, std::memory_order_relaxed);
+    calibrationLatencySamples.store(-1, std::memory_order_relaxed);
+    calibrationResultReady.store(false, std::memory_order_release);
+    calibrationActive.store(true, std::memory_order_release);
+    return juce::Result::ok();
+}
+
+std::optional<StudioAudioEngine::LatencyCalibrationResult>
+StudioAudioEngine::takeLatencyCalibrationResult()
+{
+    if (!calibrationResultReady.exchange(false, std::memory_order_acq_rel))
+        return std::nullopt;
+
+    LatencyCalibrationResult result;
+    result.latencySamples = calibrationLatencySamples.load(
+        std::memory_order_acquire);
+    if (result.latencySamples < 0)
+        result.result = juce::Result::fail(
+            "No calibration return pulse was detected within two seconds.");
+    return result;
+}
+
 juce::Result StudioAudioEngine::renderToWav(const Project& project,
                                             const juce::File& destination,
                                             double renderSampleRate)
@@ -832,6 +881,16 @@ std::optional<StudioAudioEngine::RenderSnapshot> StudioAudioEngine::buildSnapsho
     snapshot.metronomeLevel = project.metronomeLevel;
     snapshot.metronomeAccentLevel = project.metronomeAccentLevel;
     snapshot.loopEnabled = project.loopEnabled && snapshot.loopEndSample > snapshot.loopStartSample;
+    for (const auto& route : project.reampRoutes)
+    {
+        if (route.enabled && route.type == TonePathType::hardware)
+        {
+            snapshot.hardwareSends.push_back({
+                runtimeKey(route.sourceTrackId),
+                route.outputChannel
+            });
+        }
+    }
 
     const auto anySolo = std::any_of(project.tracks.cbegin(), project.tracks.cend(), [](const auto& track)
     {
@@ -2002,6 +2061,34 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
                                                          int numSamples,
                                                          const juce::AudioIODeviceCallbackContext&)
 {
+    const auto calibrationBlockActive = calibrationActive.load(
+        std::memory_order_acquire);
+    const auto calibrationElapsed = calibrationBlockActive
+        ? calibrationSamplesElapsed.load(std::memory_order_relaxed)
+        : 0;
+    if (calibrationBlockActive && calibrationElapsed > 0)
+    {
+        const auto inputChannel = calibrationInputChannel.load(
+            std::memory_order_relaxed);
+        const auto* input = inputChannel < numInputChannels
+            ? inputChannelData[inputChannel]
+            : nullptr;
+        if (input != nullptr)
+        {
+            for (int sample = 0; sample < numSamples; ++sample)
+            {
+                if (std::abs(input[sample]) < 0.2f)
+                    continue;
+                calibrationLatencySamples.store(
+                    static_cast<int>(calibrationElapsed + sample),
+                    std::memory_order_release);
+                calibrationActive.store(false, std::memory_order_release);
+                calibrationResultReady.store(true, std::memory_order_release);
+                break;
+            }
+        }
+    }
+
     auto recordingBlockActive = false;
     RecordingCallbackScope recordingScope;
     if (recordingAccepting.load(std::memory_order_acquire))
@@ -2193,6 +2280,30 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
                 applyDelayCompensation(track.processingBuffer,
                                        samplesThisBlock,
                                        track.compensation);
+                for (const auto& send : snapshot.hardwareSends)
+                {
+                    if (send.sourceRuntimeKey != track.runtimeKey)
+                        continue;
+                    if (send.outputChannel >= 0
+                        && send.outputChannel < numOutputChannels
+                        && outputChannelData[send.outputChannel] != nullptr)
+                    {
+                        for (int sample = 0; sample < samplesThisBlock; ++sample)
+                        {
+                            outputChannelData[send.outputChannel][outputOffset + sample]
+                                += track.processingBuffer.getSample(0, sample);
+                        }
+                    }
+                    if (send.outputChannel + 1 < numOutputChannels
+                        && outputChannelData[send.outputChannel + 1] != nullptr)
+                    {
+                        for (int sample = 0; sample < samplesThisBlock; ++sample)
+                        {
+                            outputChannelData[send.outputChannel + 1][outputOffset + sample]
+                                += track.processingBuffer.getSample(1, sample);
+                        }
+                    }
+                }
                 if (track.audible)
                 {
                     snapshot.masterBuffer.addFrom(0,
@@ -2257,10 +2368,10 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
             {
                 if (outputChannelData[0] != nullptr)
                     outputChannelData[0][outputOffset + sample]
-                        = snapshot.masterBuffer.getSample(0, sample);
+                        += snapshot.masterBuffer.getSample(0, sample);
                 if (numOutputChannels > 1 && outputChannelData[1] != nullptr)
                     outputChannelData[1][outputOffset + sample]
-                        = snapshot.masterBuffer.getSample(1, sample);
+                        += snapshot.masterBuffer.getSample(1, sample);
 
                 const auto clickOutput = snapshot.metronomeOutputChannel;
                 if (clickOutput >= 0
@@ -2306,7 +2417,8 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
         readingSnapshot.store(-1, std::memory_order_release);
     }
 
-    if (monitoringEnabled.load(std::memory_order_acquire))
+    if (!calibrationBlockActive
+        && monitoringEnabled.load(std::memory_order_acquire))
     {
         const auto firstInput = monitoringFirstInput.load(std::memory_order_relaxed);
         const auto inputCount = monitoringChannels.load(std::memory_order_relaxed);
@@ -2328,17 +2440,42 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
         }
     }
 
+    if (calibrationBlockActive)
+    {
+        const auto outputChannel = calibrationOutputChannel.load(
+            std::memory_order_relaxed);
+        if (calibrationElapsed == 0
+            && outputChannel < numOutputChannels
+            && outputChannelData[outputChannel] != nullptr)
+            outputChannelData[outputChannel][0] += 0.8f;
+
+        const auto elapsed = calibrationElapsed + numSamples;
+        calibrationSamplesElapsed.store(elapsed, std::memory_order_relaxed);
+        if (calibrationActive.load(std::memory_order_acquire)
+            && elapsed >= static_cast<std::int64_t>(currentSampleRate() * 2.0))
+        {
+            calibrationLatencySamples.store(-1, std::memory_order_release);
+            calibrationActive.store(false, std::memory_order_release);
+            calibrationResultReady.store(true, std::memory_order_release);
+        }
+    }
+
     for (int sample = 0; sample < numSamples; ++sample)
     {
-        if (outputChannelData[0] != nullptr)
+        for (int channel = 0; channel < numOutputChannels; ++channel)
         {
-            outputChannelData[0][sample] = juce::jlimit(-1.0f, 1.0f, outputChannelData[0][sample]);
-            leftPeakValue = std::max(leftPeakValue, std::abs(outputChannelData[0][sample]));
-        }
-        if (numOutputChannels > 1 && outputChannelData[1] != nullptr)
-        {
-            outputChannelData[1][sample] = juce::jlimit(-1.0f, 1.0f, outputChannelData[1][sample]);
-            rightPeakValue = std::max(rightPeakValue, std::abs(outputChannelData[1][sample]));
+            if (outputChannelData[channel] == nullptr)
+                continue;
+            outputChannelData[channel][sample] = juce::jlimit(
+                -1.0f,
+                1.0f,
+                outputChannelData[channel][sample]);
+            if (channel == 0)
+                leftPeakValue = std::max(leftPeakValue,
+                                         std::abs(outputChannelData[channel][sample]));
+            else if (channel == 1)
+                rightPeakValue = std::max(rightPeakValue,
+                                          std::abs(outputChannelData[channel][sample]));
         }
     }
 

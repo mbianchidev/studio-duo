@@ -93,6 +93,7 @@ private:
     void showTrackingMenu();
     void promptTempoChange();
     void promptMeterChange();
+    void createPluginTonePath(const juce::String& sourceTrackId);
     void updateTimelineSize();
     void zoomTimeline(double factor, bool reset = false);
     void projectChanged(bool writeRecovery = true, bool markDirty = true);
@@ -101,6 +102,7 @@ private:
     void changeSelectedTrackState(const std::function<void(TrackMixState&)>& change);
     void changeTransportState(const std::function<void(ProjectTransportState&)>& change);
     void changeEditGroups(const std::function<void(std::vector<EditGroup>&)>& change);
+    void changeReampRoutes(const std::function<void(std::vector<ReampRoute>&)>& change);
     [[nodiscard]] const AudioClip* activeClipAt(const juce::String& parentTrackId,
                                                 double seconds) const;
     [[nodiscard]] std::vector<juce::String> linkedClipIdsAt(
@@ -136,6 +138,7 @@ private:
     bool tempoEditActive = false;
     ProjectTransportState tempoEditStart;
     juce::String inputConfigurationSignature;
+    juce::String calibratingReampRouteId;
     std::uint64_t lastRuntimeCatalogRevision = 0;
 
     juce::TextButton newButton { "NEW" };

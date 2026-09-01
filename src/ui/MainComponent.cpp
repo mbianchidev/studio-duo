@@ -1240,6 +1240,36 @@ void MainComponent::resized()
 
 void MainComponent::timerCallback()
 {
+    if (auto calibration = audioEngine.takeLatencyCalibrationResult();
+        calibration.has_value())
+    {
+        const auto routeId = calibratingReampRouteId;
+        calibratingReampRouteId.clear();
+        if (calibration->result.failed())
+        {
+            showError("Reamp calibration failed",
+                      calibration->result.getErrorMessage());
+        }
+        else
+        {
+            changeReampRoutes([routeId, calibration](auto& routes)
+            {
+                const auto route = std::find_if(
+                    routes.begin(),
+                    routes.end(),
+                    [&routeId](const auto& candidate)
+                    {
+                        return candidate.id == routeId;
+                    });
+                if (route != routes.end())
+                    route->latencySamples = calibration->latencySamples;
+            });
+            setStatus("Measured reamp round-trip latency: "
+                          + juce::String(calibration->latencySamples)
+                          + " samples.");
+        }
+    }
+
     if (!activeRecordingTargets.empty()
         && !audioEngine.isPlaying()
         && !recordingFinalizationInProgress)
@@ -1834,6 +1864,13 @@ void MainComponent::toggleRecording()
         ActiveRecordingTarget target;
         target.parentTrackId = parent->id;
         target.versionTrack = makeRecordingVersionTrack(*parent);
+        const auto* reampRoute = project.reampRouteForReturn(parent->id);
+        const auto captureInput = reampRoute != nullptr
+                && reampRoute->enabled
+                && reampRoute->type == TonePathType::hardware
+            ? reampRoute->inputChannel
+            : parent->inputChannel;
+        target.versionTrack.inputChannel = captureInput;
         const auto legalName = juce::File::createLegalFileName(parent->name);
         target.file = folder.getNonexistentChildFile(
             "Recording-"
@@ -1846,7 +1883,7 @@ void MainComponent::toggleRecording()
             false);
         requests.push_back({
             target.file,
-            parent->inputChannel,
+            captureInput,
             parent->stereoInput ? 2 : 1
         });
         targets.push_back(std::move(target));
@@ -1968,6 +2005,16 @@ void MainComponent::completeRecording(
 
         const auto passes = recordingPasses(recording.durationSeconds,
                                             activeRecordingPlan);
+        const auto* reampRoute = project.reampRouteForReturn(
+            target.parentTrackId);
+        const auto hardwareReturn = reampRoute != nullptr
+            && reampRoute->enabled
+            && reampRoute->type == TonePathType::hardware;
+        const auto alignmentSeconds = hardwareReturn
+            ? static_cast<double>(reampRoute->latencySamples
+                                  + reampRoute->alignmentOffsetSamples)
+                / audioEngine.currentSampleRate()
+            : 0.0;
         for (std::size_t passIndex = 0; passIndex < passes.size(); ++passIndex)
         {
             auto take = target.versionTrack;
@@ -1986,13 +2033,17 @@ void MainComponent::completeRecording(
                        ? " pass " + juce::String(static_cast<int>(passIndex + 1))
                        : juce::String());
             clip.sourceFile = recording.file;
-            clip.startSeconds = pass.timelineStartSeconds;
+            clip.startSeconds = std::max(0.0,
+                                         pass.timelineStartSeconds
+                                             - alignmentSeconds);
             clip.sourceOffsetSeconds = pass.sourceOffsetSeconds;
             clip.durationSeconds = pass.durationSeconds;
             clip.sourceLengthSeconds = recording.durationSeconds;
             clip.sourceRangeStartSeconds = pass.sourceOffsetSeconds;
             clip.sourceRangeEndSeconds = pass.sourceOffsetSeconds
                 + pass.durationSeconds;
+            clip.polarityInverted = hardwareReturn
+                && reampRoute->polarityInverted;
             clip.colour = take.colour;
             if (firstClipId.isEmpty())
                 firstClipId = clip.id;
@@ -2753,12 +2804,34 @@ void MainComponent::updateInspector()
     inspectorName.setTooltip(canRenameTrack
                                  ? "Double-click to rename this audio track"
                                  : juce::String());
-    inspectorDetails.setText(clip != nullptr
-                                 ? juce::String(clip->durationSeconds, 2)
-                                     + " s  |  "
-                                     + clip->sourceFile.getFileName()
-                                 : trackTypeToString(track->type).toUpperCase(),
-                             juce::dontSendNotification);
+    auto details = clip != nullptr
+        ? juce::String(clip->durationSeconds, 2)
+            + " s  |  "
+            + clip->sourceFile.getFileName()
+        : trackTypeToString(track->type).toUpperCase();
+    if (clip == nullptr)
+    {
+        if (const auto* route = project.reampRouteForReturn(track->id))
+        {
+            const auto* source = project.findTrack(route->sourceTrackId);
+            details << "  |  "
+                    << (route->type == TonePathType::hardware
+                            ? "REAMP RETURN"
+                            : "PLUGIN TONE")
+                    << " FROM "
+                    << (source != nullptr ? source->name : juce::String("MISSING"));
+        }
+        const auto toneCount = static_cast<int>(std::count_if(
+            project.reampRoutes.cbegin(),
+            project.reampRoutes.cend(),
+            [track](const auto& route)
+            {
+                return route.sourceTrackId == track->id;
+            }));
+        if (toneCount > 0)
+            details << "  |  DI SOURCE " << juce::String(toneCount) << " PATHS";
+    }
+    inspectorDetails.setText(details, juce::dontSendNotification);
     volumeSlider.setEnabled(true);
     panSlider.setEnabled(true);
     muteButton.setEnabled(track->type != TrackType::master || !track->muted);
@@ -3313,6 +3386,223 @@ void MainComponent::showTrackingMenu()
         });
     }
 
+    menu.addSeparator();
+    menu.addSectionHeader("DI and reamp tone paths");
+    const auto* selectedRoot = project.findTrack(selectedRootId);
+    if (selectedRoot != nullptr && selectedRoot->type == TrackType::audio)
+    {
+        juce::PopupMenu hardwareReturns;
+        for (const auto& candidate : project.tracks)
+        {
+            if (candidate.parentTrackId.isNotEmpty()
+                || candidate.type != TrackType::audio
+                || candidate.id == selectedRootId)
+                continue;
+            const auto returnInUse = project.reampRouteForReturn(candidate.id)
+                != nullptr;
+            hardwareReturns.addItem(
+                candidate.name,
+                !returnInUse,
+                false,
+                [this, sourceTrackId = selectedRootId, returnTrackId = candidate.id]
+                {
+                    const auto* source = project.findTrack(sourceTrackId);
+                    const auto* returnTrack = project.findTrack(returnTrackId);
+                    if (source == nullptr || returnTrack == nullptr)
+                        return;
+                    changeReampRoutes([source, returnTrack](auto& routes)
+                    {
+                        ReampRoute route;
+                        route.name = source->name + " -> " + returnTrack->name;
+                        route.type = TonePathType::hardware;
+                        route.sourceTrackId = source->id;
+                        route.returnTrackId = returnTrack->id;
+                        route.inputChannel = returnTrack->inputChannel;
+                        routes.push_back(std::move(route));
+                    });
+                });
+        }
+        if (hardwareReturns.getNumItems() == 0)
+            hardwareReturns.addItem("No available return tracks", false, false, [] {});
+        menu.addSubMenu("Create hardware path to", hardwareReturns);
+        menu.addItem("Create plugin tone path", [this, sourceTrackId = selectedRootId]
+        {
+            createPluginTonePath(sourceTrackId);
+        });
+    }
+
+    const auto route = std::find_if(
+        project.reampRoutes.cbegin(),
+        project.reampRoutes.cend(),
+        [&selectedRootId](const auto& candidate)
+        {
+            return candidate.sourceTrackId == selectedRootId
+                || candidate.returnTrackId == selectedRootId;
+        });
+    if (route != project.reampRoutes.cend())
+    {
+        const auto routeId = route->id;
+        menu.addItem("Tone path enabled",
+                     true,
+                     route->enabled,
+                     [this, routeId]
+                     {
+                         changeReampRoutes([routeId](auto& routes)
+                         {
+                             const auto current = std::find_if(
+                                 routes.begin(),
+                                 routes.end(),
+                                 [&routeId](const auto& candidate)
+                                 {
+                                     return candidate.id == routeId;
+                                 });
+                             if (current != routes.end())
+                                 current->enabled = !current->enabled;
+                         });
+                     });
+        menu.addItem("Invert return polarity",
+                     true,
+                     route->polarityInverted,
+                     [this, routeId]
+                     {
+                         changeReampRoutes([routeId](auto& routes)
+                         {
+                             const auto current = std::find_if(
+                                 routes.begin(),
+                                 routes.end(),
+                                 [&routeId](const auto& candidate)
+                                 {
+                                     return candidate.id == routeId;
+                                 });
+                             if (current != routes.end())
+                                 current->polarityInverted
+                                     = !current->polarityInverted;
+                         });
+                     });
+
+        juce::PopupMenu alignmentMenu;
+        for (const auto adjustment : { -128, -32, -1, 0, 1, 32, 128 })
+        {
+            alignmentMenu.addItem(
+                (adjustment > 0 ? "+" : "") + juce::String(adjustment) + " samples",
+                true,
+                route->alignmentOffsetSamples == adjustment,
+                [this, routeId, adjustment]
+                {
+                    changeReampRoutes([routeId, adjustment](auto& routes)
+                    {
+                        const auto current = std::find_if(
+                            routes.begin(),
+                            routes.end(),
+                            [&routeId](const auto& candidate)
+                            {
+                                return candidate.id == routeId;
+                            });
+                        if (current != routes.end())
+                            current->alignmentOffsetSamples = adjustment;
+                    });
+                });
+        }
+        menu.addSubMenu("Fine alignment", alignmentMenu);
+
+        if (route->type == TonePathType::hardware)
+        {
+            juce::PopupMenu outputMenu;
+            juce::PopupMenu inputMenu;
+            if (auto* device = deviceManager.getCurrentAudioDevice())
+            {
+                const auto outputs = device->getOutputChannelNames();
+                for (int index = 0; index < outputs.size(); ++index)
+                {
+                    auto name = outputs[index].trim();
+                    if (name.isEmpty())
+                        name = "Output " + juce::String(index + 1);
+                    outputMenu.addItem(name,
+                                       true,
+                                       route->outputChannel == index,
+                                       [this, routeId, index]
+                                       {
+                                           changeReampRoutes([routeId, index](auto& routes)
+                                           {
+                                               const auto current = std::find_if(
+                                                   routes.begin(),
+                                                   routes.end(),
+                                                   [&routeId](const auto& candidate)
+                                                   {
+                                                       return candidate.id == routeId;
+                                                   });
+                                               if (current != routes.end())
+                                                   current->outputChannel = index;
+                                           });
+                                       });
+                }
+                const auto inputs = device->getInputChannelNames();
+                for (int index = 0; index < inputs.size(); ++index)
+                {
+                    auto name = inputs[index].trim();
+                    if (name.isEmpty())
+                        name = "Input " + juce::String(index + 1);
+                    inputMenu.addItem(name,
+                                      true,
+                                      route->inputChannel == index,
+                                      [this, routeId, index]
+                                      {
+                                          changeReampRoutes([routeId, index](auto& routes)
+                                          {
+                                              const auto current = std::find_if(
+                                                  routes.begin(),
+                                                  routes.end(),
+                                                  [&routeId](const auto& candidate)
+                                                  {
+                                                      return candidate.id == routeId;
+                                                  });
+                                              if (current != routes.end())
+                                                  current->inputChannel = index;
+                                          });
+                                      });
+                }
+            }
+            menu.addSubMenu("Reamp output", outputMenu);
+            menu.addSubMenu("Return input", inputMenu);
+            menu.addItem("Calibrate round-trip latency", [this, routeId]
+            {
+                const auto current = std::find_if(
+                    project.reampRoutes.cbegin(),
+                    project.reampRoutes.cend(),
+                    [&routeId](const auto& candidate)
+                    {
+                        return candidate.id == routeId;
+                    });
+                if (current == project.reampRoutes.cend())
+                    return;
+                const auto result = audioEngine.startLatencyCalibration(
+                    current->outputChannel,
+                    current->inputChannel);
+                if (result.failed())
+                {
+                    showError("Reamp calibration unavailable",
+                              result.getErrorMessage());
+                    return;
+                }
+                calibratingReampRouteId = routeId;
+                setStatus("Sending reamp calibration pulse...");
+            });
+        }
+        menu.addItem("Remove tone path", [this, routeId]
+        {
+            changeReampRoutes([routeId](auto& routes)
+            {
+                routes.erase(std::remove_if(routes.begin(),
+                                            routes.end(),
+                                            [&routeId](const auto& candidate)
+                                            {
+                                                return candidate.id == routeId;
+                                            }),
+                             routes.end());
+            });
+        });
+    }
+
     menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(trackingButton));
 }
 
@@ -3494,6 +3784,58 @@ void MainComponent::promptMeterChange()
         true);
 }
 
+void MainComponent::createPluginTonePath(const juce::String& sourceTrackId)
+{
+    const auto* source = project.findTrack(sourceTrackId);
+    if (source == nullptr
+        || source->type != TrackType::audio
+        || source->parentTrackId.isNotEmpty())
+        return;
+
+    const auto activeTakeId = project.activeTakeTrackId(sourceTrackId);
+    const auto* clipSource = activeTakeId.isNotEmpty()
+        ? project.findTrack(activeTakeId)
+        : source;
+    if (clipSource == nullptr || clipSource->clips.empty())
+    {
+        setStatus("The DI source needs audio before creating a plugin tone path.", true);
+        return;
+    }
+
+    Track toneTrack;
+    toneTrack.name = source->name + " Tone";
+    toneTrack.type = TrackType::audio;
+    toneTrack.colour = source->colour.brighter(0.15f);
+    toneTrack.clips = clipSource->clips;
+    for (auto& clip : toneTrack.clips)
+    {
+        clip.id = juce::Uuid().toString();
+        clip.name = source->name + " tone";
+        clip.colour = toneTrack.colour;
+    }
+
+    ReampRoute route;
+    route.name = toneTrack.name;
+    route.type = TonePathType::plugin;
+    route.sourceTrackId = sourceTrackId;
+    route.returnTrackId = toneTrack.id;
+    auto routes = project.reampRoutes;
+    routes.push_back(route);
+
+    const auto toneTrackId = toneTrack.id;
+    std::vector<std::unique_ptr<ProjectCommand>> commands;
+    commands.push_back(std::make_unique<AddTrackCommand>(std::move(toneTrack)));
+    commands.push_back(std::make_unique<SetReampRoutesCommand>(project.reampRoutes,
+                                                               std::move(routes)));
+    if (perform(std::make_unique<BatchProjectCommand>(
+            "Create plugin tone path",
+            std::move(commands))))
+    {
+        selectTrack(toneTrackId);
+        setStatus("Plugin tone path created. Add VST3 inserts to the new tone track.");
+    }
+}
+
 void MainComponent::updateInputMonitoring()
 {
     const Track* monitored = nullptr;
@@ -3669,6 +4011,15 @@ void MainComponent::changeEditGroups(
     change(updated);
     perform(std::make_unique<SetEditGroupsCommand>(project.editGroups,
                                                    std::move(updated)));
+}
+
+void MainComponent::changeReampRoutes(
+    const std::function<void(std::vector<ReampRoute>&)>& change)
+{
+    auto updated = project.reampRoutes;
+    change(updated);
+    perform(std::make_unique<SetReampRoutesCommand>(project.reampRoutes,
+                                                    std::move(updated)));
 }
 
 const AudioClip* MainComponent::activeClipAt(const juce::String& parentTrackId,

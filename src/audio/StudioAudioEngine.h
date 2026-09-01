@@ -43,6 +43,12 @@ public:
         std::vector<float> waveform;
     };
 
+    struct LatencyCalibrationResult
+    {
+        juce::Result result { juce::Result::ok() };
+        int latencySamples = 0;
+    };
+
     struct PluginRuntimeRequest
     {
         juce::String trackId;
@@ -114,6 +120,8 @@ public:
     juce::Result renderClipToWav(const AudioClip& clip,
                                  const juce::File& destination,
                                  double sampleRate);
+    juce::Result startLatencyCalibration(int outputChannel, int inputChannel);
+    std::optional<LatencyCalibrationResult> takeLatencyCalibrationResult();
     juce::Result renderToWav(const Project& project, const juce::File& destination, double sampleRate);
 
 private:
@@ -168,6 +176,12 @@ private:
 
     struct RenderSnapshot
     {
+        struct HardwareSend
+        {
+            std::uint64_t sourceRuntimeKey = 0;
+            int outputChannel = 2;
+        };
+
         double sampleRate = 48000.0;
         int processingQuantum = 512;
         std::int64_t contentLengthSamples = 0;
@@ -188,6 +202,7 @@ private:
         float masterGain = 1.0f;
         float masterPan = 0.0f;
         bool masterAudible = true;
+        std::vector<HardwareSend> hardwareSends;
         std::vector<RenderTrack> tracks;
         juce::AudioBuffer<float> masterBuffer {
             2,
@@ -380,6 +395,12 @@ private:
     std::atomic<bool> recordingLoopEnabled { false };
     juce::ThreadPool recordingFinalizer { 1 };
     std::atomic<bool> recordingFinalizing { false };
+    std::atomic<bool> calibrationActive { false };
+    std::atomic<bool> calibrationResultReady { false };
+    std::atomic<int> calibrationOutputChannel { 0 };
+    std::atomic<int> calibrationInputChannel { 0 };
+    std::atomic<std::int64_t> calibrationSamplesElapsed { 0 };
+    std::atomic<int> calibrationLatencySamples { -1 };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(StudioAudioEngine)
 };

@@ -54,6 +54,17 @@ void serializationRoundTrip()
     editGroup.quantizeStrength = 0.75;
     editGroup.protectedAnchorsSeconds = { 1.0, 4.0 };
     project.editGroups.push_back(editGroup);
+    studio::ReampRoute reampRoute;
+    reampRoute.name = "Lead hardware";
+    reampRoute.sourceTrackId = project.tracks[0].id;
+    reampRoute.returnTrackId = project.tracks[1].id;
+    const auto reampReturnTrackId = reampRoute.returnTrackId;
+    reampRoute.outputChannel = 2;
+    reampRoute.inputChannel = 1;
+    reampRoute.latencySamples = 256;
+    reampRoute.alignmentOffsetSamples = -8;
+    reampRoute.polarityInverted = true;
+    project.reampRoutes.push_back(reampRoute);
     project.tracks.front().inputChannel = 1;
     project.tracks.front().stereoInput = true;
     project.tracks.front().inputMonitoring = true;
@@ -129,6 +140,16 @@ void serializationRoundTrip()
                && std::abs(decoded->editGroups.front().quantizeStrength - 0.75) < 0.0001
                && decoded->editGroups.front().protectedAnchorsSeconds.size() == 2,
            "Linked edit groups survive serialization.");
+    expect(decoded.has_value()
+               && decoded->reampRoutes.size() == 1
+               && decoded->reampRoutes.front().sourceTrackId
+                      == decoded->tracks[0].id
+               && decoded->reampRoutes.front().returnTrackId
+                      == reampReturnTrackId
+               && decoded->reampRoutes.front().latencySamples == 256
+               && decoded->reampRoutes.front().alignmentOffsetSamples == -8
+               && decoded->reampRoutes.front().polarityInverted,
+           "Hardware reamp relationships survive serialization.");
     expect(decoded.has_value() && decoded->tracks.front().clips.size() == 1,
            "Clips survive serialization.");
     expect(decoded.has_value()
@@ -374,6 +395,7 @@ void splitClipBoundaries()
     clip.sourceLengthSeconds = 8.0;
     clip.sourceRangeStartSeconds = 0.0;
     clip.sourceRangeEndSeconds = 8.0;
+    clip.warpMarkers = { { 6.0, 6.0 } };
     const auto leftId = clip.id;
     project.tracks.front().clips.push_back(clip);
 
@@ -393,6 +415,17 @@ void splitClipBoundaries()
     expect(std::abs(clips[1].sourceRangeStartSeconds - 3.0) < 0.0001
                && std::abs(clips[1].sourceRangeEndSeconds - 8.0) < 0.0001,
            "The right half cannot expand before the split source position.");
+    expect(clips[1].warpMarkers.size() == 1
+               && std::abs(clips[1].warpMarkers.front().timelineOffsetSeconds - 3.0) < 0.0001,
+           "Split shifts right-side warp markers once.");
+    expect(history.undo(project), "A warped split can be undone.");
+    expect(history.redo(project, error), error.toRawUTF8());
+    expect(project.tracks.front().clips[1].warpMarkers.size() == 1
+               && std::abs(project.tracks.front().clips[1]
+                               .warpMarkers.front().timelineOffsetSeconds
+                           - 3.0)
+                      < 0.0001,
+           "Redo preserves right-side warp marker positions.");
 
     error.clear();
     expect(!history.perform(std::make_unique<studio::TrimClipCommand>(leftId, 2.0, 0.0, 3.25),
@@ -684,6 +717,34 @@ void audioProcessingTools()
            "Undo restores the original clip processing state.");
 }
 
+void reampWorkflow()
+{
+    auto project = studio::Project::createDefault();
+    studio::ReampRoute route;
+    route.name = "Bass reamp";
+    route.sourceTrackId = project.tracks[0].id;
+    route.returnTrackId = project.tracks[1].id;
+    route.type = studio::TonePathType::hardware;
+    route.outputChannel = 2;
+    route.inputChannel = 1;
+
+    studio::CommandStack history;
+    juce::String error;
+    expect(history.perform(std::make_unique<studio::SetReampRoutesCommand>(
+                               project.reampRoutes,
+                               std::vector<studio::ReampRoute> { route }),
+                           project,
+                           error),
+           error.toRawUTF8());
+    const auto* stored = project.reampRouteForReturn(project.tracks[1].id);
+    expect(stored != nullptr
+               && stored->sourceTrackId == project.tracks[0].id
+               && stored->outputChannel == 2,
+           "A hardware tone path links DI, send, and return tracks.");
+    expect(history.undo(project), "Reamp route creation can be undone.");
+    expect(project.reampRoutes.empty(), "Undo removes the reamp relationship.");
+}
+
 void packagePersistence()
 {
     auto project = studio::Project::createDefault();
@@ -703,6 +764,16 @@ void packagePersistence()
     expect(package.getChildFile("recovery/latest.json").existsAsFile(), "Package contains a recovery point.");
 
     package.deleteRecursively();
+}
+
+void rejectsInvalidBaseMeter()
+{
+    auto project = studio::Project::createDefault();
+    auto value = project.toVar();
+    value.getDynamicObject()->setProperty("timeSignatureDenominator", 0);
+    juce::String error;
+    expect(!studio::Project::fromVar(value, error).has_value(),
+           "Project loading rejects an invalid base meter denominator.");
 }
 
 void pluginAwareExportGuard()
@@ -888,7 +959,9 @@ int main()
     playlistsAndComping();
     linkedMultitrackEditing();
     audioProcessingTools();
+    reampWorkflow();
     packagePersistence();
+    rejectsInvalidBaseMeter();
     pluginAwareExportGuard();
     pluginCatalogFiltering();
     pluginBridgeProtocol();

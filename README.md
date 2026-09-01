@@ -35,10 +35,10 @@ The repository now contains a working native C++20 and JUCE 9 application with:
 - Automated model, command-history, and project-persistence tests on macOS and
   Windows
 
-This is the first vertical slice, not the full 1.0 feature set. Plugin editors,
-automation, real-time plugin-inclusive bounce, linked multitrack editing, MIDI,
-mastering, DAWproject exchange, and the bundled device suite remain on the
-accepted roadmap.
+This now includes the Phase 1 vertical slice and Phase 2 professional tracking
+and editing workflows, not the full 1.0 feature set. Plugin editors, automation,
+real-time plugin-inclusive bounce, MIDI, mastering, DAWproject exchange, and the
+bundled device suite remain on the accepted roadmap.
 
 ## Build
 
@@ -106,6 +106,14 @@ Arm two or more parent tracks and choose **Link armed parent tracks** in
 delete, and comp operations then apply as one undoable command across the active
 takes at the same timeline position. The same menu selects the timing reference,
 quantize strength, protected anchors, group suspension, and unlinking.
+
+For reamping, select a DI parent in **TRACKING SETUP** and create either a
+hardware path to an existing return track or a plugin tone path. Hardware paths
+route the processed DI to the selected interface output, capture the configured
+return input, and can send an impulse to measure round-trip latency. Recorded
+returns are shifted by the measured latency plus the saved fine-alignment offset
+and can invert polarity. Plugin paths create a non-destructive track referencing
+the DI media; add VST3 inserts there to build the tone.
 
 Each completed pass creates grouped `v1`, `v2`, `v3`, ... child tracks directly
 below every recorded parent. A multitrack pass enters the project as one

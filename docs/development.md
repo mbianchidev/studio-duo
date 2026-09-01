@@ -174,6 +174,23 @@ tracks. Consolidation renders the processed selection into new WAV files and
 replaces clip state through one undoable command while leaving original media
 untouched.
 
+Reamp routes persist the DI source, hardware or plugin tone-path type, return
+track, send and input channels, measured latency, polarity, fine alignment, and
+enabled state. Hardware paths copy the source track's compensated post-insert
+signal to the selected output pair without removing it from the main mix. The
+calibration state machine emits one full-scale-safe impulse, suppresses software
+monitoring, detects the returned pulse, and stores the round-trip sample count.
+Return recordings use the route input and are placed earlier by the calibrated
+latency plus fine adjustment. Plugin paths duplicate references to the active DI
+playlist into a new ordinary audio track so the Phase 1 sandboxed VST3 insert
+chain becomes a basic non-destructive tone path.
+
+To test hardware calibration, physically route the configured reamp output back
+to the configured return input, enable both channels in **I/O**, choose
+**Calibrate round-trip latency**, and confirm a positive sample count appears.
+Record a sharp DI transient through the path with pre-roll longer than the
+reported latency; the DI and returned transient should align after capture.
+
 Clip move commands capture the original track, clip index, and timeline
 position. Horizontal drags change time; vertical drags transfer the same clip
 ID to another audio track. Undo restores both placement dimensions.

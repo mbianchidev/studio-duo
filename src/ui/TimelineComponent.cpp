@@ -343,6 +343,35 @@ void TimelineComponent::paint(juce::Graphics& graphics)
                                   18,
                                   juce::Justification::centredRight);
             }
+            if (project->reampRouteForReturn(track.id) != nullptr)
+            {
+                graphics.setColour(juce::Colour(StudioColours::amber));
+                graphics.setFont(juce::Font(juce::FontOptions(8.0f,
+                                                              juce::Font::bold)));
+                graphics.drawText("TONE RETURN",
+                                  viewportPositionX + 88,
+                                  y + 67,
+                                  76,
+                                  15,
+                                  juce::Justification::centredRight);
+            }
+            else if (std::any_of(project->reampRoutes.cbegin(),
+                                 project->reampRoutes.cend(),
+                                 [&track](const auto& route)
+                                 {
+                                     return route.sourceTrackId == track.id;
+                                 }))
+            {
+                graphics.setColour(juce::Colour(StudioColours::amber));
+                graphics.setFont(juce::Font(juce::FontOptions(8.0f,
+                                                              juce::Font::bold)));
+                graphics.drawText("DI SOURCE",
+                                  viewportPositionX + 96,
+                                  y + 67,
+                                  68,
+                                  15,
+                                  juce::Justification::centredRight);
+            }
         }
     }
 

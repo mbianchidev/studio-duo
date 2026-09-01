@@ -92,8 +92,8 @@ target_include_directories(
     StudioDuo
     PRIVATE
         src
-        ${signalsmith_stretch_SOURCE_DIR}
 )
+target_include_directories(StudioDuo SYSTEM PRIVATE ${signalsmith_stretch_SOURCE_DIR})
 
 target_compile_definitions(
     StudioDuo

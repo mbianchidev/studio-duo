@@ -212,6 +212,64 @@ std::optional<EditGroup> EditGroup::fromVar(const juce::var& value,
     return group;
 }
 
+juce::var ReampRoute::toVar() const
+{
+    auto object = std::make_unique<juce::DynamicObject>();
+    object->setProperty("id", id);
+    object->setProperty("name", name);
+    object->setProperty("type", tonePathTypeToString(type));
+    object->setProperty("sourceTrackId", sourceTrackId);
+    object->setProperty("returnTrackId", returnTrackId);
+    object->setProperty("outputChannel", outputChannel);
+    object->setProperty("inputChannel", inputChannel);
+    object->setProperty("latencySamples", latencySamples);
+    object->setProperty("alignmentOffsetSamples", alignmentOffsetSamples);
+    object->setProperty("polarityInverted", polarityInverted);
+    object->setProperty("enabled", enabled);
+    return juce::var(object.release());
+}
+
+std::optional<ReampRoute> ReampRoute::fromVar(const juce::var& value,
+                                              juce::String& error)
+{
+    const auto* object = requireObject(value, error, "Reamp route");
+    if (object == nullptr)
+        return std::nullopt;
+
+    ReampRoute route;
+    route.id = object->getProperty("id").toString();
+    route.name = object->getProperty("name").toString();
+    const auto type = tonePathTypeFromString(object->getProperty("type").toString());
+    if (!type.has_value())
+    {
+        error = "Reamp route contains an unsupported tone-path type.";
+        return std::nullopt;
+    }
+    route.type = *type;
+    route.sourceTrackId = object->getProperty("sourceTrackId").toString();
+    route.returnTrackId = object->getProperty("returnTrackId").toString();
+    route.outputChannel = std::max(0,
+                                   integerProperty(*object, "outputChannel", 2));
+    route.inputChannel = std::max(0,
+                                  integerProperty(*object, "inputChannel", 0));
+    route.latencySamples = std::max(0,
+                                    integerProperty(*object, "latencySamples", 0));
+    route.alignmentOffsetSamples
+        = integerProperty(*object, "alignmentOffsetSamples", 0);
+    route.polarityInverted = booleanProperty(*object, "polarityInverted", false);
+    route.enabled = booleanProperty(*object, "enabled", true);
+    if (route.id.isEmpty()
+        || route.name.trim().isEmpty()
+        || route.sourceTrackId.isEmpty()
+        || route.returnTrackId.isEmpty()
+        || route.sourceTrackId == route.returnTrackId)
+    {
+        error = "Reamp routes require distinct source and return tracks.";
+        return std::nullopt;
+    }
+    return route;
+}
+
 juce::var PluginInsert::toVar() const
 {
     auto object = std::make_unique<juce::DynamicObject>();
@@ -824,6 +882,18 @@ const EditGroup* Project::editGroupForTrack(const juce::String& trackId) const
     return iterator == editGroups.cend() ? nullptr : &*iterator;
 }
 
+const ReampRoute* Project::reampRouteForReturn(const juce::String& trackId) const
+{
+    const auto rootId = rootTrackId(trackId);
+    const auto iterator = std::find_if(reampRoutes.cbegin(),
+                                       reampRoutes.cend(),
+                                       [&rootId](const auto& route)
+    {
+        return route.returnTrackId == rootId;
+    });
+    return iterator == reampRoutes.cend() ? nullptr : &*iterator;
+}
+
 double Project::tempoAt(double seconds) const noexcept
 {
     if (tempoChanges.empty())
@@ -1076,6 +1146,10 @@ juce::var Project::toVar() const
     for (const auto& group : editGroups)
         editGroupValues.add(group.toVar());
     object->setProperty("editGroups", juce::var(editGroupValues));
+    juce::Array<juce::var> reampValues;
+    for (const auto& route : reampRoutes)
+        reampValues.add(route.toVar());
+    object->setProperty("reampRoutes", juce::var(reampValues));
 
     juce::Array<juce::var> trackValues;
     trackValues.ensureStorageAllocated(static_cast<int>(tracks.size()));
@@ -1105,6 +1179,11 @@ std::optional<Project> Project::fromVar(const juce::var& value, juce::String& er
     project.tempo = juce::jlimit(20.0, 400.0, numberProperty(*object, "tempo", 120.0));
     project.timeSignatureNumerator = juce::jlimit(1, 32, integerProperty(*object, "timeSignatureNumerator", 4));
     project.timeSignatureDenominator = integerProperty(*object, "timeSignatureDenominator", 4);
+    if (!validMeterDenominator(project.timeSignatureDenominator))
+    {
+        error = "Project contains an unsupported base time-signature denominator.";
+        return std::nullopt;
+    }
     const auto tempoValues = object->getProperty("tempoChanges");
     if (tempoValues.isArray())
     {
@@ -1187,6 +1266,17 @@ std::optional<Project> Project::fromVar(const juce::var& value, juce::String& er
             project.editGroups.push_back(std::move(*group));
         }
     }
+    const auto reampValues = object->getProperty("reampRoutes");
+    if (reampValues.isArray())
+    {
+        for (const auto& routeValue : *reampValues.getArray())
+        {
+            auto route = ReampRoute::fromVar(routeValue, error);
+            if (!route.has_value())
+                return std::nullopt;
+            project.reampRoutes.push_back(std::move(*route));
+        }
+    }
 
     const auto trackValues = object->getProperty("tracks");
     if (!trackValues.isArray())
@@ -1256,6 +1346,26 @@ std::optional<Project> Project::fromVar(const juce::var& value, juce::String& er
             groupedTracks.push_back(trackId);
         }
     }
+    std::vector<juce::String> returnTracks;
+    for (const auto& route : project.reampRoutes)
+    {
+        const auto* source = project.findTrack(route.sourceTrackId);
+        const auto* returnTrack = project.findTrack(route.returnTrackId);
+        if (source == nullptr
+            || returnTrack == nullptr
+            || source->parentTrackId.isNotEmpty()
+            || returnTrack->parentTrackId.isNotEmpty()
+            || source->type != TrackType::audio
+            || returnTrack->type != TrackType::audio
+            || std::find(returnTracks.cbegin(),
+                         returnTracks.cend(),
+                         route.returnTrackId) != returnTracks.cend())
+        {
+            error = "A reamp route references unavailable or duplicate tracks.";
+            return std::nullopt;
+        }
+        returnTracks.push_back(route.returnTrackId);
+    }
 
     return project;
 }
@@ -1322,6 +1432,23 @@ std::optional<StretchMode> stretchModeFromString(const juce::String& value)
     if (value == "monophonic") return StretchMode::monophonic;
     if (value == "polyphonic" || value.isEmpty()) return StretchMode::polyphonic;
     if (value == "mix") return StretchMode::mix;
+    return std::nullopt;
+}
+
+juce::String tonePathTypeToString(TonePathType type)
+{
+    switch (type)
+    {
+        case TonePathType::hardware: return "hardware";
+        case TonePathType::plugin: return "plugin";
+    }
+    return "hardware";
+}
+
+std::optional<TonePathType> tonePathTypeFromString(const juce::String& value)
+{
+    if (value == "hardware" || value.isEmpty()) return TonePathType::hardware;
+    if (value == "plugin") return TonePathType::plugin;
     return std::nullopt;
 }
 

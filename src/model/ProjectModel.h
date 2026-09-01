@@ -118,6 +118,31 @@ struct EditGroup
                                             juce::String& error);
 };
 
+enum class TonePathType
+{
+    hardware,
+    plugin
+};
+
+struct ReampRoute
+{
+    juce::String id { juce::Uuid().toString() };
+    juce::String name { "Tone path" };
+    TonePathType type = TonePathType::hardware;
+    juce::String sourceTrackId;
+    juce::String returnTrackId;
+    int outputChannel = 2;
+    int inputChannel = 0;
+    int latencySamples = 0;
+    int alignmentOffsetSamples = 0;
+    bool polarityInverted = false;
+    bool enabled = true;
+
+    [[nodiscard]] juce::var toVar() const;
+    static std::optional<ReampRoute> fromVar(const juce::var& value,
+                                             juce::String& error);
+};
+
 struct PluginInsert
 {
     juce::String id { juce::Uuid().toString() };
@@ -226,6 +251,7 @@ public:
     double loopStartSeconds = 0.0;
     double loopEndSeconds = 8.0;
     std::vector<EditGroup> editGroups;
+    std::vector<ReampRoute> reampRoutes;
     std::vector<Track> tracks;
 
     static Project createDefault();
@@ -240,6 +266,8 @@ public:
     [[nodiscard]] juce::String activeTakeTrackId(const juce::String& parentTrackId) const;
     [[nodiscard]] juce::String rootTrackId(const juce::String& trackId) const;
     [[nodiscard]] const EditGroup* editGroupForTrack(const juce::String& trackId) const;
+    [[nodiscard]] const ReampRoute* reampRouteForReturn(
+        const juce::String& trackId) const;
     [[nodiscard]] double tempoAt(double seconds) const noexcept;
     [[nodiscard]] MeterChange meterAt(double seconds) const noexcept;
     [[nodiscard]] double beatsAt(double seconds) const noexcept;
@@ -259,6 +287,8 @@ juce::String pluginBridgeModeToString(PluginBridgeMode mode);
 std::optional<PluginBridgeMode> pluginBridgeModeFromString(const juce::String& value);
 juce::String stretchModeToString(StretchMode mode);
 std::optional<StretchMode> stretchModeFromString(const juce::String& value);
+juce::String tonePathTypeToString(TonePathType type);
+std::optional<TonePathType> tonePathTypeFromString(const juce::String& value);
 std::vector<CompRegion> replaceCompRegion(const std::vector<CompRegion>& existing,
                                           CompRegion replacement);
 std::vector<RecordingPass> recordingPasses(double capturedDurationSeconds,

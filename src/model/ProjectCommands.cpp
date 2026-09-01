@@ -673,6 +673,10 @@ bool SplitClipCommand::perform(Project& project, juce::String& error)
                                >= leftDuration;
                        }),
         leftSide.warpMarkers.end());
+    const auto rightId = rightSide.id;
+    rightSide = original;
+    rightSide.id = rightId;
+    rightSide.name = original.name + " B";
     rightSide.startSeconds = splitSeconds;
     rightSide.sourceOffsetSeconds = splitSourceSeconds;
     rightSide.sourceRangeStartSeconds = splitSourceSeconds;
@@ -939,6 +943,64 @@ bool SetEditGroupsCommand::validate(const Project& project,
     return true;
 }
 
+SetReampRoutesCommand::SetReampRoutesCommand(std::vector<ReampRoute> before,
+                                             std::vector<ReampRoute> after)
+    : oldRoutes(std::move(before)),
+      newRoutes(std::move(after))
+{
+}
+
+juce::String SetReampRoutesCommand::name() const
+{
+    return "Change reamp routes";
+}
+
+bool SetReampRoutesCommand::perform(Project& project, juce::String& error)
+{
+    if (!validate(project, newRoutes, error))
+        return false;
+    project.reampRoutes = newRoutes;
+    return true;
+}
+
+void SetReampRoutesCommand::undo(Project& project)
+{
+    project.reampRoutes = oldRoutes;
+}
+
+bool SetReampRoutesCommand::validate(const Project& project,
+                                     const std::vector<ReampRoute>& routes,
+                                     juce::String& error)
+{
+    std::vector<juce::String> returnTracks;
+    for (const auto& route : routes)
+    {
+        const auto* source = project.findTrack(route.sourceTrackId);
+        const auto* returnTrack = project.findTrack(route.returnTrackId);
+        if (route.id.isEmpty()
+            || route.name.trim().isEmpty()
+            || source == nullptr
+            || returnTrack == nullptr
+            || source->type != TrackType::audio
+            || returnTrack->type != TrackType::audio
+            || source->parentTrackId.isNotEmpty()
+            || returnTrack->parentTrackId.isNotEmpty()
+            || source->id == returnTrack->id
+            || route.outputChannel < 0
+            || route.inputChannel < 0
+            || route.latencySamples < 0
+            || std::find(returnTracks.cbegin(),
+                         returnTracks.cend(),
+                         route.returnTrackId) != returnTracks.cend())
+        {
+            error = "Reamp routes need unique audio returns and valid hardware channels.";
+            return false;
+        }
+        returnTracks.push_back(route.returnTrackId);
+    }
+    return true;
+}
+
 ProjectTransportState ProjectTransportState::fromProject(const Project& project)
 {
     return {
@@ -982,6 +1044,12 @@ bool SetProjectTransportCommand::perform(Project& project, juce::String& error)
         || newState.tempo > 400.0
         || newState.timeSignatureNumerator < 1
         || newState.timeSignatureNumerator > 32
+        || (newState.timeSignatureDenominator != 1
+            && newState.timeSignatureDenominator != 2
+            && newState.timeSignatureDenominator != 4
+            && newState.timeSignatureDenominator != 8
+            && newState.timeSignatureDenominator != 16
+            && newState.timeSignatureDenominator != 32)
         || newState.punchInSeconds < 0.0
         || newState.punchOutSeconds <= newState.punchInSeconds
         || newState.loopStartSeconds < 0.0
@@ -1281,6 +1349,7 @@ bool RemoveTrackCommand::perform(Project& project, juce::String& error)
             }
         }
         oldEditGroups = project.editGroups;
+        oldReampRoutes = project.reampRoutes;
 
         for (std::size_t index = 0; index < project.tracks.size(); ++index)
         {
@@ -1354,6 +1423,21 @@ bool RemoveTrackCommand::perform(Project& project, juce::String& error)
                            return group.trackIds.size() < 2;
                        }),
         project.editGroups.end());
+    project.reampRoutes.erase(
+        std::remove_if(project.reampRoutes.begin(),
+                       project.reampRoutes.end(),
+                       [this](const auto& route)
+                       {
+                           return std::any_of(
+                               removedTracks.cbegin(),
+                               removedTracks.cend(),
+                               [&route](const auto& removed)
+                               {
+                                   return removed.second.id == route.sourceTrackId
+                                       || removed.second.id == route.returnTrackId;
+                               });
+                       }),
+        project.reampRoutes.end());
     return true;
 }
 
@@ -1370,6 +1454,7 @@ void RemoveTrackCommand::undo(Project& project)
         parent->compRegions = oldCompRegions;
     }
     project.editGroups = oldEditGroups;
+    project.reampRoutes = oldReampRoutes;
 }
 
 DuplicateTrackCommand::DuplicateTrackCommand(juce::String trackToDuplicate)
