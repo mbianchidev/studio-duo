@@ -756,7 +756,9 @@ std::optional<StudioAudioEngine::RenderSnapshot> StudioAudioEngine::buildSnapsho
         snapshot.masterAudible = !master->muted;
     }
 
-    const auto buildClips = [this, targetSampleRate, &error](const Track& track)
+    const auto buildClips = [this, targetSampleRate, &error](
+                                const Track& track,
+                                const std::vector<CompRegion>* compRegions)
         -> std::optional<std::vector<RenderClip>>
     {
         std::vector<RenderClip> clips;
@@ -770,21 +772,47 @@ std::optional<StudioAudioEngine::RenderSnapshot> StudioAudioEngine::buildSnapsho
             if (!audio.has_value())
                 return std::nullopt;
 
-            RenderClip renderClip;
-            renderClip.startSample = static_cast<std::int64_t>(std::llround(clip.startSeconds * targetSampleRate));
-            renderClip.sourceOffsetSamples = static_cast<std::int64_t>(
-                std::llround(clip.sourceOffsetSeconds * targetSampleRate));
-            renderClip.lengthSamples = static_cast<std::int64_t>(
-                std::llround(clip.durationSeconds * targetSampleRate));
-            renderClip.gain = juce::Decibels::decibelsToGain(clip.gainDecibels);
-            renderClip.samples = std::move(*audio);
+            const auto addRange = [&](double rangeStart, double rangeEnd)
+            {
+                const auto intersectionStart = std::max(clip.startSeconds, rangeStart);
+                const auto intersectionEnd = std::min(clip.endSeconds(), rangeEnd);
+                if (intersectionEnd <= intersectionStart)
+                    return;
 
-            const auto available = static_cast<std::int64_t>(renderClip.samples.getNumSamples())
-                - renderClip.sourceOffsetSamples;
-            renderClip.lengthSamples = std::max<std::int64_t>(0,
-                                                               std::min(renderClip.lengthSamples, available));
-            if (renderClip.lengthSamples > 0)
-                clips.push_back(std::move(renderClip));
+                RenderClip renderClip;
+                renderClip.startSample = static_cast<std::int64_t>(
+                    std::llround(intersectionStart * targetSampleRate));
+                renderClip.sourceOffsetSamples = static_cast<std::int64_t>(
+                    std::llround((clip.sourceOffsetSeconds
+                                  + intersectionStart
+                                      - clip.startSeconds)
+                                 * targetSampleRate));
+                renderClip.lengthSamples = static_cast<std::int64_t>(
+                    std::llround((intersectionEnd - intersectionStart)
+                                 * targetSampleRate));
+                renderClip.gain = juce::Decibels::decibelsToGain(clip.gainDecibels);
+                renderClip.samples = *audio;
+
+                const auto available = static_cast<std::int64_t>(
+                    renderClip.samples.getNumSamples())
+                    - renderClip.sourceOffsetSamples;
+                renderClip.lengthSamples = std::max<std::int64_t>(
+                    0,
+                    std::min(renderClip.lengthSamples, available));
+                if (renderClip.lengthSamples > 0)
+                    clips.push_back(std::move(renderClip));
+            };
+
+            if (compRegions == nullptr)
+            {
+                addRange(clip.startSeconds, clip.endSeconds());
+            }
+            else
+            {
+                for (const auto& region : *compRegions)
+                    if (region.sourceTrackId == track.id)
+                        addRange(region.startSeconds, region.endSeconds());
+            }
         }
 
         return clips;
@@ -801,7 +829,7 @@ std::optional<StudioAudioEngine::RenderSnapshot> StudioAudioEngine::buildSnapsho
         renderTrack.pan = parent.pan;
         renderTrack.audible = !parent.muted;
 
-        auto parentClips = buildClips(parent);
+        auto parentClips = buildClips(parent, nullptr);
         if (!parentClips.has_value())
             return std::nullopt;
 
@@ -811,12 +839,28 @@ std::optional<StudioAudioEngine::RenderSnapshot> StudioAudioEngine::buildSnapsho
         parentSource.clips = std::move(*parentClips);
         renderTrack.sources.push_back(std::move(parentSource));
 
+        const auto activeTakeId = project.activeTakeTrackId(parent.id);
         for (const auto& child : project.tracks)
         {
             if (child.parentTrackId != parent.id)
                 continue;
 
-            auto childClips = buildClips(child);
+            const auto selectedByComp = std::any_of(
+                parent.compRegions.cbegin(),
+                parent.compRegions.cend(),
+                [&child](const auto& region)
+                {
+                    return region.sourceTrackId == child.id;
+                });
+            const auto selectedByPlaylist = parent.compRegions.empty()
+                && child.id == activeTakeId;
+            const auto selectedBySolo = child.solo;
+            if (!selectedByComp && !selectedByPlaylist && !selectedBySolo)
+                continue;
+
+            auto childClips = buildClips(
+                child,
+                selectedByComp && !selectedBySolo ? &parent.compRegions : nullptr);
             if (!childClips.has_value())
                 return std::nullopt;
 

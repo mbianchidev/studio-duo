@@ -49,6 +49,9 @@ public:
     std::function<void()> onTrimStartSelected;
     std::function<void()> onTrimEndSelected;
     std::function<void()> onDeleteSelected;
+    std::function<void(const juce::String&)> onUseTake;
+    std::function<void(const juce::String&)> onUseClipForComp;
+    std::function<void(const juce::String&)> onClearComp;
 
     void paint(juce::Graphics& graphics) override;
     void mouseDown(const juce::MouseEvent& event) override;

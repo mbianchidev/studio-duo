@@ -901,6 +901,42 @@ MainComponent::MainComponent()
     timeline.onTrimStartSelected = [this] { trimSelectedClipStartToPlayhead(); };
     timeline.onTrimEndSelected = [this] { trimSelectedClipEndToPlayhead(); };
     timeline.onDeleteSelected = [this] { deleteSelectedClip(); };
+    timeline.onUseTake = [this](const auto& takeTrackId)
+    {
+        const auto* take = project.findTrack(takeTrackId);
+        if (take == nullptr || take->parentTrackId.isEmpty())
+            return;
+        perform(std::make_unique<SetActiveTakeCommand>(take->parentTrackId,
+                                                       takeTrackId));
+    };
+    timeline.onUseClipForComp = [this](const auto& clipId)
+    {
+        const auto* take = project.findTrackContainingClip(clipId);
+        const auto* clip = project.findClip(clipId);
+        if (take == nullptr || clip == nullptr || take->parentTrackId.isEmpty())
+            return;
+        const auto* parent = project.findTrack(take->parentTrackId);
+        if (parent == nullptr)
+            return;
+
+        CompRegion region;
+        region.sourceTrackId = take->id;
+        region.startSeconds = clip->startSeconds;
+        region.durationSeconds = clip->durationSeconds;
+        auto updated = replaceCompRegion(parent->compRegions, std::move(region));
+        perform(std::make_unique<SetCompRegionsCommand>(parent->id,
+                                                        parent->compRegions,
+                                                        std::move(updated)));
+    };
+    timeline.onClearComp = [this](const auto& parentTrackId)
+    {
+        const auto* parent = project.findTrack(parentTrackId);
+        if (parent == nullptr || parent->compRegions.empty())
+            return;
+        perform(std::make_unique<SetCompRegionsCommand>(parent->id,
+                                                        parent->compRegions,
+                                                        std::vector<CompRegion> {}));
+    };
 
     mixer = std::make_unique<MixerPanel>();
     mixer->setProject(&project);
@@ -1814,7 +1850,6 @@ void MainComponent::completeRecording(
     const auto durationTolerance = 1.0 / audioEngine.currentSampleRate();
     juce::String warning;
     std::vector<Track> completedTracks;
-    completedTracks.reserve(targets.size());
     juce::String firstClipId;
     for (std::size_t index = 0; index < targets.size(); ++index)
     {
@@ -1849,30 +1884,52 @@ void MainComponent::completeRecording(
             return;
         }
 
-        AudioClip clip;
-        clip.name = recording.file.getFileNameWithoutExtension();
-        clip.sourceFile = recording.file;
-        clip.startSeconds = recordingStartSeconds;
-        clip.durationSeconds = recording.durationSeconds;
-        clip.sourceLengthSeconds = recording.durationSeconds;
-        clip.sourceRangeEndSeconds = recording.durationSeconds;
-        clip.colour = target.versionTrack.colour;
-        if (firstClipId.isEmpty())
-            firstClipId = clip.id;
-        target.versionTrack.clips.push_back(std::move(clip));
-        completedTracks.push_back(std::move(target.versionTrack));
+        const auto passes = recordingPasses(recording.durationSeconds,
+                                            activeRecordingPlan);
+        for (std::size_t passIndex = 0; passIndex < passes.size(); ++passIndex)
+        {
+            auto take = target.versionTrack;
+            if (passIndex > 0)
+            {
+                take.id = juce::Uuid().toString();
+                take.versionNumber += static_cast<int>(passIndex);
+                take.name = "v" + juce::String(take.versionNumber);
+                take.clips.clear();
+            }
+
+            const auto& pass = passes[passIndex];
+            AudioClip clip;
+            clip.name = recording.file.getFileNameWithoutExtension()
+                + (passes.size() > 1
+                       ? " pass " + juce::String(static_cast<int>(passIndex + 1))
+                       : juce::String());
+            clip.sourceFile = recording.file;
+            clip.startSeconds = pass.timelineStartSeconds;
+            clip.sourceOffsetSeconds = pass.sourceOffsetSeconds;
+            clip.durationSeconds = pass.durationSeconds;
+            clip.sourceLengthSeconds = recording.durationSeconds;
+            clip.sourceRangeStartSeconds = pass.sourceOffsetSeconds;
+            clip.sourceRangeEndSeconds = pass.sourceOffsetSeconds
+                + pass.durationSeconds;
+            clip.colour = take.colour;
+            if (firstClipId.isEmpty())
+                firstClipId = clip.id;
+            take.clips.push_back(std::move(clip));
+            completedTracks.push_back(std::move(take));
+        }
 
         if (warning.isEmpty() && recording.warning.isNotEmpty())
             warning = recording.warning;
     }
 
     const auto firstTrackId = completedTracks.front().id;
+    const auto completedTakeCount = completedTracks.size();
     if (!perform(std::make_unique<AddRecordingTakeCommand>(std::move(completedTracks))))
         return;
     selectClip(firstTrackId, firstClipId);
     const auto savedMessage = "Saved "
-        + juce::String(static_cast<int>(recordings.size()))
-        + (recordings.size() == 1 ? " track (" : " synchronized tracks (")
+        + juce::String(static_cast<int>(completedTakeCount))
+        + (completedTakeCount == 1 ? " take (" : " synchronized takes (")
         + juce::String(expectedDuration, 2)
         + " s).";
     setStatus(warning.isNotEmpty()

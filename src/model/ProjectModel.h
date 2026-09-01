@@ -65,6 +65,26 @@ struct MusicalPosition
     MeterChange meter;
 };
 
+struct RecordingPass
+{
+    double timelineStartSeconds = 0.0;
+    double sourceOffsetSeconds = 0.0;
+    double durationSeconds = 0.0;
+};
+
+struct CompRegion
+{
+    juce::String id { juce::Uuid().toString() };
+    juce::String sourceTrackId;
+    double startSeconds = 0.0;
+    double durationSeconds = 0.0;
+
+    [[nodiscard]] double endSeconds() const noexcept;
+    [[nodiscard]] juce::var toVar() const;
+    static std::optional<CompRegion> fromVar(const juce::var& value,
+                                             juce::String& error);
+};
+
 struct PluginInsert
 {
     juce::String id { juce::Uuid().toString() };
@@ -116,6 +136,8 @@ struct Track
     juce::String parentTrackId;
     int versionNumber = 0;
     bool versionsCollapsed = false;
+    juce::String activeTakeTrackId;
+    std::vector<CompRegion> compRegions;
     TrackType type = TrackType::audio;
     float volumeDecibels = 0.0f;
     float pan = 0.0f;
@@ -170,6 +192,7 @@ public:
     [[nodiscard]] Track* findTrackContainingClip(const juce::String& clipId);
     [[nodiscard]] const Track* findTrackContainingClip(const juce::String& clipId) const;
     [[nodiscard]] std::vector<juce::String> armedAudioParentTrackIds() const;
+    [[nodiscard]] juce::String activeTakeTrackId(const juce::String& parentTrackId) const;
     [[nodiscard]] double tempoAt(double seconds) const noexcept;
     [[nodiscard]] MeterChange meterAt(double seconds) const noexcept;
     [[nodiscard]] double beatsAt(double seconds) const noexcept;
@@ -187,4 +210,8 @@ juce::String trackTypeToString(TrackType type);
 std::optional<TrackType> trackTypeFromString(const juce::String& value);
 juce::String pluginBridgeModeToString(PluginBridgeMode mode);
 std::optional<PluginBridgeMode> pluginBridgeModeFromString(const juce::String& value);
+std::vector<CompRegion> replaceCompRegion(const std::vector<CompRegion>& existing,
+                                          CompRegion replacement);
+std::vector<RecordingPass> recordingPasses(double capturedDurationSeconds,
+                                            const RecordingPlan& plan);
 }

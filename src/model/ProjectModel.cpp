@@ -269,6 +269,44 @@ std::optional<AudioClip> AudioClip::fromVar(const juce::var& value, juce::String
     return clip;
 }
 
+double CompRegion::endSeconds() const noexcept
+{
+    return startSeconds + durationSeconds;
+}
+
+juce::var CompRegion::toVar() const
+{
+    auto object = std::make_unique<juce::DynamicObject>();
+    object->setProperty("id", id);
+    object->setProperty("sourceTrackId", sourceTrackId);
+    object->setProperty("startSeconds", startSeconds);
+    object->setProperty("durationSeconds", durationSeconds);
+    return juce::var(object.release());
+}
+
+std::optional<CompRegion> CompRegion::fromVar(const juce::var& value,
+                                              juce::String& error)
+{
+    const auto* object = requireObject(value, error, "Comp region");
+    if (object == nullptr)
+        return std::nullopt;
+
+    CompRegion region;
+    region.id = object->getProperty("id").toString();
+    region.sourceTrackId = object->getProperty("sourceTrackId").toString();
+    region.startSeconds = numberProperty(*object, "startSeconds", 0.0);
+    region.durationSeconds = numberProperty(*object, "durationSeconds", 0.0);
+    if (region.id.isEmpty()
+        || region.sourceTrackId.isEmpty()
+        || region.startSeconds < 0.0
+        || region.durationSeconds <= 0.0)
+    {
+        error = "Comp regions require IDs and a positive timeline range.";
+        return std::nullopt;
+    }
+    return region;
+}
+
 juce::var Track::toVar() const
 {
     auto object = std::make_unique<juce::DynamicObject>();
@@ -277,6 +315,7 @@ juce::var Track::toVar() const
     object->setProperty("parentTrackId", parentTrackId);
     object->setProperty("versionNumber", versionNumber);
     object->setProperty("versionsCollapsed", versionsCollapsed);
+    object->setProperty("activeTakeTrackId", activeTakeTrackId);
     object->setProperty("type", trackTypeToString(type));
     object->setProperty("volumeDecibels", volumeDecibels);
     object->setProperty("pan", pan);
@@ -300,6 +339,12 @@ juce::var Track::toVar() const
         clipValues.add(clip.toVar());
 
     object->setProperty("clips", juce::var(clipValues));
+
+    juce::Array<juce::var> compValues;
+    compValues.ensureStorageAllocated(static_cast<int>(compRegions.size()));
+    for (const auto& region : compRegions)
+        compValues.add(region.toVar());
+    object->setProperty("compRegions", juce::var(compValues));
     return juce::var(object.release());
 }
 
@@ -315,6 +360,7 @@ std::optional<Track> Track::fromVar(const juce::var& value, juce::String& error)
     track.parentTrackId = object->getProperty("parentTrackId").toString();
     track.versionNumber = juce::jmax(0, integerProperty(*object, "versionNumber", 0));
     track.versionsCollapsed = booleanProperty(*object, "versionsCollapsed", false);
+    track.activeTakeTrackId = object->getProperty("activeTakeTrackId").toString();
 
     const auto type = trackTypeFromString(object->getProperty("type").toString());
     if (!type.has_value())
@@ -367,6 +413,23 @@ std::optional<Track> Track::fromVar(const juce::var& value, juce::String& error)
             return std::nullopt;
 
         track.clips.push_back(std::move(*clip));
+    }
+
+    const auto compValues = object->getProperty("compRegions");
+    if (!compValues.isVoid())
+    {
+        if (!compValues.isArray())
+        {
+            error = "Track comp regions must be a JSON array.";
+            return std::nullopt;
+        }
+        for (const auto& compValue : *compValues.getArray())
+        {
+            auto region = CompRegion::fromVar(compValue, error);
+            if (!region.has_value())
+                return std::nullopt;
+            track.compRegions.push_back(std::move(*region));
+        }
     }
 
     if (track.id.isEmpty())
@@ -485,6 +548,29 @@ std::vector<juce::String> Project::armedAudioParentTrackIds() const
             parentIds.push_back(parentId);
     }
     return parentIds;
+}
+
+juce::String Project::activeTakeTrackId(const juce::String& parentTrackId) const
+{
+    const auto* parent = findTrack(parentTrackId);
+    if (parent == nullptr)
+        return {};
+    if (parent->activeTakeTrackId.isNotEmpty())
+    {
+        const auto* active = findTrack(parent->activeTakeTrackId);
+        if (active != nullptr && active->parentTrackId == parentTrackId)
+            return active->id;
+    }
+
+    const Track* latest = nullptr;
+    for (const auto& track : tracks)
+    {
+        if (track.parentTrackId != parentTrackId)
+            continue;
+        if (latest == nullptr || track.versionNumber > latest->versionNumber)
+            latest = &track;
+    }
+    return latest != nullptr ? latest->id : juce::String();
 }
 
 double Project::tempoAt(double seconds) const noexcept
@@ -858,6 +944,28 @@ std::optional<Project> Project::fromVar(const juce::var& value, juce::String& er
         return std::nullopt;
     }
 
+    for (const auto& track : project.tracks)
+    {
+        if (track.activeTakeTrackId.isNotEmpty())
+        {
+            const auto* activeTake = project.findTrack(track.activeTakeTrackId);
+            if (activeTake == nullptr || activeTake->parentTrackId != track.id)
+            {
+                error = "A track references an invalid active take.";
+                return std::nullopt;
+            }
+        }
+        for (const auto& region : track.compRegions)
+        {
+            const auto* take = project.findTrack(region.sourceTrackId);
+            if (take == nullptr || take->parentTrackId != track.id)
+            {
+                error = "A comp region references an invalid take lane.";
+                return std::nullopt;
+            }
+        }
+    }
+
     return project;
 }
 
@@ -903,5 +1011,69 @@ std::optional<PluginBridgeMode> pluginBridgeModeFromString(const juce::String& v
     if (value == "araCompatibility") return PluginBridgeMode::araCompatibility;
     if (value == "trustedInProcess") return PluginBridgeMode::trustedInProcess;
     return std::nullopt;
+}
+
+std::vector<CompRegion> replaceCompRegion(const std::vector<CompRegion>& existing,
+                                          CompRegion replacement)
+{
+    std::vector<CompRegion> result;
+    const auto replacementEnd = replacement.endSeconds();
+    for (const auto& region : existing)
+    {
+        if (region.endSeconds() <= replacement.startSeconds
+            || region.startSeconds >= replacementEnd)
+        {
+            result.push_back(region);
+            continue;
+        }
+
+        if (region.startSeconds < replacement.startSeconds)
+        {
+            auto left = region;
+            left.durationSeconds = replacement.startSeconds - region.startSeconds;
+            result.push_back(std::move(left));
+        }
+        if (region.endSeconds() > replacementEnd)
+        {
+            auto right = region;
+            if (region.startSeconds < replacement.startSeconds)
+                right.id = juce::Uuid().toString();
+            right.startSeconds = replacementEnd;
+            right.durationSeconds = region.endSeconds() - replacementEnd;
+            result.push_back(std::move(right));
+        }
+    }
+
+    if (replacement.durationSeconds > 0.0 && replacement.sourceTrackId.isNotEmpty())
+        result.push_back(std::move(replacement));
+    std::stable_sort(result.begin(),
+                     result.end(),
+                     [](const auto& left, const auto& right)
+                     {
+                         return left.startSeconds < right.startSeconds;
+                     });
+    return result;
+}
+
+std::vector<RecordingPass> recordingPasses(double capturedDurationSeconds,
+                                            const RecordingPlan& plan)
+{
+    const auto duration = std::max(0.0, capturedDurationSeconds);
+    if (duration <= 0.0)
+        return {};
+    if (!plan.loopEnabled || plan.loopEndSeconds <= plan.loopStartSeconds)
+        return { { plan.captureStartSeconds, 0.0, duration } };
+
+    const auto loopDuration = plan.loopEndSeconds - plan.loopStartSeconds;
+    std::vector<RecordingPass> passes;
+    for (auto offset = 0.0; offset < duration - 0.0000001; offset += loopDuration)
+    {
+        passes.push_back({
+            plan.loopStartSeconds,
+            offset,
+            std::min(loopDuration, duration - offset)
+        });
+    }
+    return passes;
 }
 }

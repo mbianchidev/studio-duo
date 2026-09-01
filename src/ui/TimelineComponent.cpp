@@ -297,6 +297,20 @@ void TimelineComponent::paint(juce::Graphics& graphics)
                               24,
                               juce::Justification::centredRight);
         }
+
+        if (childTrack
+            && project->activeTakeTrackId(track.parentTrackId) == track.id)
+        {
+            graphics.setColour(juce::Colour(StudioColours::green));
+            graphics.setFont(juce::Font(juce::FontOptions(8.5f,
+                                                         juce::Font::bold)));
+            graphics.drawText("ACTIVE",
+                              viewportPositionX + 112,
+                              y + 51,
+                              52,
+                              18,
+                              juce::Justification::centredRight);
+        }
     }
 
     const auto addTrackY = rulerHeight + static_cast<int>(tracks.size()) * trackHeight;
@@ -350,6 +364,30 @@ void TimelineComponent::paint(juce::Graphics& graphics)
                 graphics.setColour(parent.colour.withAlpha(0.28f));
                 graphics.drawRoundedRectangle(aggregate, 5.0f, 1.0f);
             }
+        }
+
+        for (const auto& region : parent.compRegions)
+        {
+            const auto* source = project->findTrack(region.sourceTrackId);
+            const juce::Rectangle<float> compBounds(
+                secondsToX(region.startSeconds),
+                static_cast<float>(parentY),
+                static_cast<float>(std::max(20.0,
+                                            region.durationSeconds
+                                                * pixelsPerSecond)),
+                trackHeight - 24.0f);
+            const auto colour = source != nullptr ? source->colour : parent.colour;
+            graphics.setColour(colour.withAlpha(0.42f));
+            graphics.fillRoundedRectangle(compBounds, 5.0f);
+            graphics.setColour(juce::Colours::white.withAlpha(0.55f));
+            graphics.drawRoundedRectangle(compBounds, 5.0f, 1.5f);
+            graphics.setFont(juce::Font(juce::FontOptions(9.0f,
+                                                          juce::Font::bold)));
+            graphics.drawText("COMP "
+                                  + (source != nullptr ? source->name
+                                                       : juce::String("MISSING")),
+                              compBounds.toNearestInt().reduced(6, 2),
+                              juce::Justification::bottomLeft);
         }
     }
 
@@ -893,6 +931,43 @@ void TimelineComponent::showContextMenu(const juce::MouseEvent& event)
         menu.addItem(std::move(trimEnd));
 
         menu.addSeparator();
+        const auto* selectedTrack = project->findTrack(selectedTrackId);
+        if (hasClip
+            && selectedTrack != nullptr
+            && selectedTrack->parentTrackId.isNotEmpty())
+        {
+            const auto takeId = selectedTrack->id;
+            const auto parentId = selectedTrack->parentTrackId;
+            juce::PopupMenu::Item useTake("Use this take as playlist");
+            useTake.isTicked = project->activeTakeTrackId(parentId) == takeId;
+            useTake.action = [this, takeId]
+            {
+                if (onUseTake)
+                    onUseTake(takeId);
+            };
+            menu.addItem(std::move(useTake));
+
+            juce::PopupMenu::Item useForComp("Use this clip range in comp");
+            useForComp.action = [this, clipId = selectedClipId]
+            {
+                if (onUseClipForComp)
+                    onUseClipForComp(clipId);
+            };
+            menu.addItem(std::move(useForComp));
+
+            const auto* parent = project->findTrack(parentId);
+            juce::PopupMenu::Item clearComp("Clear parent comp");
+            clearComp.isEnabled = parent != nullptr
+                && !parent->compRegions.empty();
+            clearComp.action = [this, parentId]
+            {
+                if (onClearComp)
+                    onClearComp(parentId);
+            };
+            menu.addItem(std::move(clearComp));
+            menu.addSeparator();
+        }
+
         juce::PopupMenu::Item remove("Delete clip");
         remove.shortcutKeyDescription = "Delete";
         remove.isEnabled = hasClip;

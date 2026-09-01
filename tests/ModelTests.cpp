@@ -68,7 +68,15 @@ void serializationRoundTrip()
     version.name = "v1";
     version.parentTrackId = project.tracks.front().id;
     version.versionNumber = 1;
+    const auto versionId = version.id;
     project.tracks.insert(project.tracks.begin() + 1, version);
+    project.tracks.front().activeTakeTrackId = versionId;
+    project.tracks.front().compRegions.push_back({
+        juce::Uuid().toString(),
+        versionId,
+        1.5,
+        1.0
+    });
 
     juce::String error;
     const auto decoded = studio::Project::fromVar(project.toVar(), error);
@@ -110,6 +118,12 @@ void serializationRoundTrip()
                && decoded->tracks[1].parentTrackId == decoded->tracks.front().id
                && decoded->tracks[1].versionNumber == 1,
            "Grouped recording versions survive serialization.");
+    expect(decoded.has_value()
+               && decoded->tracks.front().activeTakeTrackId == decoded->tracks[1].id
+               && decoded->tracks.front().compRegions.size() == 1
+               && decoded->tracks.front().compRegions.front().sourceTrackId
+                      == decoded->tracks[1].id,
+           "Active playlists and comp regions survive serialization.");
     expect(decoded.has_value()
                && decoded->tracks.front().inserts.front().bridgeMode
                       == studio::PluginBridgeMode::sandboxed,
@@ -447,6 +461,78 @@ void transportMaps()
            "Loop recording plans begin at the loop boundary.");
 }
 
+void playlistsAndComping()
+{
+    auto project = studio::Project::createDefault();
+    auto& parent = project.tracks.front();
+    const auto parentId = parent.id;
+
+    studio::Track firstTake;
+    firstTake.name = "v1";
+    firstTake.parentTrackId = parentId;
+    firstTake.versionNumber = 1;
+    const auto firstTakeId = firstTake.id;
+    studio::Track secondTake;
+    secondTake.name = "v2";
+    secondTake.parentTrackId = parentId;
+    secondTake.versionNumber = 2;
+    const auto secondTakeId = secondTake.id;
+    project.tracks.insert(project.tracks.begin() + 1, firstTake);
+    project.tracks.insert(project.tracks.begin() + 2, secondTake);
+
+    expect(project.activeTakeTrackId(parentId) == secondTakeId,
+           "The newest version is the default active playlist.");
+
+    studio::CommandStack history;
+    juce::String error;
+    expect(history.perform(std::make_unique<studio::SetActiveTakeCommand>(parentId,
+                                                                          firstTakeId),
+                           project,
+                           error),
+           error.toRawUTF8());
+    expect(project.activeTakeTrackId(parentId) == firstTakeId,
+           "An explicit playlist selection becomes active.");
+
+    std::vector<studio::CompRegion> original {
+        { juce::Uuid().toString(), firstTakeId, 0.0, 4.0 }
+    };
+    auto replacement = studio::replaceCompRegion(
+        original,
+        { juce::Uuid().toString(), secondTakeId, 1.0, 2.0 });
+    expect(replacement.size() == 3
+               && replacement[0].sourceTrackId == firstTakeId
+               && std::abs(replacement[0].durationSeconds - 1.0) < 0.0001
+               && replacement[1].sourceTrackId == secondTakeId
+               && replacement[2].sourceTrackId == firstTakeId,
+           "A comp selection replaces only its overlapping timeline range.");
+
+    expect(history.perform(std::make_unique<studio::SetCompRegionsCommand>(
+                               parentId,
+                               project.findTrack(parentId)->compRegions,
+                               replacement),
+                           project,
+                           error),
+           error.toRawUTF8());
+    expect(project.findTrack(parentId)->compRegions.size() == 3,
+           "Comp regions are applied to the parent playlist.");
+    expect(history.undo(project), "Comp changes can be undone.");
+    expect(project.findTrack(parentId)->compRegions.empty(),
+           "Undo restores the previous comp.");
+
+    studio::RecordingPlan loopPlan;
+    loopPlan.loopEnabled = true;
+    loopPlan.loopStartSeconds = 2.0;
+    loopPlan.loopEndSeconds = 6.0;
+    loopPlan.captureStartSeconds = 2.0;
+    const auto passes = studio::recordingPasses(9.5, loopPlan);
+    expect(passes.size() == 3
+               && std::abs(passes[0].timelineStartSeconds - 2.0) < 0.0001
+               && std::abs(passes[0].durationSeconds - 4.0) < 0.0001
+               && std::abs(passes[1].sourceOffsetSeconds - 4.0) < 0.0001
+               && std::abs(passes[2].durationSeconds - 1.5) < 0.0001,
+           "Loop recordings split continuous capture into alternate takes.");
+}
+
 void packagePersistence()
 {
     auto project = studio::Project::createDefault();
@@ -648,6 +734,7 @@ int main()
     commandHistory();
     splitClipBoundaries();
     transportMaps();
+    playlistsAndComping();
     packagePersistence();
     pluginAwareExportGuard();
     pluginCatalogFiltering();

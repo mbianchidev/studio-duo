@@ -1,6 +1,7 @@
 #include "ProjectCommands.h"
 
 #include <algorithm>
+#include <numeric>
 
 namespace studio
 {
@@ -611,6 +612,109 @@ void DeleteClipCommand::undo(Project& project)
     }
 }
 
+SetActiveTakeCommand::SetActiveTakeCommand(juce::String parentTrackId,
+                                           juce::String activeTakeTrackId)
+    : parentId(std::move(parentTrackId)),
+      newActiveTakeId(std::move(activeTakeTrackId))
+{
+}
+
+juce::String SetActiveTakeCommand::name() const
+{
+    return "Select active take";
+}
+
+bool SetActiveTakeCommand::perform(Project& project, juce::String& error)
+{
+    auto* parent = project.findTrack(parentId);
+    if (parent == nullptr || parent->parentTrackId.isNotEmpty())
+    {
+        error = "The take parent track is unavailable.";
+        return false;
+    }
+    if (newActiveTakeId.isNotEmpty())
+    {
+        const auto* take = project.findTrack(newActiveTakeId);
+        if (take == nullptr || take->parentTrackId != parentId)
+        {
+            error = "The selected take does not belong to this parent track.";
+            return false;
+        }
+    }
+
+    if (!capturedOriginal)
+    {
+        oldActiveTakeId = parent->activeTakeTrackId;
+        capturedOriginal = true;
+    }
+    parent->activeTakeTrackId = newActiveTakeId;
+    return true;
+}
+
+void SetActiveTakeCommand::undo(Project& project)
+{
+    if (auto* parent = project.findTrack(parentId))
+        parent->activeTakeTrackId = oldActiveTakeId;
+}
+
+SetCompRegionsCommand::SetCompRegionsCommand(juce::String parentTrackId,
+                                             std::vector<CompRegion> before,
+                                             std::vector<CompRegion> after)
+    : parentId(std::move(parentTrackId)),
+      oldRegions(std::move(before)),
+      newRegions(std::move(after))
+{
+}
+
+juce::String SetCompRegionsCommand::name() const
+{
+    return "Change comp";
+}
+
+bool SetCompRegionsCommand::perform(Project& project, juce::String& error)
+{
+    if (!validate(project, parentId, newRegions, error))
+        return false;
+    project.findTrack(parentId)->compRegions = newRegions;
+    return true;
+}
+
+void SetCompRegionsCommand::undo(Project& project)
+{
+    if (auto* parent = project.findTrack(parentId))
+        parent->compRegions = oldRegions;
+}
+
+bool SetCompRegionsCommand::validate(const Project& project,
+                                     const juce::String& parentId,
+                                     const std::vector<CompRegion>& regions,
+                                     juce::String& error)
+{
+    const auto* parent = project.findTrack(parentId);
+    if (parent == nullptr || parent->parentTrackId.isNotEmpty())
+    {
+        error = "The comp parent track is unavailable.";
+        return false;
+    }
+
+    auto previousEnd = 0.0;
+    for (const auto& region : regions)
+    {
+        const auto* take = project.findTrack(region.sourceTrackId);
+        if (region.id.isEmpty()
+            || region.durationSeconds <= 0.0
+            || region.startSeconds < previousEnd - 0.0001
+            || take == nullptr
+            || take->parentTrackId != parentId)
+        {
+            error = "Comp regions must be ordered, non-overlapping, and reference a take lane.";
+            return false;
+        }
+        previousEnd = region.endSeconds();
+    }
+    return true;
+}
+
 ProjectTransportState ProjectTransportState::fromProject(const Project& project)
 {
     return {
@@ -943,6 +1047,15 @@ bool RemoveTrackCommand::perform(Project& project, juce::String& error)
             error = "The master track cannot be removed.";
             return false;
         }
+        if (iterator->parentTrackId.isNotEmpty())
+        {
+            affectedParentId = iterator->parentTrackId;
+            if (const auto* parent = project.findTrack(affectedParentId))
+            {
+                oldActiveTakeId = parent->activeTakeTrackId;
+                oldCompRegions = parent->compRegions;
+            }
+        }
 
         for (std::size_t index = 0; index < project.tracks.size(); ++index)
         {
@@ -973,6 +1086,19 @@ bool RemoveTrackCommand::perform(Project& project, juce::String& error)
         error = "The track group to remove no longer exists.";
         return false;
     }
+    if (auto* parent = project.findTrack(affectedParentId))
+    {
+        if (parent->activeTakeTrackId == trackId)
+            parent->activeTakeTrackId.clear();
+        parent->compRegions.erase(
+            std::remove_if(parent->compRegions.begin(),
+                           parent->compRegions.end(),
+                           [this](const auto& region)
+                           {
+                               return region.sourceTrackId == trackId;
+                           }),
+            parent->compRegions.end());
+    }
     return true;
 }
 
@@ -982,6 +1108,11 @@ void RemoveTrackCommand::undo(Project& project)
     {
         const auto index = std::min(originalIndex, project.tracks.size());
         project.tracks.insert(project.tracks.begin() + static_cast<std::ptrdiff_t>(index), track);
+    }
+    if (auto* parent = project.findTrack(affectedParentId))
+    {
+        parent->activeTakeTrackId = oldActiveTakeId;
+        parent->compRegions = oldCompRegions;
     }
 }
 
@@ -1015,6 +1146,23 @@ bool DuplicateTrackCommand::perform(Project& project, juce::String& error)
         duplicatedTrack.id = juce::Uuid().toString();
         duplicatedTrack.name = source->name + " Copy";
         duplicatedTrack.armed = false;
+        duplicatedTrack.activeTakeTrackId.clear();
+        duplicatedTrack.compRegions.clear();
+        if (source->parentTrackId.isNotEmpty())
+        {
+            duplicatedTrack.versionNumber = std::accumulate(
+                project.tracks.cbegin(),
+                project.tracks.cend(),
+                0,
+                [source](int maximum, const auto& candidate)
+                {
+                    return candidate.parentTrackId == source->parentTrackId
+                        ? std::max(maximum, candidate.versionNumber)
+                        : maximum;
+                })
+                + 1;
+            duplicatedTrack.name = "v" + juce::String(duplicatedTrack.versionNumber);
+        }
         for (auto& clip : duplicatedTrack.clips)
             clip.id = juce::Uuid().toString();
         for (auto& insert : duplicatedTrack.inserts)

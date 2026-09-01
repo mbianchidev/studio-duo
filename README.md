@@ -108,6 +108,12 @@ delete behavior. The parent can collapse the versions and shows their combined
 waveform/result. Two-finger/right-click the left track header for mute, solo,
 arm, collapse/expand, and group-aware delete actions.
 
+Loop recording writes one continuous synchronized WAV per armed parent and
+creates one alternate version lane per loop pass. Right-click a take clip to use
+its lane as the active playlist or assign that clip's edited range to the parent
+comp. New comp selections replace only overlapping regions; **Clear parent
+comp** returns playback to the active playlist.
+
 The track inspector selects the hardware input, chooses mono or adjacent-channel
 stereo capture, and enables software monitoring. Monitoring is off by default
 to avoid accidental feedback. Gain defaults to `0.0 dB`, accepts signed decimal

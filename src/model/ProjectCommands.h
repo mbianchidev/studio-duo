@@ -175,6 +175,45 @@ private:
     bool capturedOriginal = false;
 };
 
+class SetActiveTakeCommand final : public ProjectCommand
+{
+public:
+    SetActiveTakeCommand(juce::String parentTrackId,
+                         juce::String activeTakeTrackId);
+
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    juce::String parentId;
+    juce::String newActiveTakeId;
+    juce::String oldActiveTakeId;
+    bool capturedOriginal = false;
+};
+
+class SetCompRegionsCommand final : public ProjectCommand
+{
+public:
+    SetCompRegionsCommand(juce::String parentTrackId,
+                          std::vector<CompRegion> before,
+                          std::vector<CompRegion> after);
+
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    static bool validate(const Project& project,
+                         const juce::String& parentId,
+                         const std::vector<CompRegion>& regions,
+                         juce::String& error);
+
+    juce::String parentId;
+    std::vector<CompRegion> oldRegions;
+    std::vector<CompRegion> newRegions;
+};
+
 struct ProjectTransportState
 {
     double tempo = 120.0;
@@ -316,6 +355,9 @@ public:
 private:
     juce::String trackId;
     std::vector<std::pair<std::size_t, Track>> removedTracks;
+    juce::String affectedParentId;
+    juce::String oldActiveTakeId;
+    std::vector<CompRegion> oldCompRegions;
     bool capturedOriginal = false;
 };
 

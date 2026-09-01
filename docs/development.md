@@ -187,6 +187,13 @@ can hide them using the parent's persisted collapse state. Parent rows draw a
 subtle aggregate of child clips. Deleting a parent removes and restores the
 whole group atomically through undo.
 
+Version lanes are playlists rather than summed layers. With no explicit choice,
+the newest version plays; users can select another active take or build
+non-overlapping parent comp regions from edited take clips. Playback renders
+only the active playlist or the source ranges referenced by the comp. Loop
+recording partitions each continuous capture into source-bounded alternate
+passes while preserving a shared WAV and sample alignment across tracks.
+
 The left track-header context menu targets the clicked parent or version lane.
 Delete removes one version or the complete parent group, while the master
 remains protected. The lower mixer filters out child lanes and exposes an
