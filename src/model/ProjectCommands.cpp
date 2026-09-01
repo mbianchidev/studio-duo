@@ -5,6 +5,17 @@
 
 namespace studio
 {
+namespace
+{
+bool hasMainAudioOutput(TrackType type)
+{
+    return type == TrackType::audio
+        || type == TrackType::instrument
+        || type == TrackType::aux
+        || type == TrackType::bus;
+}
+}
+
 bool CommandStack::perform(std::unique_ptr<ProjectCommand> command,
                            Project& project,
                            juce::String& error)
@@ -153,9 +164,38 @@ bool AddTrackCommand::perform(Project& project, juce::String& error)
 
     insertionIndex = static_cast<std::size_t>(std::distance(project.tracks.begin(), master));
     project.tracks.insert(project.tracks.begin() + static_cast<std::ptrdiff_t>(insertionIndex), track);
-    if (track.type != TrackType::master
-        && !project.validateTrackOutput(track.id, track.outputTrackId, error))
+    if (hasMainAudioOutput(track.type))
     {
+        if (!project.validateTrackOutput(track.id, track.outputTrackId, error))
+        {
+            project.tracks.erase(project.tracks.begin()
+                                 + static_cast<std::ptrdiff_t>(insertionIndex));
+            return false;
+        }
+        if (!outputRoute.has_value())
+        {
+            RoutingConnection route;
+            route.name = "Main output";
+            route.kind = RouteKind::mainOutput;
+            route.sourceTrackId = track.id;
+            route.destination.type = RouteEndpointType::track;
+            route.destination.trackId = project.resolvedOutputTrackId(track);
+            outputRoute = std::move(route);
+        }
+        project.routingConnections.push_back(*outputRoute);
+    }
+    if (!project.validateRoutingGraph(error))
+    {
+        project.routingConnections.erase(
+            std::remove_if(
+                project.routingConnections.begin(),
+                project.routingConnections.end(),
+                [this](const auto& connection)
+                {
+                    return outputRoute.has_value()
+                        && connection.id == outputRoute->id;
+                }),
+            project.routingConnections.end());
         project.tracks.erase(project.tracks.begin()
                              + static_cast<std::ptrdiff_t>(insertionIndex));
         return false;
@@ -169,6 +209,18 @@ void AddTrackCommand::undo(Project& project)
     {
         return candidate.id == track.id;
     }), project.tracks.end());
+    if (outputRoute.has_value())
+    {
+        project.routingConnections.erase(
+            std::remove_if(
+                project.routingConnections.begin(),
+                project.routingConnections.end(),
+                [this](const auto& connection)
+                {
+                    return connection.id == outputRoute->id;
+                }),
+            project.routingConnections.end());
+    }
 }
 
 RenameTrackCommand::RenameTrackCommand(juce::String trackToRename,
@@ -1123,6 +1175,76 @@ TrackMixState TrackMixState::fromTrack(const Track& track)
     };
 }
 
+TrackRoutingState TrackRoutingState::fromTrack(const Track& track)
+{
+    return {
+        track.folderTrackId,
+        track.controlledTrackIds,
+        track.channelLayout,
+        track.polarityInverted,
+        track.soloSafe,
+        track.hardwareOutputChannel,
+        track.controlRoomDimDecibels,
+        track.controlRoomDimmed,
+        track.controlRoomMono
+    };
+}
+
+SetTrackRoutingStateCommand::SetTrackRoutingStateCommand(
+    juce::String trackToChange,
+    TrackRoutingState before,
+    TrackRoutingState after)
+    : trackId(std::move(trackToChange)),
+      oldState(std::move(before)),
+      newState(std::move(after))
+{
+}
+
+juce::String SetTrackRoutingStateCommand::name() const
+{
+    return "Change track routing settings";
+}
+
+bool SetTrackRoutingStateCommand::perform(Project& project,
+                                          juce::String& error)
+{
+    auto* track = project.findTrack(trackId);
+    if (track == nullptr)
+    {
+        error = "The track to change no longer exists.";
+        return false;
+    }
+
+    apply(*track, newState);
+    if (!project.validateRoutingGraph(error))
+    {
+        apply(*track, oldState);
+        return false;
+    }
+    return true;
+}
+
+void SetTrackRoutingStateCommand::undo(Project& project)
+{
+    if (auto* track = project.findTrack(trackId))
+        apply(*track, oldState);
+}
+
+void SetTrackRoutingStateCommand::apply(
+    Track& track,
+    const TrackRoutingState& state)
+{
+    track.folderTrackId = state.folderTrackId;
+    track.controlledTrackIds = state.controlledTrackIds;
+    track.channelLayout = state.channelLayout;
+    track.polarityInverted = state.polarityInverted;
+    track.soloSafe = state.soloSafe;
+    track.hardwareOutputChannel = state.hardwareOutputChannel;
+    track.controlRoomDimDecibels = state.controlRoomDimDecibels;
+    track.controlRoomDimmed = state.controlRoomDimmed;
+    track.controlRoomMono = state.controlRoomMono;
+}
+
 SetTrackMixCommand::SetTrackMixCommand(juce::String trackToChange,
                                        TrackMixState before,
                                        TrackMixState after)
@@ -1196,9 +1318,50 @@ bool SetTrackOutputCommand::perform(Project& project, juce::String& error)
     if (!capturedOriginal)
     {
         oldOutputTrackId = track->outputTrackId;
+        const auto route = std::find_if(
+            project.routingConnections.cbegin(),
+            project.routingConnections.cend(),
+            [this](const auto& connection)
+            {
+                return connection.kind == RouteKind::mainOutput
+                    && connection.sourceTrackId == trackId;
+            });
+        if (route != project.routingConnections.cend())
+            oldRoute = *route;
+        newRoute = oldRoute.value_or(RoutingConnection {});
+        newRoute.name = "Main output";
+        newRoute.kind = RouteKind::mainOutput;
+        newRoute.tap = RouteTap::postFader;
+        newRoute.sourceTrackId = trackId;
+        newRoute.destination.type = RouteEndpointType::track;
         capturedOriginal = true;
     }
+
+    newRoute.destination.trackId = newOutputTrackId.isNotEmpty()
+        ? newOutputTrackId
+        : project.masterTrackId();
+    auto* route = project.findRoutingConnection(newRoute.id);
+    if (route != nullptr)
+        *route = newRoute;
+    else
+        project.routingConnections.push_back(newRoute);
     track->outputTrackId = newOutputTrackId;
+    if (!project.validateRoutingGraph(error))
+    {
+        track->outputTrackId = oldOutputTrackId;
+        project.routingConnections.erase(
+            std::remove_if(
+                project.routingConnections.begin(),
+                project.routingConnections.end(),
+                [this](const auto& connection)
+                {
+                    return connection.id == newRoute.id;
+                }),
+            project.routingConnections.end());
+        if (oldRoute.has_value())
+            project.routingConnections.push_back(*oldRoute);
+        return false;
+    }
     return true;
 }
 
@@ -1206,6 +1369,160 @@ void SetTrackOutputCommand::undo(Project& project)
 {
     if (auto* track = project.findTrack(trackId))
         track->outputTrackId = oldOutputTrackId;
+    project.routingConnections.erase(
+        std::remove_if(
+            project.routingConnections.begin(),
+            project.routingConnections.end(),
+            [this](const auto& connection)
+            {
+                return connection.id == newRoute.id;
+            }),
+        project.routingConnections.end());
+    if (oldRoute.has_value())
+        project.routingConnections.push_back(*oldRoute);
+}
+
+AddRoutingConnectionCommand::AddRoutingConnectionCommand(
+    RoutingConnection connectionToAdd)
+    : connection(std::move(connectionToAdd))
+{
+}
+
+juce::String AddRoutingConnectionCommand::name() const
+{
+    return "Add routing connection";
+}
+
+bool AddRoutingConnectionCommand::perform(Project& project, juce::String& error)
+{
+    if (project.findRoutingConnection(connection.id) != nullptr)
+    {
+        error = "A routing connection with the same ID already exists.";
+        return false;
+    }
+
+    if (!capturedIndex)
+    {
+        insertionIndex = project.routingConnections.size();
+        capturedIndex = true;
+    }
+    const auto index = std::min(insertionIndex,
+                                project.routingConnections.size());
+    project.routingConnections.insert(
+        project.routingConnections.begin() + static_cast<std::ptrdiff_t>(index),
+        connection);
+    if (!project.validateRoutingGraph(error))
+    {
+        project.routingConnections.erase(
+            project.routingConnections.begin() + static_cast<std::ptrdiff_t>(index));
+        return false;
+    }
+    return true;
+}
+
+void AddRoutingConnectionCommand::undo(Project& project)
+{
+    project.routingConnections.erase(
+        std::remove_if(
+            project.routingConnections.begin(),
+            project.routingConnections.end(),
+            [this](const auto& candidate)
+            {
+                return candidate.id == connection.id;
+            }),
+        project.routingConnections.end());
+}
+
+UpdateRoutingConnectionCommand::UpdateRoutingConnectionCommand(
+    RoutingConnection before,
+    RoutingConnection after)
+    : oldConnection(std::move(before)),
+      newConnection(std::move(after))
+{
+}
+
+juce::String UpdateRoutingConnectionCommand::name() const
+{
+    return "Change routing connection";
+}
+
+bool UpdateRoutingConnectionCommand::perform(Project& project,
+                                             juce::String& error)
+{
+    if (oldConnection.id != newConnection.id)
+    {
+        error = "A routing connection update cannot change its ID.";
+        return false;
+    }
+
+    auto* connection = project.findRoutingConnection(newConnection.id);
+    if (connection == nullptr)
+    {
+        error = "The routing connection no longer exists.";
+        return false;
+    }
+
+    const auto current = *connection;
+    *connection = newConnection;
+    if (!project.validateRoutingGraph(error))
+    {
+        *connection = current;
+        return false;
+    }
+    return true;
+}
+
+void UpdateRoutingConnectionCommand::undo(Project& project)
+{
+    if (auto* connection = project.findRoutingConnection(oldConnection.id))
+        *connection = oldConnection;
+}
+
+RemoveRoutingConnectionCommand::RemoveRoutingConnectionCommand(
+    juce::String connectionToRemove)
+    : connectionId(std::move(connectionToRemove))
+{
+}
+
+juce::String RemoveRoutingConnectionCommand::name() const
+{
+    return "Remove routing connection";
+}
+
+bool RemoveRoutingConnectionCommand::perform(Project& project,
+                                             juce::String& error)
+{
+    const auto iterator = std::find_if(
+        project.routingConnections.begin(),
+        project.routingConnections.end(),
+        [this](const auto& connection)
+        {
+            return connection.id == connectionId;
+        });
+    if (iterator == project.routingConnections.end())
+    {
+        error = "The routing connection no longer exists.";
+        return false;
+    }
+
+    if (!capturedOriginal)
+    {
+        removalIndex = static_cast<std::size_t>(
+            std::distance(project.routingConnections.begin(), iterator));
+        removedConnection = *iterator;
+        capturedOriginal = true;
+    }
+    project.routingConnections.erase(iterator);
+    return true;
+}
+
+void RemoveRoutingConnectionCommand::undo(Project& project)
+{
+    const auto index = std::min(removalIndex,
+                                project.routingConnections.size());
+    project.routingConnections.insert(
+        project.routingConnections.begin() + static_cast<std::ptrdiff_t>(index),
+        removedConnection);
 }
 
 AddPluginInsertCommand::AddPluginInsertCommand(juce::String destinationTrackId,
@@ -1400,8 +1717,14 @@ bool RemoveTrackCommand::perform(Project& project, juce::String& error)
         }
         oldEditGroups = project.editGroups;
         oldReampRoutes = project.reampRoutes;
+        oldRoutingConnections = project.routingConnections;
         for (const auto& candidate : project.tracks)
+        {
             oldTrackOutputs.emplace_back(candidate.id, candidate.outputTrackId);
+            oldTrackRoutingStates.emplace_back(
+                candidate.id,
+                TrackRoutingState::fromTrack(candidate));
+        }
 
         std::vector<juce::String> rootIdsToRemove;
         if (iterator->parentTrackId.isEmpty())
@@ -1527,7 +1850,75 @@ bool RemoveTrackCommand::perform(Project& project, juce::String& error)
                             return removed.second.id == candidate.outputTrackId;
                         }))
             candidate.outputTrackId.clear();
+        if (std::any_of(
+                removedTracks.cbegin(),
+                removedTracks.cend(),
+                [&candidate](const auto& removed)
+                {
+                    return removed.second.id == candidate.folderTrackId;
+                }))
+            candidate.folderTrackId.clear();
+        candidate.controlledTrackIds.erase(
+            std::remove_if(
+                candidate.controlledTrackIds.begin(),
+                candidate.controlledTrackIds.end(),
+                [this](const auto& controlledId)
+                {
+                    return std::any_of(
+                        removedTracks.cbegin(),
+                        removedTracks.cend(),
+                        [&controlledId](const auto& removed)
+                        {
+                            return removed.second.id == controlledId;
+                        });
+                }),
+            candidate.controlledTrackIds.end());
     }
+    const auto removedTrack = [this](const juce::String& candidateId)
+    {
+        return std::any_of(
+            removedTracks.cbegin(),
+            removedTracks.cend(),
+            [&candidateId](const auto& removed)
+            {
+                return removed.second.id == candidateId;
+            });
+    };
+    const auto masterId = project.masterTrackId();
+    for (auto iterator = project.routingConnections.begin();
+         iterator != project.routingConnections.end();)
+    {
+        if (removedTrack(iterator->sourceTrackId))
+        {
+            iterator = project.routingConnections.erase(iterator);
+            continue;
+        }
+
+        const auto destinationRemoved =
+            (iterator->destination.type == RouteEndpointType::track
+             || iterator->destination.type
+                    == RouteEndpointType::pluginSidechain)
+            && removedTrack(iterator->destination.trackId);
+        if (!destinationRemoved)
+        {
+            ++iterator;
+            continue;
+        }
+
+        if (iterator->kind == RouteKind::mainOutput)
+        {
+            iterator->destination.type = RouteEndpointType::track;
+            iterator->destination.trackId = masterId;
+            iterator->destination.insertId.clear();
+            ++iterator;
+        }
+        else
+        {
+            iterator = project.routingConnections.erase(iterator);
+        }
+    }
+    if (!project.validateRoutingGraph(error))
+        return false;
     return true;
 }
 
@@ -1545,9 +1936,23 @@ void RemoveTrackCommand::undo(Project& project)
     }
     project.editGroups = oldEditGroups;
     project.reampRoutes = oldReampRoutes;
+    project.routingConnections = oldRoutingConnections;
     for (const auto& [restoredTrackId, outputTrackId] : oldTrackOutputs)
         if (auto* track = project.findTrack(restoredTrackId))
             track->outputTrackId = outputTrackId;
+    for (const auto& [restoredTrackId, state] : oldTrackRoutingStates)
+        if (auto* track = project.findTrack(restoredTrackId))
+        {
+            track->folderTrackId = state.folderTrackId;
+            track->controlledTrackIds = state.controlledTrackIds;
+            track->channelLayout = state.channelLayout;
+            track->polarityInverted = state.polarityInverted;
+            track->soloSafe = state.soloSafe;
+            track->hardwareOutputChannel = state.hardwareOutputChannel;
+            track->controlRoomDimDecibels = state.controlRoomDimDecibels;
+            track->controlRoomDimmed = state.controlRoomDimmed;
+            track->controlRoomMono = state.controlRoomMono;
+        }
 }
 
 DuplicateTrackCommand::DuplicateTrackCommand(juce::String trackToDuplicate)
@@ -1606,6 +2011,7 @@ bool DuplicateTrackCommand::perform(Project& project, juce::String& error)
 
         std::vector<Track> sourceTracks;
         std::vector<std::pair<juce::String, juce::String>> idMap;
+        std::vector<std::pair<juce::String, juce::String>> insertIdMap;
         std::vector<juce::String> sendReturnTemplateIds;
         auto maximumSourceIndex = std::size_t { 0 };
         for (std::size_t index = 0; index < project.tracks.size(); ++index)
@@ -1697,6 +2103,10 @@ bool DuplicateTrackCommand::perform(Project& project, juce::String& error)
                     + (sendReturnTemplate ? " Send Return" : " Copy");
             else
                 duplicate.parentTrackId = mappedId(original.parentTrackId);
+            duplicate.outputTrackId = mappedId(original.outputTrackId);
+            duplicate.folderTrackId = mappedId(original.folderTrackId);
+            for (auto& controlledId : duplicate.controlledTrackIds)
+                controlledId = mappedId(controlledId);
             if (sendReturnTemplate)
             {
                 duplicate.clips.clear();
@@ -1706,7 +2116,11 @@ bool DuplicateTrackCommand::perform(Project& project, juce::String& error)
             for (auto& clip : duplicate.clips)
                 clip.id = juce::Uuid().toString();
             for (auto& insert : duplicate.inserts)
+            {
+                const auto originalInsertId = insert.id;
                 insert.id = juce::Uuid().toString();
+                insertIdMap.emplace_back(originalInsertId, insert.id);
+            }
 
             if (original.parentTrackId.isEmpty())
             {
@@ -1772,6 +2186,32 @@ bool DuplicateTrackCommand::perform(Project& project, juce::String& error)
             duplicate.ownsReturnTrack = true;
             duplicatedRoutes.push_back(std::move(duplicate));
         }
+        const auto mappedInsertId = [&insertIdMap](const juce::String& originalId)
+        {
+            const auto mapping = std::find_if(
+                insertIdMap.cbegin(),
+                insertIdMap.cend(),
+                [&originalId](const auto& pair)
+                {
+                    return pair.first == originalId;
+                });
+            return mapping != insertIdMap.cend() ? mapping->second : originalId;
+        };
+        for (const auto& connection : project.routingConnections)
+        {
+            if (mappedId(connection.sourceTrackId) == connection.sourceTrackId)
+                continue;
+
+            auto duplicate = connection;
+            duplicate.id = juce::Uuid().toString();
+            duplicate.name += " Copy";
+            duplicate.sourceTrackId = mappedId(connection.sourceTrackId);
+            duplicate.destination.trackId = mappedId(
+                connection.destination.trackId);
+            duplicate.destination.insertId = mappedInsertId(
+                connection.destination.insertId);
+            duplicatedConnections.push_back(std::move(duplicate));
+        }
         createdDuplicate = true;
     }
 
@@ -1793,6 +2233,14 @@ bool DuplicateTrackCommand::perform(Project& project, juce::String& error)
     project.reampRoutes.insert(project.reampRoutes.end(),
                                duplicatedRoutes.begin(),
                                duplicatedRoutes.end());
+    project.routingConnections.insert(project.routingConnections.end(),
+                                      duplicatedConnections.begin(),
+                                      duplicatedConnections.end());
+    if (!project.validateRoutingGraph(error))
+    {
+        undo(project);
+        return false;
+    }
     return true;
 }
 
@@ -1823,6 +2271,21 @@ void DuplicateTrackCommand::undo(Project& project)
                                });
                        }),
         project.reampRoutes.end());
+    project.routingConnections.erase(
+        std::remove_if(
+            project.routingConnections.begin(),
+            project.routingConnections.end(),
+            [this](const auto& candidate)
+            {
+                return std::any_of(
+                    duplicatedConnections.cbegin(),
+                    duplicatedConnections.cend(),
+                    [&candidate](const auto& duplicate)
+                    {
+                        return candidate.id == duplicate.id;
+                    });
+            }),
+        project.routingConnections.end());
 }
 
 const juce::String& DuplicateTrackCommand::duplicatedTrackId() const noexcept

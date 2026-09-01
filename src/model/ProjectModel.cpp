@@ -1,5 +1,8 @@
 #include "ProjectModel.h"
 
+#include "mix/RoutingGraph.h"
+#include "project_io/ProjectMigration.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -605,14 +608,26 @@ juce::var Track::toVar() const
     object->setProperty("activeTakeTrackId", activeTakeTrackId);
     object->setProperty("type", trackTypeToString(type));
     object->setProperty("outputTrackId", outputTrackId);
+    object->setProperty("folderTrackId", folderTrackId);
+    juce::Array<juce::var> controlledTrackValues;
+    for (const auto& trackId : controlledTrackIds)
+        controlledTrackValues.add(trackId);
+    object->setProperty("controlledTrackIds", juce::var(controlledTrackValues));
+    object->setProperty("channelLayout", channelLayoutToString(channelLayout));
     object->setProperty("volumeDecibels", volumeDecibels);
     object->setProperty("pan", pan);
+    object->setProperty("polarityInverted", polarityInverted);
     object->setProperty("muted", muted);
     object->setProperty("solo", solo);
+    object->setProperty("soloSafe", soloSafe);
     object->setProperty("armed", armed);
     object->setProperty("inputChannel", inputChannel);
     object->setProperty("stereoInput", stereoInput);
     object->setProperty("inputMonitoring", inputMonitoring);
+    object->setProperty("hardwareOutputChannel", hardwareOutputChannel);
+    object->setProperty("controlRoomDimDecibels", controlRoomDimDecibels);
+    object->setProperty("controlRoomDimmed", controlRoomDimmed);
+    object->setProperty("controlRoomMono", controlRoomMono);
     object->setProperty("colour", colour.toString());
 
     juce::Array<juce::var> insertValues;
@@ -659,14 +674,42 @@ std::optional<Track> Track::fromVar(const juce::var& value, juce::String& error)
 
     track.type = *type;
     track.outputTrackId = object->getProperty("outputTrackId").toString();
+    track.folderTrackId = object->getProperty("folderTrackId").toString();
+    const auto controlledTrackValues = object->getProperty("controlledTrackIds");
+    if (controlledTrackValues.isArray())
+        for (const auto& controlledTrackValue : *controlledTrackValues.getArray())
+            track.controlledTrackIds.push_back(controlledTrackValue.toString());
+    const auto channelLayout = channelLayoutFromString(
+        object->getProperty("channelLayout").toString());
+    if (object->hasProperty("channelLayout") && !channelLayout.has_value())
+    {
+        error = "Track contains an unsupported channel layout.";
+        return std::nullopt;
+    }
+    track.channelLayout = channelLayout.value_or(ChannelLayout::stereo);
     track.volumeDecibels = static_cast<float>(numberProperty(*object, "volumeDecibels", 0.0));
     track.pan = juce::jlimit(-1.0f, 1.0f, static_cast<float>(numberProperty(*object, "pan", 0.0)));
+    track.polarityInverted = booleanProperty(*object, "polarityInverted", false);
     track.muted = booleanProperty(*object, "muted", false);
     track.solo = booleanProperty(*object, "solo", false);
+    track.soloSafe = booleanProperty(*object, "soloSafe", false);
     track.armed = booleanProperty(*object, "armed", false);
     track.inputChannel = juce::jmax(0, integerProperty(*object, "inputChannel", 0));
     track.stereoInput = booleanProperty(*object, "stereoInput", false);
     track.inputMonitoring = booleanProperty(*object, "inputMonitoring", false);
+    track.hardwareOutputChannel = std::max(
+        0,
+        integerProperty(*object, "hardwareOutputChannel", 0));
+    track.controlRoomDimDecibels = static_cast<float>(
+        numberProperty(*object, "controlRoomDimDecibels", -20.0));
+    track.controlRoomDimmed = booleanProperty(
+        *object,
+        "controlRoomDimmed",
+        false);
+    track.controlRoomMono = booleanProperty(
+        *object,
+        "controlRoomMono",
+        false);
     track.colour = colourProperty(*object, "colour", juce::Colour(0xffdd5b3f));
 
     const auto insertValues = object->getProperty("inserts");
@@ -749,6 +792,16 @@ Project Project::createDefault()
     master.colour = juce::Colour(0xff78c6a3);
 
     project.tracks = { std::move(rhythmLeft), std::move(rhythmRight), std::move(master) };
+    for (std::size_t index = 0; index + 1 < project.tracks.size(); ++index)
+    {
+        RoutingConnection output;
+        output.name = "Main output";
+        output.kind = RouteKind::mainOutput;
+        output.sourceTrackId = project.tracks[index].id;
+        output.destination.type = RouteEndpointType::track;
+        output.destination.trackId = project.tracks.back().id;
+        project.routingConnections.push_back(std::move(output));
+    }
     return project;
 }
 
@@ -768,6 +821,32 @@ const Track* Project::findTrack(const juce::String& trackId) const
         return track.id == trackId;
     });
     return iterator == tracks.cend() ? nullptr : &*iterator;
+}
+
+RoutingConnection* Project::findRoutingConnection(
+    const juce::String& connectionId)
+{
+    const auto iterator = std::find_if(
+        routingConnections.begin(),
+        routingConnections.end(),
+        [&connectionId](const auto& connection)
+        {
+            return connection.id == connectionId;
+        });
+    return iterator == routingConnections.end() ? nullptr : &*iterator;
+}
+
+const RoutingConnection* Project::findRoutingConnection(
+    const juce::String& connectionId) const
+{
+    const auto iterator = std::find_if(
+        routingConnections.cbegin(),
+        routingConnections.cend(),
+        [&connectionId](const auto& connection)
+        {
+            return connection.id == connectionId;
+        });
+    return iterator == routingConnections.cend() ? nullptr : &*iterator;
 }
 
 AudioClip* Project::findClip(const juce::String& clipId)
@@ -911,6 +990,19 @@ juce::String Project::resolvedOutputTrackId(const Track& track) const
 {
     if (track.type == TrackType::master)
         return {};
+    const auto mainRoute = std::find_if(
+        routingConnections.cbegin(),
+        routingConnections.cend(),
+        [&track](const auto& connection)
+        {
+            return connection.enabled
+                && connection.signalType == SignalType::audio
+                && connection.kind == RouteKind::mainOutput
+                && connection.sourceTrackId == track.id
+                && connection.destination.type == RouteEndpointType::track;
+        });
+    if (mainRoute != routingConnections.cend())
+        return mainRoute->destination.trackId;
     return track.outputTrackId.isNotEmpty() ? track.outputTrackId : masterTrackId();
 }
 
@@ -980,74 +1072,18 @@ bool Project::validateTrackOutput(const juce::String& sourceTrackId,
 
 std::optional<std::vector<juce::String>> Project::routingOrder(juce::String& error) const
 {
-    const auto masterId = masterTrackId();
-    if (masterId.isEmpty())
-    {
-        error = "The project does not contain a master track.";
-        return std::nullopt;
-    }
+    return routingGraphOrder(error);
+}
 
-    std::vector<juce::String> rootTrackIds;
-    for (const auto& track : tracks)
-        if (track.parentTrackId.isEmpty() && track.type != TrackType::master)
-            rootTrackIds.push_back(track.id);
+bool Project::validateRoutingGraph(juce::String& error) const
+{
+    return RoutingGraph::validate(*this, error);
+}
 
-    std::vector<int> incoming(rootTrackIds.size(), 0);
-    for (std::size_t sourceIndex = 0; sourceIndex < rootTrackIds.size(); ++sourceIndex)
-    {
-        const auto* source = findTrack(rootTrackIds[sourceIndex]);
-        if (source == nullptr
-            || !validateTrackOutput(source->id, source->outputTrackId, error))
-            return std::nullopt;
-
-        const auto destinationId = resolvedOutputTrackId(*source);
-        if (destinationId == masterId)
-            continue;
-        const auto destination = std::find(rootTrackIds.cbegin(),
-                                           rootTrackIds.cend(),
-                                           destinationId);
-        if (destination == rootTrackIds.cend())
-        {
-            error = "A track routes to an unavailable bus.";
-            return std::nullopt;
-        }
-        ++incoming[static_cast<std::size_t>(
-            std::distance(rootTrackIds.cbegin(), destination))];
-    }
-
-    std::vector<juce::String> order;
-    order.reserve(rootTrackIds.size());
-    std::vector<bool> emitted(rootTrackIds.size(), false);
-    while (order.size() < rootTrackIds.size())
-    {
-        auto emittedTrack = false;
-        for (std::size_t index = 0; index < rootTrackIds.size(); ++index)
-        {
-            if (emitted[index] || incoming[index] != 0)
-                continue;
-
-            emitted[index] = true;
-            emittedTrack = true;
-            order.push_back(rootTrackIds[index]);
-            const auto* source = findTrack(rootTrackIds[index]);
-            const auto destinationId = source != nullptr
-                ? resolvedOutputTrackId(*source)
-                : juce::String();
-            const auto destination = std::find(rootTrackIds.cbegin(),
-                                               rootTrackIds.cend(),
-                                               destinationId);
-            if (destination != rootTrackIds.cend())
-                --incoming[static_cast<std::size_t>(
-                    std::distance(rootTrackIds.cbegin(), destination))];
-        }
-        if (!emittedTrack)
-        {
-            error = "Track routing cannot contain a cycle.";
-            return std::nullopt;
-        }
-    }
-
-    return order;
+std::optional<std::vector<juce::String>> Project::routingGraphOrder(
+    juce::String& error) const
+{
+    return RoutingGraph::order(*this, error);
 }
 
 double Project::tempoAt(double seconds) const noexcept
@@ -1306,6 +1342,10 @@ juce::var Project::toVar() const
     for (const auto& route : reampRoutes)
         reampValues.add(route.toVar());
     object->setProperty("reampRoutes", juce::var(reampValues));
+    juce::Array<juce::var> routingValues;
+    for (const auto& connection : routingConnections)
+        routingValues.add(connection.toVar());
+    object->setProperty("routingConnections", juce::var(routingValues));
 
     juce::Array<juce::var> trackValues;
     trackValues.ensureStorageAllocated(static_cast<int>(tracks.size()));
@@ -1318,12 +1358,16 @@ juce::var Project::toVar() const
 
 std::optional<Project> Project::fromVar(const juce::var& value, juce::String& error)
 {
-    const auto* object = requireObject(value, error, "Project");
+    const auto migrated = ProjectMigration::migrateToCurrent(value, error);
+    if (!migrated.has_value())
+        return std::nullopt;
+
+    const auto* object = requireObject(*migrated, error, "Project");
     if (object == nullptr)
         return std::nullopt;
 
     const auto version = integerProperty(*object, "formatVersion", 0);
-    if (version < 1 || version > currentFormatVersion)
+    if (version != currentFormatVersion)
     {
         error = "Unsupported Studio Duo project format version " + juce::String(version) + ".";
         return std::nullopt;
@@ -1431,6 +1475,17 @@ std::optional<Project> Project::fromVar(const juce::var& value, juce::String& er
             if (!route.has_value())
                 return std::nullopt;
             project.reampRoutes.push_back(std::move(*route));
+        }
+        const auto routingValues = object->getProperty("routingConnections");
+        if (routingValues.isArray())
+        {
+            for (const auto& routingValue : *routingValues.getArray())
+            {
+                auto connection = RoutingConnection::fromVar(routingValue, error);
+                if (!connection.has_value())
+                    return std::nullopt;
+                project.routingConnections.push_back(std::move(*connection));
+            }
         }
     }
 
@@ -1542,8 +1597,12 @@ juce::String trackTypeToString(TrackType type)
     {
         case TrackType::audio: return "audio";
         case TrackType::instrument: return "instrument";
+        case TrackType::midi: return "midi";
         case TrackType::aux: return "aux";
         case TrackType::bus: return "bus";
+        case TrackType::folder: return "folder";
+        case TrackType::vca: return "vca";
+        case TrackType::controlRoom: return "controlRoom";
         case TrackType::master: return "master";
     }
 
@@ -1554,8 +1613,12 @@ std::optional<TrackType> trackTypeFromString(const juce::String& value)
 {
     if (value == "audio") return TrackType::audio;
     if (value == "instrument") return TrackType::instrument;
+    if (value == "midi") return TrackType::midi;
     if (value == "aux") return TrackType::aux;
     if (value == "bus") return TrackType::bus;
+    if (value == "folder") return TrackType::folder;
+    if (value == "vca") return TrackType::vca;
+    if (value == "controlRoom") return TrackType::controlRoom;
     if (value == "master") return TrackType::master;
     return std::nullopt;
 }

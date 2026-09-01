@@ -47,12 +47,18 @@ juce_add_binary_data(
 set(STUDIO_DUO_MODEL_SOURCES
     src/audio/AudioAnalysis.cpp
     src/audio/AudioAnalysis.h
+    src/mix/RoutingTypes.cpp
+    src/mix/RoutingTypes.h
+    src/mix/RoutingGraph.cpp
+    src/mix/RoutingGraph.h
     src/model/ProjectCommands.cpp
     src/model/ProjectCommands.h
     src/model/ProjectModel.cpp
     src/model/ProjectModel.h
     src/project_io/ProjectFile.cpp
     src/project_io/ProjectFile.h
+    src/project_io/ProjectMigration.cpp
+    src/project_io/ProjectMigration.h
 )
 
 set(STUDIO_DUO_PLUGIN_SOURCES
@@ -177,6 +183,7 @@ if(STUDIO_DUO_BUILD_TESTS)
         StudioDuoTests
         PRIVATE
             tests/ModelTests.cpp
+            tests/RoutingModelTests.cpp
             ${STUDIO_DUO_MODEL_SOURCES}
     )
 

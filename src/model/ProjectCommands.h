@@ -61,6 +61,7 @@ public:
 
 private:
     Track track;
+    std::optional<RoutingConnection> outputRoute;
     std::size_t insertionIndex = 0;
 };
 
@@ -342,6 +343,40 @@ struct TrackMixState
     static TrackMixState fromTrack(const Track& track);
 };
 
+struct TrackRoutingState
+{
+    juce::String folderTrackId;
+    std::vector<juce::String> controlledTrackIds;
+    ChannelLayout channelLayout = ChannelLayout::stereo;
+    bool polarityInverted = false;
+    bool soloSafe = false;
+    int hardwareOutputChannel = 0;
+    float controlRoomDimDecibels = -20.0f;
+    bool controlRoomDimmed = false;
+    bool controlRoomMono = false;
+
+    static TrackRoutingState fromTrack(const Track& track);
+};
+
+class SetTrackRoutingStateCommand final : public ProjectCommand
+{
+public:
+    SetTrackRoutingStateCommand(juce::String trackToChange,
+                                TrackRoutingState before,
+                                TrackRoutingState after);
+
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    static void apply(Track& track, const TrackRoutingState& state);
+
+    juce::String trackId;
+    TrackRoutingState oldState;
+    TrackRoutingState newState;
+};
+
 class SetTrackMixCommand final : public ProjectCommand
 {
 public:
@@ -373,6 +408,54 @@ private:
     juce::String trackId;
     juce::String newOutputTrackId;
     juce::String oldOutputTrackId;
+    std::optional<RoutingConnection> oldRoute;
+    RoutingConnection newRoute;
+    bool capturedOriginal = false;
+};
+
+class AddRoutingConnectionCommand final : public ProjectCommand
+{
+public:
+    explicit AddRoutingConnectionCommand(RoutingConnection connectionToAdd);
+
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    RoutingConnection connection;
+    std::size_t insertionIndex = 0;
+    bool capturedIndex = false;
+};
+
+class UpdateRoutingConnectionCommand final : public ProjectCommand
+{
+public:
+    UpdateRoutingConnectionCommand(RoutingConnection before,
+                                   RoutingConnection after);
+
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    RoutingConnection oldConnection;
+    RoutingConnection newConnection;
+};
+
+class RemoveRoutingConnectionCommand final : public ProjectCommand
+{
+public:
+    explicit RemoveRoutingConnectionCommand(juce::String connectionToRemove);
+
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    juce::String connectionId;
+    RoutingConnection removedConnection;
+    std::size_t removalIndex = 0;
     bool capturedOriginal = false;
 };
 
@@ -447,6 +530,8 @@ private:
     std::vector<CompRegion> oldCompRegions;
     std::vector<EditGroup> oldEditGroups;
     std::vector<ReampRoute> oldReampRoutes;
+    std::vector<RoutingConnection> oldRoutingConnections;
+    std::vector<std::pair<juce::String, TrackRoutingState>> oldTrackRoutingStates;
     std::vector<std::pair<juce::String, juce::String>> oldTrackOutputs;
     bool capturedOriginal = false;
 };
@@ -466,6 +551,7 @@ private:
     juce::String duplicatedRootTrackId;
     std::vector<Track> duplicatedTracks;
     std::vector<ReampRoute> duplicatedRoutes;
+    std::vector<RoutingConnection> duplicatedConnections;
     std::size_t insertionIndex = 0;
     bool createdDuplicate = false;
 };

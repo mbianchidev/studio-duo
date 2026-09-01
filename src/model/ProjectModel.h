@@ -1,5 +1,7 @@
 #pragma once
 
+#include "mix/RoutingTypes.h"
+
 #include <juce_data_structures/juce_data_structures.h>
 #include <juce_graphics/juce_graphics.h>
 
@@ -12,8 +14,12 @@ enum class TrackType
 {
     audio,
     instrument,
+    midi,
     aux,
     bus,
+    folder,
+    vca,
+    controlRoom,
     master
 };
 
@@ -210,14 +216,23 @@ struct Track
     std::vector<CompRegion> compRegions;
     TrackType type = TrackType::audio;
     juce::String outputTrackId;
+    juce::String folderTrackId;
+    std::vector<juce::String> controlledTrackIds;
+    ChannelLayout channelLayout = ChannelLayout::stereo;
     float volumeDecibels = 0.0f;
     float pan = 0.0f;
+    bool polarityInverted = false;
     bool muted = false;
     bool solo = false;
+    bool soloSafe = false;
     bool armed = false;
     int inputChannel = 0;
     bool stereoInput = false;
     bool inputMonitoring = false;
+    int hardwareOutputChannel = 0;
+    float controlRoomDimDecibels = -20.0f;
+    bool controlRoomDimmed = false;
+    bool controlRoomMono = false;
     juce::Colour colour { 0xffdd5b3f };
     std::vector<PluginInsert> inserts;
     std::vector<AudioClip> clips;
@@ -229,7 +244,7 @@ struct Track
 class Project
 {
 public:
-    static constexpr int currentFormatVersion = 2;
+    static constexpr int currentFormatVersion = 3;
 
     juce::String id { juce::Uuid().toString() };
     juce::String name { "Untitled" };
@@ -254,12 +269,17 @@ public:
     double loopEndSeconds = 8.0;
     std::vector<EditGroup> editGroups;
     std::vector<ReampRoute> reampRoutes;
+    std::vector<RoutingConnection> routingConnections;
     std::vector<Track> tracks;
 
     static Project createDefault();
 
     [[nodiscard]] Track* findTrack(const juce::String& trackId);
     [[nodiscard]] const Track* findTrack(const juce::String& trackId) const;
+    [[nodiscard]] RoutingConnection* findRoutingConnection(
+        const juce::String& connectionId);
+    [[nodiscard]] const RoutingConnection* findRoutingConnection(
+        const juce::String& connectionId) const;
     [[nodiscard]] AudioClip* findClip(const juce::String& clipId);
     [[nodiscard]] const AudioClip* findClip(const juce::String& clipId) const;
     [[nodiscard]] Track* findTrackContainingClip(const juce::String& clipId);
@@ -275,6 +295,9 @@ public:
     [[nodiscard]] bool validateTrackOutput(const juce::String& sourceTrackId,
                                            const juce::String& destinationTrackId,
                                            juce::String& error) const;
+    [[nodiscard]] bool validateRoutingGraph(juce::String& error) const;
+    [[nodiscard]] std::optional<std::vector<juce::String>> routingGraphOrder(
+        juce::String& error) const;
     [[nodiscard]] std::optional<std::vector<juce::String>> routingOrder(
         juce::String& error) const;
     [[nodiscard]] double tempoAt(double seconds) const noexcept;

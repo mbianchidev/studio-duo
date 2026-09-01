@@ -5,6 +5,7 @@
 #include "plugin_host/PluginBridgeProtocol.h"
 #include "project_io/ProjectFile.h"
 #include "TestHarness.h"
+#include "TestSuites.h"
 
 #include <array>
 #include <cmath>
@@ -1164,6 +1165,7 @@ int main()
     synchronizedRecordingCapture();
     multitrackRecordingTargets();
     multitrackRecordingCommand();
+    routingModelTests();
 
     if (failures == 0)
     {
