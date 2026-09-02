@@ -1834,60 +1834,60 @@ std::optional<Project> Project::fromVar(const juce::var& value, juce::String& er
                 return std::nullopt;
             project.reampRoutes.push_back(std::move(*route));
         }
-        const auto routingValues = object->getProperty("routingConnections");
-        if (routingValues.isArray())
+    }
+    const auto routingValues = object->getProperty("routingConnections");
+    if (routingValues.isArray())
+    {
+        for (const auto& routingValue : *routingValues.getArray())
         {
-            for (const auto& routingValue : *routingValues.getArray())
-            {
-                auto connection = RoutingConnection::fromVar(routingValue, error);
-                if (!connection.has_value())
-                    return std::nullopt;
-                project.routingConnections.push_back(std::move(*connection));
-            }
-            const auto automationValues = object->getProperty("automationLanes");
-            if (automationValues.isArray())
-            {
-                for (const auto& automationValue : *automationValues.getArray())
-                {
-                    auto lane = AutomationLane::fromVar(automationValue, error);
-                    if (!lane.has_value())
-                        return std::nullopt;
-                    project.automationLanes.push_back(std::move(*lane));
-                }
-                const auto toneSnapshotValues = object->getProperty("toneSnapshots");
-                if (toneSnapshotValues.isArray())
-                {
-                    for (const auto& snapshotValue : *toneSnapshotValues.getArray())
-                    {
-                        auto snapshot = ToneSnapshot::fromVar(snapshotValue, error);
-                        if (!snapshot.has_value())
-                            return std::nullopt;
-                        project.toneSnapshots.push_back(std::move(*snapshot));
-                    }
-                }
-                const auto mixerSnapshotValues = object->getProperty("mixerSnapshots");
-                if (mixerSnapshotValues.isArray())
-                {
-                    for (const auto& snapshotValue : *mixerSnapshotValues.getArray())
-                    {
-                        auto snapshot = MixerSnapshot::fromVar(snapshotValue, error);
-                        if (!snapshot.has_value())
-                            return std::nullopt;
-                        project.mixerSnapshots.push_back(std::move(*snapshot));
-                    }
-                }
-                const auto reportValues = object->getProperty("renderReports");
-                if (reportValues.isArray())
-                {
-                    for (const auto& reportValue : *reportValues.getArray())
-                    {
-                        auto report = RenderReport::fromVar(reportValue, error);
-                        if (!report.has_value())
-                            return std::nullopt;
-                        project.renderReports.push_back(std::move(*report));
-                    }
-                }
-            }
+            auto connection = RoutingConnection::fromVar(routingValue, error);
+            if (!connection.has_value())
+                return std::nullopt;
+            project.routingConnections.push_back(std::move(*connection));
+        }
+    }
+    const auto automationValues = object->getProperty("automationLanes");
+    if (automationValues.isArray())
+    {
+        for (const auto& automationValue : *automationValues.getArray())
+        {
+            auto lane = AutomationLane::fromVar(automationValue, error);
+            if (!lane.has_value())
+                return std::nullopt;
+            project.automationLanes.push_back(std::move(*lane));
+        }
+    }
+    const auto toneSnapshotValues = object->getProperty("toneSnapshots");
+    if (toneSnapshotValues.isArray())
+    {
+        for (const auto& snapshotValue : *toneSnapshotValues.getArray())
+        {
+            auto snapshot = ToneSnapshot::fromVar(snapshotValue, error);
+            if (!snapshot.has_value())
+                return std::nullopt;
+            project.toneSnapshots.push_back(std::move(*snapshot));
+        }
+    }
+    const auto mixerSnapshotValues = object->getProperty("mixerSnapshots");
+    if (mixerSnapshotValues.isArray())
+    {
+        for (const auto& snapshotValue : *mixerSnapshotValues.getArray())
+        {
+            auto snapshot = MixerSnapshot::fromVar(snapshotValue, error);
+            if (!snapshot.has_value())
+                return std::nullopt;
+            project.mixerSnapshots.push_back(std::move(*snapshot));
+        }
+    }
+    const auto reportValues = object->getProperty("renderReports");
+    if (reportValues.isArray())
+    {
+        for (const auto& reportValue : *reportValues.getArray())
+        {
+            auto report = RenderReport::fromVar(reportValue, error);
+            if (!report.has_value())
+                return std::nullopt;
+            project.renderReports.push_back(std::move(*report));
         }
     }
 

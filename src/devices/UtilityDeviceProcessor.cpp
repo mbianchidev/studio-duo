@@ -42,57 +42,58 @@ UtilityDeviceProcessor::UtilityDeviceProcessor(UtilityDeviceType deviceType)
     switch (type)
     {
         case UtilityDeviceType::equalizer:
-            addFloat("frequency", "Frequency",
+            addFloat(ParameterSlot::frequency, "frequency", "Frequency",
                      { 20.0f, 20000.0f, 0.0f, 0.3f }, 1000.0f);
-            addFloat("midGain", "Gain", { -18.0f, 18.0f }, 0.0f);
-            addFloat("q", "Q", { 0.2f, 10.0f, 0.0f, 0.4f }, 1.0f);
+            addFloat(ParameterSlot::midGain, "midGain", "Gain", { -18.0f, 18.0f }, 0.0f);
+            addFloat(ParameterSlot::q, "q", "Q", { 0.2f, 10.0f, 0.0f, 0.4f }, 1.0f);
             break;
         case UtilityDeviceType::compressor:
-            addFloat("threshold", "Threshold", { -60.0f, 0.0f }, -18.0f);
-            addFloat("ratio", "Ratio", { 1.0f, 20.0f }, 4.0f);
-            addFloat("attack", "Attack", { 0.1f, 100.0f }, 10.0f);
-            addFloat("release", "Release", { 5.0f, 1000.0f }, 100.0f);
-            addFloat("makeup", "Makeup", { -12.0f, 24.0f }, 0.0f);
-            addFloat("mix", "Mix", { 0.0f, 1.0f }, 1.0f);
+            addFloat(ParameterSlot::threshold, "threshold", "Threshold", { -60.0f, 0.0f }, -18.0f);
+            addFloat(ParameterSlot::ratio, "ratio", "Ratio", { 1.0f, 20.0f }, 4.0f);
+            addFloat(ParameterSlot::attack, "attack", "Attack", { 0.1f, 100.0f }, 10.0f);
+            addFloat(ParameterSlot::release, "release", "Release", { 5.0f, 1000.0f }, 100.0f);
+            addFloat(ParameterSlot::makeup, "makeup", "Makeup", { -12.0f, 24.0f }, 0.0f);
+            addFloat(ParameterSlot::mix, "mix", "Mix", { 0.0f, 1.0f }, 1.0f);
             break;
         case UtilityDeviceType::limiter:
-            addFloat("ceiling", "Ceiling", { -12.0f, 0.0f }, -0.5f);
-            addFloat("release", "Release", { 5.0f, 1000.0f }, 100.0f);
-            addFloat("truePeak", "True peak", { 0.0f, 1.0f, 1.0f }, 1.0f);
+            addFloat(ParameterSlot::ceiling, "ceiling", "Ceiling", { -12.0f, 0.0f }, -0.5f);
+            addFloat(ParameterSlot::release, "release", "Release", { 5.0f, 1000.0f }, 100.0f);
+            addFloat(ParameterSlot::truePeak, "truePeak", "True peak", { 0.0f, 1.0f, 1.0f }, 1.0f);
             break;
         case UtilityDeviceType::reverb:
-            addFloat("room", "Room size", { 0.0f, 1.0f }, 0.5f);
-            addFloat("damping", "Damping", { 0.0f, 1.0f }, 0.5f);
-            addFloat("width", "Width", { 0.0f, 1.0f }, 1.0f);
-            addFloat("mix", "Mix", { 0.0f, 1.0f }, 0.35f);
+            addFloat(ParameterSlot::room, "room", "Room size", { 0.0f, 1.0f }, 0.5f);
+            addFloat(ParameterSlot::damping, "damping", "Damping", { 0.0f, 1.0f }, 0.5f);
+            addFloat(ParameterSlot::width, "width", "Width", { 0.0f, 1.0f }, 1.0f);
+            addFloat(ParameterSlot::mix, "mix", "Mix", { 0.0f, 1.0f }, 0.35f);
             break;
         case UtilityDeviceType::gate:
-            addFloat("threshold", "Threshold", { -80.0f, 0.0f }, -40.0f);
-            addFloat("attack", "Attack", { 0.1f, 100.0f }, 2.0f);
-            addFloat("release", "Release", { 5.0f, 1000.0f }, 100.0f);
-            addFloat("range", "Range", { -96.0f, 0.0f }, -96.0f);
+            addFloat(ParameterSlot::threshold, "threshold", "Threshold", { -80.0f, 0.0f }, -40.0f);
+            addFloat(ParameterSlot::attack, "attack", "Attack", { 0.1f, 100.0f }, 2.0f);
+            addFloat(ParameterSlot::release, "release", "Release", { 5.0f, 1000.0f }, 100.0f);
+            addFloat(ParameterSlot::range, "range", "Range", { -96.0f, 0.0f }, -96.0f);
             break;
         case UtilityDeviceType::gain:
-            addFloat("gain", "Gain", { -24.0f, 24.0f }, 0.0f);
+            addFloat(ParameterSlot::gain, "gain", "Gain", { -24.0f, 24.0f }, 0.0f);
             break;
         case UtilityDeviceType::polarity:
-            addFloat("invert", "Invert", { 0.0f, 1.0f, 1.0f }, 0.0f);
+            addFloat(ParameterSlot::invert, "invert", "Invert", { 0.0f, 1.0f, 1.0f }, 0.0f);
             break;
         case UtilityDeviceType::delay:
-            addFloat("samples", "Samples", { 0.0f, 96000.0f, 1.0f }, 0.0f);
+            addFloat(ParameterSlot::samples, "samples", "Samples", { 0.0f, 96000.0f, 1.0f }, 0.0f);
             break;
         case UtilityDeviceType::tuner:
             break;
         case UtilityDeviceType::generator:
-            addFloat("waveform", "Waveform", { 0.0f, 2.0f, 1.0f }, 0.0f);
-            addFloat("frequency", "Frequency",
+            addFloat(ParameterSlot::waveform, "waveform", "Waveform", { 0.0f, 2.0f, 1.0f }, 0.0f);
+            addFloat(ParameterSlot::frequency, "frequency", "Frequency",
                      { 20.0f, 20000.0f, 0.0f, 0.3f }, 440.0f);
-            addFloat("level", "Level", { -60.0f, 0.0f }, -18.0f);
+            addFloat(ParameterSlot::level, "level", "Level", { -60.0f, 0.0f }, -18.0f);
             break;
     }
 }
 
 juce::AudioParameterFloat* UtilityDeviceProcessor::addFloat(
+    ParameterSlot slot,
     const juce::String& id,
     const juce::String& name,
     juce::NormalisableRange<float> range,
@@ -107,6 +108,7 @@ juce::AudioParameterFloat* UtilityDeviceProcessor::addFloat(
     addParameter(pointer);
     value.release();
     parameterLookup.emplace_back(id, pointer);
+    realtimeParameters[static_cast<std::size_t>(slot)] = pointer;
     return pointer;
 }
 
@@ -153,9 +155,10 @@ void UtilityDeviceProcessor::reset()
 {
     for (auto& filter : equalizerFilters)
         filter.reset();
-    compressorEnvelope.fill(0.0f);
+    compressorEnvelope.fill(1.0f);
     gateEnvelope.fill(0.0f);
     limiterPrevious.fill(0.0f);
+    limiterGain.fill(1.0f);
     delayBuffer.clear();
     delayWritePosition = 0;
     reverb.reset();
@@ -183,10 +186,10 @@ void UtilityDeviceProcessor::processBlock(juce::AudioBuffer<float>& audio,
         case UtilityDeviceType::reverb:
         {
             juce::Reverb::Parameters settings;
-            settings.roomSize = parameter("room");
-            settings.damping = parameter("damping");
-            settings.width = parameter("width");
-            settings.wetLevel = parameter("mix");
+            settings.roomSize = parameter(ParameterSlot::room);
+            settings.damping = parameter(ParameterSlot::damping);
+            settings.width = parameter(ParameterSlot::width);
+            settings.wetLevel = parameter(ParameterSlot::mix);
             settings.dryLevel = 1.0f - settings.wetLevel;
             reverb.setParameters(settings);
             reverb.processStereo(
@@ -200,10 +203,10 @@ void UtilityDeviceProcessor::processBlock(juce::AudioBuffer<float>& audio,
             break;
         case UtilityDeviceType::gain:
             audio.applyGain(
-                juce::Decibels::decibelsToGain(parameter("gain")));
+                juce::Decibels::decibelsToGain(parameter(ParameterSlot::gain)));
             break;
         case UtilityDeviceType::polarity:
-            if (parameter("invert") >= 0.5f)
+            if (parameter(ParameterSlot::invert) >= 0.5f)
                 audio.applyGain(-1.0f);
             break;
         case UtilityDeviceType::delay:
@@ -238,9 +241,9 @@ void UtilityDeviceProcessor::processEqualizer(
     const auto frequency = juce::jlimit(
         20.0,
         currentSampleRate * 0.45,
-        static_cast<double>(parameter("frequency")));
-    const auto gain = static_cast<double>(parameter("midGain"));
-    const auto q = std::max(0.2, static_cast<double>(parameter("q")));
+        static_cast<double>(parameter(ParameterSlot::frequency)));
+    const auto gain = static_cast<double>(parameter(ParameterSlot::midGain));
+    const auto q = std::max(0.2, static_cast<double>(parameter(ParameterSlot::q)));
     const auto a = std::pow(10.0, gain / 40.0);
     const auto omega = juce::MathConstants<double>::twoPi
         * frequency
@@ -279,13 +282,13 @@ void UtilityDeviceProcessor::processCompressor(
     const auto* detectorBuffer = sidechain.getNumChannels() > 0
         ? &sidechain
         : &audio;
-    const auto threshold = parameter("threshold");
-    const auto ratio = parameter("ratio");
-    const auto attack = coefficient(parameter("attack"), currentSampleRate);
-    const auto release = coefficient(parameter("release"), currentSampleRate);
+    const auto threshold = parameter(ParameterSlot::threshold);
+    const auto ratio = parameter(ParameterSlot::ratio);
+    const auto attack = coefficient(parameter(ParameterSlot::attack), currentSampleRate);
+    const auto release = coefficient(parameter(ParameterSlot::release), currentSampleRate);
     const auto makeup =
-        juce::Decibels::decibelsToGain(parameter("makeup"));
-    const auto mix = parameter("mix");
+        juce::Decibels::decibelsToGain(parameter(ParameterSlot::makeup));
+    const auto mix = parameter(ParameterSlot::mix);
     for (int sample = 0; sample < audio.getNumSamples(); ++sample)
     {
         auto detector = 0.0f;
@@ -321,12 +324,12 @@ void UtilityDeviceProcessor::processLimiter(
     juce::AudioBuffer<float>& audio) noexcept
 {
     const auto ceiling =
-        juce::Decibels::decibelsToGain(parameter("ceiling"));
-    const auto release = coefficient(parameter("release"), currentSampleRate);
-    const auto truePeak = parameter("truePeak") >= 0.5f;
+        juce::Decibels::decibelsToGain(parameter(ParameterSlot::ceiling));
+    const auto release = coefficient(parameter(ParameterSlot::release), currentSampleRate);
+    const auto truePeak = parameter(ParameterSlot::truePeak) >= 0.5f;
     for (int channel = 0; channel < std::min(2, audio.getNumChannels()); ++channel)
     {
-        auto gain = 1.0f;
+        auto gain = limiterGain[static_cast<std::size_t>(channel)];
         auto* samples = audio.getWritePointer(channel);
         auto previous = limiterPrevious[static_cast<std::size_t>(channel)];
         for (int sample = 0; sample < audio.getNumSamples(); ++sample)
@@ -354,6 +357,7 @@ void UtilityDeviceProcessor::processLimiter(
             previous = current;
         }
         limiterPrevious[static_cast<std::size_t>(channel)] = previous;
+        limiterGain[static_cast<std::size_t>(channel)] = gain;
     }
 }
 
@@ -367,11 +371,11 @@ void UtilityDeviceProcessor::processGate(
         ? &sidechain
         : &audio;
     const auto threshold = juce::Decibels::decibelsToGain(
-        parameter("threshold"));
+        parameter(ParameterSlot::threshold));
     const auto floorGain = juce::Decibels::decibelsToGain(
-        parameter("range"));
-    const auto attack = coefficient(parameter("attack"), currentSampleRate);
-    const auto release = coefficient(parameter("release"), currentSampleRate);
+        parameter(ParameterSlot::range));
+    const auto attack = coefficient(parameter(ParameterSlot::attack), currentSampleRate);
+    const auto release = coefficient(parameter(ParameterSlot::release), currentSampleRate);
     for (int sample = 0; sample < audio.getNumSamples(); ++sample)
     {
         auto detector = 0.0f;
@@ -400,7 +404,7 @@ void UtilityDeviceProcessor::processDelay(
     const auto delaySamples = juce::jlimit(
         0,
         delayBuffer.getNumSamples() - maximumBlock - 1,
-        static_cast<int>(std::round(parameter("samples"))));
+        static_cast<int>(std::round(parameter(ParameterSlot::samples))));
     const auto capacity = delayBuffer.getNumSamples();
     for (int sample = 0; sample < audio.getNumSamples(); ++sample)
     {
@@ -453,10 +457,11 @@ void UtilityDeviceProcessor::processTuner(
 void UtilityDeviceProcessor::processGenerator(
     juce::AudioBuffer<float>& audio) noexcept
 {
-    const auto waveform = static_cast<int>(std::round(parameter("waveform")));
-    const auto frequency = parameter("frequency");
+    const auto waveform = static_cast<int>(
+        std::round(parameter(ParameterSlot::waveform)));
+    const auto frequency = parameter(ParameterSlot::frequency);
     const auto level =
-        juce::Decibels::decibelsToGain(parameter("level"));
+        juce::Decibels::decibelsToGain(parameter(ParameterSlot::level));
     const auto phaseStep = juce::MathConstants<double>::twoPi
         * frequency
         / currentSampleRate;
@@ -496,16 +501,11 @@ void UtilityDeviceProcessor::processGenerator(
     }
 }
 
-float UtilityDeviceProcessor::parameter(const juce::String& id) const
+float UtilityDeviceProcessor::parameter(ParameterSlot slot) const noexcept
 {
-    const auto value = std::find_if(
-        parameterLookup.cbegin(),
-        parameterLookup.cend(),
-        [&id](const auto& entry)
-        {
-            return entry.first == id;
-        });
-    return value != parameterLookup.cend() ? value->second->get() : 0.0f;
+    const auto* value =
+        realtimeParameters[static_cast<std::size_t>(slot)];
+    return value != nullptr ? value->get() : 0.0f;
 }
 
 double UtilityDeviceProcessor::getTailLengthSeconds() const

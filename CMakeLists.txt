@@ -253,7 +253,7 @@ endif()
 if(STUDIO_DUO_BUILD_TESTS)
     enable_testing()
 
-    add_library(StudioDuoClapFixture MODULE tests/fixtures/ClapTestPlugin.c)
+    add_library(StudioDuoClapFixture MODULE tests/fixtures/ClapTestPlugin.cpp)
     target_link_libraries(StudioDuoClapFixture PRIVATE clap)
     set_target_properties(
         StudioDuoClapFixture
@@ -292,6 +292,7 @@ if(STUDIO_DUO_BUILD_TESTS)
             tests/ReampSnapshotTests.cpp
             tests/RenderEngineTests.cpp
             tests/PluginCompatibilityTests.cpp
+            tests/ProjectMigrationTests.cpp
             src/ui/RoutingUiModel.cpp
             src/ui/RoutingUiModel.h
             src/audio/StudioAudioEngine.cpp

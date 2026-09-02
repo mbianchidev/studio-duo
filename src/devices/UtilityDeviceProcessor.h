@@ -53,6 +53,31 @@ public:
 private:
     static BusesProperties busesFor(UtilityDeviceType type);
 
+    enum class ParameterSlot
+    {
+        frequency,
+        midGain,
+        q,
+        threshold,
+        ratio,
+        attack,
+        release,
+        makeup,
+        mix,
+        ceiling,
+        truePeak,
+        room,
+        damping,
+        width,
+        range,
+        gain,
+        invert,
+        samples,
+        waveform,
+        level,
+        count
+    };
+
     struct Biquad
     {
         float b0 = 1.0f;
@@ -68,11 +93,12 @@ private:
     };
 
     juce::AudioParameterFloat* addFloat(
+        ParameterSlot slot,
         const juce::String& id,
         const juce::String& name,
         juce::NormalisableRange<float> range,
         float defaultValue);
-    [[nodiscard]] float parameter(const juce::String& id) const;
+    [[nodiscard]] float parameter(ParameterSlot slot) const noexcept;
     void processEqualizer(juce::AudioBuffer<float>& audio) noexcept;
     void processCompressor(juce::AudioBuffer<float>& audio) noexcept;
     void processLimiter(juce::AudioBuffer<float>& audio) noexcept;
@@ -84,12 +110,16 @@ private:
     UtilityDeviceType type;
     std::vector<std::pair<juce::String, juce::AudioParameterFloat*>>
         parameterLookup;
+    std::array<juce::AudioParameterFloat*,
+               static_cast<std::size_t>(ParameterSlot::count)>
+        realtimeParameters {};
     double currentSampleRate = 48000.0;
     int maximumBlock = 512;
     std::array<Biquad, 2> equalizerFilters;
-    std::array<float, 2> compressorEnvelope {};
+    std::array<float, 2> compressorEnvelope { 1.0f, 1.0f };
     std::array<float, 2> gateEnvelope {};
     std::array<float, 2> limiterPrevious {};
+    std::array<float, 2> limiterGain { 1.0f, 1.0f };
     juce::AudioBuffer<float> delayBuffer;
     int delayWritePosition = 0;
     juce::Reverb reverb;

@@ -107,6 +107,7 @@ std::optional<juce::var> ProjectMigration::migrateToCurrent(
         return std::nullopt;
 
     addEmptyArray(*object, "routingConnections");
+    addEmptyArray(*object, "reampRoutes");
     addEmptyArray(*object, "automationLanes");
     addEmptyArray(*object, "toneSnapshots");
     addEmptyArray(*object, "mixerSnapshots");

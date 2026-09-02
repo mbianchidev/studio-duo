@@ -85,6 +85,18 @@ juce::Result ProjectFile::save(const Project& project, const juce::File& request
     manifest->setProperty("activeSession", "session/" + generationName);
     manifest->setProperty("activeAutomation",
                           "automation/" + generationName);
+    manifest->setProperty(
+        "requiredCapabilities",
+        juce::var(juce::Array<juce::var> {
+            "routingGraphV3",
+            "automationV1",
+            "sandboxedPluginStateV1",
+            "clapHostV1",
+            "araCompatibilityV1",
+            "bundledDevicesV1",
+            "toneSnapshotsV1",
+            "renderReportsV1"
+        }));
     manifest->setProperty("savedAt", juce::Time::getCurrentTime().toISO8601(true));
 
     if (const auto result = writeJsonAtomically(manifestFile, juce::var(manifest.release())); result.failed())
@@ -142,6 +154,12 @@ std::optional<Project> ProjectFile::load(const juce::File& requestedPackageDirec
             != manifestVersion)
     {
         error = "The manifest and session format versions do not agree.";
+        return std::nullopt;
+    }
+    if (manifestVersion >= 3
+        && !manifest->getProperty("requiredCapabilities").isArray())
+    {
+        error = "The version 3 manifest does not declare required capabilities.";
         return std::nullopt;
     }
 

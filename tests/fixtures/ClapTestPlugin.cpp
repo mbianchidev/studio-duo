@@ -10,6 +10,12 @@ typedef struct test_plugin {
     double gain;
 } test_plugin_t;
 
+static const char* features[] = {
+    CLAP_PLUGIN_FEATURE_AUDIO_EFFECT,
+    CLAP_PLUGIN_FEATURE_UTILITY,
+    NULL
+};
+
 static const clap_plugin_descriptor_t descriptor = {
     .clap_version = CLAP_VERSION,
     .id = "dev.mbianchi.studioduo.test-gain",
@@ -20,11 +26,7 @@ static const clap_plugin_descriptor_t descriptor = {
     .support_url = "",
     .version = "1.0.0",
     .description = "Deterministic CLAP host fixture",
-    .features = (const char*[]) {
-        CLAP_PLUGIN_FEATURE_AUDIO_EFFECT,
-        CLAP_PLUGIN_FEATURE_UTILITY,
-        NULL
-    }
+    .features = features
 };
 
 static test_plugin_t* self(const clap_plugin_t* plugin)
@@ -106,6 +108,8 @@ static clap_process_status plugin_process(const clap_plugin_t* plugin,
         for (uint32_t port = 0; port < process->audio_outputs_count; ++port)
         {
             clap_audio_buffer_t* output = &process->audio_outputs[port];
+            for (uint32_t channel = 0; channel < output->channel_count; ++channel)
+                output->data32[channel][frame] = 0.0f;
             const clap_audio_buffer_t* input =
                 port < process->audio_inputs_count
                 ? &process->audio_inputs[port]
@@ -118,7 +122,7 @@ static clap_process_status plugin_process(const clap_plugin_t* plugin,
                         && channel < input->channel_count
                     ? input->data32[channel][frame]
                     : 0.0f;
-                output->data32[channel][frame] =
+                output->data32[channel][frame] +=
                     source * (float) instance->gain;
             }
         }
@@ -147,7 +151,7 @@ static bool audio_ports_get(const clap_plugin_t* plugin,
     info->flags = CLAP_AUDIO_PORT_IS_MAIN;
     info->channel_count = 2;
     info->port_type = CLAP_PORT_STEREO;
-    info->in_place_pair = is_input ? 20 : 10;
+    info->in_place_pair = CLAP_INVALID_ID;
     return true;
 }
 

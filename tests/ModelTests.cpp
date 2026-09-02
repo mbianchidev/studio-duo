@@ -198,6 +198,8 @@ void legacyProjectMigration()
     auto legacy = studio::Project::createDefault().toVar();
     auto* object = legacy.getDynamicObject();
     object->setProperty("formatVersion", 1);
+    object->removeProperty("reampRoutes");
+    object->removeProperty("routingConnections");
     if (auto* tracks = object->getProperty("tracks").getArray())
         for (auto& track : *tracks)
             if (auto* trackObject = track.getDynamicObject())
@@ -209,7 +211,8 @@ void legacyProjectMigration()
     expect(migrated.has_value()
                && migrated->tracks.front().outputTrackId.isEmpty()
                && migrated->resolvedOutputTrackId(migrated->tracks.front())
-                      == migrated->masterTrackId(),
+                      == migrated->masterTrackId()
+               && !migrated->routingConnections.empty(),
            "Version 1 projects migrate to direct master outputs.");
 }
 
@@ -1188,6 +1191,7 @@ int main()
     reampSnapshotTests();
     renderEngineTests();
     pluginCompatibilityTests();
+    projectMigrationTests();
 
     if (failures == 0)
     {

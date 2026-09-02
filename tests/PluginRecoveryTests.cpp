@@ -67,6 +67,38 @@ void pluginRecoveryTests()
                       == studio::PluginFailureKind::timeout,
            "Compatibility records persist crash and timeout diagnostics.");
 
+    const auto compatibilityFile = root.getChildFile("compatibility.json");
+    auto forwardValue = juce::JSON::parse(
+        compatibilityFile.loadFileAsString());
+    auto* forwardRecords =
+        forwardValue.getDynamicObject()->getProperty("records").getArray();
+    auto future = std::make_unique<juce::DynamicObject>();
+    future->setProperty("pluginIdentifier", "future");
+    future->setProperty("name", "Future");
+    future->setProperty("format", "CLAP");
+    future->setProperty("preferredMode", "futureMode");
+    future->setProperty("lastFailure", "none");
+    forwardRecords->add(juce::var(future.release()));
+    compatibilityFile.replaceWithText(
+        juce::JSON::toString(forwardValue, true));
+    studio::PluginCompatibilityDatabase forwardDatabase(
+        compatibilityFile);
+    error.clear();
+    expect(forwardDatabase.load(error)
+               && error.containsIgnoreCase("skipped")
+               && forwardDatabase.find("fixture").has_value(),
+           "Unknown compatibility records do not discard valid records.");
+    juce::String saveError;
+    expect(!forwardDatabase.save(saveError)
+               && juce::JSON::parse(
+                      compatibilityFile.loadFileAsString())
+                      .getDynamicObject()
+                      ->getProperty("records")
+                      .getArray()
+                      ->size()
+                      == 2,
+           "A forward-incompatible database is not truncated on save.");
+
     auto project = studio::Project::createDefault();
     studio::PluginInsert missing;
     missing.pluginIdentifier = "missing";

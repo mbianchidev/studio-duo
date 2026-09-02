@@ -168,6 +168,8 @@ public:
     {
         juce::String name;
         std::uint32_t channels = 0;
+        clap_id id = CLAP_INVALID_ID;
+        clap_id inPlacePair = CLAP_INVALID_ID;
     };
 
     class Parameter final : public juce::HostedAudioProcessorParameter
@@ -425,7 +427,9 @@ public:
                 continue;
             destination.push_back({
                 juce::String::fromUTF8(info.name),
-                info.channel_count
+                info.channel_count,
+                info.id,
+                info.in_place_pair
             });
         }
     }
@@ -442,6 +446,7 @@ public:
     std::vector<Port> inputs;
     std::vector<Port> outputs;
     std::vector<Parameter*> parameters;
+    juce::AudioBuffer<float> inputScratch;
     InputEvents inputEvents;
     OutputEvents outputEvents;
     bool active = false;
@@ -516,6 +521,13 @@ void ClapPluginInstance::prepareToPlay(double sampleRate, int maximumBlockSize)
 {
     releaseResources();
     impl->sampleRate = sampleRate;
+    impl->inputScratch.setSize(
+        std::max(1, getTotalNumInputChannels()),
+        std::max(1, maximumBlockSize),
+        false,
+        true,
+        false);
+    impl->inputScratch.clear();
     if (!impl->plugin->activate(impl->plugin,
                                 sampleRate,
                                 1,
@@ -589,20 +601,53 @@ void ClapPluginInstance::processBlock(juce::AudioBuffer<float>& audio,
         impl->outputs.size(),
         outputBuffers.size());
 
+    auto scratchChannel = 0;
     for (std::size_t bus = 0; bus < inputCount; ++bus)
     {
         const auto channels = std::min<int>(
             getChannelCountOfBus(true, static_cast<int>(bus)),
             static_cast<int>(inputPointers[bus].size()));
+        const auto inputId = impl->inputs[bus].id;
+        const auto inPlacePair = impl->inputs[bus].inPlacePair;
+        const auto pairedOutput = inPlacePair
+                != CLAP_INVALID_ID
+            ? std::find_if(
+                  impl->outputs.cbegin(),
+                  impl->outputs.cend(),
+                  [inputId, inPlacePair](const auto& output)
+                  {
+                      return output.id == inPlacePair
+                          && output.inPlacePair == inputId;
+                  })
+            : impl->outputs.cend();
+        const auto canProcessInPlace =
+            pairedOutput != impl->outputs.cend();
         for (int channel = 0; channel < channels; ++channel)
         {
             const auto bufferChannel = getChannelIndexInProcessBlockBuffer(
                 true,
                 static_cast<int>(bus),
                 channel);
-            inputPointers[bus][static_cast<std::size_t>(channel)] =
-                audio.getWritePointer(bufferChannel);
+            if (canProcessInPlace)
+            {
+                inputPointers[bus][static_cast<std::size_t>(channel)] =
+                    audio.getWritePointer(bufferChannel);
+            }
+            else
+            {
+                impl->inputScratch.copyFrom(
+                    scratchChannel + channel,
+                    0,
+                    audio,
+                    bufferChannel,
+                    0,
+                    audio.getNumSamples());
+                inputPointers[bus][static_cast<std::size_t>(channel)] =
+                    impl->inputScratch.getWritePointer(
+                        scratchChannel + channel);
+            }
         }
+        scratchChannel += channels;
         inputBuffers[bus] = {
             inputPointers[bus].data(),
             nullptr,

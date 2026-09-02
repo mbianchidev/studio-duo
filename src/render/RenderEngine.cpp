@@ -69,8 +69,10 @@ std::optional<double> RenderEngine::levelMatchGainDecibels(
 {
     juce::AudioFormatManager formats;
     formats.registerBasicFormats();
-    auto referenceReader = formats.createReaderFor(reference);
-    auto candidateReader = formats.createReaderFor(candidate);
+    auto referenceReader = std::unique_ptr<juce::AudioFormatReader>(
+        formats.createReaderFor(reference));
+    auto candidateReader = std::unique_ptr<juce::AudioFormatReader>(
+        formats.createReaderFor(candidate));
     if (referenceReader == nullptr || candidateReader == nullptr)
     {
         error = "Could not read the tone renders for level matching.";

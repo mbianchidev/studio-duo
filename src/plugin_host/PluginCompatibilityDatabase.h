@@ -65,6 +65,7 @@ private:
 
     juce::File file;
     std::vector<PluginCompatibilityRecord> entries;
+    bool writable = true;
 };
 
 juce::String pluginFailureKindToString(PluginFailureKind value);

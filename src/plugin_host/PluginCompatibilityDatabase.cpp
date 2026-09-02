@@ -31,9 +31,12 @@ PluginCompatibilityDatabase::PluginCompatibilityDatabase(
 
 bool PluginCompatibilityDatabase::load(juce::String& error)
 {
-    entries.clear();
+    writable = true;
     if (!file.existsAsFile())
+    {
+        entries.clear();
         return true;
+    }
     const auto value = juce::JSON::parse(file.loadFileAsString());
     const auto* root = value.getDynamicObject();
     if (root == nullptr
@@ -41,16 +44,19 @@ bool PluginCompatibilityDatabase::load(juce::String& error)
         || !root->getProperty("records").isArray())
     {
         error = "Plugin compatibility database is corrupt or unsupported.";
+        writable = false;
         return false;
     }
 
+    std::vector<PluginCompatibilityRecord> parsed;
+    auto skippedRecords = 0;
     for (const auto& recordValue : *root->getProperty("records").getArray())
     {
         const auto* object = recordValue.getDynamicObject();
         if (object == nullptr)
         {
-            error = "Plugin compatibility record must be an object.";
-            return false;
+            ++skippedRecords;
+            continue;
         }
         const auto failure = pluginFailureKindFromString(
             object->getProperty("lastFailure").toString());
@@ -58,8 +64,8 @@ bool PluginCompatibilityDatabase::load(juce::String& error)
             object->getProperty("preferredMode").toString());
         if (!failure.has_value() || !mode.has_value())
         {
-            error = "Plugin compatibility record contains an unsupported value.";
-            return false;
+            ++skippedRecords;
+            continue;
         }
         PluginCompatibilityRecord record;
         record.pluginIdentifier =
@@ -85,16 +91,28 @@ bool PluginCompatibilityDatabase::load(juce::String& error)
         record.araCapable = booleanProperty(*object, "araCapable");
         if (record.pluginIdentifier.isEmpty())
         {
-            error = "Plugin compatibility record has no identifier.";
-            return false;
+            ++skippedRecords;
+            continue;
         }
-        entries.push_back(std::move(record));
+        parsed.push_back(std::move(record));
+    }
+    entries = std::move(parsed);
+    if (skippedRecords > 0)
+    {
+        writable = false;
+        error = juce::String(skippedRecords)
+            + " unsupported compatibility record(s) were preserved on disk and skipped.";
     }
     return true;
 }
 
 bool PluginCompatibilityDatabase::save(juce::String& error) const
 {
+    if (!writable)
+    {
+        error = "Compatibility database was not overwritten after a failed load.";
+        return false;
+    }
     if (!file.getParentDirectory().createDirectory())
     {
         error = "Could not create the plugin compatibility directory.";

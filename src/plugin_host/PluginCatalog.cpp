@@ -241,14 +241,15 @@ PluginCatalog::PluginCatalog()
     knownPlugins.setCustomScanner(std::make_unique<OutOfProcessPluginScanner>(cancelRequested));
     load();
     juce::String compatibilityError;
-    if (!compatibilityDatabase.load(compatibilityError))
-        statusMessage = compatibilityError;
+    compatibilityDatabase.load(compatibilityError);
     juce::PluginDirectoryScanner::applyBlacklistingsFromDeadMansPedal(knownPlugins,
                                                                       deadMansPedalFile);
 
     const auto count = knownPlugins.getNumTypes();
     statusMessage = count == 0 ? "No plugins scanned yet."
                                : juce::String(count) + " plugins loaded from catalog.";
+    if (compatibilityError.isNotEmpty())
+        statusMessage << " " << compatibilityError;
 }
 
 PluginCatalog::~PluginCatalog()

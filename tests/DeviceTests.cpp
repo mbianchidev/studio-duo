@@ -77,6 +77,11 @@ void deviceTests()
 
     auto compressor = studio::DeviceRegistry::create("studio.device.compressor");
     compressor->prepareToPlay(48000.0, 256);
+    auto transparentAudio = constantBuffer(0.1f);
+    compressor->processBlock(transparentAudio, midi);
+    expect(transparentAudio.getSample(0, 0) > 0.095f,
+           "Compressor reset starts at unity gain.");
+    compressor->reset();
     auto compressorAudio = constantBuffer(0.9f);
     compressor->processBlock(compressorAudio, midi);
     expect(compressorAudio.getSample(0, 200) < 0.8f,
@@ -104,6 +109,27 @@ void deviceTests()
     limiter->processBlock(limiterAudio, midi);
     expect(std::abs(limiterAudio.getSample(0, 200)) <= 0.99f,
            "True-peak limiter respects its ceiling.");
+    auto limiterWhole = studio::DeviceRegistry::create("studio.device.limiter");
+    auto limiterSplit = studio::DeviceRegistry::create("studio.device.limiter");
+    limiterWhole->prepareToPlay(48000.0, 512);
+    limiterSplit->prepareToPlay(48000.0, 256);
+    juce::AudioBuffer<float> whole(2, 512);
+    juce::AudioBuffer<float> firstHalf(2, 256);
+    juce::AudioBuffer<float> secondHalf(2, 256);
+    for (int channel = 0; channel < 2; ++channel)
+    {
+        for (int sample = 0; sample < 512; ++sample)
+            whole.setSample(channel, sample, sample < 128 ? 1.5f : 0.2f);
+        firstHalf.copyFrom(channel, 0, whole, channel, 0, 256);
+        secondHalf.copyFrom(channel, 0, whole, channel, 256, 256);
+    }
+    limiterWhole->processBlock(whole, midi);
+    limiterSplit->processBlock(firstHalf, midi);
+    limiterSplit->processBlock(secondHalf, midi);
+    expect(std::abs(whole.getSample(0, 256)
+                    - secondHalf.getSample(0, 0))
+               < 0.0001f,
+           "Limiter release state is independent of host block boundaries.");
 
     auto equalizer = studio::DeviceRegistry::create("studio.device.eq");
     equalizer->prepareToPlay(48000.0, 256);
