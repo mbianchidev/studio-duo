@@ -154,6 +154,8 @@ public:
         retiredDelayGenerationForTesting();
     [[nodiscard]] static std::array<int, 2>
         snapshotPublicationSlotsForTesting();
+    [[nodiscard]] static float
+        delayPublicationHandoffForTesting();
 #endif
     [[nodiscard]] std::vector<RecordingProgress> recordingProgress() const;
     [[nodiscard]] std::vector<PluginRuntimeStatus> pluginRuntimeStatuses();
@@ -222,6 +224,8 @@ private:
                 std::atomic<std::int64_t> samplesWritten { 0 };
                 std::array<std::atomic<int>, 3>
                     transitionPositions {};
+                std::array<std::atomic<int>, 3>
+                    transitionHandoffMasks {};
             };
 
             struct Transition
@@ -542,6 +546,13 @@ private:
     static void applyDelayCompensation(juce::AudioBuffer<float>& buffer,
                                        int samples,
                                        RenderSource::DelayCompensator& delay) noexcept;
+    static int mergeDelayTransitionProgress(
+        RenderSource::DelayCompensator& delay,
+        int sourceFilter = -1) noexcept;
+    void mergeSnapshotTransitionHandoffs(
+        RenderSnapshot& snapshot,
+        int sourceFilter,
+        int maximumSourceReaders) noexcept;
     void processRuntimeChain(std::uint64_t runtimeKey,
                              juce::AudioBuffer<float>& buffer,
                              const juce::AudioBuffer<float>* sidechain = nullptr,

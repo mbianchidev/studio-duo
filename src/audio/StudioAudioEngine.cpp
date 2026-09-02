@@ -973,6 +973,73 @@ StudioAudioEngine::snapshotPublicationSlotsForTesting()
     retiredReader.join();
     return { secondGeneration, thirdGeneration };
 }
+
+float StudioAudioEngine::delayPublicationHandoffForTesting()
+{
+    constexpr auto quantum = 16;
+    RenderSource::DelayCompensator sourceGeneration;
+    configureDelayCompensator(
+        sourceGeneration,
+        4,
+        quantum);
+    juce::AudioBuffer<float> history(2, 64);
+    for (int sample = 0; sample < history.getNumSamples(); ++sample)
+    {
+        const auto value = static_cast<float>(sample) / 100.0f;
+        history.setSample(0, sample, value);
+        history.setSample(1, sample, value);
+    }
+    applyDelayCompensation(
+        history,
+        history.getNumSamples(),
+        sourceGeneration);
+    configureDelayCompensator(
+        sourceGeneration,
+        8,
+        quantum,
+        0);
+    juce::AudioBuffer<float> initialTransition(2, 4);
+    for (int sample = 0;
+         sample < initialTransition.getNumSamples();
+         ++sample)
+    {
+        const auto value =
+            static_cast<float>(64 + sample) / 100.0f;
+        initialTransition.setSample(0, sample, value);
+        initialTransition.setSample(1, sample, value);
+    }
+    applyDelayCompensation(
+        initialTransition,
+        initialTransition.getNumSamples(),
+        sourceGeneration);
+
+    auto destinationGeneration = sourceGeneration;
+    configureDelayCompensator(
+        destinationGeneration,
+        8,
+        quantum,
+        1);
+
+    juce::AudioBuffer<float> sourceAdvance(2, 1);
+    sourceAdvance.setSample(0, 0, 0.68f);
+    sourceAdvance.setSample(1, 0, 0.68f);
+    applyDelayCompensation(
+        sourceAdvance,
+        1,
+        sourceGeneration);
+    mergeDelayTransitionProgress(
+        destinationGeneration,
+        0);
+
+    juce::AudioBuffer<float> destinationOutput(2, 1);
+    destinationOutput.setSample(0, 0, 0.69f);
+    destinationOutput.setSample(1, 0, 0.69f);
+    applyDelayCompensation(
+        destinationOutput,
+        1,
+        destinationGeneration);
+    return destinationOutput.getSample(0, 0);
+}
 #endif
 
 std::vector<StudioAudioEngine::RecordingProgress> StudioAudioEngine::recordingProgress() const
@@ -3142,10 +3209,20 @@ void StudioAudioEngine::startPluginSnapshotRefreshLocked()
             {
                 const auto destination =
                     chooseWritableSnapshot();
+                const auto sourceSnapshotIndex =
+                    static_cast<int>(
+                        (activeRenderPair.load(
+                             std::memory_order_acquire)
+                         >> 2)
+                        & 0x3);
                 configureRuntimeTiming(
                     refreshed,
                     requests,
                     destination);
+                mergeSnapshotTransitionHandoffs(
+                    refreshed,
+                    sourceSnapshotIndex,
+                    -1);
                 const auto refreshedTemplate =
                     std::make_shared<RenderSnapshot>(refreshed);
                 activeSnapshotTemplate = refreshedTemplate;
@@ -3199,16 +3276,39 @@ void StudioAudioEngine::configureDelayCompensator(
             if (nextSlot
                 != delay.transition->positionSlot)
             {
-                const auto position =
+                const auto previousSlot =
+                    delay.transition->positionSlot;
+                auto sourceMask =
+                    delay.state->transitionHandoffMasks[
+                        static_cast<std::size_t>(
+                            previousSlot)].load(
+                        std::memory_order_acquire)
+                    | (1 << previousSlot);
+                auto position =
                     delay.state->transitionPositions[
                         static_cast<std::size_t>(
-                            delay.transition
-                                ->positionSlot)].load(
+                            previousSlot)].load(
                         std::memory_order_acquire);
+                for (auto slot = 0; slot < 3; ++slot)
+                {
+                    if ((sourceMask & (1 << slot)) == 0)
+                        continue;
+                    position = std::max(
+                        position,
+                        delay.state->transitionPositions[
+                            static_cast<std::size_t>(
+                                slot)].load(
+                            std::memory_order_acquire));
+                }
                 delay.state->transitionPositions[
                     static_cast<std::size_t>(
                         nextSlot)].store(
                     position,
+                    std::memory_order_release);
+                sourceMask &= ~(1 << nextSlot);
+                delay.state->transitionHandoffMasks[
+                    static_cast<std::size_t>(nextSlot)].store(
+                    sourceMask,
                     std::memory_order_release);
                 delay.transition->positionSlot = nextSlot;
             }
@@ -3272,6 +3372,11 @@ void StudioAudioEngine::configureDelayCompensator(
             ? (delay.transition->positionSlot + 1) % 3
             : 0;
         targetState->transitionPositions[
+            static_cast<std::size_t>(
+                transition->positionSlot)].store(
+            0,
+            std::memory_order_release);
+        targetState->transitionHandoffMasks[
             static_cast<std::size_t>(
                 transition->positionSlot)].store(
             0,
@@ -3933,6 +4038,109 @@ void StudioAudioEngine::applyTrackGainAndPan(juce::AudioBuffer<float>& buffer,
     buffer.applyGain(1, 0, samples, rightGain);
 }
 
+int StudioAudioEngine::mergeDelayTransitionProgress(
+    RenderSource::DelayCompensator& delay,
+    int sourceFilter) noexcept
+{
+    if (delay.state == nullptr
+        || !delay.transition.has_value())
+        return 0;
+
+    const auto destinationSlot =
+        delay.transition->positionSlot;
+    if (destinationSlot < 0 || destinationSlot >= 3)
+    {
+        jassertfalse;
+        return 0;
+    }
+    const auto sourceMask =
+        delay.state->transitionHandoffMasks[
+            static_cast<std::size_t>(destinationSlot)].load(
+            std::memory_order_acquire);
+    if (sourceMask == 0
+        || (sourceFilter >= 0
+            && (sourceMask & (1 << sourceFilter)) == 0))
+        return 0;
+
+    auto destinationPosition =
+        delay.state->transitionPositions[
+            static_cast<std::size_t>(destinationSlot)].load(
+            std::memory_order_relaxed);
+    auto sourcePosition = destinationPosition;
+    for (auto slot = 0; slot < 3; ++slot)
+    {
+        if ((sourceMask & (1 << slot)) == 0)
+            continue;
+        sourcePosition = std::max(
+            sourcePosition,
+            delay.state->transitionPositions[
+                static_cast<std::size_t>(slot)].load(
+                std::memory_order_acquire));
+    }
+    while (destinationPosition < sourcePosition
+           && !delay.state->transitionPositions[
+                   static_cast<std::size_t>(
+                       destinationSlot)].compare_exchange_weak(
+                   destinationPosition,
+                   sourcePosition,
+                   std::memory_order_acq_rel,
+                   std::memory_order_relaxed))
+    {
+    }
+    return sourceMask;
+}
+
+void StudioAudioEngine::mergeSnapshotTransitionHandoffs(
+    RenderSnapshot& snapshot,
+    int sourceFilter,
+    int maximumSourceReaders) noexcept
+{
+    const auto merge = [this,
+                        sourceFilter,
+                        maximumSourceReaders](auto& delay)
+    {
+        const auto sourceMask =
+            mergeDelayTransitionProgress(
+                delay,
+                sourceFilter);
+        if (sourceMask == 0)
+            return;
+
+        auto clearMask = 0;
+        for (auto slot = 0; slot < 3; ++slot)
+        {
+            const auto slotMask = 1 << slot;
+            if ((sourceMask & slotMask) == 0
+                || (sourceFilter >= 0
+                    && slot != sourceFilter)
+                || snapshotReaders[
+                       static_cast<std::size_t>(slot)].load(
+                       std::memory_order_seq_cst)
+                    > maximumSourceReaders)
+                continue;
+            clearMask |= slotMask;
+        }
+        if (clearMask == 0)
+            return;
+        const auto destinationSlot =
+            delay.transition->positionSlot;
+        delay.state->transitionHandoffMasks[
+            static_cast<std::size_t>(destinationSlot)].fetch_and(
+            ~clearMask,
+            std::memory_order_acq_rel);
+    };
+
+    for (auto& track : snapshot.tracks)
+    {
+        for (auto& source : track.sources)
+            merge(source.compensation);
+        merge(track.compensation);
+        for (auto& route : track.routes)
+            merge(route.compensation);
+    }
+    merge(snapshot.clickCompensation);
+}
+
 void StudioAudioEngine::applyDelayCompensation(
     juce::AudioBuffer<float>& buffer,
     int samples,
@@ -3943,6 +4151,7 @@ void StudioAudioEngine::applyDelayCompensation(
             <= delay.delaySamples)
         return;
 
+    mergeDelayTransitionProgress(delay);
     for (int sample = 0; sample < samples; ++sample)
     {
         std::array<float, 2> input {
@@ -3992,6 +4201,14 @@ void StudioAudioEngine::applyDelayCompensation(
         auto* transition = delay.transition.has_value()
             ? &*delay.transition
             : nullptr;
+        if (transition != nullptr
+            && (transition->positionSlot < 0
+                || transition->positionSlot >= 3))
+        {
+            jassertfalse;
+            transition = nullptr;
+        }
+        mergeDelayTransitionProgress(delay);
         const auto transitionPosition = transition != nullptr
             ? delay.state->transitionPositions[
                   static_cast<std::size_t>(
@@ -5682,6 +5899,10 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
         };
 
         auto& snapshot = snapshots[static_cast<std::size_t>(snapshotIndex)];
+        mergeSnapshotTransitionHandoffs(
+            snapshot,
+            -1,
+            0);
         auto position = playheadSample.load(std::memory_order_acquire);
         const auto renderingRecording = recordingBlockActive;
         const auto renderLooping = snapshot.loopEnabled
@@ -6291,6 +6512,41 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
         }
 
         playheadSample.store(position, std::memory_order_release);
+        for (;;)
+        {
+            const auto currentPair =
+                activeRenderPair.load(std::memory_order_acquire);
+            const auto currentSnapshotIndex = static_cast<int>(
+                (currentPair >> 2) & 0x3);
+            if (currentSnapshotIndex == snapshotIndex)
+                break;
+            snapshotReaders[
+                static_cast<std::size_t>(
+                    currentSnapshotIndex)].fetch_add(
+                1,
+                std::memory_order_seq_cst);
+            if (currentPair
+                == activeRenderPair.load(
+                    std::memory_order_acquire))
+            {
+                mergeSnapshotTransitionHandoffs(
+                    snapshots[static_cast<std::size_t>(
+                        currentSnapshotIndex)],
+                    snapshotIndex,
+                    1);
+                snapshotReaders[
+                    static_cast<std::size_t>(
+                        currentSnapshotIndex)].fetch_sub(
+                    1,
+                    std::memory_order_seq_cst);
+                break;
+            }
+            snapshotReaders[
+                static_cast<std::size_t>(
+                    currentSnapshotIndex)].fetch_sub(
+                1,
+                std::memory_order_seq_cst);
+        }
     }
 
     if (!calibrationBlockActive

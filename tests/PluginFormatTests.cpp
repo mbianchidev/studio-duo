@@ -45,6 +45,9 @@ void pluginFormatTests()
     const auto publicationSlots =
         studio::StudioAudioEngine::
             snapshotPublicationSlotsForTesting();
+    const auto publicationHandoff =
+        studio::StudioAudioEngine::
+            delayPublicationHandoffForTesting();
     expect(increasedDelay.size() == 16
                && std::abs(increasedDelay.front() - 0.60f)
                       < 0.0001f
@@ -87,12 +90,15 @@ void pluginFormatTests()
                       retiredGeneration[0] - 0.6293333f)
                       < 0.0001f
                && std::abs(
-                      retiredGeneration[1] - 0.6393333f)
+                      retiredGeneration[1] - 0.6366667f)
                       < 0.0001f,
-           "A blocked retired delay generation keeps independent progress across two newer publications.");
+           "A blocked retired delay generation hands final progress to the newest publication without slot reuse.");
     expect(publicationSlots[0] == 1
                && publicationSlots[1] == 2,
            "Two newer snapshot publications reserve distinct slots while a retired generation remains blocked.");
+    expect(std::abs(publicationHandoff - 0.6366667f)
+               < 0.0001f,
+           "Destination delay progress merges a final source advance made after preparation but before publication.");
 
     studio::ClapPluginFormat clapFormat;
     juce::OwnedArray<juce::PluginDescription> descriptions;
