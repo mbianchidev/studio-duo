@@ -699,7 +699,8 @@ double StudioAudioEngine::activeSnapshotSampleRateForTesting() const noexcept
         : snapshots.front().sampleRate;
 }
 
-void StudioAudioEngine::processActiveBlockForTesting(int samples)
+juce::AudioBuffer<float>
+StudioAudioEngine::renderActiveBlockForTesting(int samples)
 {
     juce::AudioBuffer<float> output(
         2,
@@ -717,6 +718,12 @@ void StudioAudioEngine::processActiveBlockForTesting(int samples)
         2,
         output.getNumSamples(),
         context);
+    return output;
+}
+
+void StudioAudioEngine::processActiveBlockForTesting(int samples)
+{
+    juce::ignoreUnused(renderActiveBlockForTesting(samples));
 }
 #endif
 
@@ -871,15 +878,23 @@ StudioAudioEngine::pluginRuntimeStatuses()
     if (timingChanged || parameterLayoutChanged)
     {
         const juce::ScopedLock statusLock(pluginStatusLock);
-        ++pluginSnapshotRefreshRevision;
-        pluginSnapshotRefreshPending = true;
-        startPluginSnapshotRefreshLocked(pluginStatuses);
+        if (parameterLayoutChanged
+            && activeSnapshotTemplate != nullptr)
+        {
+            resolvePluginAutomationParameterIds(
+                *activeSnapshotTemplate,
+                pluginStatuses);
+        }
+        if (timingChanged)
+        {
+            ++pluginSnapshotRefreshRevision;
+            pluginSnapshotRefreshPending = true;
+        }
+        if (pluginSnapshotRefreshPending)
+            startPluginSnapshotRefreshLocked();
     }
     else if (pluginSnapshotRefreshPending)
-    {
-        const juce::ScopedLock statusLock(pluginStatusLock);
-        startPluginSnapshotRefreshLocked(pluginStatuses);
-    }
+        startPluginSnapshotRefreshLocked();
     const juce::ScopedLock statusLock(pluginStatusLock);
     return pluginStatuses;
 }
@@ -2788,7 +2803,7 @@ std::optional<StudioAudioEngine::RenderSnapshot> StudioAudioEngine::buildSnapsho
 }
 
 void StudioAudioEngine::resolvePluginAutomationParameterIds(
-    RenderSnapshot& snapshot,
+    const RenderSnapshot& snapshot,
     const std::vector<PluginRuntimeStatus>& statuses) const
 {
     const auto resolve = [&statuses](
@@ -2809,17 +2824,18 @@ void StudioAudioEngine::resolvePluginAutomationParameterIds(
                 });
             if (status == statuses.end())
             {
-                lane.parameterIndex = -1;
+                lane.resolveParameterIndex(-1);
                 continue;
             }
 
-            lane.parameterIndex = -1;
+            lane.resolveParameterIndex(-1);
             for (const auto& parameter : status->parameters)
             {
                 if (parameter.automatable
                     && parameter.id == lane.parameterId)
                 {
-                    lane.parameterIndex = parameter.index;
+                    lane.resolveParameterIndex(
+                        parameter.index);
                     break;
                 }
             }
@@ -2837,8 +2853,7 @@ void StudioAudioEngine::resolvePluginAutomationParameterIds(
         snapshot.masterPluginAutomation);
 }
 
-void StudioAudioEngine::startPluginSnapshotRefreshLocked(
-    std::vector<PluginRuntimeStatus> runtimeStatuses)
+void StudioAudioEngine::startPluginSnapshotRefreshLocked()
 {
     if (!pluginSnapshotRefreshPending
         || pluginSnapshotRefreshRunning
@@ -2858,7 +2873,6 @@ void StudioAudioEngine::startPluginSnapshotRefreshLocked(
         [this,
          snapshotTemplate,
          requests,
-         statuses = std::move(runtimeStatuses),
          generation,
          runtimeIndex,
          snapshotRevision,
@@ -2872,10 +2886,9 @@ void StudioAudioEngine::startPluginSnapshotRefreshLocked(
             }
 
             auto refreshed = *snapshotTemplate;
-            resolvePluginAutomationParameterIds(
-                refreshed,
-                statuses);
             configureRuntimeTiming(refreshed, requests);
+            const auto refreshedTemplate =
+                std::make_shared<RenderSnapshot>(refreshed);
 
             const juce::ScopedLock lock(pluginRequestLock);
             if (snapshotRevision == activeSnapshotRevision
@@ -2885,6 +2898,8 @@ void StudioAudioEngine::startPluginSnapshotRefreshLocked(
             {
                 const auto destination =
                     chooseWritableSnapshot();
+                activeSnapshotTemplate = refreshedTemplate;
+                ++activeSnapshotRevision;
                 snapshots[static_cast<std::size_t>(destination)] =
                     std::move(refreshed);
                 snapshotGenerations[
@@ -2905,16 +2920,7 @@ void StudioAudioEngine::startPluginSnapshotRefreshLocked(
             pluginSnapshotRefreshRunning = false;
             if (pluginSnapshotRefreshPending
                 && !shuttingDown.load(std::memory_order_acquire))
-            {
-                std::vector<PluginRuntimeStatus> currentStatuses;
-                {
-                    const juce::ScopedLock statusLock(
-                        pluginStatusLock);
-                    currentStatuses = pluginStatuses;
-                }
-                startPluginSnapshotRefreshLocked(
-                    std::move(currentStatuses));
-            }
+                startPluginSnapshotRefreshLocked();
         });
 }
 
@@ -2959,19 +2965,51 @@ void StudioAudioEngine::configureRuntimeTiming(
             return total + std::max(0.0, request.tailSeconds);
         });
     };
-    const auto resetDelay = [&snapshot](auto& delay, int samples)
+    const auto configureDelay = [&snapshot](auto& delay, int samples)
     {
-        delay.delaySamples = std::max(0, samples);
-        delay.writePosition = 0;
-        delay.buffer.setSize(2,
-                             std::max(1,
-                                      delay.delaySamples
-                                          + snapshot.processingQuantum
-                                          + 1),
-                             false,
-                             true,
-                             false);
-        delay.buffer.clear();
+        const auto previousDelay = delay.delaySamples;
+        const auto nextDelay = std::clamp(
+            samples,
+            0,
+            std::numeric_limits<int>::max() - 1);
+        const auto requiredCapacity = nextDelay + 1;
+        delay.delaySamples = nextDelay;
+        if (delay.state != nullptr
+            && delay.state->buffer.getNumSamples()
+                >= requiredCapacity)
+            return;
+
+        auto replacement = std::make_shared<
+            RenderSource::DelayCompensator::State>();
+        const auto headroom = std::max<std::int64_t>(
+            static_cast<std::int64_t>(
+                snapshot.processingQuantum)
+                * 4,
+            nextDelay);
+        const auto allocatedCapacity =
+            static_cast<int>(std::min<std::int64_t>(
+                std::numeric_limits<int>::max(),
+                static_cast<std::int64_t>(
+                    requiredCapacity)
+                    + headroom));
+        replacement->buffer.setSize(
+            2,
+            std::max(1, allocatedCapacity),
+            false,
+            true,
+            false);
+        replacement->buffer.clear();
+        if (delay.state != nullptr
+            && delay.state->buffer.getNumSamples() > 0)
+        {
+            replacement->fallback = delay.state;
+            replacement->fallbackDelaySamples =
+                previousDelay;
+            replacement->transitionSamples =
+                nextDelay
+                + std::max(1, snapshot.processingQuantum);
+        }
+        delay.state = std::move(replacement);
     };
 
     std::vector<int> inputLatencies(snapshot.tracks.size(), 0);
@@ -3000,8 +3038,9 @@ void StudioAudioEngine::configureRuntimeTiming(
         const auto alignedInputLatency = std::max(maximumSourceLatency,
                                                  inputLatencies[index]);
         for (auto& source : track.sources)
-            resetDelay(source.compensation,
-                       alignedInputLatency - source.runtimeLatencySamples);
+            configureDelay(
+                source.compensation,
+                alignedInputLatency - source.runtimeLatencySamples);
 
         track.runtimeLatencySamples = alignedInputLatency
             + latencyForKey(track.runtimeKey);
@@ -3036,23 +3075,26 @@ void StudioAudioEngine::configureRuntimeTiming(
         const auto destinationLatency = track.destinationIndex >= 0
             ? inputLatencies[static_cast<std::size_t>(track.destinationIndex)]
             : masterInputLatency;
-        resetDelay(track.compensation,
-                   destinationLatency - track.runtimeLatencySamples);
+        configureDelay(
+            track.compensation,
+            destinationLatency - track.runtimeLatencySamples);
         for (auto& route : track.routes)
         {
             const auto routeDestinationLatency = route.destinationIndex >= 0
                 ? inputLatencies[static_cast<std::size_t>(
                       route.destinationIndex)]
                 : track.runtimeLatencySamples;
-            resetDelay(route.compensation,
-                       routeDestinationLatency - track.runtimeLatencySamples);
+            configureDelay(
+                route.compensation,
+                routeDestinationLatency - track.runtimeLatencySamples);
             route.processingBuffer.clear();
         }
     }
 
     const auto masterLatency = latencyForKey(snapshot.masterRuntimeKey);
-    resetDelay(snapshot.clickCompensation,
-               masterInputLatency + masterLatency);
+    configureDelay(
+        snapshot.clickCompensation,
+        masterInputLatency + masterLatency);
     snapshot.lengthSamples = snapshot.contentLengthSamples
         + masterInputLatency
         + masterLatency
@@ -3576,25 +3618,83 @@ void StudioAudioEngine::applyDelayCompensation(
     int samples,
     RenderSource::DelayCompensator& delay) noexcept
 {
-    if (delay.delaySamples <= 0 || delay.buffer.getNumSamples() <= delay.delaySamples)
+    if (delay.state == nullptr
+        || delay.state->buffer.getNumSamples()
+            <= delay.delaySamples)
         return;
 
-    const auto capacity = delay.buffer.getNumSamples();
     for (int sample = 0; sample < samples; ++sample)
     {
-        auto readPosition = delay.writePosition - delay.delaySamples;
-        if (readPosition < 0)
-            readPosition += capacity;
-
-        for (int channel = 0; channel < 2; ++channel)
+        std::array<float, 2> input {
+            buffer.getSample(0, sample),
+            buffer.getSample(1, sample)
+        };
+        const auto processState = [&input](
+            RenderSource::DelayCompensator::State& state,
+            int delaySamples,
+            std::array<float, 2>& output)
         {
-            const auto input = buffer.getSample(channel, sample);
-            const auto output = delay.buffer.getSample(channel, readPosition);
-            delay.buffer.setSample(channel, delay.writePosition, input);
-            buffer.setSample(channel, sample, output);
-        }
+            const auto capacity = state.buffer.getNumSamples();
+            auto readPosition =
+                state.writePosition - delaySamples;
+            if (readPosition < 0)
+                readPosition += capacity;
+            for (int channel = 0; channel < 2; ++channel)
+            {
+                output[static_cast<std::size_t>(channel)] =
+                    delaySamples > 0
+                    ? state.buffer.getSample(
+                          channel,
+                          readPosition)
+                    : input[static_cast<std::size_t>(channel)];
+                state.buffer.setSample(
+                    channel,
+                    state.writePosition,
+                    input[static_cast<std::size_t>(channel)]);
+            }
+            state.writePosition =
+                (state.writePosition + 1) % capacity;
+        };
 
-        delay.writePosition = (delay.writePosition + 1) % capacity;
+        std::array<float, 2> output {};
+        processState(*delay.state, delay.delaySamples, output);
+        auto& state = *delay.state;
+        if (state.fallback != nullptr
+            && state.transitionPosition
+                < state.transitionSamples)
+        {
+            std::array<float, 2> fallbackOutput {};
+            processState(
+                *state.fallback,
+                state.fallbackDelaySamples,
+                fallbackOutput);
+            const auto warmup = delay.delaySamples;
+            const auto fadeSamples = std::max(
+                1,
+                state.transitionSamples - warmup);
+            const auto mix = state.transitionPosition < warmup
+                ? 0.0f
+                : juce::jlimit(
+                      0.0f,
+                      1.0f,
+                      static_cast<float>(
+                          state.transitionPosition - warmup)
+                          / static_cast<float>(fadeSamples));
+            for (int channel = 0; channel < 2; ++channel)
+            {
+                const auto index =
+                    static_cast<std::size_t>(channel);
+                output[index] = fallbackOutput[index]
+                    + (output[index] - fallbackOutput[index])
+                        * mix;
+            }
+            ++state.transitionPosition;
+        }
+        for (int channel = 0; channel < 2; ++channel)
+            buffer.setSample(
+                channel,
+                sample,
+                output[static_cast<std::size_t>(channel)]);
     }
 }
 
@@ -3664,6 +3764,8 @@ void StudioAudioEngine::processRuntimeChain(std::uint64_t key,
                 {
                     if (lane.insertId != insert.insertId)
                         continue;
+                    const auto parameterIndex =
+                        lane.resolvedParameterIndex();
                     if (lane.lane.interpolation
                         == AutomationInterpolation::linear)
                     {
@@ -3673,7 +3775,7 @@ void StudioAudioEngine::processRuntimeChain(std::uint64_t key,
                             if (segmentEnd <= segmentStart)
                                 return;
                             addEvent(
-                                lane.parameterIndex,
+                                parameterIndex,
                                 segmentStart,
                                 lane.lane.valueAt(
                                     timelineSample + segmentStart),
@@ -3697,7 +3799,7 @@ void StudioAudioEngine::processRuntimeChain(std::uint64_t key,
                     }
                     else
                     {
-                        addEvent(lane.parameterIndex,
+                        addEvent(parameterIndex,
                                  0,
                                  lane.lane.valueAt(timelineSample),
                                  0,
@@ -3711,7 +3813,7 @@ void StudioAudioEngine::processRuntimeChain(std::uint64_t key,
                                 || point.sample >= blockEnd)
                                 continue;
                             addEvent(
-                                lane.parameterIndex,
+                                parameterIndex,
                                 static_cast<int>(
                                     point.sample - timelineSample),
                                 point.value + lane.lane.trimOffset,
@@ -4765,12 +4867,15 @@ void StudioAudioEngine::runPluginRuntimeBuilder()
                 insertRuntime.name = request.name;
                 insertRuntime.failureDelay.delaySamples =
                     std::max(0, processor->getLatencySamples());
-                insertRuntime.failureDelay.buffer.setSize(
+                insertRuntime.failureDelay.state =
+                    std::make_shared<
+                        RenderSource::DelayCompensator::State>();
+                insertRuntime.failureDelay.state->buffer.setSize(
                     2,
                     insertRuntime.failureDelay.delaySamples
                         + PluginBridgeSharedState::maxBlockSize
                         + 1);
-                insertRuntime.failureDelay.buffer.clear();
+                insertRuntime.failureDelay.state->buffer.clear();
                 insertRuntime.inProcessBuffer.setSize(
                     std::max({
                         2,
@@ -4855,12 +4960,15 @@ void StudioAudioEngine::runPluginRuntimeBuilder()
                 failedRuntime.failureDelay.delaySamples
                     = deviceBlockSize.load(std::memory_order_acquire)
                     + std::max(0, request.latencySamples);
-                failedRuntime.failureDelay.buffer.setSize(
+                failedRuntime.failureDelay.state =
+                    std::make_shared<
+                        RenderSource::DelayCompensator::State>();
+                failedRuntime.failureDelay.state->buffer.setSize(
                     2,
                     failedRuntime.failureDelay.delaySamples
                         + PluginBridgeSharedState::maxBlockSize
                         + 1);
-                failedRuntime.failureDelay.buffer.clear();
+                failedRuntime.failureDelay.state->buffer.clear();
                 track->inserts.push_back(std::move(failedRuntime));
 
                 status.state = PluginRuntimeStatus::State::failed;
@@ -4892,12 +5000,15 @@ void StudioAudioEngine::runPluginRuntimeBuilder()
             insertRuntime.failureDelay.delaySamples
                 = deviceBlockSize.load(std::memory_order_acquire)
                 + bridge->reportedLatencySamples();
-            insertRuntime.failureDelay.buffer.setSize(
+            insertRuntime.failureDelay.state =
+                std::make_shared<
+                    RenderSource::DelayCompensator::State>();
+            insertRuntime.failureDelay.state->buffer.setSize(
                 2,
                 insertRuntime.failureDelay.delaySamples
                     + PluginBridgeSharedState::maxBlockSize
                     + 1);
-            insertRuntime.failureDelay.buffer.clear();
+            insertRuntime.failureDelay.state->buffer.clear();
             insertRuntime.bridge = std::move(bridge);
             track->inserts.push_back(std::move(insertRuntime));
             status.state = PluginRuntimeStatus::State::ready;

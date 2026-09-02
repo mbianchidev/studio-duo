@@ -435,6 +435,23 @@ void pluginFormatTests()
                            - monoRender.getSample(0, 33))
                       < 0.0001f,
            "CLAP automation is sample-exact in one process call and mono output duplicates to stereo.");
+    studio::Track dryTrack;
+    dryTrack.name = "PDC reference";
+    dryTrack.clips.push_back(monoClip);
+    monoProject.tracks.push_back(std::move(dryTrack));
+    expect(monoEngine.updateProject(
+              monoProject,
+              { monoRequest })
+              .wasOk(),
+           "PDC metadata-rescan project is accepted.");
+    for (int attempt = 0;
+         attempt < 100
+         && monoEngine.pluginRuntimeTransitionPending();
+         ++attempt)
+    {
+        juce::MessageManager::getInstance()
+           ->runDispatchLoopUntil(10);
+    }
     monoEngine.seekSeconds(0.0);
     monoEngine.play();
     monoEngine.processActiveBlockForTesting(64);
@@ -556,6 +573,55 @@ void pluginFormatTests()
               && timingRefreshedStatuses.front().latencySamples
                      == 64,
            "Live latency changes publish refreshed PDC timing without stopping audio.");
+    monoEngine.seekSeconds(0.0);
+    monoEngine.play();
+    const auto alignedBeforeMetadataRescan =
+        monoEngine.renderActiveBlockForTesting(64);
+    error.clear();
+    expect(monoEngine.setPluginParameter(
+              monoInsert.id,
+              291,
+              1.0f,
+              error),
+           error.toRawUTF8());
+    monoEngine.seekSeconds(0.0);
+    monoEngine.play();
+    monoEngine.processActiveBlockForTesting(64);
+    juce::MessageManager::getInstance()->runDispatchLoopUntil(50);
+    const auto metadataOnlyStatuses =
+        monoEngine.pluginRuntimeStatuses();
+    monoEngine.seekSeconds(0.0);
+    monoEngine.play();
+    const auto alignedAfterMetadataRescan =
+        monoEngine.renderActiveBlockForTesting(64);
+    auto metadataRescanDifference = 0.0f;
+    for (int channel = 0;
+         channel < alignedBeforeMetadataRescan.getNumChannels();
+         ++channel)
+    {
+        for (int sample = 0;
+             sample < alignedBeforeMetadataRescan.getNumSamples();
+             ++sample)
+        {
+            metadataRescanDifference = std::max(
+               metadataRescanDifference,
+               std::abs(
+                   alignedBeforeMetadataRescan.getSample(
+                       channel,
+                       sample)
+                   - alignedAfterMetadataRescan.getSample(
+                       channel,
+                       sample)));
+        }
+    }
+    expect(!metadataOnlyStatuses.empty()
+              && metadataOnlyStatuses.front().parameters.size()
+                     == 302
+              && metadataOnlyStatuses.front().latencySamples
+                     == 64
+              && !monoEngine.pluginRuntimeTransitionPending()
+              && metadataRescanDifference < 0.0001f,
+           "Metadata-only CLAP rescans preserve live PDC history and alignment.");
     monoSource.deleteFile();
 
     auto project = studio::Project::createDefault();

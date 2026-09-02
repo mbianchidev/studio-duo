@@ -11,8 +11,8 @@ typedef struct test_plugin {
     const clap_host_thread_check_t* thread_check;
     const clap_host_params_t* host_params;
     const clap_host_latency_t* host_latency;
-    double parameters[301];
-    uint32_t cookies[301];
+    double parameters[302];
+    uint32_t cookies[302];
     uint32_t thread_violations;
     uint32_t activation_count;
     uint32_t main_thread_callbacks;
@@ -22,6 +22,7 @@ typedef struct test_plugin {
     bool requested_parameter_rescan;
     bool latency_change_requested;
     bool latency_change_reported;
+    bool metadata_rescan_requested;
     uint32_t metadata_epoch;
 } test_plugin_t;
 
@@ -147,7 +148,7 @@ static clap_process_status plugin_process(const clap_plugin_t* plugin,
                 const clap_event_param_value_t* value =
                     (const clap_event_param_value_t*) header;
                 if (value->param_id >= 1
-                    && value->param_id <= 301
+                    && value->param_id <= 302
                     && value->cookie
                         != &instance->cookies[value->param_id - 1])
                     ++instance->thread_violations;
@@ -155,7 +156,8 @@ static clap_process_status plugin_process(const clap_plugin_t* plugin,
                     instance->parameters[0] = value->value;
                 else if (value->param_id >= 2
                          && (value->param_id <= 298
-                             || value->param_id == 301))
+                             || value->param_id == 301
+                             || value->param_id == 302))
                     instance->parameters[value->param_id - 1] =
                         value->value;
                 if (value->param_id == 293
@@ -163,6 +165,14 @@ static clap_process_status plugin_process(const clap_plugin_t* plugin,
                     && !instance->latency_change_requested)
                 {
                     instance->latency_change_requested = true;
+                    instance->host->request_callback(
+                        instance->host);
+                }
+                if (value->param_id == 292
+                    && value->value > 0.9
+                    && !instance->metadata_rescan_requested)
+                {
+                    instance->metadata_rescan_requested = true;
                     instance->host->request_callback(
                         instance->host);
                 }
@@ -234,9 +244,15 @@ static clap_id parameter_id_for_index(
         return index + 1;
     if (index < 249)
         return index + 1;
+    if (self(plugin)->metadata_epoch == 1)
+    {
+        if (index < 299)
+            return index + 2;
+        return 301;
+    }
     if (index < 299)
-        return index + 2;
-    return 301;
+        return index + 3;
+    return 302;
 }
 
 static bool params_get_info(const clap_plugin_t* plugin,
@@ -270,6 +286,11 @@ static bool params_get_info(const clap_plugin_t* plugin,
         snprintf(info->name, sizeof(info->name), "Thread violations");
     else if (parameter_id == 301)
         snprintf(info->name, sizeof(info->name), "Added parameter");
+    else if (parameter_id == 302)
+        snprintf(
+            info->name,
+            sizeof(info->name),
+            "Second added parameter");
     else
         snprintf(info->name, sizeof(info->name), "Parameter %u", parameter_id);
     info->min_value = parameter_id == 2 ? -24.0 : 0.0;
@@ -293,9 +314,11 @@ static bool params_get_value(const clap_plugin_t* plugin,
                              double* value)
 {
     expect_main_thread(plugin);
-    if (param_id < 1 || param_id > 301
+    if (param_id < 1 || param_id > 302
         || (self(plugin)->metadata_epoch > 0
             && param_id == 250)
+        || (self(plugin)->metadata_epoch > 1
+            && param_id == 251)
         || value == NULL)
         return false;
     if (param_id == 299)
@@ -316,9 +339,11 @@ static bool params_value_to_text(const clap_plugin_t* plugin,
                                  uint32_t capacity)
 {
     expect_main_thread(plugin);
-    if (param_id < 1 || param_id > 301
+    if (param_id < 1 || param_id > 302
         || (self(plugin)->metadata_epoch > 0
             && param_id == 250)
+        || (self(plugin)->metadata_epoch > 1
+            && param_id == 251)
         || text == NULL || capacity == 0)
         return false;
     snprintf(text, capacity, "%.3f", value);
@@ -497,6 +522,15 @@ static void plugin_on_main_thread(const clap_plugin_t* plugin)
         self(plugin)->host_latency->changed(
             self(plugin)->host);
     }
+    if (self(plugin)->metadata_rescan_requested
+        && self(plugin)->metadata_epoch < 2
+        && self(plugin)->host_params != NULL)
+    {
+        self(plugin)->metadata_epoch = 2;
+        self(plugin)->host_params->rescan(
+            self(plugin)->host,
+            CLAP_PARAM_RESCAN_INFO | CLAP_PARAM_RESCAN_ALL);
+    }
 }
 
 static const clap_plugin_t* create_plugin(const clap_plugin_factory_t* factory,
@@ -523,7 +557,7 @@ static const clap_plugin_t* create_plugin(const clap_plugin_factory_t* factory,
         (const clap_host_latency_t*) host->get_extension(
             host,
             CLAP_EXT_LATENCY);
-    for (uint32_t index = 0; index < 301; ++index)
+    for (uint32_t index = 0; index < 302; ++index)
     {
         instance->cookies[index] = index + 1;
     }

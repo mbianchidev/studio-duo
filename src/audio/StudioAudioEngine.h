@@ -138,6 +138,8 @@ public:
 #if defined(STUDIO_DUO_TESTING)
     [[nodiscard]] int minimumRouteBufferCapacityForTesting() const noexcept;
     [[nodiscard]] double activeSnapshotSampleRateForTesting() const noexcept;
+    [[nodiscard]] juce::AudioBuffer<float>
+        renderActiveBlockForTesting(int samples);
     void processActiveBlockForTesting(int samples);
 #endif
     [[nodiscard]] std::vector<RecordingProgress> recordingProgress() const;
@@ -200,9 +202,18 @@ private:
     {
         struct DelayCompensator
         {
+            struct State
+            {
+                int writePosition = 0;
+                juce::AudioBuffer<float> buffer;
+                std::shared_ptr<State> fallback;
+                int fallbackDelaySamples = 0;
+                int transitionSamples = 0;
+                int transitionPosition = 0;
+            };
+
             int delaySamples = 0;
-            int writePosition = 0;
-            juce::AudioBuffer<float> buffer;
+            std::shared_ptr<State> state;
         };
 
         std::uint64_t runtimeKey = 0;
@@ -220,9 +231,36 @@ private:
         DelayCompensator compensation;
         struct PluginAutomation
         {
+            PluginAutomation(
+                juce::String insert,
+                juce::String parameter,
+                int initialParameterIndex,
+                CompiledAutomationLane compiledLane)
+                : insertId(std::move(insert)),
+                  parameterId(std::move(parameter)),
+                  parameterIndex(
+                      std::make_shared<std::atomic<int>>(
+                          initialParameterIndex)),
+                  lane(std::move(compiledLane))
+            {
+            }
+
+            [[nodiscard]] int resolvedParameterIndex() const noexcept
+            {
+                return parameterIndex->load(
+                    std::memory_order_acquire);
+            }
+
+            void resolveParameterIndex(int index) const noexcept
+            {
+                parameterIndex->store(
+                    index,
+                    std::memory_order_release);
+            }
+
             juce::String insertId;
             juce::String parameterId;
-            int parameterIndex = -1;
+            std::shared_ptr<std::atomic<int>> parameterIndex;
             CompiledAutomationLane lane;
         };
         std::vector<PluginAutomation> pluginAutomation;
@@ -451,10 +489,9 @@ private:
     void configureRuntimeTiming(RenderSnapshot& snapshot,
                                 const std::vector<PluginRuntimeRequest>& pluginRequests) const;
     void resolvePluginAutomationParameterIds(
-        RenderSnapshot& snapshot,
+        const RenderSnapshot& snapshot,
         const std::vector<PluginRuntimeStatus>& statuses) const;
-    void startPluginSnapshotRefreshLocked(
-        std::vector<PluginRuntimeStatus> statuses);
+    void startPluginSnapshotRefreshLocked();
     static void mixSample(RenderSnapshot& snapshot,
                           std::int64_t timelineSample,
                           float& left,
