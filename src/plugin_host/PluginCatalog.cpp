@@ -39,6 +39,20 @@ PluginCompatibilityRecord compatibilityIdentity(
     return record;
 }
 
+PluginCompatibilityRecord compatibilityIdentity(
+    const PluginCatalogEntry& entry)
+{
+    PluginCompatibilityRecord record;
+    record.pluginIdentifier = entry.identifier;
+    record.name = entry.name;
+    record.format = entry.format;
+    record.vendor = entry.manufacturer;
+    record.version = entry.version;
+    record.architecture = entry.architecture;
+    record.araCapable = entry.araCapable;
+    return record;
+}
+
 class ScanCoordinator final : private juce::ChildProcessCoordinator
 {
 public:
@@ -408,6 +422,19 @@ void PluginCatalog::recordRuntimeFailure(
         compatibilityIdentity(insert),
         failure,
         message);
+    juce::String error;
+    if (!compatibilityDatabase.save(error))
+        updateState(error, scanProgress.load(std::memory_order_relaxed));
+}
+
+void PluginCatalog::recordValidation(
+    const PluginCatalogEntry& entry,
+    const juce::String& status)
+{
+    const juce::ScopedLock compatibilityGuard(compatibilityLock);
+    compatibilityDatabase.noteValidation(
+        compatibilityIdentity(entry),
+        status);
     juce::String error;
     if (!compatibilityDatabase.save(error))
         updateState(error, scanProgress.load(std::memory_order_relaxed));

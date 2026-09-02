@@ -120,10 +120,14 @@ set(STUDIO_DUO_PLUGIN_SOURCES
     src/plugin_host/PluginCatalog.h
     src/plugin_host/PluginCompatibilityDatabase.cpp
     src/plugin_host/PluginCompatibilityDatabase.h
+    src/plugin_host/PluginCompatibilityValidator.cpp
+    src/plugin_host/PluginCompatibilityValidator.h
     src/plugin_host/PluginFormats.cpp
     src/plugin_host/PluginFormats.h
     src/plugin_host/PluginStateStore.cpp
     src/plugin_host/PluginStateStore.h
+    src/plugin_host/ScreamForgeValidation.cpp
+    src/plugin_host/ScreamForgeValidation.h
 )
 
 juce_add_gui_app(
@@ -287,6 +291,7 @@ if(STUDIO_DUO_BUILD_TESTS)
             tests/DeviceTests.cpp
             tests/ReampSnapshotTests.cpp
             tests/RenderEngineTests.cpp
+            tests/PluginCompatibilityTests.cpp
             src/ui/RoutingUiModel.cpp
             src/ui/RoutingUiModel.h
             src/audio/StudioAudioEngine.cpp
@@ -304,8 +309,12 @@ if(STUDIO_DUO_BUILD_TESTS)
             src/plugin_host/PluginFormats.h
             src/plugin_host/PluginCompatibilityDatabase.cpp
             src/plugin_host/PluginCompatibilityDatabase.h
+            src/plugin_host/PluginCompatibilityValidator.cpp
+            src/plugin_host/PluginCompatibilityValidator.h
             src/plugin_host/PluginStateStore.cpp
             src/plugin_host/PluginStateStore.h
+            src/plugin_host/ScreamForgeValidation.cpp
+            src/plugin_host/ScreamForgeValidation.h
             src/devices/DeviceRegistry.cpp
             src/devices/DeviceRegistry.h
             src/devices/UtilityDeviceProcessor.cpp

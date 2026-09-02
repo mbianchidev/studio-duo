@@ -757,6 +757,10 @@ MainComponent::MainComponent()
     {
         addPluginToSelectedTrack(entry);
     };
+    pluginBrowser->onPluginValidate = [this](const auto& entry)
+    {
+        validatePlugin(entry);
+    };
     addAndMakeVisible(*pluginBrowser);
 
     routingPanel = std::make_unique<RoutingPanel>();
@@ -868,6 +872,7 @@ MainComponent::MainComponent()
 MainComponent::~MainComponent()
 {
     stopTimer();
+    compatibilityValidator.removeAllJobs(true, 2000);
     if (audioEngine.isRecording())
         audioEngine.stopRecording();
     audioEngine.shutdown();
@@ -2223,6 +2228,116 @@ void MainComponent::addPluginToSelectedTrack(const PluginCatalogEntry& entry)
 
     if (perform(std::make_unique<AddPluginInsertCommand>(track->id, insert)))
         setStatus(entry.name + " added as a sandboxed insert model.");
+}
+
+void MainComponent::validatePlugin(const PluginCatalogEntry& entry)
+{
+    if (entry.bundledDevice)
+    {
+        setStatus("Bundled devices are covered by the Studio Duo DSP tests.");
+        return;
+    }
+    setStatus("Validating " + entry.name + " in a separate process...");
+    const juce::Component::SafePointer<MainComponent> safe(this);
+    compatibilityValidator.addJob([safe, entry]
+    {
+        juce::ChildProcess process;
+        juce::StringArray arguments;
+        arguments.add(
+            juce::File::getSpecialLocation(
+                juce::File::currentExecutableFile)
+                .getFullPathName());
+        arguments.add("--validate-plugin");
+        arguments.add(entry.identifier);
+        auto output = juce::String();
+        auto result = 1;
+        if (!process.start(arguments))
+        {
+            output = "Could not launch the compatibility validator.";
+        }
+        else if (!process.waitForProcessToFinish(60000))
+        {
+            process.kill();
+            output = "Compatibility validation timed out.";
+        }
+        else
+        {
+            output = process.readAllProcessOutput();
+            result = static_cast<int>(process.getExitCode());
+        }
+        juce::MessageManager::callAsync(
+            [safe, entry, output, result]
+            {
+                if (safe == nullptr)
+                    return;
+                safe->pluginCatalog.recordValidation(
+                    entry,
+                    result == 0 ? "pass" : "fail");
+                safe->setStatus(
+                    result == 0
+                        ? entry.name + " passed compatibility validation."
+                        : entry.name + " failed compatibility validation.",
+                    result != 0);
+                juce::AlertWindow::showMessageBoxAsync(
+                    result == 0
+                        ? juce::MessageBoxIconType::InfoIcon
+                        : juce::MessageBoxIconType::WarningIcon,
+                    entry.name + " compatibility",
+                    output.substring(0, 8000));
+            });
+    });
+}
+
+void MainComponent::validateScreamForge()
+{
+    setStatus("Validating installed Scream Forge formats...");
+    const juce::Component::SafePointer<MainComponent> safe(this);
+    compatibilityValidator.addJob([safe]
+    {
+        juce::ChildProcess process;
+        juce::StringArray arguments;
+        arguments.add(
+            juce::File::getSpecialLocation(
+                juce::File::currentExecutableFile)
+                .getFullPathName());
+        arguments.add("--validate-scream-forge");
+        auto output = juce::String();
+        auto result = 1;
+        if (!process.start(arguments))
+        {
+            output = "Could not launch the Scream Forge validator.";
+        }
+        else if (!process.waitForProcessToFinish(120000))
+        {
+            process.kill();
+            output = "Scream Forge validation timed out.";
+        }
+        else
+        {
+            output = process.readAllProcessOutput();
+            result = static_cast<int>(process.getExitCode());
+        }
+        juce::MessageManager::callAsync(
+            [safe, output, result]
+            {
+                if (safe == nullptr)
+                    return;
+                const auto unavailable = result == 2;
+                safe->setStatus(
+                    unavailable
+                        ? "Scream Forge is not installed."
+                        : result == 0
+                            ? "Installed Scream Forge formats passed validation."
+                            : "Scream Forge compatibility validation failed.",
+                    result == 1);
+                juce::AlertWindow::showMessageBoxAsync(
+                    result == 0
+                        ? juce::MessageBoxIconType::InfoIcon
+                        : juce::MessageBoxIconType::WarningIcon,
+                    "Scream Forge compatibility",
+                    output.substring(0, 8000));
+            });
+    });
 }
 
 void MainComponent::changePluginMode(const juce::String& trackId,
@@ -4009,6 +4124,9 @@ void MainComponent::showTrackingMenu()
     if (project.mixerSnapshots.empty())
         mixerSnapshots.addItem("No mixer snapshots", false, false, [] {});
     menu.addSubMenu("Recall mixer snapshot", mixerSnapshots);
+    menu.addSeparator();
+    menu.addItem("Validate installed Scream Forge",
+                 [this] { validateScreamForge(); });
 
     menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(trackingButton));
 }

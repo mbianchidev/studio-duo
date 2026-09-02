@@ -2,12 +2,15 @@
 #include "plugin_host/PluginBridgeClient.h"
 #include "plugin_host/PluginBridgeWorker.h"
 #include "plugin_host/PluginScanWorker.h"
+#include "plugin_host/PluginCompatibilityValidator.h"
+#include "plugin_host/ScreamForgeValidation.h"
 #include "platform/ApplicationIcon.h"
 
 #include <juce_gui_extra/juce_gui_extra.h>
 
 #include <algorithm>
 #include <cmath>
+#include <iostream>
 
 namespace studio
 {
@@ -57,6 +60,24 @@ public:
             bridgeSelfTest = std::make_unique<PluginBridgeClient>();
             pluginActivationCatalog = std::make_unique<PluginCatalog>();
             juce::MessageManager::callAsync([this] { runPluginActivationSelfTest(); });
+            return;
+        }
+        if (commandLine.contains("--validate-scream-forge"))
+        {
+            pluginActivationCatalog = std::make_unique<PluginCatalog>();
+            juce::MessageManager::callAsync(
+                [this] { runScreamForgeValidation(); });
+            return;
+        }
+        if (commandLine.contains("--validate-plugin"))
+        {
+            validationIdentifier = commandLine
+                .fromFirstOccurrenceOf("--validate-plugin", false, false)
+                .trim()
+                .unquoted();
+            pluginActivationCatalog = std::make_unique<PluginCatalog>();
+            juce::MessageManager::callAsync(
+                [this] { runPluginValidation(); });
             return;
         }
 
@@ -177,6 +198,79 @@ private:
         quit();
     }
 
+    void runPluginValidation()
+    {
+        if (pluginActivationCatalog == nullptr
+            || validationIdentifier.isEmpty())
+        {
+            setApplicationReturnValue(2);
+            quit();
+            return;
+        }
+        const auto entries = pluginActivationCatalog->entries();
+        const auto entry = std::find_if(
+            entries.cbegin(),
+            entries.cend(),
+            [this](const auto& candidate)
+            {
+                return !candidate.bundledDevice
+                    && (candidate.identifier == validationIdentifier
+                        || candidate.name.equalsIgnoreCase(
+                            validationIdentifier));
+            });
+        if (entry == entries.cend())
+        {
+            std::cout << "{\"status\":\"not-installed\"}\n";
+            setApplicationReturnValue(2);
+            quit();
+            return;
+        }
+        const auto description =
+            pluginActivationCatalog->descriptionForIdentifier(
+                entry->identifier);
+        if (!description.has_value())
+        {
+            setApplicationReturnValue(1);
+            quit();
+            return;
+        }
+        const auto report =
+            PluginCompatibilityValidator::validate(*description);
+        std::cout << juce::JSON::toString(report.toVar(), true) << '\n';
+        setApplicationReturnValue(report.status == "pass" ? 0 : 1);
+        quit();
+    }
+
+    void runScreamForgeValidation()
+    {
+        if (pluginActivationCatalog == nullptr)
+        {
+            setApplicationReturnValue(1);
+            quit();
+            return;
+        }
+        std::vector<juce::PluginDescription> descriptions;
+        for (const auto& entry : pluginActivationCatalog->entries())
+        {
+            if (entry.bundledDevice)
+                continue;
+            const auto description =
+                pluginActivationCatalog->descriptionForIdentifier(
+                    entry.identifier);
+            if (description.has_value()
+                && ScreamForgeValidation::matches(*description))
+                descriptions.push_back(*description);
+        }
+        const auto result =
+            ScreamForgeValidation::validateInstalled(descriptions);
+        std::cout << juce::JSON::toString(result.toVar(), true) << '\n';
+        setApplicationReturnValue(
+            result.status == "pass"
+                ? 0
+                : result.status == "not-installed" ? 2 : 1);
+        quit();
+    }
+
     class MainWindow final : public juce::DocumentWindow
     {
     public:
@@ -204,6 +298,7 @@ private:
     std::unique_ptr<PluginBridgeWorker> pluginBridgeWorker;
     std::unique_ptr<PluginBridgeClient> bridgeSelfTest;
     std::unique_ptr<PluginCatalog> pluginActivationCatalog;
+    juce::String validationIdentifier;
 };
 }
 START_JUCE_APPLICATION(studio::StudioDuoApplication)

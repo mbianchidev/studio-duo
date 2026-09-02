@@ -33,6 +33,8 @@ struct PluginCompatibilityRecord
     PluginFailureKind lastFailure = PluginFailureKind::none;
     juce::String lastMessage;
     juce::String updatedAt;
+    juce::String validationStatus;
+    juce::String validationAt;
     int scanCrashCount = 0;
     int runtimeCrashCount = 0;
     int timeoutCount = 0;
@@ -51,6 +53,8 @@ public:
                      juce::String message);
     void noteReady(const PluginCompatibilityRecord& identity,
                    PluginBridgeMode mode);
+    void noteValidation(const PluginCompatibilityRecord& identity,
+                        juce::String status);
     [[nodiscard]] std::optional<PluginCompatibilityRecord> find(
         const juce::String& pluginIdentifier) const;
     [[nodiscard]] const std::vector<PluginCompatibilityRecord>& records() const;

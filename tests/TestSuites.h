@@ -9,3 +9,4 @@ void automationTests();
 void deviceTests();
 void reampSnapshotTests();
 void renderEngineTests();
+void pluginCompatibilityTests();

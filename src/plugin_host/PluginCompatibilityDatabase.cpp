@@ -74,6 +74,10 @@ bool PluginCompatibilityDatabase::load(juce::String& error)
         record.lastFailure = *failure;
         record.lastMessage = object->getProperty("lastMessage").toString();
         record.updatedAt = object->getProperty("updatedAt").toString();
+        record.validationStatus =
+            object->getProperty("validationStatus").toString();
+        record.validationAt =
+            object->getProperty("validationAt").toString();
         record.scanCrashCount = integerProperty(*object, "scanCrashCount");
         record.runtimeCrashCount =
             integerProperty(*object, "runtimeCrashCount");
@@ -117,6 +121,8 @@ bool PluginCompatibilityDatabase::save(juce::String& error) const
             pluginFailureKindToString(record.lastFailure));
         object->setProperty("lastMessage", record.lastMessage);
         object->setProperty("updatedAt", record.updatedAt);
+        object->setProperty("validationStatus", record.validationStatus);
+        object->setProperty("validationAt", record.validationAt);
         object->setProperty("scanCrashCount", record.scanCrashCount);
         object->setProperty(
             "runtimeCrashCount",
@@ -178,6 +184,16 @@ void PluginCompatibilityDatabase::noteReady(
     record.lastFailure = PluginFailureKind::none;
     record.lastMessage = "Ready";
     record.updatedAt = juce::Time::getCurrentTime().toISO8601(true);
+}
+
+void PluginCompatibilityDatabase::noteValidation(
+    const PluginCompatibilityRecord& identity,
+    juce::String status)
+{
+    auto& record = findOrAdd(identity);
+    record.validationStatus = std::move(status);
+    record.validationAt = juce::Time::getCurrentTime().toISO8601(true);
+    record.updatedAt = record.validationAt;
 }
 
 std::optional<PluginCompatibilityRecord>

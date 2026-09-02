@@ -52,6 +52,7 @@ void pluginRecoveryTests()
         record,
         studio::PluginFailureKind::timeout,
         "state request timed out");
+    database.noteValidation(record, "pass");
     expect(database.save(error), error.toRawUTF8());
 
     studio::PluginCompatibilityDatabase restoredDatabase(
@@ -61,6 +62,7 @@ void pluginRecoveryTests()
     expect(restoredRecord.has_value()
                && restoredRecord->runtimeCrashCount == 1
                && restoredRecord->timeoutCount == 1
+               && restoredRecord->validationStatus == "pass"
                && restoredRecord->lastFailure
                       == studio::PluginFailureKind::timeout,
            "Compatibility records persist crash and timeout diagnostics.");

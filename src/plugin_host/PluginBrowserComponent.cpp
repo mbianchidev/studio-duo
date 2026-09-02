@@ -34,6 +34,17 @@ PluginBrowserComponent::PluginBrowserComponent(PluginCatalog& catalogToDisplay)
             && onPluginActivated)
             onPluginActivated(filteredEntries[static_cast<std::size_t>(selectedRow)]);
     };
+    addAndMakeVisible(validateButton);
+    validateButton.setTooltip("Run public-standard compatibility checks in a separate process");
+    validateButton.setEnabled(false);
+    validateButton.onClick = [this]
+    {
+        if (selectedRow >= 0
+            && selectedRow < static_cast<int>(filteredEntries.size())
+            && onPluginValidate)
+            onPluginValidate(
+                filteredEntries[static_cast<std::size_t>(selectedRow)]);
+    };
 
     addAndMakeVisible(statusLabel);
     statusLabel.setColour(juce::Label::textColourId, juce::Colour(StudioColours::secondaryText));
@@ -79,6 +90,8 @@ void PluginBrowserComponent::resized()
     bounds.removeFromTop(24);
     auto controls = bounds.removeFromTop(30);
     scanButton.setBounds(controls.removeFromRight(64));
+    controls.removeFromRight(6);
+    validateButton.setBounds(controls.removeFromRight(52));
     controls.removeFromRight(6);
     addButton.setBounds(controls.removeFromRight(52));
     controls.removeFromRight(6);
@@ -151,6 +164,11 @@ void PluginBrowserComponent::selectedRowsChanged(int lastRowSelected)
     selectedRow = lastRowSelected;
     addButton.setEnabled(selectedRow >= 0
                          && selectedRow < static_cast<int>(filteredEntries.size()));
+    validateButton.setEnabled(
+        selectedRow >= 0
+        && selectedRow < static_cast<int>(filteredEntries.size())
+        && !filteredEntries[static_cast<std::size_t>(selectedRow)]
+                .bundledDevice);
 
     if (lastRowSelected < 0 || lastRowSelected >= static_cast<int>(filteredEntries.size()))
         return;
@@ -199,6 +217,7 @@ void PluginBrowserComponent::rebuildFilter()
     list.updateContent();
     selectedRow = -1;
     addButton.setEnabled(false);
+    validateButton.setEnabled(false);
     list.repaint();
 }
 }

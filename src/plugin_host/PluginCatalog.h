@@ -48,6 +48,8 @@ public:
     void recordRuntimeFailure(const PluginInsert& insert,
                               PluginFailureKind failure,
                               const juce::String& message);
+    void recordValidation(const PluginCatalogEntry& entry,
+                          const juce::String& status);
     [[nodiscard]] std::vector<PluginCompatibilityRecord>
         compatibilityRecords() const;
     [[nodiscard]] std::optional<juce::PluginDescription> descriptionForIdentifier(

@@ -66,6 +66,8 @@ private:
     void duplicateSelectedTrack();
     void deleteSelectedTrack();
     void addPluginToSelectedTrack(const PluginCatalogEntry& entry);
+    void validatePlugin(const PluginCatalogEntry& entry);
+    void validateScreamForge();
     void changePluginMode(const juce::String& trackId,
                           const juce::String& insertId,
                           PluginBridgeMode mode);
@@ -172,6 +174,7 @@ private:
     juce::String calibratingReampRouteId;
     std::uint64_t lastRuntimeCatalogRevision = 0;
     juce::String reducedIsolationMarkerSignature;
+    juce::ThreadPool compatibilityValidator { 1 };
 
     juce::TextButton newButton { "NEW" };
     juce::TextButton openButton { "OPEN" };
