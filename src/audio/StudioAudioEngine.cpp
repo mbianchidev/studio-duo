@@ -779,6 +779,81 @@ std::vector<float> StudioAudioEngine::delayTransitionForTesting(
         output.begin());
     return output;
 }
+
+std::vector<float>
+StudioAudioEngine::delayRefreshAfterTransitionForTesting(
+    int previousDelay,
+    int nextDelay)
+{
+    constexpr auto quantum = 16;
+    RenderSource::DelayCompensator activeDelay;
+    configureDelayCompensator(
+        activeDelay,
+        previousDelay,
+        quantum);
+    juce::AudioBuffer<float> history(2, 64);
+    for (int sample = 0; sample < history.getNumSamples(); ++sample)
+    {
+        const auto value = static_cast<float>(sample) / 100.0f;
+        history.setSample(0, sample, value);
+        history.setSample(1, sample, value);
+    }
+    applyDelayCompensation(
+        history,
+        history.getNumSamples(),
+        activeDelay);
+
+    configureDelayCompensator(
+        activeDelay,
+        nextDelay,
+        quantum);
+    const auto immutableTemplate = activeDelay;
+    const auto transitionSamples =
+        std::max(0, nextDelay) + quantum;
+    juce::AudioBuffer<float> transition(
+        2,
+        transitionSamples);
+    for (int sample = 0;
+         sample < transition.getNumSamples();
+         ++sample)
+    {
+        const auto value =
+            static_cast<float>(64 + sample) / 100.0f;
+        transition.setSample(0, sample, value);
+        transition.setSample(1, sample, value);
+    }
+    applyDelayCompensation(
+        transition,
+        transition.getNumSamples(),
+        activeDelay);
+
+    auto republishedDelay = immutableTemplate;
+    configureDelayCompensator(
+        republishedDelay,
+        nextDelay,
+        quantum);
+    juce::AudioBuffer<float> followup(2, quantum);
+    for (int sample = 0; sample < followup.getNumSamples(); ++sample)
+    {
+        const auto value = static_cast<float>(
+            64 + transitionSamples + sample)
+            / 100.0f;
+        followup.setSample(0, sample, value);
+        followup.setSample(1, sample, value);
+    }
+    applyDelayCompensation(
+        followup,
+        followup.getNumSamples(),
+        republishedDelay);
+
+    std::vector<float> output(
+        static_cast<std::size_t>(quantum));
+    std::copy_n(
+        followup.getReadPointer(0),
+        quantum,
+        output.begin());
+    return output;
+}
 #endif
 
 std::vector<StudioAudioEngine::RecordingProgress> StudioAudioEngine::recordingProgress() const
@@ -3042,6 +3117,16 @@ void StudioAudioEngine::configureDelayCompensator(
         transition->fadeSamples = std::max(
             1,
             processingQuantum);
+        transition->positionSlot =
+            targetState == delay.state
+                && delay.transition.has_value()
+            ? 1 - delay.transition->positionSlot
+            : 0;
+        targetState->transitionPositions[
+            static_cast<std::size_t>(
+                transition->positionSlot)].store(
+            0,
+            std::memory_order_release);
     }
     delay.delaySamples = nextDelay;
     delay.state = std::move(targetState);
@@ -3754,7 +3839,10 @@ void StudioAudioEngine::applyDelayCompensation(
             ? &*delay.transition
             : nullptr;
         const auto transitionPosition = transition != nullptr
-            ? transition->position
+            ? delay.state->transitionPositions[
+                  static_cast<std::size_t>(
+                      transition->positionSlot)].load(
+                  std::memory_order_relaxed)
             : 0;
         const auto transitionSamples = transition != nullptr
             ? transition->warmupSamples
@@ -3790,7 +3878,11 @@ void StudioAudioEngine::applyDelayCompensation(
             if (transition->sourceState.get()
                 != delay.state.get())
                 writeState(*transition->sourceState);
-            ++transition->position;
+            delay.state->transitionPositions[
+                static_cast<std::size_t>(
+                    transition->positionSlot)].fetch_add(
+                1,
+                std::memory_order_relaxed);
         }
         writeState(*delay.state);
         for (int channel = 0; channel < 2; ++channel)

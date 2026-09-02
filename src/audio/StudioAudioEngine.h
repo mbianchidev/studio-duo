@@ -146,6 +146,10 @@ public:
             int previousDelay,
             int nextDelay,
             int outputSamples = 16);
+    [[nodiscard]] static std::vector<float>
+        delayRefreshAfterTransitionForTesting(
+            int previousDelay,
+            int nextDelay);
 #endif
     [[nodiscard]] std::vector<RecordingProgress> recordingProgress() const;
     [[nodiscard]] std::vector<PluginRuntimeStatus> pluginRuntimeStatuses();
@@ -212,6 +216,8 @@ private:
                 int writePosition = 0;
                 juce::AudioBuffer<float> buffer;
                 std::atomic<std::int64_t> samplesWritten { 0 };
+                std::array<std::atomic<int>, 2>
+                    transitionPositions {};
             };
 
             struct Transition
@@ -220,7 +226,7 @@ private:
                 int sourceDelaySamples = 0;
                 int warmupSamples = 0;
                 int fadeSamples = 0;
-                int position = 0;
+                int positionSlot = 0;
             };
 
             int delaySamples = 0;

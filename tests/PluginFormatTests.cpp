@@ -36,6 +36,9 @@ void pluginFormatTests()
             4,
             200,
             216);
+    const auto refreshedAfterTransition =
+        studio::StudioAudioEngine::
+            delayRefreshAfterTransitionForTesting(4, 200);
     expect(increasedDelay.size() == 16
                && std::abs(increasedDelay.front() - 0.60f)
                       < 0.0001f
@@ -65,6 +68,14 @@ void pluginFormatTests()
                       < 0.0001f
                && maximumGrowthStep < 0.2f,
            "Growing the delay ring keeps the old tap through warmup and crossfades without an abrupt gap.");
+    expect(refreshedAfterTransition.size() == 16
+               && std::abs(
+                      refreshedAfterTransition.front() - 0.80f)
+                      < 0.0001f
+               && std::abs(
+                      refreshedAfterTransition.back() - 0.95f)
+                      < 0.0001f,
+           "A later unchanged-delay refresh retains completed transition progress and cannot replay the old ring.");
 
     studio::ClapPluginFormat clapFormat;
     juce::OwnedArray<juce::PluginDescription> descriptions;
