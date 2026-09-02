@@ -127,6 +127,12 @@ control channel; a generic editor is used when the processor exposes no native
 view. In-process trusted and ARA editors use the same window wrapper, with
 message-thread ownership kept outside the swappable runtime graph.
 
+The CLAP adapter exposes host thread-check, parameter, latency, audio-port, and
+state extensions. Module/plugin lifecycle and state calls run on the message
+thread; process/start/stop/reset use the symbolic audio-thread scope. Dirty
+parameter changes use dynamically sized queues, flush while stopped, and host
+restart/process/callback requests are drained by the main-thread timer.
+
 Playback builds parent-track render nodes containing ordinary clips plus
 version-lane sources. Child inserts process before the parent sum, parent
 inserts process the group result, and master inserts process the final mix.
@@ -182,14 +188,19 @@ lines allow one source to feed destinations with different path latencies.
 
 Automation lanes use seconds or musical beats and compile off-thread to integer
 sample positions. Track and route controls evaluate per sample. External plugin
-events travel in the same bridge record as their audio block; linear ramps emit
-dense sample-offset events. Read, touch, latch, write, trim, and preview edits
-remain typed and undoable.
+events travel in the same bridge record as their audio block. Linear automation
+uses compact breakpoint/ramp descriptors and a shared bounded control grid
+instead of one event and one processor call per sample; overflow is counted
+rather than silently dropping later lanes. Read, touch, latch, write, trim, and
+preview edits remain typed and undoable.
 
 Bundled devices use the same processor, parameter, state, automation, sidechain,
 and render paths as external inserts. Their processing allocates state during
 prepare/reset, suppresses denormals, and avoids locks, file access, or logging
-inside `processBlock`.
+inside `processBlock`. The limiter uses a four-phase, 33-tap linear-phase
+true-peak detector with a matched 16-sample audio delay. The tuner accumulates a
+multi-block downsampled window and uses normalized autocorrelation so guitar and
+bass fundamentals remain detectable with small host buffers.
 
 ARA-capable VST3 and Audio Unit instances can opt into an in-process document
 binding. Studio Duo writes a recovery point before activation, shows the

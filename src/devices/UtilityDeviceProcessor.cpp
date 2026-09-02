@@ -145,16 +145,49 @@ void UtilityDeviceProcessor::prepareToPlay(double sampleRate,
         false);
     if (type == UtilityDeviceType::limiter)
     {
-        limiterOversampling =
-            std::make_unique<juce::dsp::Oversampling<float>>(
-                2,
-                2,
-                juce::dsp::Oversampling<float>::
-                    filterHalfBandPolyphaseIIR,
-                true);
-        limiterOversampling->initProcessing(
-            static_cast<std::size_t>(
-                std::max(1, maximumBlockSize)));
+        setLatencySamples(limiterLatencySamples);
+        for (int phase = 0; phase < limiterPhaseCount; ++phase)
+        {
+            auto coefficientSum = 0.0;
+            const auto fraction = static_cast<double>(phase)
+                / static_cast<double>(limiterPhaseCount);
+            for (int tap = 0; tap < limiterFilterTaps; ++tap)
+            {
+                const auto offset = static_cast<double>(tap)
+                    - static_cast<double>(limiterLatencySamples)
+                    + fraction;
+                const auto sinc = std::abs(offset) < 0.0000001
+                    ? 1.0
+                    : std::sin(
+                          juce::MathConstants<double>::pi * offset)
+                        / (juce::MathConstants<double>::pi * offset);
+                const auto position = static_cast<double>(tap)
+                    / static_cast<double>(limiterFilterTaps - 1);
+                const auto window = 0.42
+                    - 0.5
+                        * std::cos(
+                            juce::MathConstants<double>::twoPi
+                            * position)
+                    + 0.08
+                        * std::cos(
+                            2.0
+                            * juce::MathConstants<double>::twoPi
+                            * position);
+                limiterCoefficients[static_cast<std::size_t>(phase)]
+                                   [static_cast<std::size_t>(tap)] =
+                    static_cast<float>(sinc * window);
+                coefficientSum += sinc * window;
+            }
+            if (std::abs(coefficientSum) > 0.0000001)
+            {
+                for (auto& coefficient :
+                     limiterCoefficients[static_cast<std::size_t>(
+                         phase)])
+                {
+                    coefficient /= static_cast<float>(coefficientSum);
+                }
+            }
+        }
     }
     reset();
     reverb.setSampleRate(sampleRate);
@@ -171,8 +204,9 @@ void UtilityDeviceProcessor::reset()
     compressorEnvelope.fill(1.0f);
     gateEnvelope.fill(0.0f);
     limiterGain.fill(1.0f);
-    if (limiterOversampling != nullptr)
-        limiterOversampling->reset();
+    for (auto& history : limiterHistory)
+        history.fill(0.0f);
+    limiterHistoryWritePosition.fill(0);
     delayBuffer.clear();
     delayWritePosition = 0;
     reverb.reset();
@@ -349,46 +383,44 @@ void UtilityDeviceProcessor::processLimiter(
         juce::Decibels::decibelsToGain(parameter(ParameterSlot::ceiling));
     const auto release = coefficient(parameter(ParameterSlot::release), currentSampleRate);
     const auto truePeak = parameter(ParameterSlot::truePeak) >= 0.5f;
-    juce::dsp::AudioBlock<float> oversampled;
-    auto oversamplingFactor = std::size_t { 1 };
-    if (truePeak && limiterOversampling != nullptr)
-    {
-        auto inputBlock = juce::dsp::AudioBlock<float>(audio)
-                              .getSubsetChannelBlock(
-                                  0,
-                                  static_cast<std::size_t>(
-                                      std::min(2, audio.getNumChannels())));
-        oversampled =
-            limiterOversampling->processSamplesUp(inputBlock);
-        oversamplingFactor =
-            limiterOversampling->getOversamplingFactor();
-    }
-    else if (limiterOversampling != nullptr)
-    {
-        limiterOversampling->reset();
-    }
     for (int channel = 0; channel < std::min(2, audio.getNumChannels()); ++channel)
     {
         auto gain = limiterGain[static_cast<std::size_t>(channel)];
+        auto writePosition = limiterHistoryWritePosition[
+            static_cast<std::size_t>(channel)];
         auto* samples = audio.getWritePointer(channel);
         for (int sample = 0; sample < audio.getNumSamples(); ++sample)
         {
             const auto current = samples[sample];
-            auto peak = std::abs(current);
-            if (truePeak && oversampled.getNumChannels() > 0)
+            auto& history =
+                limiterHistory[static_cast<std::size_t>(channel)];
+            history[static_cast<std::size_t>(writePosition)] = current;
+            const auto sampleAtLag = [&history, writePosition](int lag)
             {
-                const auto first = static_cast<std::size_t>(sample)
-                    * oversamplingFactor;
-                const auto end = std::min(
-                    first + oversamplingFactor,
-                    oversampled.getNumSamples());
-                for (auto index = first; index < end; ++index)
+                auto position = writePosition - lag;
+                if (position < 0)
+                    position += limiterFilterTaps;
+                return history[static_cast<std::size_t>(position)];
+            };
+            const auto delayed = sampleAtLag(limiterLatencySamples);
+            auto peak = std::abs(delayed);
+            if (truePeak)
+            {
+                for (int phase = 0;
+                     phase < limiterPhaseCount;
+                     ++phase)
                 {
-                    peak = std::max(
-                        peak,
-                        std::abs(oversampled.getSample(
-                            channel,
-                            static_cast<int>(index))));
+                    auto interpolated = 0.0f;
+                    for (int tap = 0;
+                         tap < limiterFilterTaps;
+                         ++tap)
+                    {
+                        interpolated += sampleAtLag(tap)
+                            * limiterCoefficients[
+                                static_cast<std::size_t>(phase)]
+                                [static_cast<std::size_t>(tap)];
+                    }
+                    peak = std::max(peak, std::abs(interpolated));
                 }
             }
             const auto target = peak > ceiling && peak > 0.0f
@@ -397,8 +429,12 @@ void UtilityDeviceProcessor::processLimiter(
             gain = target < gain
                 ? target
                 : 1.0f + release * (gain - 1.0f);
-            samples[sample] = current * gain;
+            samples[sample] = delayed * gain;
+            writePosition = (writePosition + 1)
+                % limiterFilterTaps;
         }
+        limiterHistoryWritePosition[static_cast<std::size_t>(channel)] =
+            writePosition;
         limiterGain[static_cast<std::size_t>(channel)] = gain;
     }
 }

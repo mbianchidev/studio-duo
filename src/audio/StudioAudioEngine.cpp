@@ -362,7 +362,7 @@ StudioAudioEngine::InsertRuntime::InsertRuntime()
 {
     automationBoundaries.reserve(
         static_cast<std::size_t>(
-            PluginBridgeSharedState::maxParameterEvents)
+            PluginBridgeSharedState::maxParameterEvents * 2)
         + static_cast<std::size_t>(
             PluginBridgeSharedState::maxBlockSize / 32 + 2));
 }
@@ -3432,6 +3432,7 @@ void StudioAudioEngine::processRuntimeChain(std::uint64_t key,
                 boundaries.clear();
                 boundaries.push_back(0);
                 boundaries.push_back(buffer.getNumSamples());
+                auto hasRamp = false;
                 for (int eventIndex = 0;
                      eventIndex < insert.parameterEventCount;
                      ++eventIndex)
@@ -3446,15 +3447,19 @@ void StudioAudioEngine::processRuntimeChain(std::uint64_t key,
                          & PluginBridgeParameterEvent::rampFlag)
                         != 0)
                     {
+                        hasRamp = true;
                         const auto end = std::min(
                             buffer.getNumSamples(),
                             static_cast<int>(event.rampEndOffset));
-                        for (auto offset = start + automationQuantum;
-                             offset < end;
-                             offset += automationQuantum)
-                            boundaries.push_back(offset);
                         boundaries.push_back(end);
                     }
+                }
+                if (hasRamp)
+                {
+                    for (auto offset = automationQuantum;
+                         offset < buffer.getNumSamples();
+                         offset += automationQuantum)
+                        boundaries.push_back(offset);
                 }
                 std::sort(boundaries.begin(), boundaries.end());
                 boundaries.erase(

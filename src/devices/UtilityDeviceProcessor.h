@@ -1,11 +1,9 @@
 #pragma once
 
 #include <juce_audio_processors/juce_audio_processors.h>
-#include <juce_dsp/juce_dsp.h>
 
 #include <array>
 #include <atomic>
-#include <memory>
 
 namespace studio
 {
@@ -121,7 +119,16 @@ private:
     std::array<float, 2> compressorEnvelope { 1.0f, 1.0f };
     std::array<float, 2> gateEnvelope {};
     std::array<float, 2> limiterGain { 1.0f, 1.0f };
-    std::unique_ptr<juce::dsp::Oversampling<float>> limiterOversampling;
+    static constexpr int limiterPhaseCount = 4;
+    static constexpr int limiterFilterTaps = 33;
+    static constexpr int limiterLatencySamples =
+        (limiterFilterTaps - 1) / 2;
+    std::array<std::array<float, limiterFilterTaps>,
+               limiterPhaseCount>
+        limiterCoefficients {};
+    std::array<std::array<float, limiterFilterTaps>, 2>
+        limiterHistory {};
+    std::array<int, 2> limiterHistoryWritePosition {};
     juce::AudioBuffer<float> delayBuffer;
     int delayWritePosition = 0;
     juce::Reverb reverb;

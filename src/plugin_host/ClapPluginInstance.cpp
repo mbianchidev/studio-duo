@@ -178,7 +178,8 @@ public:
             const auto* messages =
                 juce::MessageManager::getInstanceWithoutCreating();
             return messages != nullptr
-                && messages->isThisTheMessageThread();
+                && messages->isThisTheMessageThread()
+                && audioThreadDepth == 0;
         }
 
         static bool CLAP_ABI isAudioThread(const clap_host_t*)
@@ -919,6 +920,25 @@ ClapPluginInstance::~ClapPluginInstance()
 {
     stopTimer();
     releaseResources();
+    auto* implementation = impl.release();
+    if (implementation == nullptr)
+        return;
+    const auto* messages =
+        juce::MessageManager::getInstanceWithoutCreating();
+    if (messages == nullptr || messages->isThisTheMessageThread())
+    {
+        delete implementation;
+        return;
+    }
+    if (!juce::MessageManager::callSync(
+            [implementation]
+            {
+                delete implementation;
+            }))
+    {
+        juce::Logger::writeToLog(
+            "clap.lifecycle: destruction main thread unavailable");
+    }
 }
 
 const juce::String ClapPluginInstance::getName() const

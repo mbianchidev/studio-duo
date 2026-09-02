@@ -15,7 +15,7 @@ PluginBridgeWorker::PluginBridgeWorker()
     PluginFormats::addSupportedFormats(formatManager);
     automationBoundaries.reserve(
         static_cast<std::size_t>(
-            PluginBridgeSharedState::maxParameterEvents)
+            PluginBridgeSharedState::maxParameterEvents * 2)
         + static_cast<std::size_t>(
             PluginBridgeSharedState::maxBlockSize / 32 + 2));
 }
@@ -235,6 +235,7 @@ void PluginBridgeWorker::run()
         automationBoundaries.clear();
         automationBoundaries.push_back(0);
         automationBoundaries.push_back(samples);
+        auto hasRamp = false;
         for (int eventIndex = 0; eventIndex < eventCount; ++eventIndex)
         {
             const auto& event =
@@ -247,15 +248,19 @@ void PluginBridgeWorker::run()
             if ((event.flags & PluginBridgeParameterEvent::rampFlag)
                 != 0)
             {
+                hasRamp = true;
                 const auto end = std::min(
                     samples,
                     static_cast<int>(event.rampEndOffset));
-                for (auto offset = start + automationQuantum;
-                     offset < end;
-                     offset += automationQuantum)
-                    automationBoundaries.push_back(offset);
                 automationBoundaries.push_back(end);
             }
+        }
+        if (hasRamp)
+        {
+            for (auto offset = automationQuantum;
+                 offset < samples;
+                 offset += automationQuantum)
+                automationBoundaries.push_back(offset);
         }
         std::sort(
             automationBoundaries.begin(),
