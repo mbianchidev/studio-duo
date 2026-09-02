@@ -9,6 +9,8 @@
 
 namespace studio
 {
+class PluginEditorWindow;
+
 class PluginBridgeWorker final : private juce::ChildProcessWorker,
                                  private juce::Thread
 {
@@ -28,11 +30,16 @@ private:
                          int blockSize,
                          int sidechainChannels);
     void sendStatus(const juce::String& status);
+    void showEditor();
+    void hideEditor();
+    void focusEditor();
+    void resizeEditor(int width, int height);
 
     std::unique_ptr<juce::MemoryMappedFile> mapping;
     PluginBridgeSharedState* sharedState = nullptr;
     juce::AudioPluginFormatManager formatManager;
     std::unique_ptr<juce::AudioPluginInstance> plugin;
+    std::unique_ptr<PluginEditorWindow> editorWindow;
     juce::AudioBuffer<float> processBuffer;
     juce::MidiBuffer midiBuffer;
     std::mutex pluginMutex;

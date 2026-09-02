@@ -98,6 +98,9 @@ public:
 
     void systemRequestedQuit() override
     {
+        if (mainWindow != nullptr
+            && !mainWindow->prepareForShutdown())
+            return;
         quit();
     }
 
@@ -192,7 +195,23 @@ private:
         bridgeSelfTest->processBlock(block);
         juce::Thread::sleep(10);
         bridgeSelfTest->processBlock(block);
-        const auto passed = bridgeSelfTest->isReady();
+        const auto editorResult = bridgeSelfTest->showEditor();
+        if (editorResult.wasOk())
+            juce::Thread::sleep(50);
+        const auto hideResult = editorResult.wasOk()
+            ? bridgeSelfTest->hideEditor()
+            : editorResult;
+        const auto passed = bridgeSelfTest->isReady()
+            && editorResult.wasOk()
+            && hideResult.wasOk();
+        if (!passed)
+        {
+            juce::Logger::writeToLog(
+                "plugin.bridge.activation-test: "
+                + (editorResult.failed()
+                       ? editorResult.getErrorMessage()
+                       : hideResult.getErrorMessage()));
+        }
         bridgeSelfTest->stop();
         setApplicationReturnValue(passed ? 0 : 1);
         quit();
@@ -290,6 +309,16 @@ private:
         void closeButtonPressed() override
         {
             juce::JUCEApplication::getInstance()->systemRequestedQuit();
+        }
+
+        bool prepareForShutdown()
+        {
+            if (auto* content =
+                    dynamic_cast<MainComponent*>(getContentComponent()))
+            {
+                return content->prepareForShutdown();
+            }
+            return true;
         }
     };
 

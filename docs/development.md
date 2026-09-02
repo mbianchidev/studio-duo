@@ -121,6 +121,12 @@ opaque state, negotiate buses, process parameter events at exact sample
 boundaries, and return latency, tail, and parameter metadata without loading
 third-party code into the DAW.
 
+Native VST3 and Audio Unit editors are created in the worker's accessory
+process. Show, hide, focus, resize, and teardown commands use the non-real-time
+control channel; a generic editor is used when the processor exposes no native
+view. In-process trusted and ARA editors use the same window wrapper, with
+message-thread ownership kept outside the swappable runtime graph.
+
 Playback builds parent-track render nodes containing ordinary clips plus
 version-lane sources. Child inserts process before the parent sum, parent
 inserts process the group result, and master inserts process the final mix.
@@ -188,11 +194,22 @@ inside `processBlock`.
 ARA-capable VST3 and Audio Unit instances can opt into an in-process document
 binding. Studio Duo writes a recovery point before activation, shows the
 reduced-isolation warning, records an unclean-session marker, and reopens marked
-instances safe-disabled until explicit reload.
+instances safe-disabled until explicit reload. The host registers immutable
+audio sources, audio modifications, per-track region sequences, playback
+regions, and tempo/meter content before processor preparation. ARA model,
+archive, and teardown calls stay on one runtime thread; processor destruction
+returns to the message thread.
 
 Plugin state is captured outside the callback and stored once under
 `plugin-state/<sha256>.bin`. Missing or crashed processors keep their insert ID,
-routing, automation targets, policy, and prior state reference.
+routing, automation targets, policy, and prior state reference. ARA archives
+share the same content-addressed blob as processor state. Live ARA edits are
+captured before a document revision rebuild and restored into the replacement
+runtime.
+
+`StudioDuoAraFixture` is a public JUCE VST3/AU ARA fixture. Compatibility tests
+exercise source access, tempo/meter registration, sparse archive writes,
+archive restore, unsaved-state preservation, and processor-inclusive rendering.
 
 Audio files remain immutable. Clips store source references and non-destructive
 start, offset, duration, gain, and mute decisions.

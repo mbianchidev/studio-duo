@@ -9,6 +9,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <condition_variable>
+#include <mutex>
 #include <span>
 
 namespace studio
@@ -23,6 +25,33 @@ juce::AudioFormatWriterOptions writerOptions(double sampleRate, int channels)
         .withBitsPerSample(24);
 }
 
+std::shared_ptr<juce::AudioProcessor> messageThreadOwnedProcessor(
+    std::unique_ptr<juce::AudioProcessor> processor)
+{
+    return {
+        processor.release(),
+        [](juce::AudioProcessor* value)
+        {
+            if (value == nullptr)
+                return;
+            const auto* messages =
+                juce::MessageManager::getInstanceWithoutCreating();
+            if (messages == nullptr
+                || messages->isThisTheMessageThread())
+            {
+                delete value;
+                return;
+            }
+            if (!juce::MessageManager::callAsync(
+                    [value] { delete value; }))
+            {
+                juce::Logger::writeToLog(
+                    "plugin.runtime: message thread unavailable during processor teardown");
+            }
+        }
+    };
+}
+
 struct RecordingCallbackScope
 {
     ~RecordingCallbackScope()
@@ -32,6 +61,16 @@ struct RecordingCallbackScope
     }
 
     std::atomic<int>* counter = nullptr;
+};
+
+struct AtomicCounterScope
+{
+    ~AtomicCounterScope()
+    {
+        counter.fetch_sub(1, std::memory_order_acq_rel);
+    }
+
+    std::atomic<int>& counter;
 };
 
 float automatedVolumeGain(
@@ -71,6 +110,33 @@ bool automatedSwitch(
         ? automation->valueAt(sample) >= 0.5
         : fallback;
 }
+}
+
+bool StudioAudioEngine::waitForPluginRuntimeTransition(
+    int timeoutMilliseconds)
+{
+    const auto deadline = std::chrono::steady_clock::now()
+        + std::chrono::milliseconds(
+            std::max(1, timeoutMilliseconds));
+#if JUCE_MODAL_LOOPS_PERMITTED
+    if (auto* messages =
+            juce::MessageManager::getInstanceWithoutCreating();
+        messages != nullptr && messages->isThisTheMessageThread())
+    {
+        while (pluginRuntimeTransitionPending()
+               && std::chrono::steady_clock::now() < deadline)
+        {
+            messages->runDispatchLoopUntil(5);
+        }
+        return !pluginRuntimeTransitionPending();
+    }
+#endif
+    while (pluginRuntimeTransitionPending()
+           && std::chrono::steady_clock::now() < deadline)
+    {
+        juce::Thread::sleep(1);
+    }
+    return !pluginRuntimeTransitionPending();
 }
 
 StudioAudioEngine::LockFreeRecorder::LockFreeRecorder()
@@ -285,8 +351,15 @@ StudioAudioEngine::StudioAudioEngine()
     }
 }
 
+StudioAudioEngine::InsertRuntime::~InsertRuntime()
+{
+    if (inProcess != nullptr)
+        inProcess->releaseResources();
+}
+
 StudioAudioEngine::~StudioAudioEngine()
 {
+    editorCallbacksAlive->store(false, std::memory_order_release);
     shutdown();
 }
 
@@ -311,6 +384,7 @@ void StudioAudioEngine::shutdown()
     recordingAccepting.store(false, std::memory_order_release);
     calibrationActive.store(false, std::memory_order_release);
     calibrationResultReady.store(false, std::memory_order_release);
+    closeInProcessEditors();
 
     if (deviceManager != nullptr)
     {
@@ -323,10 +397,81 @@ void StudioAudioEngine::shutdown()
     if (activeRecorderCount.load(std::memory_order_acquire) > 0)
         finishRecordingSession();
     recordingFinalizing.store(false, std::memory_order_release);
-    pluginRuntimeBuilder.removeAllJobs(false, -1);
+#if JUCE_MODAL_LOOPS_PERMITTED
+    if (auto* messages =
+            juce::MessageManager::getInstanceWithoutCreating();
+        messages != nullptr && messages->isThisTheMessageThread())
+    {
+        while (!pluginRuntimeBuilder.removeAllJobs(false, 0))
+            messages->runDispatchLoopUntil(5);
+    }
+    else
+#endif
+    {
+        pluginRuntimeBuilder.removeAllJobs(false, -1);
+    }
 
-    for (auto& graph : pluginRuntimeGraphs)
-        graph.tracks.clear();
+    struct RuntimeCleanupState
+    {
+        std::mutex mutex;
+        std::condition_variable condition;
+        bool completed = false;
+    };
+    const auto cleanupState =
+        std::make_shared<RuntimeCleanupState>();
+    pluginRuntimeBuilder.addJob(
+        [this, cleanupState]
+        {
+            {
+                const juce::ScopedLock lock(pluginRequestLock);
+                for (auto& graph : pluginRuntimeGraphs)
+                {
+                    for (auto& track : graph.tracks)
+                    {
+                        for (auto& insert : track.inserts)
+                        {
+                            if (insert.inProcess != nullptr)
+                                insert.inProcess->releaseResources();
+                            insert.araDocument.reset();
+                        }
+                    }
+                }
+            }
+            {
+                const std::lock_guard lock(cleanupState->mutex);
+                cleanupState->completed = true;
+            }
+            cleanupState->condition.notify_one();
+        });
+#if JUCE_MODAL_LOOPS_PERMITTED
+    if (auto* messages =
+            juce::MessageManager::getInstanceWithoutCreating();
+        messages != nullptr && messages->isThisTheMessageThread())
+    {
+        for (;;)
+        {
+            {
+                const std::lock_guard cleanupGuard(
+                    cleanupState->mutex);
+                if (cleanupState->completed)
+                    break;
+            }
+            messages->runDispatchLoopUntil(5);
+        }
+    }
+    else
+#endif
+    {
+        std::unique_lock cleanupLock(cleanupState->mutex);
+        cleanupState->condition.wait(
+            cleanupLock,
+            [cleanupState] { return cleanupState->completed; });
+    }
+    {
+        const juce::ScopedLock lock(pluginRequestLock);
+        for (auto& graph : pluginRuntimeGraphs)
+            graph.tracks.clear();
+    }
     activePluginRuntime.store(0, std::memory_order_release);
     readingPluginRuntime.store(-1, std::memory_order_release);
     activeSnapshot.store(0, std::memory_order_release);
@@ -337,6 +482,7 @@ void StudioAudioEngine::shutdown()
     for (auto& generation : pluginRuntimeGenerations)
         generation.store(0, std::memory_order_relaxed);
     pluginLateBlocks.store(0, std::memory_order_relaxed);
+    exclusiveAudioOperation.store(0, std::memory_order_release);
     {
         const juce::ScopedLock lock(pluginRequestLock);
         pendingPluginRequests.clear();
@@ -351,6 +497,8 @@ void StudioAudioEngine::shutdown()
         activePluginGeneration = 0;
         hasPendingPluginRequest = false;
         pluginBuilderRunning = false;
+        pluginStateCapturePending = false;
+        pendingEditorCloseRequired = false;
     }
     {
         const juce::ScopedLock lock(pluginStatusLock);
@@ -362,6 +510,21 @@ juce::Result StudioAudioEngine::updateProject(
     const Project& project,
     std::vector<PluginRuntimeRequest> pluginRequests)
 {
+    return updateProjectInternal(
+        project,
+        std::move(pluginRequests),
+        false);
+}
+
+juce::Result StudioAudioEngine::updateProjectInternal(
+    const Project& project,
+    std::vector<PluginRuntimeRequest> pluginRequests,
+    bool renderOwned)
+{
+    if (renderInProgress.load(std::memory_order_acquire)
+        && !renderOwned)
+        return juce::Result::fail(
+            "Wait for the active render to finish.");
     metronomeEnabled.store(project.metronomeEnabled, std::memory_order_release);
     juce::String error;
     auto snapshot = buildSnapshot(project,
@@ -371,34 +534,47 @@ juce::Result StudioAudioEngine::updateProject(
     if (!snapshot.has_value())
         return juce::Result::fail(error);
 
-    requestPluginRuntime(std::move(pluginRequests), std::move(*snapshot));
+    requestPluginRuntime(
+        std::move(pluginRequests),
+        std::move(*snapshot),
+        renderOwned);
     return juce::Result::ok();
 }
 
 void StudioAudioEngine::play() noexcept
 {
+    if (renderInProgress.load(std::memory_order_acquire))
+        return;
     playing.store(true, std::memory_order_release);
 }
 
 void StudioAudioEngine::pause() noexcept
 {
+    if (renderInProgress.load(std::memory_order_acquire))
+        return;
     playing.store(false, std::memory_order_release);
 }
 
 void StudioAudioEngine::stop() noexcept
 {
+    if (renderInProgress.load(std::memory_order_acquire))
+        return;
     playing.store(false, std::memory_order_release);
     playheadSample.store(0, std::memory_order_release);
 }
 
 void StudioAudioEngine::seekSeconds(double seconds) noexcept
 {
+    if (renderInProgress.load(std::memory_order_acquire))
+        return;
     const auto target = static_cast<std::int64_t>(std::max(0.0, seconds) * currentSampleRate());
     playheadSample.store(target, std::memory_order_release);
 }
 
 void StudioAudioEngine::setMetronomeEnabled(bool enabled) noexcept
 {
+    if (renderInProgress.load(std::memory_order_acquire))
+        return;
     metronomeEnabled.store(enabled, std::memory_order_release);
 }
 
@@ -406,6 +582,8 @@ void StudioAudioEngine::setInputMonitoring(bool enabled,
                                            int firstInputChannel,
                                            int channels) noexcept
 {
+    if (renderInProgress.load(std::memory_order_acquire))
+        return;
     monitoringFirstInput.store(juce::jmax(0, firstInputChannel), std::memory_order_relaxed);
     monitoringChannels.store(juce::jlimit(1, 2, channels), std::memory_order_relaxed);
     monitoringEnabled.store(enabled, std::memory_order_release);
@@ -546,14 +724,171 @@ std::vector<StudioAudioEngine::PluginStateCapture>
 StudioAudioEngine::capturePluginStates(int timeoutMilliseconds)
 {
     const auto timeout = std::max(1, timeoutMilliseconds);
-    for (auto waited = 0;
-         waited < timeout
-         && readingPluginRuntime.load(std::memory_order_acquire) >= 0;
-         ++waited)
-        juce::Thread::sleep(1);
+    std::vector<PluginStateCapture> captures;
+    if (renderInProgress.load(std::memory_order_acquire))
+    {
+        PluginStateCapture capture;
+        capture.result = juce::Result::fail(
+            "Wait for the active render to finish before saving plugin state.");
+        captures.push_back(std::move(capture));
+        return captures;
+    }
+    auto expectedOperation = 0;
+    if (!exclusiveAudioOperation.compare_exchange_strong(
+            expectedOperation,
+            2,
+            std::memory_order_acq_rel))
+    {
+        PluginStateCapture capture;
+        capture.result = juce::Result::fail(
+            expectedOperation == 1
+                ? "Stop and finalize recording before saving plugin state."
+                : "Another plugin state operation is already running.");
+        captures.push_back(std::move(capture));
+        return captures;
+    }
+    if (isRecording()
+        || activeRecorderCount.load(std::memory_order_acquire) > 0
+        || recordingFinalizing.load(std::memory_order_acquire))
+    {
+        exclusiveAudioOperation.store(0, std::memory_order_release);
+        PluginStateCapture capture;
+        capture.result = juce::Result::fail(
+            "Stop and finalize recording before saving plugin state.");
+        captures.push_back(std::move(capture));
+        return captures;
+    }
+    struct CaptureState
+    {
+        std::mutex mutex;
+        std::condition_variable condition;
+        std::vector<PluginStateCapture> captures;
+        bool completed = false;
+    };
+    const auto state = std::make_shared<CaptureState>();
+    {
+        const juce::ScopedLock requestGuard(pluginRequestLock);
+        if (pluginBuilderRunning
+            || hasPendingPluginRequest
+            || desiredPluginFingerprint != activePluginFingerprint
+            || pluginStateCapturePending)
+        {
+            PluginStateCapture capture;
+            capture.result = juce::Result::fail(
+                "Wait for plugin loading to finish before saving.");
+            captures.push_back(std::move(capture));
+            exclusiveAudioOperation.store(
+                0,
+                std::memory_order_release);
+            return captures;
+        }
+        pluginStateCapturePending = true;
+        pluginRuntimeBuilder.addJob(
+            [this, state, timeout]
+            {
+                auto runtimeCaptures =
+                    capturePluginStatesOnRuntimeThread(timeout);
+                auto closePendingEditors = false;
+                {
+                    const juce::ScopedLock completionGuard(
+                        pluginRequestLock);
+                    pluginStateCapturePending = false;
+                    closePendingEditors =
+                        pendingEditorCloseRequired;
+                    pendingEditorCloseRequired = false;
+                }
+                if (closePendingEditors)
+                    closeInProcessEditorsBeforeRuntimeChange();
+                exclusiveAudioOperation.store(
+                    0,
+                    std::memory_order_release);
+                {
+                    const std::lock_guard stateGuard(state->mutex);
+                    state->captures = std::move(runtimeCaptures);
+                    state->completed = true;
+                }
+                state->condition.notify_one();
+            });
+    }
+
+    const auto waitMilliseconds = static_cast<int>(
+        std::clamp<std::int64_t>(
+            static_cast<std::int64_t>(timeout)
+                * static_cast<std::int64_t>(maximumRecordingTracks),
+            5000,
+            120000));
+    auto completed = false;
+#if JUCE_MODAL_LOOPS_PERMITTED
+    if (auto* messages =
+            juce::MessageManager::getInstanceWithoutCreating();
+        messages != nullptr && messages->isThisTheMessageThread())
+    {
+        const auto deadline = std::chrono::steady_clock::now()
+            + std::chrono::milliseconds(waitMilliseconds);
+        while (std::chrono::steady_clock::now() < deadline)
+        {
+            {
+                const std::lock_guard stateGuard(state->mutex);
+                if (state->completed)
+                {
+                    completed = true;
+                    break;
+                }
+            }
+            messages->runDispatchLoopUntil(5);
+        }
+    }
+    else
+#endif
+    {
+        std::unique_lock stateLock(state->mutex);
+        completed = state->condition.wait_for(
+            stateLock,
+            std::chrono::milliseconds(waitMilliseconds),
+            [state] { return state->completed; });
+    }
+    if (!completed)
+    {
+        PluginStateCapture capture;
+        capture.result = juce::Result::fail(
+            "Plugin state capture timed out.");
+        captures.push_back(std::move(capture));
+        return captures;
+    }
+    return std::move(state->captures);
+}
+
+std::vector<StudioAudioEngine::PluginStateCapture>
+StudioAudioEngine::capturePluginStatesOnRuntimeThread(
+    int timeoutMilliseconds)
+{
+    const auto timeout = std::max(1, timeoutMilliseconds);
+    pluginStateOperationActive.store(true, std::memory_order_release);
+    struct StateOperationScope
+    {
+        ~StateOperationScope()
+        {
+            active.store(false, std::memory_order_release);
+        }
+
+        std::atomic<bool>& active;
+    } stateOperationScope { pluginStateOperationActive };
 
     std::vector<PluginStateCapture> captures;
-    if (readingPluginRuntime.load(std::memory_order_acquire) >= 0)
+    for (auto waited = 0;
+         waited < timeout
+         && (audioCallbacksInFlight.load(std::memory_order_acquire) > 0
+             || pluginControlOperationsInFlight.load(
+                    std::memory_order_acquire)
+                 > 0);
+         ++waited)
+    {
+        juce::Thread::sleep(1);
+    }
+    if (audioCallbacksInFlight.load(std::memory_order_acquire) > 0
+        || pluginControlOperationsInFlight.load(
+               std::memory_order_acquire)
+            > 0)
     {
         PluginStateCapture capture;
         capture.result = juce::Result::fail(
@@ -562,7 +897,6 @@ StudioAudioEngine::capturePluginStates(int timeoutMilliseconds)
         return captures;
     }
 
-    const juce::ScopedLock lock(pluginRequestLock);
     auto& graph = pluginRuntimeGraphs[static_cast<std::size_t>(
         activePluginRuntime.load(std::memory_order_acquire))];
     for (auto& track : graph.tracks)
@@ -581,7 +915,25 @@ StudioAudioEngine::capturePluginStates(int timeoutMilliseconds)
             }
             else if (insert.inProcess != nullptr)
             {
-                insert.inProcess->getStateInformation(capture.state);
+                juce::MemoryBlock processorState;
+                insert.inProcess->getStateInformation(processorState);
+                if (insert.araDocument != nullptr)
+                {
+                    juce::MemoryBlock araState;
+                    capture.result = insert.araDocument->archive(araState);
+                    if (capture.result.failed())
+                    {
+                        captures.push_back(std::move(capture));
+                        continue;
+                    }
+                    capture.state = AraDocumentHost::packState(
+                        processorState,
+                        araState);
+                }
+                else
+                {
+                    capture.state = std::move(processorState);
+                }
             }
             else
             {
@@ -594,12 +946,153 @@ StudioAudioEngine::capturePluginStates(int timeoutMilliseconds)
     return captures;
 }
 
+StudioAudioEngine::AraPreservationResult
+StudioAudioEngine::preserveLiveAraStates(
+    std::vector<PluginRuntimeRequest>& requests)
+{
+    const auto hasAraRequest = std::any_of(
+        requests.cbegin(),
+        requests.cend(),
+        [](const auto& request)
+        {
+            return request.bridgeMode
+                == PluginBridgeMode::araCompatibility;
+        });
+    if (!hasAraRequest)
+        return {};
+    auto expectedOperation = 0;
+    if (!exclusiveAudioOperation.compare_exchange_strong(
+            expectedOperation,
+            2,
+            std::memory_order_acq_rel))
+    {
+        return {
+            expectedOperation == 1
+                ? AraPreservationResult::Status::recordingBlocked
+                : AraPreservationResult::Status::failed,
+            expectedOperation == 1
+                ? "Stop and finalize recording before rebuilding ARA processors."
+                : "Another plugin state operation is already running."
+        };
+    }
+    struct ExclusiveOperationScope
+    {
+        ~ExclusiveOperationScope()
+        {
+            operation.store(0, std::memory_order_release);
+        }
+
+        std::atomic<int>& operation;
+    } exclusiveScope { exclusiveAudioOperation };
+    if (recordingAccepting.load(std::memory_order_acquire)
+        || activeRecorderCount.load(std::memory_order_acquire) > 0
+        || recordingFinalizing.load(std::memory_order_acquire))
+    {
+        return {
+            AraPreservationResult::Status::recordingBlocked,
+            "Stop and finalize recording before rebuilding ARA processors."
+        };
+    }
+
+    pluginStateOperationActive.store(true, std::memory_order_release);
+    struct StateOperationScope
+    {
+        ~StateOperationScope()
+        {
+            active.store(false, std::memory_order_release);
+        }
+
+        std::atomic<bool>& active;
+    } stateOperationScope { pluginStateOperationActive };
+
+    for (int waited = 0;
+         waited < 2000
+         && (audioCallbacksInFlight.load(std::memory_order_acquire) > 0
+             || pluginControlOperationsInFlight.load(
+                    std::memory_order_acquire)
+                 > 0);
+         ++waited)
+    {
+        juce::Thread::sleep(1);
+    }
+    if (audioCallbacksInFlight.load(std::memory_order_acquire) > 0
+        || pluginControlOperationsInFlight.load(
+               std::memory_order_acquire)
+            > 0)
+    {
+        return {
+            AraPreservationResult::Status::failed,
+            "Audio processing did not stop before preserving ARA state."
+        };
+    }
+
+    auto& graph = pluginRuntimeGraphs[static_cast<std::size_t>(
+        activePluginRuntime.load(std::memory_order_acquire))];
+    for (auto& request : requests)
+    {
+        if (request.bridgeMode
+            != PluginBridgeMode::araCompatibility)
+        {
+            continue;
+        }
+        for (auto& track : graph.tracks)
+        {
+            const auto insert = std::find_if(
+                track.inserts.begin(),
+                track.inserts.end(),
+                [&request](const auto& candidate)
+                {
+                    return candidate.insertId == request.insertId;
+                });
+            if (insert == track.inserts.end()
+                || insert->inProcess == nullptr
+                || insert->araDocument == nullptr)
+            {
+                continue;
+            }
+
+            juce::MemoryBlock processorState;
+            insert->inProcess->getStateInformation(processorState);
+            juce::MemoryBlock araState;
+            if (const auto result =
+                    insert->araDocument->archive(araState);
+                result.failed())
+            {
+                return {
+                    AraPreservationResult::Status::failed,
+                    insert->name
+                        + ": could not preserve live ARA state: "
+                        + result.getErrorMessage()
+                };
+            }
+            request.state = AraDocumentHost::packState(
+                processorState,
+                araState);
+            break;
+        }
+    }
+    return {};
+}
+
 bool StudioAudioEngine::setPluginParameter(
     const juce::String& insertId,
     int parameterIndex,
     float normalizedValue,
     juce::String& error)
 {
+    if (renderInProgress.load(std::memory_order_acquire))
+    {
+        error = "Wait for the active render to finish.";
+        return false;
+    }
+    if (!beginPluginControlOperation())
+    {
+        error = "Wait for plugin state processing to finish.";
+        return false;
+    }
+    AtomicCounterScope controlScope {
+        pluginControlOperationsInFlight
+    };
     if (parameterIndex < 0)
     {
         error = "Plugin parameter index cannot be negative.";
@@ -665,6 +1158,236 @@ bool StudioAudioEngine::setPluginParameter(
     return false;
 }
 
+juce::Result StudioAudioEngine::showPluginEditor(
+    const juce::String& insertId)
+{
+    if (renderInProgress.load(std::memory_order_acquire))
+        return juce::Result::fail(
+            "Wait for the active render to finish.");
+    if (!beginPluginControlOperation())
+        return juce::Result::fail(
+            "Wait for plugin state processing to finish.");
+    AtomicCounterScope controlScope {
+        pluginControlOperationsInFlight
+    };
+    std::shared_ptr<PluginBridgeClient> bridge;
+    std::shared_ptr<juce::AudioProcessor> processor;
+    auto editorName = juce::String();
+    {
+        const juce::ScopedLock lock(pluginRequestLock);
+        auto& graph = pluginRuntimeGraphs[static_cast<std::size_t>(
+            activePluginRuntime.load(std::memory_order_acquire))];
+        for (auto& track : graph.tracks)
+        {
+            const auto insert = std::find_if(
+                track.inserts.begin(),
+                track.inserts.end(),
+                [&insertId](const auto& candidate)
+                {
+                    return candidate.insertId == insertId;
+                });
+            if (insert == track.inserts.end())
+                continue;
+            if (insert->bridge != nullptr)
+                bridge = insert->bridge;
+            else
+                processor = insert->inProcess;
+            editorName = insert->name;
+            break;
+        }
+    }
+    if (bridge != nullptr)
+        return bridge->showEditor();
+    if (processor == nullptr)
+        return juce::Result::fail(
+            "The plugin runtime is unavailable.");
+    if (juce::MessageManager::getInstanceWithoutCreating() == nullptr
+        || !juce::MessageManager::getInstance()->isThisTheMessageThread())
+    {
+        return juce::Result::fail(
+            "In-process plugin editors must open on the message thread.");
+    }
+
+    const juce::ScopedLock editorGuard(editorLock);
+    auto& session = editorSessions[insertId];
+    if (session.processor != processor)
+    {
+        session.window.reset();
+        session.processor.reset();
+    }
+    session.processor = processor;
+    if (session.window == nullptr)
+    {
+        juce::String error;
+        session.window = PluginEditorWindow::create(
+            *processor,
+            editorName,
+            error);
+        if (session.window == nullptr)
+        {
+            editorSessions.erase(insertId);
+            return juce::Result::fail(error);
+        }
+    }
+    session.window->showEditor();
+    return juce::Result::ok();
+}
+
+juce::Result StudioAudioEngine::hidePluginEditor(
+    const juce::String& insertId)
+{
+    if (renderInProgress.load(std::memory_order_acquire))
+        return juce::Result::fail(
+            "Wait for the active render to finish.");
+    if (!beginPluginControlOperation())
+        return juce::Result::fail(
+            "Wait for plugin state processing to finish.");
+    AtomicCounterScope controlScope {
+        pluginControlOperationsInFlight
+    };
+    if (juce::MessageManager::getInstanceWithoutCreating() != nullptr
+        && juce::MessageManager::getInstance()->isThisTheMessageThread())
+    {
+        const juce::ScopedLock editorGuard(editorLock);
+        const auto session = editorSessions.find(insertId);
+        if (session != editorSessions.end())
+        {
+            session->second.window->hideEditor();
+            return juce::Result::ok();
+        }
+    }
+
+    std::shared_ptr<PluginBridgeClient> bridge;
+    auto foundInsert = false;
+    {
+        const juce::ScopedLock lock(pluginRequestLock);
+        auto& graph = pluginRuntimeGraphs[static_cast<std::size_t>(
+            activePluginRuntime.load(std::memory_order_acquire))];
+        for (auto& track : graph.tracks)
+        {
+            const auto insert = std::find_if(
+                track.inserts.begin(),
+                track.inserts.end(),
+                [&insertId](const auto& candidate)
+                {
+                    return candidate.insertId == insertId;
+                });
+            if (insert == track.inserts.end())
+                continue;
+            foundInsert = true;
+            bridge = insert->bridge;
+            break;
+        }
+    }
+    if (bridge != nullptr)
+        return bridge->hideEditor();
+    return foundInsert
+        ? juce::Result::ok()
+        : juce::Result::fail("The plugin insert is unavailable.");
+}
+
+juce::Result StudioAudioEngine::focusPluginEditor(
+    const juce::String& insertId)
+{
+    if (renderInProgress.load(std::memory_order_acquire))
+        return juce::Result::fail(
+            "Wait for the active render to finish.");
+    if (!beginPluginControlOperation())
+        return juce::Result::fail(
+            "Wait for plugin state processing to finish.");
+    AtomicCounterScope controlScope {
+        pluginControlOperationsInFlight
+    };
+    if (juce::MessageManager::getInstanceWithoutCreating() != nullptr
+        && juce::MessageManager::getInstance()->isThisTheMessageThread())
+    {
+        const juce::ScopedLock editorGuard(editorLock);
+        const auto session = editorSessions.find(insertId);
+        if (session != editorSessions.end())
+        {
+            session->second.window->focusEditor();
+            return juce::Result::ok();
+        }
+    }
+    std::shared_ptr<PluginBridgeClient> bridge;
+    {
+        const juce::ScopedLock lock(pluginRequestLock);
+        auto& graph = pluginRuntimeGraphs[static_cast<std::size_t>(
+            activePluginRuntime.load(std::memory_order_acquire))];
+        for (auto& track : graph.tracks)
+        {
+            const auto insert = std::find_if(
+                track.inserts.begin(),
+                track.inserts.end(),
+                [&insertId](const auto& candidate)
+                {
+                    return candidate.insertId == insertId;
+                });
+            if (insert == track.inserts.end())
+                continue;
+            bridge = insert->bridge;
+            break;
+        }
+    }
+    if (bridge != nullptr)
+        return bridge->focusEditor();
+    return showPluginEditor(insertId);
+}
+
+juce::Result StudioAudioEngine::resizePluginEditor(
+    const juce::String& insertId,
+    int width,
+    int height)
+{
+    if (renderInProgress.load(std::memory_order_acquire))
+        return juce::Result::fail(
+            "Wait for the active render to finish.");
+    if (!beginPluginControlOperation())
+        return juce::Result::fail(
+            "Wait for plugin state processing to finish.");
+    AtomicCounterScope controlScope {
+        pluginControlOperationsInFlight
+    };
+    if (juce::MessageManager::getInstanceWithoutCreating() != nullptr
+        && juce::MessageManager::getInstance()->isThisTheMessageThread())
+    {
+        const juce::ScopedLock editorGuard(editorLock);
+        const auto session = editorSessions.find(insertId);
+        if (session != editorSessions.end())
+        {
+            return session->second.window->resizeEditor(width, height)
+                ? juce::Result::ok()
+                : juce::Result::fail(
+                      "Plugin editor dimensions must be positive.");
+        }
+    }
+
+    std::shared_ptr<PluginBridgeClient> bridge;
+    {
+        const juce::ScopedLock lock(pluginRequestLock);
+        auto& graph = pluginRuntimeGraphs[static_cast<std::size_t>(
+            activePluginRuntime.load(std::memory_order_acquire))];
+        for (auto& track : graph.tracks)
+        {
+            const auto insert = std::find_if(
+                track.inserts.begin(),
+                track.inserts.end(),
+                [&insertId](const auto& candidate)
+                {
+                    return candidate.insertId == insertId;
+                });
+            if (insert != track.inserts.end())
+            {
+                bridge = insert->bridge;
+                break;
+            }
+        }
+    }
+    return bridge != nullptr
+        ? bridge->resizeEditor(width, height)
+        : juce::Result::fail("The plugin editor is not open.");
+}
+
 std::uint64_t StudioAudioEngine::pluginLateBlockCount() const noexcept
 {
     return pluginLateBlocks.load(std::memory_order_relaxed);
@@ -683,6 +1406,19 @@ juce::Result StudioAudioEngine::forcePluginRuntimeReload(
     std::vector<PluginRuntimeRequest> pluginRequests,
     juce::String insertId)
 {
+    return forcePluginRuntimeReloadInternal(
+        project,
+        std::move(pluginRequests),
+        std::move(insertId),
+        false);
+}
+
+juce::Result StudioAudioEngine::forcePluginRuntimeReloadInternal(
+    const Project& project,
+    std::vector<PluginRuntimeRequest> pluginRequests,
+    juce::String insertId,
+    bool renderOwned)
+{
     juce::ignoreUnused(insertId);
     juce::String previousDesiredFingerprint;
     std::uint64_t previousDesiredGeneration = 0;
@@ -694,7 +1430,10 @@ juce::Result StudioAudioEngine::forcePluginRuntimeReload(
         previousDesiredGeneration = desiredPluginGeneration;
         desiredPluginFingerprint.clear();
     }
-    const auto result = updateProject(project, std::move(pluginRequests));
+    const auto result = updateProjectInternal(
+        project,
+        std::move(pluginRequests),
+        renderOwned);
     if (result.failed())
     {
         metronomeEnabled.store(previousMetronome,
@@ -712,6 +1451,31 @@ juce::Result StudioAudioEngine::forcePluginRuntimeReload(
 juce::Result StudioAudioEngine::startRecording(const std::vector<RecordingRequest>& requests,
                                                const RecordingPlan& plan)
 {
+    if (renderInProgress.load(std::memory_order_acquire))
+        return juce::Result::fail(
+            "Wait for the active render to finish before recording.");
+    auto expectedOperation = 0;
+    if (!exclusiveAudioOperation.compare_exchange_strong(
+            expectedOperation,
+            1,
+            std::memory_order_acq_rel))
+    {
+        return juce::Result::fail(
+            expectedOperation == 2
+                ? "Wait for plugin state processing to finish before recording."
+                : "A recording is already in progress.");
+    }
+    struct RecordingReservation
+    {
+        ~RecordingReservation()
+        {
+            if (!committed)
+                operation.store(0, std::memory_order_release);
+        }
+
+        std::atomic<int>& operation;
+        bool committed = false;
+    } reservation { exclusiveAudioOperation };
     if (recordingFinalizing.load(std::memory_order_acquire))
         return juce::Result::fail("The previous recording is still finalizing.");
     if (recordingAccepting.load(std::memory_order_acquire)
@@ -819,6 +1583,7 @@ juce::Result StudioAudioEngine::startRecording(const std::vector<RecordingReques
     activeRecorderCount.store(static_cast<int>(requests.size()), std::memory_order_release);
     recordingAccepting.store(true, std::memory_order_release);
     playing.store(true, std::memory_order_release);
+    reservation.committed = true;
     return juce::Result::ok();
 }
 
@@ -880,6 +1645,8 @@ std::vector<StudioAudioEngine::RecordingResult> StudioAudioEngine::finishRecordi
     results.reserve(static_cast<std::size_t>(count));
     for (int index = 0; index < count; ++index)
         results.push_back(recorders[static_cast<std::size_t>(index)]->finishStop());
+    exclusiveAudioOperation.store(0, std::memory_order_release);
+    resumePendingPluginRuntime();
     return results;
 }
 
@@ -1080,6 +1847,21 @@ juce::Result StudioAudioEngine::renderToBuffer(
 {
     if (renderSampleRate <= 0.0)
         return juce::Result::fail("Render sample rate must be positive.");
+    auto expectedRender = false;
+    if (!renderInProgress.compare_exchange_strong(
+            expectedRender,
+            true,
+            std::memory_order_acq_rel))
+        return juce::Result::fail("Another render is already running.");
+    struct RenderScope
+    {
+        ~RenderScope()
+        {
+            active.store(false, std::memory_order_release);
+        }
+
+        std::atomic<bool>& active;
+    } renderScope { renderInProgress };
     if (project.hasActivePluginInserts() && pluginRequests.empty())
         return juce::Result::fail(
             "Buffer rendering cannot omit active plugins.");
@@ -1129,7 +1911,7 @@ juce::Result StudioAudioEngine::renderToBuffer(
         deviceBlockSize.store(renderBlockSize, std::memory_order_release);
         metronomeEnabled.store(false, std::memory_order_release);
         playing.store(false, std::memory_order_release);
-        seekSeconds(0.0);
+        playheadSample.store(0, std::memory_order_release);
 
         const auto restoreSettings = [&](bool reloadLiveProject)
             -> juce::Result
@@ -1143,9 +1925,11 @@ juce::Result StudioAudioEngine::renderToBuffer(
             auto restoration = juce::Result::ok();
             if (reloadLiveProject)
             {
-                if (const auto result = forcePluginRuntimeReload(
+                if (const auto result = forcePluginRuntimeReloadInternal(
                         project,
-                        pluginRequests);
+                        pluginRequests,
+                        {},
+                        true);
                     result.failed())
                 {
                     restoration = juce::Result::fail(
@@ -1154,11 +1938,7 @@ juce::Result StudioAudioEngine::renderToBuffer(
                 }
                 else
                 {
-                    for (int attempt = 0;
-                         attempt < 10000 && pluginRuntimeTransitionPending();
-                         ++attempt)
-                        juce::Thread::sleep(1);
-                    if (pluginRuntimeTransitionPending())
+                    if (!waitForPluginRuntimeTransition(10000))
                     {
                         restoration = juce::Result::fail(
                             "Timed out while restoring the live project.");
@@ -1185,18 +1965,15 @@ juce::Result StudioAudioEngine::renderToBuffer(
             return failure;
         };
 
-        if (const auto result = updateProject(
+        if (const auto result = updateProjectInternal(
                 renderProject,
-                pluginRequests);
+                pluginRequests,
+                true);
             result.failed())
         {
             return restoreAfterFailure(result, false);
         }
-        for (int attempt = 0;
-             attempt < 10000 && pluginRuntimeTransitionPending();
-             ++attempt)
-            juce::Thread::sleep(1);
-        if (pluginRuntimeTransitionPending())
+        if (!waitForPluginRuntimeTransition(10000))
         {
             return restoreAfterFailure(
                 juce::Result::fail(
@@ -2911,11 +3688,144 @@ int StudioAudioEngine::meterSlotFor(const juce::String& trackId)
     return -1;
 }
 
-void StudioAudioEngine::requestPluginRuntime(std::vector<PluginRuntimeRequest> requests,
-                                             RenderSnapshot snapshot)
+void StudioAudioEngine::closeInProcessEditorsAsync()
 {
+    const auto* manager =
+        juce::MessageManager::getInstanceWithoutCreating();
+    if (manager == nullptr)
+    {
+        const juce::ScopedLock editorGuard(editorLock);
+        editorSessions.clear();
+        return;
+    }
+    if (manager->isThisTheMessageThread())
+    {
+        closeInProcessEditors();
+        return;
+    }
+    const auto alive = editorCallbacksAlive;
+    juce::MessageManager::callAsync(
+        [this, alive]
+        {
+            if (alive->load(std::memory_order_acquire))
+                closeInProcessEditors();
+        });
+}
+
+void StudioAudioEngine::closeInProcessEditors()
+{
+    const auto clear = [this]
+    {
+        const juce::ScopedLock editorGuard(editorLock);
+        editorSessions.clear();
+    };
+    const auto* manager =
+        juce::MessageManager::getInstanceWithoutCreating();
+    if (manager == nullptr || manager->isThisTheMessageThread())
+    {
+        clear();
+        return;
+    }
+
+    const juce::MessageManagerLock messageLock;
+    if (messageLock.lockWasGained())
+        clear();
+    else
+        juce::Logger::writeToLog(
+            "plugin.editor: could not acquire the message thread for cleanup");
+}
+
+bool StudioAudioEngine::closeInProcessEditorsBeforeRuntimeChange()
+{
+    const auto* manager =
+        juce::MessageManager::getInstanceWithoutCreating();
+    if (manager == nullptr || manager->isThisTheMessageThread())
+    {
+        closeInProcessEditors();
+        return true;
+    }
+
+    struct CloseState
+    {
+        std::mutex mutex;
+        std::condition_variable condition;
+        bool completed = false;
+    };
+    const auto state = std::make_shared<CloseState>();
+    const auto alive = editorCallbacksAlive;
+    if (!juce::MessageManager::callAsync(
+            [this, alive, state]
+            {
+                if (alive->load(std::memory_order_acquire))
+                    closeInProcessEditors();
+                {
+                    const std::lock_guard stateGuard(state->mutex);
+                    state->completed = true;
+                }
+                state->condition.notify_one();
+            }))
+    {
+        return false;
+    }
+
+    std::unique_lock stateLock(state->mutex);
+    while (!state->completed)
+    {
+        if (shuttingDown.load(std::memory_order_acquire))
+            return false;
+        state->condition.wait_for(
+            stateLock,
+            std::chrono::milliseconds(5));
+    }
+    return true;
+}
+
+void StudioAudioEngine::resumePendingPluginRuntime()
+{
+    if (shuttingDown.load(std::memory_order_acquire))
+        return;
+    auto startBuilder = false;
+    {
+        const juce::ScopedLock lock(pluginRequestLock);
+        if (hasPendingPluginRequest && !pluginBuilderRunning)
+        {
+            pluginBuilderRunning = true;
+            startBuilder = true;
+        }
+    }
+    if (startBuilder)
+        pluginRuntimeBuilder.addJob(
+            [this] { runPluginRuntimeBuilder(); });
+}
+
+bool StudioAudioEngine::beginPluginControlOperation() noexcept
+{
+    if (exclusiveAudioOperation.load(std::memory_order_acquire) == 2)
+        return false;
+    pluginControlOperationsInFlight.fetch_add(
+        1,
+        std::memory_order_acq_rel);
+    if (exclusiveAudioOperation.load(std::memory_order_acquire) != 2)
+        return true;
+    pluginControlOperationsInFlight.fetch_sub(
+        1,
+        std::memory_order_acq_rel);
+    return false;
+}
+
+void StudioAudioEngine::requestPluginRuntime(
+    std::vector<PluginRuntimeRequest> requests,
+    RenderSnapshot snapshot,
+    bool renderOwned)
+{
+    if (shuttingDown.load(std::memory_order_acquire))
+        return;
+    if (renderInProgress.load(std::memory_order_acquire)
+        && !renderOwned)
+        return;
     const auto fingerprint = pluginRuntimeFingerprint(requests);
     auto startBuilder = false;
+    auto closeEditors = false;
     {
         const juce::ScopedLock lock(pluginRequestLock);
         if (fingerprint == activePluginFingerprint
@@ -2941,6 +3851,17 @@ void StudioAudioEngine::requestPluginRuntime(std::vector<PluginRuntimeRequest> r
                 && !hasPendingPluginRequest
                 && fingerprint != activePluginFingerprint))
         {
+            if (exclusiveAudioOperation.load(
+                    std::memory_order_acquire)
+                == 2)
+            {
+                pendingEditorCloseRequired = true;
+            }
+            else
+            {
+                closeEditors = true;
+                pendingEditorCloseRequired = false;
+            }
             desiredPluginFingerprint = fingerprint;
             ++desiredPluginGeneration;
             pendingPluginRequests = std::move(requests);
@@ -2958,6 +3879,8 @@ void StudioAudioEngine::requestPluginRuntime(std::vector<PluginRuntimeRequest> r
         }
     }
 
+    if (closeEditors)
+        closeInProcessEditorsAsync();
     if (startBuilder)
         pluginRuntimeBuilder.addJob([this] { runPluginRuntimeBuilder(); });
 }
@@ -2969,6 +3892,7 @@ void StudioAudioEngine::runPluginRuntimeBuilder()
         std::vector<PluginRuntimeRequest> requests;
         juce::String fingerprint;
         std::uint64_t generation = 0;
+        auto closeEditorsBeforeBuild = false;
         {
             const juce::ScopedLock lock(pluginRequestLock);
             if (!hasPendingPluginRequest)
@@ -2983,13 +3907,60 @@ void StudioAudioEngine::runPluginRuntimeBuilder()
             pendingPluginFingerprint.clear();
             hasPendingPluginRequest = false;
             buildingPluginFingerprint = fingerprint;
+            closeEditorsBeforeBuild = pendingEditorCloseRequired;
+            pendingEditorCloseRequired = false;
+        }
+
+        if (closeEditorsBeforeBuild
+            && !closeInProcessEditorsBeforeRuntimeChange()
+            && shuttingDown.load(std::memory_order_acquire))
+        {
+            return;
+        }
+
+        const auto preserved = preserveLiveAraStates(requests);
+        if (preserved.status
+            != AraPreservationResult::Status::success)
+        {
+            juce::Logger::writeToLog(
+                "plugin.ara.preserve: "
+                + preserved.error);
+            const juce::ScopedLock lock(pluginRequestLock);
+            if (generation == desiredPluginGeneration)
+            {
+                if (preserved.status
+                    == AraPreservationResult::Status::recordingBlocked)
+                {
+                    pendingPluginRequests = std::move(requests);
+                    pendingPluginFingerprint = fingerprint;
+                    pendingPluginGeneration = generation;
+                    hasPendingPluginRequest = true;
+                    buildingPluginFingerprint.clear();
+                    if (exclusiveAudioOperation.load(
+                            std::memory_order_acquire)
+                        == 1)
+                    {
+                        pluginBuilderRunning = false;
+                        return;
+                    }
+                    continue;
+                }
+                desiredPluginFingerprint =
+                    activePluginFingerprint;
+                desiredPluginGeneration = activePluginGeneration;
+                pendingPluginSnapshot.reset();
+                pendingSnapshotGeneration = 0;
+                buildingPluginFingerprint.clear();
+            }
+            continue;
         }
 
         std::vector<PluginRuntimeStatus> statuses;
         statuses.reserve(requests.size());
         PluginRuntimeGraph graph;
-        juce::AudioPluginFormatManager inProcessFormats;
-        PluginFormats::addSupportedFormats(inProcessFormats);
+        auto inProcessFormats =
+            std::make_shared<juce::AudioPluginFormatManager>();
+        PluginFormats::addSupportedFormats(*inProcessFormats);
 
         for (auto& request : requests)
         {
@@ -3049,30 +4020,113 @@ void StudioAudioEngine::runPluginRuntimeBuilder()
                 }
 
                 juce::String creationError;
-                std::unique_ptr<juce::AudioProcessor> processor;
+                std::shared_ptr<juce::AudioProcessor> processor;
                 juce::AudioPluginInstance* externalInstance = nullptr;
+                juce::MemoryBlock processorState = request.state;
+                juce::MemoryBlock araState;
+                if (request.bridgeMode
+                    == PluginBridgeMode::araCompatibility)
+                {
+                    AraDocumentHost::unpackState(
+                        request.state,
+                        processorState,
+                        araState);
+                }
                 if (request.deviceIdentifier.isNotEmpty())
                 {
-                    processor = DeviceRegistry::create(
-                        request.deviceIdentifier);
+                    processor = messageThreadOwnedProcessor(
+                        DeviceRegistry::create(
+                            request.deviceIdentifier));
                 }
                 else
                 {
-                    auto instance =
-                        request.description->pluginFormatName == "CLAP"
-                        ? std::unique_ptr<juce::AudioPluginInstance>(
-                              ClapPluginInstance::create(
-                                  *request.description,
-                                  currentSampleRate(),
-                                  PluginBridgeSharedState::maxBlockSize,
-                                  creationError))
-                        : inProcessFormats.createPluginInstance(
-                              *request.description,
-                              currentSampleRate(),
-                              PluginBridgeSharedState::maxBlockSize,
-                              creationError);
+                    std::unique_ptr<juce::AudioPluginInstance> instance;
+                    if (request.description->pluginFormatName == "CLAP")
+                    {
+                        instance = ClapPluginInstance::create(
+                            *request.description,
+                            currentSampleRate(),
+                            PluginBridgeSharedState::maxBlockSize,
+                            creationError);
+                    }
+                    else
+                    {
+                        struct InstanceCreationState
+                        {
+                            std::mutex mutex;
+                            std::condition_variable condition;
+                            std::unique_ptr<juce::AudioPluginInstance>
+                                instance;
+                            juce::String error;
+                            bool completed = false;
+                        };
+                        const auto creation =
+                            std::make_shared<InstanceCreationState>();
+                        const auto started = juce::MessageManager::callSync(
+                            [formats = inProcessFormats,
+                             creation,
+                             description = *request.description,
+                             runtimeSampleRate = currentSampleRate()]
+                            {
+                                formats->createPluginInstanceAsync(
+                                    description,
+                                    runtimeSampleRate,
+                                    PluginBridgeSharedState::maxBlockSize,
+                                    [creation](
+                                        std::unique_ptr<
+                                            juce::AudioPluginInstance>
+                                            createdInstance,
+                                        const juce::String& error)
+                                    {
+                                        {
+                                            const std::lock_guard lock(
+                                                creation->mutex);
+                                            creation->instance =
+                                                std::move(
+                                                    createdInstance);
+                                            creation->error = error;
+                                            creation->completed = true;
+                                        }
+                                        creation->condition.notify_one();
+                                    });
+                                return true;
+                            });
+                        if (!started.has_value())
+                        {
+                            creationError =
+                                "The message thread is unavailable.";
+                        }
+                        else
+                        {
+                            std::unique_lock lock(creation->mutex);
+                            const auto completed =
+                                creation->condition.wait_for(
+                                    lock,
+                                    std::chrono::seconds(5),
+                                    [this, creation]
+                                    {
+                                        return creation->completed
+                                            || shuttingDown.load(
+                                                std::memory_order_acquire);
+                                    });
+                            if (creation->completed)
+                            {
+                                instance =
+                                    std::move(creation->instance);
+                                creationError = creation->error;
+                            }
+                            else if (!completed)
+                            {
+                                creationError =
+                                    "Timed out while creating the in-process plugin.";
+                            }
+                        }
+                    }
+                    if (shuttingDown.load(std::memory_order_acquire))
+                        return;
                     externalInstance = instance.get();
-                    processor = std::move(instance);
+                    processor = messageThreadOwnedProcessor(
+                        std::move(instance));
                 }
                 if (processor == nullptr)
                 {
@@ -3101,13 +4155,10 @@ void StudioAudioEngine::runPluginRuntimeBuilder()
                         continue;
                     }
                 }
-                if (!request.state.isEmpty())
+                if (!processorState.isEmpty())
                     processor->setStateInformation(
-                        request.state.getData(),
-                        static_cast<int>(request.state.getSize()));
-                processor->prepareToPlay(
-                    currentSampleRate(),
-                    PluginBridgeSharedState::maxBlockSize);
+                        processorState.getData(),
+                        static_cast<int>(processorState.getSize()));
                 std::unique_ptr<AraDocumentHost> araDocument;
                 if (request.bridgeMode == PluginBridgeMode::araCompatibility)
                 {
@@ -3122,16 +4173,20 @@ void StudioAudioEngine::runPluginRuntimeBuilder()
                         continue;
                     }
                     if (const auto result = araDocument->bind(
-                            *externalInstance);
+                            *externalInstance,
+                            request.araDocument,
+                            araState);
                         result.failed())
                     {
-                        processor->releaseResources();
                         status.state = PluginRuntimeStatus::State::failed;
                         status.message = result.getErrorMessage();
                         statuses.push_back(std::move(status));
                         continue;
                     }
                 }
+                processor->prepareToPlay(
+                    currentSampleRate(),
+                    PluginBridgeSharedState::maxBlockSize);
 
                 auto track = std::find_if(
                     graph.tracks.begin(),
@@ -3379,6 +4434,9 @@ juce::String StudioAudioEngine::pluginRuntimeFingerprint(
                     << ":"
                     << request.sidechainChannels
                     << ":";
+        if (request.araDocument != nullptr)
+            fingerprint << request.araDocument->revision;
+        fingerprint << ":";
         if (request.description.has_value())
             fingerprint << request.description->createIdentifierString();
         fingerprint << ";";
@@ -3419,6 +4477,9 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
                                                          int numSamples,
                                                          const juce::AudioIODeviceCallbackContext&)
 {
+    audioCallbacksInFlight.fetch_add(1, std::memory_order_acq_rel);
+    AtomicCounterScope callbackScope { audioCallbacksInFlight };
+
     const auto calibrationBlockActive = calibrationActive.load(
         std::memory_order_acquire);
     const auto calibrationElapsed = calibrationBlockActive
@@ -3502,6 +4563,13 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
     for (int channel = 0; channel < numOutputChannels; ++channel)
         if (outputChannelData[channel] != nullptr)
             juce::FloatVectorOperations::clear(outputChannelData[channel], numSamples);
+
+    if (pluginStateOperationActive.load(std::memory_order_acquire))
+    {
+        outputLeftPeak.store(0.0f, std::memory_order_relaxed);
+        outputRightPeak.store(0.0f, std::memory_order_relaxed);
+        return;
+    }
 
     if (numOutputChannels == 0)
     {

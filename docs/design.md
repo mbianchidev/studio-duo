@@ -231,7 +231,10 @@ standard block bridge without a much larger proxy implementation. Version 1.0
 therefore provides a clearly marked ARA compatibility mode that runs the ARA
 plugin instance in the main process after a sandboxed scan. Studio Duo saves a
 recovery point before activation and warns that the instance has reduced crash
-isolation. A future out-of-process ARA proxy can remove this exception.
+isolation. The compatibility host provides immutable source readers,
+modifications, region sequences, playback regions, tempo/meter content, and
+document archive restore. A future out-of-process ARA proxy can remove the
+isolation exception.
 
 Users may also opt a trusted standard plugin into in-process low-latency mode
 for monitored recording. Sandboxed mode remains the default.
@@ -495,8 +498,8 @@ Completed in the working application:
 - Full routing graph, buses, sends, sidechains, VCAs, folders, control room,
   flexible hardware outputs, solo-safe behavior, and latency compensation
 - Sample-accurate read, touch, latch, write, trim, and preview automation
-- Sandboxed VST3, Audio Unit, and CLAP hosting plus explicit reduced-isolation
-  ARA 2 compatibility mode
+- Sandboxed VST3, Audio Unit, and CLAP hosting with worker-owned native/generic
+  editors, plus a source-aware, archive-backed reduced-isolation ARA 2 mode
 - Plugin state capture, crash/timeout records, explicit reload, safe-disabled
   recovery, and missing-plugin replacement
 - Parametric EQ, compressor, true-peak limiter, algorithmic reverb, noise gate,

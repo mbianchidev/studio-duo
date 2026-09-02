@@ -29,6 +29,10 @@ public:
     void stop();
     juce::Result requestState(juce::MemoryBlock& state,
                               std::chrono::milliseconds timeout);
+    juce::Result showEditor();
+    juce::Result hideEditor();
+    juce::Result focusEditor();
+    juce::Result resizeEditor(int width, int height);
     bool setParameter(int parameterIndex, float normalizedValue);
     void processBlock(
         juce::AudioBuffer<float>& audio,
@@ -56,6 +60,9 @@ private:
     void publishInputBlock(int samples) noexcept;
     void writeOutputBlock(juce::AudioBuffer<float>& audio,
                           std::int64_t expectedSequence) noexcept;
+    juce::Result sendEditorCommand(const juce::String& command,
+                                  int width = 0,
+                                  int height = 0);
 
     juce::File sharedFile;
     std::unique_ptr<juce::MemoryMappedFile> mapping;
@@ -88,6 +95,7 @@ private:
     std::atomic<int> pluginLatencySamples { 0 };
     std::atomic<double> pluginTailSeconds { 0.0 };
     std::vector<PluginParameterDescriptor> parameters;
+    std::mutex commandMutex;
     std::mutex responseMutex;
     std::condition_variable responseCondition;
     juce::String responseMessage;

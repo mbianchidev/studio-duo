@@ -3,6 +3,8 @@
 #include "AraDocumentHost.h"
 #include "ClapPluginInstance.h"
 
+#include <juce_audio_formats/juce_audio_formats.h>
+
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
@@ -40,6 +42,43 @@ bool finiteAudio(const juce::AudioBuffer<float>& audio)
             if (!std::isfinite(audio.getSample(channel, sample)))
                 return false;
     return true;
+}
+
+juce::File createAraValidationSource(juce::String& error)
+{
+    const auto file = juce::File::getSpecialLocation(
+                          juce::File::tempDirectory)
+                          .getNonexistentChildFile(
+                              "StudioDuoAraValidation",
+                              ".wav",
+                              false);
+    juce::WavAudioFormat wav;
+    std::unique_ptr<juce::OutputStream> stream =
+        file.createOutputStream();
+    auto writer = wav.createWriterFor(
+        stream,
+        juce::AudioFormatWriterOptions {}
+            .withSampleRate(48000.0)
+            .withNumChannels(2)
+            .withBitsPerSample(24));
+    if (writer == nullptr)
+    {
+        error = "Could not create the ARA validation source.";
+        return {};
+    }
+    juce::AudioBuffer<float> source(2, 4800);
+    source.clear();
+    source.setSample(0, 0, 0.5f);
+    source.setSample(1, 0, 0.5f);
+    if (!writer->writeFromAudioSampleBuffer(
+            source,
+            0,
+            source.getNumSamples()))
+    {
+        error = "Could not write the ARA validation source.";
+        return {};
+    }
+    return file;
 }
 
 PluginValidationCheck platformValidation(
@@ -248,26 +287,29 @@ PluginValidationReport PluginCompatibilityValidator::validate(
                  : "fail",
              "Public plugin descriptor");
 
-    juce::String error;
-    std::unique_ptr<juce::AudioPluginInstance> instance;
-    if (description.pluginFormatName == "CLAP")
+    const auto createInstance = [&description](
+                                    juce::String& error)
+        -> std::unique_ptr<juce::AudioPluginInstance>
     {
-        instance = ClapPluginInstance::create(
-            description,
-            48000.0,
-            256,
-            error);
-    }
-    else
-    {
+        if (description.pluginFormatName == "CLAP")
+        {
+            return ClapPluginInstance::create(
+                description,
+                48000.0,
+                256,
+                error);
+        }
         juce::AudioPluginFormatManager formats;
         PluginFormats::addSupportedFormats(formats);
-        instance = formats.createPluginInstance(
+        return formats.createPluginInstance(
             description,
             48000.0,
             256,
             error);
-    }
+    };
+
+    juce::String error;
+    auto instance = createInstance(error);
     if (instance == nullptr)
     {
         addCheck(report,
@@ -278,6 +320,102 @@ PluginValidationReport PluginCompatibilityValidator::validate(
         return report;
     }
     addCheck(report, "instantiate", "pass", "Instance created");
+
+    std::unique_ptr<AraDocumentHost> araHost;
+    std::shared_ptr<const AraDocumentDescriptor> araDescriptor;
+    auto araValidationSource = juce::File();
+    if (description.hasARAExtension)
+    {
+        araValidationSource = createAraValidationSource(error);
+        if (araValidationSource.existsAsFile())
+        {
+            auto araProject = Project::createDefault();
+            AudioClip clip;
+            clip.name = "ARA validation";
+            clip.sourceFile = araValidationSource;
+            clip.durationSeconds = 0.1;
+            clip.sourceLengthSeconds = 0.1;
+            clip.sourceRangeEndSeconds = 0.1;
+            araProject.tracks.front().clips.push_back(clip);
+            araDescriptor = AraDocumentHost::describeProject(
+                araProject,
+                araProject.tracks.front().id);
+            araHost = std::make_unique<AraDocumentHost>();
+            const auto result = araHost->bind(
+                *instance,
+                araDescriptor);
+            addCheck(report,
+                     "ara2",
+                     result.wasOk() ? "pass" : "fail",
+                     result.wasOk()
+                         ? "ARA document bound in compatibility mode"
+                         : result.getErrorMessage());
+            addCheck(
+                report,
+                "ara-audio-source",
+                result.wasOk()
+                        && araHost->audioSourceCount() == 1
+                        && araHost->playbackRegionCount() == 1
+                    ? "pass"
+                    : "fail",
+                result.wasOk()
+                    ? "Project audio source and playback region registered"
+                    : "ARA source registration unavailable");
+
+            juce::MemoryBlock archive;
+            const auto archiveResult = result.wasOk()
+                ? araHost->archive(archive)
+                : result;
+            auto restoreResult = juce::Result::fail(
+                "ARA archive was unavailable.");
+            if (archiveResult.wasOk() && !archive.isEmpty())
+            {
+                juce::String restoreError;
+                auto restoredInstance = createInstance(restoreError);
+                if (restoredInstance != nullptr)
+                {
+                    AraDocumentHost restoredHost;
+                    restoreResult = restoredHost.bind(
+                        *restoredInstance,
+                        araDescriptor,
+                        archive);
+                    restoredInstance->releaseResources();
+                }
+                else
+                {
+                    restoreResult = juce::Result::fail(
+                        restoreError);
+                }
+            }
+            addCheck(
+                report,
+                "ara-archive",
+                archiveResult.wasOk()
+                        && !archive.isEmpty()
+                        && restoreResult.wasOk()
+                    ? "pass"
+                    : "fail",
+                archiveResult.failed()
+                    ? archiveResult.getErrorMessage()
+                    : restoreResult.failed()
+                        ? restoreResult.getErrorMessage()
+                        : "ARA document archive restored");
+        }
+        else
+        {
+            addCheck(report, "ara2", "fail", error);
+            addCheck(
+                report,
+                "ara-audio-source",
+                "fail",
+                "ARA validation source unavailable");
+            addCheck(
+                report,
+                "ara-archive",
+                "fail",
+                "ARA validation source unavailable");
+        }
+    }
 
     instance->prepareToPlay(48000.0, 256);
     juce::AudioBuffer<float> audio(
@@ -360,18 +498,7 @@ PluginValidationReport PluginCompatibilityValidator::validate(
                  "No message loop or editor available");
     }
 
-    if (description.hasARAExtension)
-    {
-        AraDocumentHost ara;
-        const auto result = ara.bind(*instance);
-        addCheck(report,
-                 "ara2",
-                 result.wasOk() ? "pass" : "fail",
-                 result.wasOk()
-                     ? "ARA document bound in compatibility mode"
-                     : result.getErrorMessage());
-    }
-    else
+    if (!description.hasARAExtension)
     {
         addCheck(report, "ara2", "skip", "Plugin does not advertise ARA 2");
     }
@@ -379,6 +506,9 @@ PluginValidationReport PluginCompatibilityValidator::validate(
     report.checks.push_back(platformValidation(description));
 
     instance->releaseResources();
+    araHost.reset();
+    if (araValidationSource.existsAsFile())
+        araValidationSource.deleteFile();
     report.status = std::any_of(
         report.checks.cbegin(),
         report.checks.cend(),

@@ -191,6 +191,25 @@ void PluginInsertPanel::mouseDown(const juce::MouseEvent& event)
     {
         juce::PopupMenu menu;
         menu.addItem(
+            "Open plugin editor",
+            !insert.missing && !insert.recoveryDisabled,
+            false,
+            [this, selectedTrackId = track->id, insertId = insert.id]
+            {
+                if (onOpenEditor)
+                    onOpenEditor(selectedTrackId, insertId);
+            });
+        menu.addItem(
+            "Open parameter editor",
+            true,
+            false,
+            [this, selectedTrackId = track->id, insertId = insert.id]
+            {
+                if (onEdit)
+                    onEdit(selectedTrackId, insertId);
+            });
+        menu.addSeparator();
+        menu.addItem(
             "Sandboxed DSP",
             !insert.bundledDevice,
             insert.bridgeMode == PluginBridgeMode::sandboxed,
@@ -273,8 +292,11 @@ void PluginInsertPanel::mouseDoubleClick(const juce::MouseEvent& event)
     const auto index = static_cast<int>((event.position.y - 24.0f) / 54.0f);
     if (index >= 0
         && index < static_cast<int>(track->inserts.size())
-        && onEdit)
-        onEdit(track->id,
-               track->inserts[static_cast<std::size_t>(index)].id);
+        && onOpenEditor)
+    {
+        onOpenEditor(
+            track->id,
+            track->inserts[static_cast<std::size_t>(index)].id);
+    }
 }
 }

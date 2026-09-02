@@ -122,6 +122,8 @@ set(STUDIO_DUO_PLUGIN_SOURCES
     src/plugin_host/PluginCompatibilityDatabase.h
     src/plugin_host/PluginCompatibilityValidator.cpp
     src/plugin_host/PluginCompatibilityValidator.h
+    src/plugin_host/PluginEditorWindow.cpp
+    src/plugin_host/PluginEditorWindow.h
     src/plugin_host/PluginFormats.cpp
     src/plugin_host/PluginFormats.h
     src/plugin_host/PluginStateStore.cpp
@@ -206,6 +208,7 @@ target_compile_definitions(
         JUCE_PLUGINHOST_VST=0
         JUCE_PLUGINHOST_VST3=1
         JUCE_PLUGINHOST_ARA=1
+        JUCE_MODAL_LOOPS_PERMITTED=1
         STUDIO_DUO_VERSION="${PROJECT_VERSION}"
 )
 
@@ -252,6 +255,46 @@ endif()
 
 if(STUDIO_DUO_BUILD_TESTS)
     enable_testing()
+
+    set(STUDIO_DUO_ARA_FIXTURE_FORMATS VST3)
+    if(APPLE)
+        list(APPEND STUDIO_DUO_ARA_FIXTURE_FORMATS AU)
+    endif()
+    juce_add_plugin(
+        StudioDuoAraFixture
+        COMPANY_NAME "Studio Duo"
+        BUNDLE_ID "dev.mbianchi.studioduo.ara-fixture"
+        PLUGIN_MANUFACTURER_CODE StDu
+        PLUGIN_CODE ArFt
+        FORMATS ${STUDIO_DUO_ARA_FIXTURE_FORMATS}
+        PRODUCT_NAME "Studio Duo ARA Fixture"
+        IS_SYNTH FALSE
+        NEEDS_MIDI_INPUT FALSE
+        NEEDS_MIDI_OUTPUT FALSE
+        IS_MIDI_EFFECT FALSE
+        IS_ARA_EFFECT TRUE
+        COPY_PLUGIN_AFTER_BUILD FALSE
+    )
+    juce_generate_juce_header(StudioDuoAraFixture)
+    target_sources(
+        StudioDuoAraFixture
+        PRIVATE
+            tests/fixtures/AraTestPlugin.cpp
+    )
+    target_compile_definitions(
+        StudioDuoAraFixture
+        PRIVATE
+            JUCE_USE_CURL=0
+            JUCE_WEB_BROWSER=0
+        PUBLIC
+            JUCE_VST3_CAN_REPLACE_VST2=0
+    )
+    target_link_libraries(
+        StudioDuoAraFixture
+        PRIVATE
+            juce::juce_audio_utils
+            juce::juce_audio_plugin_client
+    )
 
     add_library(StudioDuoClapFixture MODULE tests/fixtures/ClapTestPlugin.cpp)
     target_link_libraries(StudioDuoClapFixture PRIVATE clap)
@@ -312,6 +355,8 @@ if(STUDIO_DUO_BUILD_TESTS)
             src/plugin_host/PluginCompatibilityDatabase.h
             src/plugin_host/PluginCompatibilityValidator.cpp
             src/plugin_host/PluginCompatibilityValidator.h
+            src/plugin_host/PluginEditorWindow.cpp
+            src/plugin_host/PluginEditorWindow.h
             src/plugin_host/PluginStateStore.cpp
             src/plugin_host/PluginStateStore.h
             src/plugin_host/ScreamForgeValidation.cpp
@@ -336,6 +381,7 @@ if(STUDIO_DUO_BUILD_TESTS)
             JUCE_PLUGINHOST_VST=0
             JUCE_PLUGINHOST_VST3=1
             JUCE_PLUGINHOST_ARA=1
+            JUCE_MODAL_LOOPS_PERMITTED=1
             STUDIO_DUO_TESTING=1
             STUDIO_DUO_VERSION="${PROJECT_VERSION}"
     )
@@ -343,16 +389,22 @@ if(STUDIO_DUO_BUILD_TESTS)
         target_compile_definitions(
             StudioDuoTests
             PRIVATE
+                STUDIO_DUO_ARA_FIXTURE_PATH="$<TARGET_BUNDLE_DIR:StudioDuoAraFixture_VST3>"
                 STUDIO_DUO_CLAP_FIXTURE_PATH="$<TARGET_BUNDLE_DIR:StudioDuoClapFixture>"
         )
     else()
         target_compile_definitions(
             StudioDuoTests
             PRIVATE
+                STUDIO_DUO_ARA_FIXTURE_PATH="$<TARGET_FILE:StudioDuoAraFixture_VST3>"
                 STUDIO_DUO_CLAP_FIXTURE_PATH="$<TARGET_FILE:StudioDuoClapFixture>"
         )
     endif()
-    add_dependencies(StudioDuoTests StudioDuoClapFixture)
+    add_dependencies(
+        StudioDuoTests
+        StudioDuoAraFixture_VST3
+        StudioDuoClapFixture
+    )
     if(APPLE)
         target_compile_definitions(StudioDuoTests PRIVATE JUCE_PLUGINHOST_AU=1)
     else()

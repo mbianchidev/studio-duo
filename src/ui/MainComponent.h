@@ -28,10 +28,20 @@ public:
     MainComponent();
     ~MainComponent() override;
 
+    bool prepareForShutdown();
     void paint(juce::Graphics& graphics) override;
     void resized() override;
 
 private:
+    class ExportInputBlocker final : public juce::Component
+    {
+    public:
+        bool keyPressed(const juce::KeyPress&) override
+        {
+            return true;
+        }
+    };
+
     struct ActiveRecordingTarget
     {
         juce::String parentTrackId;
@@ -162,6 +172,9 @@ private:
     juce::String selectedClipId;
     juce::String replacementInsertId;
     bool dirty = false;
+    bool appShutdownPrepared = false;
+    bool exportInProgress = false;
+    ExportInputBlocker exportInputBlocker;
     bool statusIsError = false;
     bool recordingFinalizationInProgress = false;
     bool playAfterRuntimeTransition = false;

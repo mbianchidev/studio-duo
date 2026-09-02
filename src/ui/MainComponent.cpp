@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <map>
 #include <numeric>
 
 namespace studio
@@ -149,6 +150,9 @@ MainComponent::MainComponent()
     brandLogo = juce::Drawable::createFromImageData(
         studio_brand::studioduoicon_svg,
         static_cast<std::size_t>(studio_brand::studioduoicon_svgSize));
+    exportInputBlocker.setInterceptsMouseClicks(true, true);
+    exportInputBlocker.setWantsKeyboardFocus(true);
+    addChildComponent(exportInputBlocker);
 
     const auto configureButton = [this](juce::Button& button, const juce::String& tooltip)
     {
@@ -823,6 +827,21 @@ MainComponent::MainComponent()
     {
         showPluginParameters(trackId, insertId);
     };
+    insertPanel->onOpenEditor = [this](
+                                    const auto& trackId,
+                                    const auto& insertId)
+    {
+        selectTrack(trackId);
+        if (const auto result = audioEngine.showPluginEditor(insertId);
+            result.failed())
+        {
+            setStatus(result.getErrorMessage(), true);
+        }
+        else
+        {
+            setStatus("Plugin editor opened.");
+        }
+    };
     insertPanel->onReload = [this](const auto& trackId, const auto& insertId)
     {
         if (const auto* track = project.findTrack(trackId))
@@ -871,11 +890,7 @@ MainComponent::MainComponent()
 
 MainComponent::~MainComponent()
 {
-    stopTimer();
-    compatibilityValidator.removeAllJobs(true, 2000);
-    if (audioEngine.isRecording())
-        audioEngine.stopRecording();
-    audioEngine.shutdown();
+    prepareForShutdown();
     const auto recoveryPending = std::any_of(
         project.tracks.cbegin(),
         project.tracks.cend(),
@@ -892,8 +907,23 @@ MainComponent::~MainComponent()
         });
     if (projectPackage.exists() && !recoveryPending)
         ProjectFile::clearReducedIsolationMarker(projectPackage);
+}
+
+bool MainComponent::prepareForShutdown()
+{
+    if (exportInProgress)
+        return false;
+    if (appShutdownPrepared)
+        return true;
+    appShutdownPrepared = true;
+    stopTimer();
+    compatibilityValidator.removeAllJobs(true, 2000);
+    if (audioEngine.isRecording())
+        audioEngine.stopRecording();
+    audioEngine.shutdown();
     timelineViewport.setViewedComponent(nullptr, false);
     setLookAndFeel(nullptr);
+    return true;
 }
 
 void MainComponent::paint(juce::Graphics& graphics)
@@ -1058,6 +1088,9 @@ void MainComponent::resized()
 
     updateTimelineSize();
     timeline.setViewportPosition(timelineViewport.getViewPositionX());
+    exportInputBlocker.setBounds(getLocalBounds());
+    if (exportInputBlocker.isVisible())
+        exportInputBlocker.toFront(false);
 }
 
 void MainComponent::timerCallback()
@@ -1671,6 +1704,16 @@ void MainComponent::importAudioFile(const juce::File& source)
 
 void MainComponent::exportMixTo(const juce::File& destination)
 {
+    if (exportInProgress)
+    {
+        setStatus("A render is already in progress.", true);
+        return;
+    }
+    exportInProgress = true;
+    stopTimer();
+    exportInputBlocker.setVisible(true);
+    exportInputBlocker.toFront(false);
+    exportInputBlocker.grabKeyboardFocus();
     setStatus("Rendering " + destination.getFileName() + "...");
     auto exportProject = project;
     for (auto& track : exportProject.tracks)
@@ -1700,10 +1743,16 @@ void MainComponent::exportMixTo(const juce::File& destination)
         pluginRuntimeRequests());
     if (result.failed())
     {
+        exportInputBlocker.setVisible(false);
+        startTimerHz(30);
+        exportInProgress = false;
         showError("Export failed", result.getErrorMessage());
         return;
     }
 
+    exportInputBlocker.setVisible(false);
+    startTimerHz(30);
+    exportInProgress = false;
     setStatus("Exported 48 kHz / 24-bit WAV to " + destination.getFullPathName());
 }
 
@@ -4850,6 +4899,9 @@ std::vector<StudioAudioEngine::PluginRuntimeRequest>
 MainComponent::pluginRuntimeRequests(const Project& sourceProject) const
 {
     std::vector<StudioAudioEngine::PluginRuntimeRequest> requests;
+    std::map<
+        juce::String,
+        std::shared_ptr<const AraDocumentDescriptor>> araDocuments;
     for (const auto& track : sourceProject.tracks)
     {
         for (const auto& insert : track.inserts)
@@ -4865,6 +4917,17 @@ MainComponent::pluginRuntimeRequests(const Project& sourceProject) const
             request.deviceIdentifier = insert.bundledDevice
                 ? insert.pluginIdentifier
                 : juce::String();
+            if (insert.bridgeMode == PluginBridgeMode::araCompatibility)
+            {
+                auto& document = araDocuments[track.id];
+                if (document == nullptr)
+                {
+                    document = AraDocumentHost::describeProject(
+                        sourceProject,
+                        track.id);
+                }
+                request.araDocument = document;
+            }
             request.sidechainChannels = std::any_of(
                 sourceProject.routingConnections.cbegin(),
                 sourceProject.routingConnections.cend(),

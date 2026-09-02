@@ -176,6 +176,7 @@ juce::Result PluginBridgeClient::requestState(
     juce::MemoryBlock& state,
     std::chrono::milliseconds timeout)
 {
+    const std::lock_guard commandLock(commandMutex);
     state.reset();
     if (!isReady())
         return juce::Result::fail("Plugin bridge is not ready.");
@@ -223,6 +224,29 @@ juce::Result PluginBridgeClient::requestState(
     return juce::Result::ok();
 }
 
+juce::Result PluginBridgeClient::showEditor()
+{
+    return sendEditorCommand("show-editor");
+}
+
+juce::Result PluginBridgeClient::hideEditor()
+{
+    return sendEditorCommand("hide-editor");
+}
+
+juce::Result PluginBridgeClient::focusEditor()
+{
+    return sendEditorCommand("focus-editor");
+}
+
+juce::Result PluginBridgeClient::resizeEditor(int width, int height)
+{
+    if (width <= 0 || height <= 0)
+        return juce::Result::fail(
+            "Plugin editor dimensions must be positive.");
+    return sendEditorCommand("resize-editor", width, height);
+}
+
 bool PluginBridgeClient::setParameter(int parameterIndex,
                                       float normalizedValue)
 {
@@ -234,6 +258,58 @@ bool PluginBridgeClient::setParameter(int parameterIndex,
     stream.writeInt(parameterIndex);
     stream.writeFloat(juce::jlimit(0.0f, 1.0f, normalizedValue));
     return sendMessageToWorker(request);
+}
+
+juce::Result PluginBridgeClient::sendEditorCommand(
+    const juce::String& command,
+    int width,
+    int height)
+{
+    const std::lock_guard commandLock(commandMutex);
+    if (!isReady())
+        return juce::Result::fail("Plugin bridge is not ready.");
+    {
+        const std::lock_guard lock(responseMutex);
+        responseMessage.clear();
+    }
+
+    juce::MemoryBlock request;
+    juce::MemoryOutputStream stream(request, true);
+    stream.writeString(command);
+    if (command == "resize-editor")
+    {
+        stream.writeInt(width);
+        stream.writeInt(height);
+    }
+    if (!sendMessageToWorker(request))
+        return juce::Result::fail(
+            "Could not send the plugin editor command.");
+
+    std::unique_lock lock(responseMutex);
+    if (!responseCondition.wait_for(
+            lock,
+            std::chrono::seconds(5),
+            [this]
+            {
+                return responseMessage.isNotEmpty()
+                    || connectionLost.load(std::memory_order_acquire);
+            }))
+    {
+        return juce::Result::fail(
+            "Plugin editor command timed out.");
+    }
+    if (connectionLost.load(std::memory_order_acquire))
+        return juce::Result::fail(
+            "Plugin bridge disconnected while controlling the editor.");
+    if (responseMessage.startsWith("editor|error|"))
+    {
+        return juce::Result::fail(
+            responseMessage.fromLastOccurrenceOf("|", false, false));
+    }
+    return responseMessage.startsWith("editor|")
+        ? juce::Result::ok()
+        : juce::Result::fail(
+              "Plugin bridge returned an invalid editor response.");
 }
 
 void PluginBridgeClient::processBlock(

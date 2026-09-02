@@ -1,6 +1,10 @@
 #include "PluginBridgeWorker.h"
 
 #include "PluginFormats.h"
+#include "PluginEditorWindow.h"
+#if JUCE_MAC
+#include "platform/ApplicationIcon.h"
+#endif
 
 namespace studio
 {
@@ -18,7 +22,15 @@ PluginBridgeWorker::~PluginBridgeWorker()
 
 bool PluginBridgeWorker::initialise(const juce::String& commandLine)
 {
-    return initialiseFromCommandLine(commandLine, pluginBridgeProcessId, 5000);
+    const auto worker = initialiseFromCommandLine(
+        commandLine,
+        pluginBridgeProcessId,
+        5000);
+#if JUCE_MAC
+    if (worker)
+        setPlatformAccessoryApplication();
+#endif
+    return worker;
 }
 
 void PluginBridgeWorker::handleMessageFromCoordinator(const juce::MemoryBlock& message)
@@ -49,6 +61,31 @@ void PluginBridgeWorker::handleMessageFromCoordinator(const juce::MemoryBlock& m
                 && parameterIndex >= 0
                 && parameterIndex < plugin->getParameters().size())
                 plugin->getParameters()[parameterIndex]->setValue(value);
+        }
+        else if (command == "show-editor")
+        {
+            juce::MessageManager::callAsync(
+                [this] { showEditor(); });
+        }
+        else if (command == "hide-editor")
+        {
+            juce::MessageManager::callAsync(
+                [this] { hideEditor(); });
+        }
+        else if (command == "focus-editor")
+        {
+            juce::MessageManager::callAsync(
+                [this] { focusEditor(); });
+        }
+        else if (command == "resize-editor")
+        {
+            const auto width = stream.readInt();
+            const auto height = stream.readInt();
+            juce::MessageManager::callAsync(
+                [this, width, height]
+                {
+                    resizeEditor(width, height);
+                });
         }
         return;
     }
@@ -259,6 +296,7 @@ void PluginBridgeWorker::startProcessing(std::unique_ptr<juce::AudioPluginInstan
                                          int blockSize,
                                          int requestedSidechainChannels)
 {
+    editorWindow.reset();
     if (newPlugin != nullptr)
     {
         if (requestedSidechainChannels > 0
@@ -348,6 +386,71 @@ void PluginBridgeWorker::startProcessing(std::unique_ptr<juce::AudioPluginInstan
                + "|"
                + parameterMetadata.toBase64Encoding());
     startThread(juce::Thread::Priority::high);
+}
+
+void PluginBridgeWorker::showEditor()
+{
+    if (plugin == nullptr)
+    {
+        sendStatus("editor|error|Plugin runtime is unavailable");
+        return;
+    }
+    if (editorWindow == nullptr)
+    {
+        juce::String error;
+        editorWindow = PluginEditorWindow::create(
+            *plugin,
+            plugin->getName(),
+            error);
+        if (editorWindow == nullptr)
+        {
+            sendStatus("editor|error|" + error);
+            return;
+        }
+    }
+    editorWindow->showEditor();
+    sendStatus(
+        "editor|shown|"
+        + juce::String(editorWindow->getWidth())
+        + "|"
+        + juce::String(editorWindow->getHeight()));
+}
+
+void PluginBridgeWorker::hideEditor()
+{
+    if (editorWindow != nullptr)
+        editorWindow->hideEditor();
+    sendStatus("editor|hidden");
+}
+
+void PluginBridgeWorker::focusEditor()
+{
+    if (editorWindow == nullptr)
+    {
+        showEditor();
+        return;
+    }
+    editorWindow->focusEditor();
+    sendStatus("editor|focused");
+}
+
+void PluginBridgeWorker::resizeEditor(int width, int height)
+{
+    if (editorWindow == nullptr)
+    {
+        sendStatus("editor|error|Plugin editor is not open");
+        return;
+    }
+    if (!editorWindow->resizeEditor(width, height))
+    {
+        sendStatus("editor|error|Plugin editor size is invalid");
+        return;
+    }
+    sendStatus(
+        "editor|resized|"
+        + juce::String(editorWindow->getWidth())
+        + "|"
+        + juce::String(editorWindow->getHeight()));
 }
 
 void PluginBridgeWorker::sendStatus(const juce::String& status)

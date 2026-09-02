@@ -6,6 +6,7 @@
 #include "model/ProjectModel.h"
 #include "plugin_host/PluginBridgeClient.h"
 #include "plugin_host/AraDocumentHost.h"
+#include "plugin_host/PluginEditorWindow.h"
 
 #include <juce_audio_devices/juce_audio_devices.h>
 #include <juce_audio_formats/juce_audio_formats.h>
@@ -13,6 +14,7 @@
 #include <array>
 #include <atomic>
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -63,6 +65,7 @@ public:
         double tailSeconds = 0.0;
         std::uint64_t catalogRevision = 0;
         juce::String deviceIdentifier;
+        std::shared_ptr<const AraDocumentDescriptor> araDocument;
         int sidechainChannels = 0;
         PluginBridgeMode bridgeMode = PluginBridgeMode::sandboxed;
         bool bypassed = false;
@@ -143,6 +146,12 @@ public:
                             int parameterIndex,
                             float normalizedValue,
                             juce::String& error);
+    juce::Result showPluginEditor(const juce::String& insertId);
+    juce::Result hidePluginEditor(const juce::String& insertId);
+    juce::Result focusPluginEditor(const juce::String& insertId);
+    juce::Result resizePluginEditor(const juce::String& insertId,
+                                    int width,
+                                    int height);
     [[nodiscard]] std::uint64_t pluginLateBlockCount() const noexcept;
     [[nodiscard]] bool pluginRuntimeTransitionPending() const;
     juce::Result forcePluginRuntimeReload(
@@ -331,10 +340,17 @@ private:
 
     struct InsertRuntime
     {
+        InsertRuntime() = default;
+        ~InsertRuntime();
+        InsertRuntime(InsertRuntime&&) = default;
+        InsertRuntime& operator=(InsertRuntime&&) = default;
+        InsertRuntime(const InsertRuntime&) = delete;
+        InsertRuntime& operator=(const InsertRuntime&) = delete;
+
         juce::String insertId;
         juce::String name;
-        std::unique_ptr<PluginBridgeClient> bridge;
-        std::unique_ptr<juce::AudioProcessor> inProcess;
+        std::shared_ptr<PluginBridgeClient> bridge;
+        std::shared_ptr<juce::AudioProcessor> inProcess;
         std::unique_ptr<AraDocumentHost> araDocument;
         juce::AudioBuffer<float> inProcessBuffer;
         juce::MidiBuffer midi;
@@ -410,6 +426,15 @@ private:
                                                 double sampleRate,
                                                 const std::vector<PluginRuntimeRequest>& pluginRequests,
                                                 juce::String& error);
+    juce::Result updateProjectInternal(
+        const Project& project,
+        std::vector<PluginRuntimeRequest> pluginRequests,
+        bool renderOwned);
+    juce::Result forcePluginRuntimeReloadInternal(
+        const Project& project,
+        std::vector<PluginRuntimeRequest> pluginRequests,
+        juce::String insertId,
+        bool renderOwned);
     std::optional<juce::AudioBuffer<float>> readAndResample(const juce::File& source,
                                                            double targetSampleRate,
                                                            juce::String& error);
@@ -453,16 +478,39 @@ private:
         const juce::AudioBuffer<float>* sidechain,
         int sidechainSampleOffset = 0) noexcept;
     void requestPluginRuntime(std::vector<PluginRuntimeRequest> requests,
-                              RenderSnapshot snapshot);
+                              RenderSnapshot snapshot,
+                              bool renderOwned);
     void runPluginRuntimeBuilder();
     [[nodiscard]] juce::String pluginRuntimeFingerprint(
         const std::vector<PluginRuntimeRequest>& requests) const;
+    bool waitForPluginRuntimeTransition(int timeoutMilliseconds);
     [[nodiscard]] static std::uint64_t runtimeKey(const juce::String& trackId) noexcept;
     [[nodiscard]] static std::uint64_t renderPair(std::uint64_t generation,
                                                   int snapshotIndex,
                                                   int runtimeIndex) noexcept;
     int chooseWritableRuntime() const noexcept;
     int meterSlotFor(const juce::String& trackId);
+    void closeInProcessEditorsAsync();
+    void closeInProcessEditors();
+    bool closeInProcessEditorsBeforeRuntimeChange();
+    void resumePendingPluginRuntime();
+    bool beginPluginControlOperation() noexcept;
+    std::vector<PluginStateCapture> capturePluginStatesOnRuntimeThread(
+        int timeoutMilliseconds);
+    struct AraPreservationResult
+    {
+        enum class Status
+        {
+            success,
+            recordingBlocked,
+            failed
+        };
+
+        Status status = Status::success;
+        juce::String error;
+    };
+    AraPreservationResult preserveLiveAraStates(
+        std::vector<PluginRuntimeRequest>& requests);
     void waitForRecordingCallbacks() const noexcept;
     std::vector<RecordingResult> finishRecordingSession();
     static void addMetronome(const RenderSnapshot& snapshot,
@@ -508,6 +556,7 @@ private:
     std::array<std::atomic<std::uint64_t>, 3> pluginRuntimeGenerations {};
     std::atomic<int> activePluginRuntime { 0 };
     std::atomic<int> readingPluginRuntime { -1 };
+    std::atomic<int> audioCallbacksInFlight { 0 };
     juce::ThreadPool pluginRuntimeBuilder { 1 };
     mutable juce::CriticalSection pluginRequestLock;
     std::vector<PluginRuntimeRequest> pendingPluginRequests;
@@ -522,10 +571,26 @@ private:
     std::uint64_t activePluginGeneration = 0;
     bool hasPendingPluginRequest = false;
     bool pluginBuilderRunning = false;
+    bool pluginStateCapturePending = false;
+    bool pendingEditorCloseRequired = false;
+    std::atomic<bool> pluginStateOperationActive { false };
+    std::atomic<int> exclusiveAudioOperation { 0 };
+    std::atomic<int> pluginControlOperationsInFlight { 0 };
+    std::atomic<bool> renderInProgress { false };
     std::atomic<bool> shuttingDown { false };
     mutable juce::CriticalSection pluginStatusLock;
     std::vector<PluginRuntimeStatus> pluginStatuses;
     std::atomic<std::uint64_t> pluginLateBlocks { 0 };
+    struct InProcessEditorSession
+    {
+        std::shared_ptr<juce::AudioProcessor> processor;
+        std::unique_ptr<PluginEditorWindow> window;
+    };
+    juce::CriticalSection editorLock;
+    std::map<juce::String, InProcessEditorSession> editorSessions;
+    std::shared_ptr<std::atomic<bool>> editorCallbacksAlive {
+        std::make_shared<std::atomic<bool>>(true)
+    };
     mutable juce::CriticalSection meterLock;
     std::array<MeterSlot, maximumMeterTracks> meterSlots;
     std::array<std::unique_ptr<LockFreeRecorder>, maximumRecordingTracks> recorders;

@@ -198,9 +198,16 @@ always listed. Select an entry and choose **ADD** to attach it to the selected
 track.
 
 Ready external inserts process playback in sandbox workers. Double-click an
-insert to open its generic parameter editor. Right-click to choose sandboxed,
-trusted in-process, or advertised ARA 2 mode. ARA activation requires a saved
-project, writes a recovery point, and warns about reduced crash isolation.
+insert to open its plugin editor in the worker process; plugins without a native
+editor receive an isolated generic editor. Right-click an insert to open the
+generic parameter editor or choose sandboxed, trusted in-process, or advertised
+ARA 2 mode.
+
+ARA activation requires a saved project, writes a recovery point, and warns
+about reduced crash isolation. Studio Duo registers the track's immutable audio
+sources, clip playback regions, tempo map, and meter map with the ARA document.
+Processor and ARA document state are archived together, including unsaved ARA
+edits preserved across clip, tempo, and meter graph rebuilds.
 
 The inspector reports loading, ready, missing, bypassed, recovery-disabled,
 crashed, and late-block states. Click a failed insert to reload that runtime.

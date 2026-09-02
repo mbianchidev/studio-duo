@@ -90,6 +90,74 @@ void pluginFormatTests()
                       == studio::PluginBridgeMode::sandboxed,
            "Plugin isolation mode changes are undoable.");
 
+    const auto araSourceFile = juce::File::getSpecialLocation(
+                                   juce::File::tempDirectory)
+                                   .getNonexistentChildFile(
+                                       "StudioDuoAraSource",
+                                       ".wav",
+                                       false);
+    {
+        juce::WavAudioFormat wav;
+        std::unique_ptr<juce::OutputStream> stream =
+            araSourceFile.createOutputStream();
+        auto writer = wav.createWriterFor(
+            stream,
+            juce::AudioFormatWriterOptions {}
+                .withSampleRate(48000.0)
+                .withNumChannels(1)
+                .withBitsPerSample(24));
+        juce::AudioBuffer<float> source(1, 480);
+        source.clear();
+        expect(writer != nullptr
+                   && writer->writeFromAudioSampleBuffer(
+                       source,
+                       0,
+                       source.getNumSamples()),
+               "ARA descriptor test source can be written.");
+    }
+    project.tempoChanges = {
+        { 0.0, 120.0, false },
+        { 2.0, 90.0, false }
+    };
+    project.meterChanges = {
+        { 0.0, 4, 4 },
+        { 2.0, 3, 4 }
+    };
+    studio::AudioClip araClip;
+    araClip.name = "ARA clip";
+    araClip.sourceFile = araSourceFile;
+    araClip.startSeconds = 1.0;
+    araClip.sourceOffsetSeconds = 0.002;
+    araClip.durationSeconds = 0.005;
+    project.tracks.front().clips.push_back(araClip);
+    const auto descriptor = studio::AraDocumentHost::describeProject(
+        project,
+        project.tracks.front().id);
+    expect(descriptor != nullptr
+               && descriptor->name == project.name
+               && descriptor->audioRegions.size() == 1
+               && descriptor->audioRegions.front().regionId == araClip.id
+               && descriptor->tempoEntries.size() >= 2
+               && descriptor->meterEntries.size() == 2
+               && descriptor->revision.isNotEmpty(),
+           "ARA project descriptors include sources, regions, tempo, and meter.");
+
+    const juce::MemoryBlock processorState("processor", 9);
+    const juce::MemoryBlock araState("ara-document", 12);
+    const auto packedState = studio::AraDocumentHost::packState(
+        processorState,
+        araState);
+    juce::MemoryBlock unpackedProcessor;
+    juce::MemoryBlock unpackedAra;
+    expect(studio::AraDocumentHost::unpackState(
+               packedState,
+               unpackedProcessor,
+               unpackedAra)
+               && unpackedProcessor == processorState
+               && unpackedAra == araState,
+           "ARA and processor state share one content-addressed state blob.");
+    araSourceFile.deleteFile();
+
     studio::StudioAudioEngine engine;
     studio::StudioAudioEngine::PluginRuntimeRequest request;
     request.trackId = project.tracks.front().id;
