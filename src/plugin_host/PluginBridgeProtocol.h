@@ -22,16 +22,20 @@ struct PluginParameterDescriptor
 
 struct PluginBridgeParameterEvent
 {
+    static constexpr std::uint32_t rampFlag = 1u;
+
     std::uint32_t parameterIndex = 0;
     std::uint32_t sampleOffset = 0;
     float value = 0.0f;
     std::uint32_t flags = 0;
+    std::uint32_t rampEndOffset = 0;
+    float rampEndValue = 0.0f;
 };
 
 struct alignas(64) PluginBridgeSharedState
 {
     static constexpr std::uint32_t magicValue = 0x53444252;
-    static constexpr std::uint32_t protocolVersion = 2;
+    static constexpr std::uint32_t protocolVersion = 3;
     static constexpr int maxChannels = 8;
     static constexpr int maxBlockSize = 4096;
     static constexpr int maxParameterEvents = 16384;

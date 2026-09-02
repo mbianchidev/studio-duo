@@ -356,6 +356,11 @@ StudioAudioEngine::InsertRuntime::InsertRuntime()
           static_cast<std::size_t>(
               PluginBridgeSharedState::maxParameterEvents))
 {
+    automationBoundaries.reserve(
+        static_cast<std::size_t>(
+            PluginBridgeSharedState::maxParameterEvents)
+        + static_cast<std::size_t>(
+            PluginBridgeSharedState::maxBlockSize / 32 + 2));
 }
 
 StudioAudioEngine::InsertRuntime::~InsertRuntime()
@@ -489,6 +494,9 @@ void StudioAudioEngine::shutdown()
     for (auto& generation : pluginRuntimeGenerations)
         generation.store(0, std::memory_order_relaxed);
     pluginLateBlocks.store(0, std::memory_order_relaxed);
+    pluginAutomationEventsDropped.store(
+        0,
+        std::memory_order_relaxed);
     exclusiveAudioOperation.store(0, std::memory_order_release);
     {
         const juce::ScopedLock lock(pluginRequestLock);
@@ -1398,6 +1406,13 @@ juce::Result StudioAudioEngine::resizePluginEditor(
 std::uint64_t StudioAudioEngine::pluginLateBlockCount() const noexcept
 {
     return pluginLateBlocks.load(std::memory_order_relaxed);
+}
+
+std::uint64_t
+StudioAudioEngine::pluginAutomationEventDropCount() const noexcept
+{
+    return pluginAutomationEventsDropped.load(
+        std::memory_order_relaxed);
 }
 
 bool StudioAudioEngine::pluginRuntimeTransitionPending() const
@@ -3071,16 +3086,19 @@ void StudioAudioEngine::mixSample(RenderSnapshot& snapshot,
             * vcaGain
             * polarity
             * rightPanGain;
-        routeSample(track,
-                    RouteTap::postFader,
-                    trackLeft,
-                    trackRight);
-
-        if (!track.audible
+        const auto trackMuted = !track.audible
             || automatedSwitch(
-                track.muteAutomation,
-                timelineSample,
-                false))
+                   track.muteAutomation,
+                   timelineSample,
+                   false);
+        if (!trackMuted)
+        {
+            routeSample(track,
+                        RouteTap::postFader,
+                        trackLeft,
+                        trackRight);
+        }
+        if (trackMuted)
             continue;
         if (track.destinationIndex >= 0)
         {
@@ -3274,14 +3292,23 @@ void StudioAudioEngine::processRuntimeChain(std::uint64_t key,
             insert.parameterEventCount = 0;
             if (automation != nullptr)
             {
-                const auto addEvent = [&insert](int parameterIndex,
-                                                int sampleOffset,
-                                                double value)
+                const auto addEvent = [this, &insert](
+                                          int parameterIndex,
+                                          int sampleOffset,
+                                          double value,
+                                          int rampEndOffset,
+                                          double rampEndValue,
+                                          bool ramp)
                 {
                     if (parameterIndex < 0
                         || insert.parameterEventCount
                             >= PluginBridgeSharedState::maxParameterEvents)
+                    {
+                        pluginAutomationEventsDropped.fetch_add(
+                            1,
+                            std::memory_order_relaxed);
                         return;
+                    }
                     auto& event = insert.parameterEvents[
                         static_cast<std::size_t>(
                             insert.parameterEventCount++)];
@@ -3291,7 +3318,14 @@ void StudioAudioEngine::processRuntimeChain(std::uint64_t key,
                         sampleOffset);
                     event.value = static_cast<float>(
                         juce::jlimit(0.0, 1.0, value));
-                    event.flags = 0;
+                    event.flags = ramp
+                        ? PluginBridgeParameterEvent::rampFlag
+                        : 0;
+                    event.rampEndOffset =
+                        static_cast<std::uint32_t>(
+                            std::max(sampleOffset, rampEndOffset));
+                    event.rampEndValue = static_cast<float>(
+                        juce::jlimit(0.0, 1.0, rampEndValue));
                 };
                 for (const auto& lane : *automation)
                 {
@@ -3300,21 +3334,42 @@ void StudioAudioEngine::processRuntimeChain(std::uint64_t key,
                     if (lane.lane.interpolation
                         == AutomationInterpolation::linear)
                     {
-                        for (int sample = 0;
-                             sample < buffer.getNumSamples();
-                             ++sample)
+                        auto segmentStart = 0;
+                        const auto addSegment = [&](int segmentEnd)
                         {
+                            if (segmentEnd <= segmentStart)
+                                return;
                             addEvent(
                                 lane.parameterIndex,
-                                sample,
-                                lane.lane.valueAt(timelineSample + sample));
+                                segmentStart,
+                                lane.lane.valueAt(
+                                    timelineSample + segmentStart),
+                                segmentEnd,
+                                lane.lane.valueAt(
+                                    timelineSample + segmentEnd),
+                                true);
+                            segmentStart = segmentEnd;
+                        };
+                        const auto blockEnd =
+                            timelineSample + buffer.getNumSamples();
+                        for (const auto& point : lane.lane.points)
+                        {
+                            if (point.sample <= timelineSample
+                                || point.sample >= blockEnd)
+                                continue;
+                            addSegment(static_cast<int>(
+                                point.sample - timelineSample));
                         }
+                        addSegment(buffer.getNumSamples());
                     }
                     else
                     {
                         addEvent(lane.parameterIndex,
                                  0,
-                                 lane.lane.valueAt(timelineSample));
+                                 lane.lane.valueAt(timelineSample),
+                                 0,
+                                 lane.lane.valueAt(timelineSample),
+                                 false);
                         const auto blockEnd =
                             timelineSample + buffer.getNumSamples();
                         for (const auto& point : lane.lane.points)
@@ -3326,7 +3381,11 @@ void StudioAudioEngine::processRuntimeChain(std::uint64_t key,
                                 lane.parameterIndex,
                                 static_cast<int>(
                                     point.sample - timelineSample),
-                                point.value + lane.lane.trimOffset);
+                                point.value + lane.lane.trimOffset,
+                                static_cast<int>(
+                                    point.sample - timelineSample),
+                                point.value + lane.lane.trimOffset,
+                                false);
                         }
                     }
                 }
@@ -3364,64 +3423,98 @@ void StudioAudioEngine::processRuntimeChain(std::uint64_t key,
                     continue;
                 }
 
-                auto processedSamples = 0;
-                auto eventIndex = 0;
-                while (eventIndex < insert.parameterEventCount)
+                constexpr auto automationQuantum = 32;
+                auto& boundaries = insert.automationBoundaries;
+                boundaries.clear();
+                boundaries.push_back(0);
+                boundaries.push_back(buffer.getNumSamples());
+                for (int eventIndex = 0;
+                     eventIndex < insert.parameterEventCount;
+                     ++eventIndex)
                 {
-                    const auto offset = std::min(
+                    const auto& event = insert.parameterEvents[
+                        static_cast<std::size_t>(eventIndex)];
+                    const auto start = std::min(
                         buffer.getNumSamples(),
-                        static_cast<int>(
-                            insert.parameterEvents[
-                                static_cast<std::size_t>(eventIndex)]
-                                .sampleOffset));
-                    if (offset > processedSamples)
+                        static_cast<int>(event.sampleOffset));
+                    boundaries.push_back(start);
+                    if ((event.flags
+                         & PluginBridgeParameterEvent::rampFlag)
+                        != 0)
                     {
-                        juce::AudioBuffer<float> segment(
-                            buffer.getArrayOfWritePointers(),
-                            buffer.getNumChannels(),
-                            processedSamples,
-                            offset - processedSamples);
-                        processInProcessRuntime(
-                            insert,
-                            segment,
-                            sidechain,
-                            processedSamples);
-                        processedSamples = offset;
+                        const auto end = std::min(
+                            buffer.getNumSamples(),
+                            static_cast<int>(event.rampEndOffset));
+                        for (auto offset = start + automationQuantum;
+                             offset < end;
+                             offset += automationQuantum)
+                            boundaries.push_back(offset);
+                        boundaries.push_back(end);
                     }
-                    while (eventIndex < insert.parameterEventCount
-                           && static_cast<int>(
-                                  insert.parameterEvents[
-                                      static_cast<std::size_t>(eventIndex)]
-                                      .sampleOffset)
-                               == offset)
+                }
+                std::sort(boundaries.begin(), boundaries.end());
+                boundaries.erase(
+                    std::unique(boundaries.begin(), boundaries.end()),
+                    boundaries.end());
+                for (std::size_t boundary = 0;
+                     boundary + 1 < boundaries.size();
+                     ++boundary)
+                {
+                    const auto offset = boundaries[boundary];
+                    const auto next = boundaries[boundary + 1];
+                    auto& parameters =
+                        insert.inProcess->getParameters();
+                    for (int eventIndex = 0;
+                         eventIndex < insert.parameterEventCount;
+                         ++eventIndex)
                     {
                         const auto& event = insert.parameterEvents[
                             static_cast<std::size_t>(eventIndex)];
-                        auto& parameters =
-                            insert.inProcess->getParameters();
                         if (event.parameterIndex
-                            < static_cast<std::uint32_t>(
-                                  parameters.size()))
+                            >= static_cast<std::uint32_t>(
+                                parameters.size()))
+                        {
+                            continue;
+                        }
+                        const auto start = static_cast<int>(
+                            event.sampleOffset);
+                        const auto end = static_cast<int>(
+                            event.rampEndOffset);
+                        if ((event.flags
+                             & PluginBridgeParameterEvent::rampFlag)
+                            != 0
+                            && offset >= start
+                            && offset <= end
+                            && end > start)
+                        {
+                            const auto progress = static_cast<float>(
+                                offset - start)
+                                / static_cast<float>(end - start);
+                            parameters[static_cast<int>(
+                                event.parameterIndex)]
+                                ->setValue(
+                                    event.value
+                                    + (event.rampEndValue
+                                       - event.value)
+                                        * progress);
+                        }
+                        else if (offset == start)
                         {
                             parameters[static_cast<int>(
                                 event.parameterIndex)]
                                 ->setValue(event.value);
                         }
-                        ++eventIndex;
                     }
-                }
-                if (processedSamples < buffer.getNumSamples())
-                {
                     juce::AudioBuffer<float> segment(
                         buffer.getArrayOfWritePointers(),
                         buffer.getNumChannels(),
-                        processedSamples,
-                        buffer.getNumSamples() - processedSamples);
+                        offset,
+                        next - offset);
                     processInProcessRuntime(
                         insert,
                         segment,
                         sidechain,
-                        processedSamples);
+                        offset);
                 }
             }
             else
@@ -3454,7 +3547,7 @@ void StudioAudioEngine::processInProcessRuntime(
     }
 
     auto& scratch = insert.inProcessBuffer;
-    scratch.clear();
+    scratch.clear(0, buffer.getNumSamples());
     const auto mainChannels = processor.getBusCount(true) > 0
         ? processor.getChannelCountOfBus(true, 0)
         : processor.getTotalNumInputChannels();
@@ -4632,6 +4725,14 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
             auto samplesThisBlock = std::min(
                 numSamples - outputOffset,
                 PluginBridgeSharedState::maxBlockSize);
+            if (renderLooping
+                && position < snapshot.loopEndSample)
+            {
+                samplesThisBlock = static_cast<int>(
+                    std::min<std::int64_t>(
+                        samplesThisBlock,
+                        snapshot.loopEndSample - position));
+            }
 
             if (recordingTransportEnd >= 0)
             {

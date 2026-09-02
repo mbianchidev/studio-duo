@@ -2,6 +2,7 @@
 
 #include "PluginFormats.h"
 #include "PluginEditorWindow.h"
+#include <algorithm>
 #if JUCE_MAC
 #include "platform/ApplicationIcon.h"
 #endif
@@ -12,6 +13,11 @@ PluginBridgeWorker::PluginBridgeWorker()
     : juce::Thread("Studio Duo plugin bridge")
 {
     PluginFormats::addSupportedFormats(formatManager);
+    automationBoundaries.reserve(
+        static_cast<std::size_t>(
+            PluginBridgeSharedState::maxParameterEvents)
+        + static_cast<std::size_t>(
+            PluginBridgeSharedState::maxBlockSize / 32 + 2));
 }
 
 PluginBridgeWorker::~PluginBridgeWorker()
@@ -205,7 +211,7 @@ void PluginBridgeWorker::run()
         const auto samples = std::min(
             static_cast<int>(sharedState->numSamples.load(std::memory_order_relaxed)),
             PluginBridgeSharedState::maxBlockSize);
-        processBuffer.clear();
+        processBuffer.clear(0, samples);
         for (int channel = 0; channel < channels; ++channel)
             processBuffer.copyFrom(channel,
                                    0,
@@ -225,57 +231,88 @@ void PluginBridgeWorker::run()
         midiBuffer.clear();
         const auto eventCount =
             PluginBridgeProtocol::parameterEventCount(*sharedState);
-        const auto applyEvent = [this](const PluginBridgeParameterEvent& event)
+        constexpr auto automationQuantum = 32;
+        automationBoundaries.clear();
+        automationBoundaries.push_back(0);
+        automationBoundaries.push_back(samples);
+        for (int eventIndex = 0; eventIndex < eventCount; ++eventIndex)
         {
-            auto& parameters = plugin->getParameters();
-            if (event.parameterIndex < static_cast<std::uint32_t>(
-                                           parameters.size()))
-            {
-                parameters[static_cast<int>(event.parameterIndex)]
-                    ->setValue(event.value);
-            }
-        };
-        auto processedSamples = 0;
-        auto eventIndex = 0;
-        while (eventIndex < eventCount)
-        {
-            const auto eventOffset = std::min(
+            const auto& event =
+                sharedState->parameterEvents[
+                    static_cast<std::size_t>(eventIndex)];
+            const auto start = std::min(
                 samples,
-                static_cast<int>(
-                    sharedState
-                        ->parameterEvents[static_cast<std::size_t>(eventIndex)]
-                        .sampleOffset));
-            if (eventOffset > processedSamples)
+                static_cast<int>(event.sampleOffset));
+            automationBoundaries.push_back(start);
+            if ((event.flags & PluginBridgeParameterEvent::rampFlag)
+                != 0)
             {
-                juce::AudioBuffer<float> view(
-                    processBuffer.getArrayOfWritePointers(),
-                    processingChannels,
-                    processedSamples,
-                    eventOffset - processedSamples);
-                plugin->processBlock(view, midiBuffer);
-                processedSamples = eventOffset;
-            }
-            while (eventIndex < eventCount
-                   && static_cast<int>(
-                          sharedState
-                              ->parameterEvents[static_cast<std::size_t>(
-                                  eventIndex)]
-                              .sampleOffset)
-                       == eventOffset)
-            {
-                applyEvent(
-                    sharedState->parameterEvents[static_cast<std::size_t>(
-                        eventIndex)]);
-                ++eventIndex;
+                const auto end = std::min(
+                    samples,
+                    static_cast<int>(event.rampEndOffset));
+                for (auto offset = start + automationQuantum;
+                     offset < end;
+                     offset += automationQuantum)
+                    automationBoundaries.push_back(offset);
+                automationBoundaries.push_back(end);
             }
         }
-        if (processedSamples < samples)
+        std::sort(
+            automationBoundaries.begin(),
+            automationBoundaries.end());
+        automationBoundaries.erase(
+            std::unique(
+                automationBoundaries.begin(),
+                automationBoundaries.end()),
+            automationBoundaries.end());
+        for (std::size_t boundary = 0;
+             boundary + 1 < automationBoundaries.size();
+             ++boundary)
         {
+            const auto offset = automationBoundaries[boundary];
+            const auto next = automationBoundaries[boundary + 1];
+            auto& parameters = plugin->getParameters();
+            for (int eventIndex = 0;
+                 eventIndex < eventCount;
+                 ++eventIndex)
+            {
+                const auto& event =
+                    sharedState->parameterEvents[
+                        static_cast<std::size_t>(eventIndex)];
+                if (event.parameterIndex
+                    >= static_cast<std::uint32_t>(parameters.size()))
+                    continue;
+                const auto start = static_cast<int>(
+                    event.sampleOffset);
+                const auto end = static_cast<int>(
+                    event.rampEndOffset);
+                if ((event.flags
+                     & PluginBridgeParameterEvent::rampFlag)
+                    != 0
+                    && offset >= start
+                    && offset <= end
+                    && end > start)
+                {
+                    const auto progress = static_cast<float>(
+                        offset - start)
+                        / static_cast<float>(end - start);
+                    parameters[static_cast<int>(event.parameterIndex)]
+                        ->setValue(
+                            event.value
+                            + (event.rampEndValue - event.value)
+                                * progress);
+                }
+                else if (offset == start)
+                {
+                    parameters[static_cast<int>(event.parameterIndex)]
+                        ->setValue(event.value);
+                }
+            }
             juce::AudioBuffer<float> view(
                 processBuffer.getArrayOfWritePointers(),
                 processingChannels,
-                processedSamples,
-                samples - processedSamples);
+                offset,
+                next - offset);
             plugin->processBlock(view, midiBuffer);
         }
         for (int channel = 0; channel < PluginBridgeSharedState::maxChannels; ++channel)

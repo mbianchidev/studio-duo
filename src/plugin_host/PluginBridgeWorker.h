@@ -6,6 +6,7 @@
 #include <juce_events/juce_events.h>
 
 #include <mutex>
+#include <vector>
 
 namespace studio
 {
@@ -42,6 +43,7 @@ private:
     std::unique_ptr<PluginEditorWindow> editorWindow;
     juce::AudioBuffer<float> processBuffer;
     juce::MidiBuffer midiBuffer;
+    std::vector<int> automationBoundaries;
     std::mutex pluginMutex;
     int mainInputChannels = 2;
     int sidechainInputChannels = 0;

@@ -31,6 +31,9 @@ struct CompiledAutomationEvent
 {
     int sampleOffset = 0;
     double value = 0.0;
+    int rampEndOffset = 0;
+    double rampEndValue = 0.0;
+    bool ramp = false;
 };
 
 class AutomationScheduler

@@ -153,6 +153,7 @@ public:
                                     int width,
                                     int height);
     [[nodiscard]] std::uint64_t pluginLateBlockCount() const noexcept;
+    [[nodiscard]] std::uint64_t pluginAutomationEventDropCount() const noexcept;
     [[nodiscard]] bool pluginRuntimeTransitionPending() const;
     juce::Result forcePluginRuntimeReload(
         const Project& project,
@@ -355,6 +356,7 @@ private:
         juce::AudioBuffer<float> inProcessBuffer;
         juce::MidiBuffer midi;
         std::vector<PluginBridgeParameterEvent> parameterEvents;
+        std::vector<int> automationBoundaries;
         int parameterEventCount = 0;
         RenderSource::DelayCompensator failureDelay;
     };
@@ -580,6 +582,7 @@ private:
     mutable juce::CriticalSection pluginStatusLock;
     std::vector<PluginRuntimeStatus> pluginStatuses;
     std::atomic<std::uint64_t> pluginLateBlocks { 0 };
+    std::atomic<std::uint64_t> pluginAutomationEventsDropped { 0 };
     struct InProcessEditorSession
     {
         std::shared_ptr<juce::AudioProcessor> processor;

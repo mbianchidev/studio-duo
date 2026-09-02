@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace studio
 {
@@ -74,33 +75,56 @@ std::optional<CompiledAutomationLane> AutomationScheduler::compile(
     compiled.target = lane.target;
     compiled.interpolation = lane.interpolation;
     compiled.trimOffset = lane.trimOffset;
+    struct TimedPoint
+    {
+        double seconds = 0.0;
+        double value = 0.0;
+    };
+    std::vector<TimedPoint> timedPoints;
+    timedPoints.reserve(lane.points.size());
     for (const auto& point : lane.points)
     {
         const auto seconds = lane.timebase == AutomationTimebase::beats
             ? project.secondsAtBeat(point.position)
             : point.position;
-        compiled.points.push_back({
-            static_cast<std::int64_t>(
-                std::llround(seconds * sampleRate)),
-            point.value
-        });
+        timedPoints.push_back({ seconds, point.value });
     }
     std::stable_sort(
-        compiled.points.begin(),
-        compiled.points.end(),
+        timedPoints.begin(),
+        timedPoints.end(),
         [](const auto& left, const auto& right)
         {
-            return left.sample < right.sample;
+            return left.seconds < right.seconds;
         });
-    std::vector<CompiledAutomationPoint> unique;
-    for (const auto& point : compiled.points)
+    auto previousSeconds = -1.0;
+    for (const auto& point : timedPoints)
     {
-        if (!unique.empty() && unique.back().sample == point.sample)
-            unique.back() = point;
+        auto sample = static_cast<std::int64_t>(
+            std::llround(point.seconds * sampleRate));
+        const auto samePosition = std::abs(
+            point.seconds - previousSeconds)
+            <= std::numeric_limits<double>::epsilon()
+                * std::max({
+                    1.0,
+                    std::abs(point.seconds),
+                    std::abs(previousSeconds)
+                });
+        if (!compiled.points.empty()
+            && !samePosition
+            && sample <= compiled.points.back().sample)
+        {
+            sample = compiled.points.back().sample + 1;
+        }
+        if (!compiled.points.empty() && samePosition)
+        {
+            compiled.points.back().value = point.value;
+        }
         else
-            unique.push_back(point);
+        {
+            compiled.points.push_back({ sample, point.value });
+        }
+        previousSeconds = point.seconds;
     }
-    compiled.points = std::move(unique);
     return compiled;
 }
 
@@ -114,12 +138,30 @@ std::vector<CompiledAutomationEvent> AutomationScheduler::eventsForBlock(
         return events;
     if (lane.interpolation == AutomationInterpolation::linear)
     {
-        events.reserve(static_cast<std::size_t>(blockSamples));
-        for (int sample = 0; sample < blockSamples; ++sample)
+        auto segmentStart = 0;
+        const auto appendSegment = [&](int segmentEnd)
+        {
+            if (segmentEnd <= segmentStart)
+                return;
             events.push_back({
-                sample,
-                lane.valueAt(blockStartSample + sample)
+                segmentStart,
+                lane.valueAt(blockStartSample + segmentStart),
+                segmentEnd,
+                lane.valueAt(blockStartSample + segmentEnd),
+                true
             });
+            segmentStart = segmentEnd;
+        };
+        const auto blockEnd = blockStartSample + blockSamples;
+        for (const auto& point : lane.points)
+        {
+            if (point.sample <= blockStartSample
+                || point.sample >= blockEnd)
+                continue;
+            appendSegment(static_cast<int>(
+                point.sample - blockStartSample));
+        }
+        appendSegment(blockSamples);
         return events;
     }
 

@@ -102,7 +102,7 @@ AutomationLane AutomationRecorder::applyGesture(
     if (mode == AutomationMode::touch)
     {
         addPoint(result,
-                 gesture.endPosition + 0.000000001,
+                 gesture.endPosition + 0.000001,
                  returnValue);
     }
     normalize(result);
