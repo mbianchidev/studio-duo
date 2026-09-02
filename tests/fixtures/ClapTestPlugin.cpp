@@ -410,36 +410,89 @@ static int64_t state_read(const clap_istream_t* stream,
     return stream->read(stream, data, size);
 }
 
+enum {
+    state_magic = 0x53445453,
+    state_version = 1,
+    legacy_parameter_count = 301,
+    current_parameter_count = 302
+};
+
+typedef struct test_state_header {
+    uint32_t magic;
+    uint32_t version;
+    uint32_t parameter_count;
+} test_state_header_t;
+
 static bool state_save(const clap_plugin_t* plugin,
                        const clap_ostream_t* stream)
 {
     expect_main_thread(plugin);
     if (self(plugin)->parameters[295] > 0.9)
         return false;
-    const auto bytes = self(plugin)->parameters[296] > 0.9
+    const test_state_header_t header = {
+        .magic = state_magic,
+        .version = state_version,
+        .parameter_count = current_parameter_count
+    };
+    if (state_write(stream, &header, sizeof(header))
+        != (int64_t) sizeof(header))
+        return false;
+    const uint64_t parameter_bytes =
+        self(plugin)->parameters[296] > 0.9
         ? sizeof(self(plugin)->parameters) / 2
         : sizeof(self(plugin)->parameters);
     return state_write(
                stream,
                self(plugin)->parameters,
-               bytes)
-        == (int64_t) bytes;
+               parameter_bytes)
+        == (int64_t) parameter_bytes;
 }
 
 static bool state_load(const clap_plugin_t* plugin,
                        const clap_istream_t* stream)
 {
     expect_main_thread(plugin);
-    double parameters[301];
-    if (state_read(stream, parameters, sizeof(parameters))
-        != (int64_t) sizeof(parameters))
+    test_state_header_t header;
+    if (state_read(stream, &header, sizeof(header))
+        != (int64_t) sizeof(header))
         return false;
+    double parameters[current_parameter_count] = { 0 };
+    uint32_t parameter_count = 0;
+    if (header.magic == state_magic)
+    {
+        if (header.version != state_version
+            || header.parameter_count != current_parameter_count
+            || state_read(
+                   stream,
+                   parameters,
+                   sizeof(parameters))
+                != (int64_t) sizeof(parameters))
+            return false;
+        parameter_count = current_parameter_count;
+    }
+    else
+    {
+        memcpy(parameters, &header, sizeof(header));
+        const uint64_t remaining =
+            sizeof(double) * legacy_parameter_count
+            - sizeof(header);
+        if (state_read(
+                stream,
+                ((uint8_t*) parameters) + sizeof(header),
+                remaining)
+            != (int64_t) remaining)
+            return false;
+        parameter_count = legacy_parameter_count;
+    }
     if (parameters[294] > 0.9)
     {
         self(plugin)->parameters[0] = 0.125;
         return false;
     }
-    memcpy(self(plugin)->parameters, parameters, sizeof(parameters));
+    memcpy(
+        self(plugin)->parameters,
+        parameters,
+        sizeof(double) * parameter_count);
     return true;
 }
 

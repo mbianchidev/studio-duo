@@ -27,6 +27,44 @@ void pluginFormatTests()
 #endif
     expect(names.contains("CLAP"),
            "Supported plugin formats include CLAP.");
+    const auto increasedDelay =
+        studio::StudioAudioEngine::delayTransitionForTesting(4, 8);
+    const auto decreasedDelay =
+        studio::StudioAudioEngine::delayTransitionForTesting(8, 2);
+    const auto grownDelay =
+        studio::StudioAudioEngine::delayTransitionForTesting(
+            4,
+            200,
+            216);
+    expect(increasedDelay.size() == 16
+               && std::abs(increasedDelay.front() - 0.60f)
+                      < 0.0001f
+               && std::abs(increasedDelay.back() - 0.71f)
+                      < 0.0001f,
+           "Increasing delay crossfades from the old tap to the new tap without repeating abruptly.");
+    expect(decreasedDelay.size() == 16
+               && std::abs(decreasedDelay.front() - 0.56f)
+                      < 0.0001f
+               && std::abs(decreasedDelay.back() - 0.77f)
+                      < 0.0001f,
+           "Decreasing delay crossfades from the old tap to the new tap without skipping queued audio.");
+    auto maximumGrowthStep = 0.0f;
+    for (std::size_t index = 1;
+         index < grownDelay.size();
+         ++index)
+    {
+        maximumGrowthStep = std::max(
+            maximumGrowthStep,
+            std::abs(
+                grownDelay[index] - grownDelay[index - 1]));
+    }
+    expect(grownDelay.size() == 216
+               && std::abs(grownDelay.front() - 0.60f)
+                      < 0.0001f
+               && std::abs(grownDelay.back() - 0.79f)
+                      < 0.0001f
+               && maximumGrowthStep < 0.2f,
+           "Growing the delay ring keeps the old tap through warmup and crossfades without an abrupt gap.");
 
     studio::ClapPluginFormat clapFormat;
     juce::OwnedArray<juce::PluginDescription> descriptions;
@@ -263,6 +301,53 @@ void pluginFormatTests()
            "CLAP state validation uses a disposable instance and cannot mutate live DSP state on failure.");
     instance->getParameters()[294]->setValueNotifyingHost(0.0f);
     instance->processBlock(audio, midi);
+    instance->getParameters()[291]->setValueNotifyingHost(1.0f);
+    instance->processBlock(audio, midi);
+    juce::MessageManager::getInstance()->runDispatchLoopUntil(100);
+    juce::MemoryBlock currentFixtureState;
+    if (instance->getParameters().size() > 301)
+    {
+        instance->getParameters()[301]->setValueNotifyingHost(0.8f);
+        instance->processBlock(audio, midi);
+    }
+    expect(instance->getParameters().size() == 302
+               && validatedState->saveValidatedState(
+                      currentFixtureState)
+                      .wasOk(),
+           "Versioned CLAP fixture state saves all 302 parameters.");
+    if (instance->getParameters().size() > 301)
+    {
+        instance->getParameters()[301]->setValueNotifyingHost(0.1f);
+        instance->processBlock(audio, midi);
+    }
+    expect(validatedState->restoreValidatedState(
+               currentFixtureState.getData(),
+               static_cast<int>(currentFixtureState.getSize()))
+               .wasOk()
+               && instance->getParameters().size() > 301
+               && std::abs(
+                      instance->getParameters()[301]->getValue()
+                      - 0.8f)
+                      < 0.0001f,
+           "Versioned CLAP fixture state restores parameter 302.");
+    std::array<double, 301> legacyFixtureValues {};
+    legacyFixtureValues[0] = 0.33;
+    juce::MemoryBlock legacyFixtureState(
+        legacyFixtureValues.data(),
+        sizeof(legacyFixtureValues));
+    expect(validatedState->restoreValidatedState(
+               legacyFixtureState.getData(),
+               static_cast<int>(legacyFixtureState.getSize()))
+               .wasOk()
+               && std::abs(
+                      instance->getParameters()[0]->getValue()
+                      - 0.33f)
+                      < 0.0001f
+               && std::abs(
+                      instance->getParameters()[301]->getValue()
+                      - 0.8f)
+                      < 0.0001f,
+           "CLAP fixture state accepts legacy 301-parameter blobs without losing parameter 302.");
     const std::uint8_t malformedState = 0;
     expect(validatedState != nullptr
                && validatedState->restoreValidatedState(

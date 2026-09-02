@@ -725,6 +725,60 @@ void StudioAudioEngine::processActiveBlockForTesting(int samples)
 {
     juce::ignoreUnused(renderActiveBlockForTesting(samples));
 }
+
+std::vector<float> StudioAudioEngine::delayTransitionForTesting(
+    int previousDelay,
+    int nextDelay,
+    int outputSamples)
+{
+    constexpr auto quantum = 16;
+    RenderSource::DelayCompensator delay;
+    configureDelayCompensator(
+        delay,
+        previousDelay,
+        quantum);
+    juce::AudioBuffer<float> history(2, 64);
+    for (int sample = 0; sample < history.getNumSamples(); ++sample)
+    {
+        const auto value = static_cast<float>(sample) / 100.0f;
+        history.setSample(0, sample, value);
+        history.setSample(1, sample, value);
+    }
+    applyDelayCompensation(
+        history,
+        history.getNumSamples(),
+        delay);
+
+    configureDelayCompensator(
+        delay,
+        nextDelay,
+        quantum);
+    juce::AudioBuffer<float> transition(
+        2,
+        std::max(1, outputSamples));
+    for (int sample = 0;
+         sample < transition.getNumSamples();
+         ++sample)
+    {
+        const auto value =
+            static_cast<float>(64 + sample) / 100.0f;
+        transition.setSample(0, sample, value);
+        transition.setSample(1, sample, value);
+    }
+    applyDelayCompensation(
+        transition,
+        transition.getNumSamples(),
+        delay);
+
+    std::vector<float> output(
+        static_cast<std::size_t>(
+            transition.getNumSamples()));
+    std::copy_n(
+        transition.getReadPointer(0),
+        transition.getNumSamples(),
+        output.begin());
+    return output;
+}
 #endif
 
 std::vector<StudioAudioEngine::RecordingProgress> StudioAudioEngine::recordingProgress() const
@@ -2924,6 +2978,76 @@ void StudioAudioEngine::startPluginSnapshotRefreshLocked()
         });
 }
 
+void StudioAudioEngine::configureDelayCompensator(
+    RenderSource::DelayCompensator& delay,
+    int samples,
+    int processingQuantum)
+{
+    const auto previousDelay = delay.delaySamples;
+    const auto nextDelay = std::clamp(
+        samples,
+        0,
+        std::numeric_limits<int>::max() - 1);
+    const auto requiredCapacity = nextDelay + 1;
+    if (delay.state != nullptr
+        && previousDelay == nextDelay)
+        return;
+
+    auto targetState = delay.state;
+    if (targetState == nullptr
+        || targetState->buffer.getNumSamples()
+            < requiredCapacity)
+    {
+        targetState = std::make_shared<
+            RenderSource::DelayCompensator::State>();
+        const auto headroom = std::max<std::int64_t>(
+            static_cast<std::int64_t>(
+                processingQuantum)
+                * 4,
+            nextDelay);
+        const auto allocatedCapacity =
+            static_cast<int>(std::min<std::int64_t>(
+                std::numeric_limits<int>::max(),
+                static_cast<std::int64_t>(
+                    requiredCapacity)
+                    + headroom));
+        targetState->buffer.setSize(
+            2,
+            std::max(1, allocatedCapacity),
+            false,
+            true,
+            false);
+        targetState->buffer.clear();
+    }
+
+    std::optional<
+        RenderSource::DelayCompensator::Transition>
+        transition;
+    if (delay.state != nullptr
+        && delay.state->buffer.getNumSamples() > 0)
+    {
+        transition.emplace();
+        transition->sourceState = delay.state;
+        transition->sourceDelaySamples = previousDelay;
+        const auto availableHistory =
+            targetState == delay.state
+            ? std::min<std::int64_t>(
+                  targetState->buffer.getNumSamples() - 1,
+                  targetState->samplesWritten.load(
+                      std::memory_order_acquire))
+            : 0;
+        transition->warmupSamples = std::max(
+            0,
+            nextDelay - static_cast<int>(availableHistory));
+        transition->fadeSamples = std::max(
+            1,
+            processingQuantum);
+    }
+    delay.delaySamples = nextDelay;
+    delay.state = std::move(targetState);
+    delay.transition = std::move(transition);
+}
+
 void StudioAudioEngine::configureRuntimeTiming(
     RenderSnapshot& snapshot,
     const std::vector<PluginRuntimeRequest>& pluginRequests) const
@@ -2965,53 +3089,6 @@ void StudioAudioEngine::configureRuntimeTiming(
             return total + std::max(0.0, request.tailSeconds);
         });
     };
-    const auto configureDelay = [&snapshot](auto& delay, int samples)
-    {
-        const auto previousDelay = delay.delaySamples;
-        const auto nextDelay = std::clamp(
-            samples,
-            0,
-            std::numeric_limits<int>::max() - 1);
-        const auto requiredCapacity = nextDelay + 1;
-        delay.delaySamples = nextDelay;
-        if (delay.state != nullptr
-            && delay.state->buffer.getNumSamples()
-                >= requiredCapacity)
-            return;
-
-        auto replacement = std::make_shared<
-            RenderSource::DelayCompensator::State>();
-        const auto headroom = std::max<std::int64_t>(
-            static_cast<std::int64_t>(
-                snapshot.processingQuantum)
-                * 4,
-            nextDelay);
-        const auto allocatedCapacity =
-            static_cast<int>(std::min<std::int64_t>(
-                std::numeric_limits<int>::max(),
-                static_cast<std::int64_t>(
-                    requiredCapacity)
-                    + headroom));
-        replacement->buffer.setSize(
-            2,
-            std::max(1, allocatedCapacity),
-            false,
-            true,
-            false);
-        replacement->buffer.clear();
-        if (delay.state != nullptr
-            && delay.state->buffer.getNumSamples() > 0)
-        {
-            replacement->fallback = delay.state;
-            replacement->fallbackDelaySamples =
-                previousDelay;
-            replacement->transitionSamples =
-                nextDelay
-                + std::max(1, snapshot.processingQuantum);
-        }
-        delay.state = std::move(replacement);
-    };
-
     std::vector<int> inputLatencies(snapshot.tracks.size(), 0);
     std::vector<double> inputTails(snapshot.tracks.size(), 0.0);
     std::vector<double> outputTails(snapshot.tracks.size(), 0.0);
@@ -3038,9 +3115,10 @@ void StudioAudioEngine::configureRuntimeTiming(
         const auto alignedInputLatency = std::max(maximumSourceLatency,
                                                  inputLatencies[index]);
         for (auto& source : track.sources)
-            configureDelay(
+            configureDelayCompensator(
                 source.compensation,
-                alignedInputLatency - source.runtimeLatencySamples);
+                alignedInputLatency - source.runtimeLatencySamples,
+                snapshot.processingQuantum);
 
         track.runtimeLatencySamples = alignedInputLatency
             + latencyForKey(track.runtimeKey);
@@ -3075,26 +3153,29 @@ void StudioAudioEngine::configureRuntimeTiming(
         const auto destinationLatency = track.destinationIndex >= 0
             ? inputLatencies[static_cast<std::size_t>(track.destinationIndex)]
             : masterInputLatency;
-        configureDelay(
+        configureDelayCompensator(
             track.compensation,
-            destinationLatency - track.runtimeLatencySamples);
+            destinationLatency - track.runtimeLatencySamples,
+            snapshot.processingQuantum);
         for (auto& route : track.routes)
         {
             const auto routeDestinationLatency = route.destinationIndex >= 0
                 ? inputLatencies[static_cast<std::size_t>(
                       route.destinationIndex)]
                 : track.runtimeLatencySamples;
-            configureDelay(
+            configureDelayCompensator(
                 route.compensation,
-                routeDestinationLatency - track.runtimeLatencySamples);
+                routeDestinationLatency - track.runtimeLatencySamples,
+                snapshot.processingQuantum);
             route.processingBuffer.clear();
         }
     }
 
     const auto masterLatency = latencyForKey(snapshot.masterRuntimeKey);
-    configureDelay(
+    configureDelayCompensator(
         snapshot.clickCompensation,
-        masterInputLatency + masterLatency);
+        masterInputLatency + masterLatency,
+        snapshot.processingQuantum);
     snapshot.lengthSamples = snapshot.contentLengthSamples
         + masterInputLatency
         + masterLatency
@@ -3629,8 +3710,8 @@ void StudioAudioEngine::applyDelayCompensation(
             buffer.getSample(0, sample),
             buffer.getSample(1, sample)
         };
-        const auto processState = [&input](
-            RenderSource::DelayCompensator::State& state,
+        const auto readState = [&input](
+            const RenderSource::DelayCompensator::State& state,
             int delaySamples,
             std::array<float, 2>& output)
         {
@@ -3647,6 +3728,14 @@ void StudioAudioEngine::applyDelayCompensation(
                           channel,
                           readPosition)
                     : input[static_cast<std::size_t>(channel)];
+            }
+        };
+        const auto writeState = [&input](
+            RenderSource::DelayCompensator::State& state)
+        {
+            const auto capacity = state.buffer.getNumSamples();
+            for (int channel = 0; channel < 2; ++channel)
+            {
                 state.buffer.setSample(
                     channel,
                     state.writePosition,
@@ -3654,42 +3743,56 @@ void StudioAudioEngine::applyDelayCompensation(
             }
             state.writePosition =
                 (state.writePosition + 1) % capacity;
+            state.samplesWritten.fetch_add(
+                1,
+                std::memory_order_release);
         };
 
         std::array<float, 2> output {};
-        processState(*delay.state, delay.delaySamples, output);
-        auto& state = *delay.state;
-        if (state.fallback != nullptr
-            && state.transitionPosition
-                < state.transitionSamples)
+        readState(*delay.state, delay.delaySamples, output);
+        auto* transition = delay.transition.has_value()
+            ? &*delay.transition
+            : nullptr;
+        const auto transitionPosition = transition != nullptr
+            ? transition->position
+            : 0;
+        const auto transitionSamples = transition != nullptr
+            ? transition->warmupSamples
+                + transition->fadeSamples
+            : 0;
+        if (transition != nullptr
+            && transition->sourceState != nullptr
+            && transitionPosition < transitionSamples)
         {
-            std::array<float, 2> fallbackOutput {};
-            processState(
-                *state.fallback,
-                state.fallbackDelaySamples,
-                fallbackOutput);
-            const auto warmup = delay.delaySamples;
-            const auto fadeSamples = std::max(
-                1,
-                state.transitionSamples - warmup);
-            const auto mix = state.transitionPosition < warmup
+            std::array<float, 2> sourceOutput {};
+            readState(
+                *transition->sourceState,
+                transition->sourceDelaySamples,
+                sourceOutput);
+            const auto mix =
+                transitionPosition < transition->warmupSamples
                 ? 0.0f
-                : juce::jlimit(
-                      0.0f,
-                      1.0f,
-                      static_cast<float>(
-                          state.transitionPosition - warmup)
-                          / static_cast<float>(fadeSamples));
+                : transition->fadeSamples <= 1
+                ? 1.0f
+                : static_cast<float>(
+                      transitionPosition
+                      - transition->warmupSamples)
+                    / static_cast<float>(
+                        transition->fadeSamples - 1);
             for (int channel = 0; channel < 2; ++channel)
             {
                 const auto index =
                     static_cast<std::size_t>(channel);
-                output[index] = fallbackOutput[index]
-                    + (output[index] - fallbackOutput[index])
+                output[index] = sourceOutput[index]
+                    + (output[index] - sourceOutput[index])
                         * mix;
             }
-            ++state.transitionPosition;
+            if (transition->sourceState.get()
+                != delay.state.get())
+                writeState(*transition->sourceState);
+            ++transition->position;
         }
+        writeState(*delay.state);
         for (int channel = 0; channel < 2; ++channel)
             buffer.setSample(
                 channel,
