@@ -716,6 +716,86 @@ float UtilityDeviceProcessor::parameter(ParameterSlot slot) const noexcept
     return value != nullptr ? value->get() : 0.0f;
 }
 
+bool UtilityDeviceProcessor::supportsSampleAccurateAutomation(
+    std::span<const PluginBridgeParameterEvent> events) const noexcept
+{
+    return type == UtilityDeviceType::gain
+        && std::all_of(
+            events.begin(),
+            events.end(),
+            [](const auto& event)
+            {
+                return event.parameterIndex == 0;
+            });
+}
+
+void UtilityDeviceProcessor::processBlockWithAutomation(
+    juce::AudioBuffer<float>& audio,
+    juce::MidiBuffer& midi,
+    std::span<const PluginBridgeParameterEvent> events) noexcept
+{
+    juce::ignoreUnused(midi);
+    if (!supportsSampleAccurateAutomation(events))
+    {
+        processBlock(audio, midi);
+        return;
+    }
+
+    auto* gainParameter = static_cast<juce::AudioProcessorParameter*>(
+        realtimeParameters[static_cast<std::size_t>(
+            ParameterSlot::gain)]);
+    auto normalized = gainParameter->getValue();
+    for (int sample = 0; sample < audio.getNumSamples(); ++sample)
+    {
+        for (const auto& event : events)
+        {
+            const auto start = static_cast<int>(event.sampleOffset);
+            if (sample < start)
+                break;
+            if ((event.flags & PluginBridgeParameterEvent::rampFlag)
+                    != 0
+                && event.rampEndOffset > event.sampleOffset)
+            {
+                const auto end = static_cast<int>(
+                    event.rampEndOffset);
+                if (sample <= end)
+                {
+                    const auto progress =
+                        static_cast<float>(sample - start)
+                        / static_cast<float>(end - start);
+                    normalized = event.value
+                        + (event.rampEndValue - event.value)
+                            * progress;
+                }
+                else
+                {
+                    normalized = event.rampEndValue;
+                }
+            }
+            else
+            {
+                normalized = event.value;
+            }
+        }
+        const auto decibels = realtimeParameters[
+            static_cast<std::size_t>(ParameterSlot::gain)]
+                                  ->convertFrom0to1(
+                                      juce::jlimit(
+                                          0.0f,
+                                          1.0f,
+                                          normalized));
+        const auto gain = juce::Decibels::decibelsToGain(
+            decibels);
+        for (int channel = 0;
+             channel < audio.getNumChannels();
+             ++channel)
+        {
+            audio.applyGain(channel, sample, 1, gain);
+        }
+    }
+    gainParameter->setValue(normalized);
+}
+
 double UtilityDeviceProcessor::getTailLengthSeconds() const
 {
     return type == UtilityDeviceType::reverb ? 4.0 : 0.0;

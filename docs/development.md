@@ -132,6 +132,10 @@ state extensions. Module/plugin lifecycle and state calls run on the message
 thread; process/start/stop/reset use the symbolic audio-thread scope. Dirty
 parameter changes use dynamically sized queues, flush while stopped, and host
 restart/process/callback requests are drained by the main-thread timer.
+`RESCAN_INFO` and `RESCAN_ALL` refresh parameter metadata, cookies, and event
+storage under the audio lifecycle fence. Live latency and metadata changes flow
+through in-process status polling or worker control messages and republish
+snapshot timing/PDC without reloading the graph.
 
 Playback builds parent-track render nodes containing ordinary clips plus
 version-lane sources. Child inserts process before the parent sum, parent
@@ -189,10 +193,11 @@ lines allow one source to feed destinations with different path latencies.
 Automation lanes use seconds or musical beats and compile off-thread to integer
 sample positions. Track and route controls evaluate per sample. External plugin
 events travel in the same bridge record as their audio block. Linear automation
-uses compact breakpoint/ramp descriptors and a shared bounded control grid
-instead of one event and one processor call per sample; overflow is counted
-rather than silently dropping later lanes. Read, touch, latch, write, trim, and
-preview edits remain typed and undoable.
+uses compact breakpoint/ramp descriptors. CLAP expands them to exact timed
+events inside one `process()` call, bundled gain applies processor-native
+per-sample ramps, and unsupported JUCE formats use an adaptive bounded split
+fallback. Overflow is counted rather than silently dropping later lanes. Read,
+touch, latch, write, trim, and preview edits remain typed and undoable.
 
 Bundled devices use the same processor, parameter, state, automation, sidechain,
 and render paths as external inserts. Their processing allocates state during
@@ -216,7 +221,11 @@ Plugin state is captured outside the callback and stored once under
 routing, automation targets, policy, and prior state reference. ARA archives
 share the same content-addressed blob as processor state. Live ARA edits are
 captured before a document revision rebuild and restored into the replacement
-runtime.
+runtime. State files use a versioned length envelope while retaining the payload
+hash as their stable reference; writes replace corrupt destination blobs
+atomically and are read back before save completes. CLAP state save/load and
+bridge failures propagate explicitly, while unavailable runtimes preserve the
+last verified blob.
 
 `StudioDuoAraFixture` is a public JUCE VST3/AU ARA fixture. Compatibility tests
 exercise source access, tempo/meter registration, sparse archive writes,

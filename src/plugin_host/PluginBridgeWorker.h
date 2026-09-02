@@ -13,7 +13,9 @@ namespace studio
 class PluginEditorWindow;
 
 class PluginBridgeWorker final : private juce::ChildProcessWorker,
-                                 private juce::Thread
+                                 private juce::Thread,
+                                 private juce::AudioProcessorListener,
+                                 private juce::Timer
 {
 public:
     PluginBridgeWorker();
@@ -35,6 +37,15 @@ private:
     void hideEditor();
     void focusEditor();
     void resizeEditor(int width, int height);
+    juce::String parameterMetadata() const;
+    void audioProcessorParameterChanged(
+        juce::AudioProcessor*,
+        int,
+        float) override;
+    void audioProcessorChanged(
+        juce::AudioProcessor*,
+        const ChangeDetails&) override;
+    void timerCallback() override;
 
     std::unique_ptr<juce::MemoryMappedFile> mapping;
     PluginBridgeSharedState* sharedState = nullptr;
@@ -49,6 +60,8 @@ private:
     int sidechainInputChannels = 0;
     int mainOutputChannels = 2;
     int processingChannels = 2;
+    std::atomic<bool> latencyReportPending { false };
+    std::atomic<bool> metadataReportPending { false };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PluginBridgeWorker)
 };

@@ -3,6 +3,7 @@
 
 #include "plugin_host/PluginFormats.h"
 #include "plugin_host/ClapPluginFormat.h"
+#include "plugin_host/ValidatedPluginStateTarget.h"
 #include "model/ProjectCommands.h"
 #include "audio/StudioAudioEngine.h"
 
@@ -42,6 +43,11 @@ void pluginFormatTests()
     expect(instance != nullptr, error.toRawUTF8());
     if (instance == nullptr)
         return;
+    auto* validatedState =
+        dynamic_cast<studio::ValidatedPluginStateTarget*>(
+            instance.get());
+    expect(validatedState != nullptr,
+           "CLAP instances expose validated state errors.");
 
     instance->prepareToPlay(48000.0, 64);
     juce::AudioBuffer<float> audio(2, 64);
@@ -57,10 +63,36 @@ void pluginFormatTests()
            "CLAP parameters are exposed without truncation.");
     juce::MessageManager::getInstance()->runDispatchLoopUntil(100);
     expect(instance->getLatencySamples() == 32
+               && instance->getParameters().size() == 301
+               && instance->getParameters()[0]->getName(128)
+                      == "Gain rescanned"
                && instance->getParameters()[298]->getValue() > 0.0f
                && std::abs(instance->getParameters()[299]->getValue())
                       < 0.0001f,
            "CLAP restart, callback, latency, and thread-check requests drain on valid threads.");
+    auto* exactAutomation =
+        dynamic_cast<studio::SampleAccurateAutomationTarget*>(
+            instance.get());
+    studio::PluginBridgeParameterEvent rangedEvent;
+    rangedEvent.parameterIndex = 1;
+    rangedEvent.sampleOffset = 17;
+    rangedEvent.value = 0.5f;
+    if (exactAutomation != nullptr)
+    {
+        audio.clear();
+        exactAutomation->processBlockWithAutomation(
+            audio,
+            midi,
+            std::span<const studio::PluginBridgeParameterEvent>(
+                &rangedEvent,
+                1));
+    }
+    juce::MemoryBlock rangedState;
+    expect(exactAutomation != nullptr
+               && validatedState->saveValidatedState(rangedState).wasOk()
+               && std::abs(instance->getParameters()[1]->getValue() - 0.5f)
+                      < 0.0001f,
+           "CLAP timed automation converts normalized values to plain parameter ranges.");
     juce::MemoryBlock state;
     instance->getStateInformation(state);
     instance->getParameters()[0]->setValueNotifyingHost(0.25f);
@@ -81,6 +113,29 @@ void pluginFormatTests()
     expect(std::abs(instance->getParameters()[257]->getValue() - 0.75f)
                < 0.0001f,
            "CLAP parameters beyond index 256 reach processing and state.");
+    instance->getParameters()[295]->setValueNotifyingHost(1.0f);
+    instance->processBlock(audio, midi);
+    juce::MemoryBlock failedState;
+    expect(validatedState != nullptr
+               && validatedState->saveValidatedState(failedState).failed()
+               && failedState.isEmpty(),
+           "CLAP state save failures discard partial output.");
+    instance->getParameters()[295]->setValueNotifyingHost(0.0f);
+    instance->getParameters()[296]->setValueNotifyingHost(1.0f);
+    instance->processBlock(audio, midi);
+    expect(validatedState != nullptr
+               && validatedState->saveValidatedState(failedState).failed()
+               && failedState.isEmpty(),
+           "CLAP partial state blobs fail round-trip validation.");
+    instance->getParameters()[296]->setValueNotifyingHost(0.0f);
+    instance->processBlock(audio, midi);
+    const std::uint8_t malformedState = 0;
+    expect(validatedState != nullptr
+               && validatedState->restoreValidatedState(
+               &malformedState,
+               1)
+               .failed(),
+           "CLAP state load failures are reported.");
     instance->releaseResources();
     instance->getParameters()[0]->setValueNotifyingHost(0.25f);
     juce::MemoryBlock stoppedState;
@@ -92,6 +147,18 @@ void pluginFormatTests()
     expect(std::abs(instance->getParameters()[0]->getValue() - 0.25f)
                < 0.0001f,
            "CLAP edits flush and persist while processing is stopped.");
+    instance->getParameters()[297]->setValueNotifyingHost(0.75f);
+    expect(validatedState != nullptr
+               && validatedState->saveValidatedState(stoppedState).wasOk()
+               && std::abs(
+                      instance->getParameters()[297]->getValue()
+                      - 0.75f)
+                      < 0.0001f
+               && std::abs(
+                      instance->getParameters()[299]->getValue())
+                      < 0.0001f,
+           "Process-only CLAP parameters receive a silent process block and persist while stopped.");
+    instance->releaseResources();
 
     const auto monoSource = juce::File::getSpecialLocation(
                                 juce::File::tempDirectory)
@@ -137,6 +204,19 @@ void pluginFormatTests()
     monoInsert.bridgeMode =
         studio::PluginBridgeMode::trustedInProcess;
     monoProject.tracks.front().inserts.push_back(monoInsert);
+    studio::AutomationLane monoAutomation;
+    monoAutomation.target.type =
+        studio::AutomationTargetType::pluginParameter;
+    monoAutomation.target.trackId = monoProject.tracks.front().id;
+    monoAutomation.target.insertId = monoInsert.id;
+    monoAutomation.target.parameterIndex = 0;
+    monoAutomation.interpolation =
+        studio::AutomationInterpolation::linear;
+    monoAutomation.points = {
+        { juce::Uuid().toString(), 0.0, 0.5 },
+        { juce::Uuid().toString(), 64.0 / 48000.0, 1.0 }
+    };
+    monoProject.automationLanes.push_back(monoAutomation);
     studio::StudioAudioEngine::PluginRuntimeRequest monoRequest;
     monoRequest.trackId = monoProject.tracks.front().id;
     monoRequest.insertId = monoInsert.id;
@@ -155,12 +235,43 @@ void pluginFormatTests()
            "Mono-output CLAP renders in process.");
     expect(monoRender.getNumChannels() == 2
                && monoRender.getNumSamples() > 32
-               && std::abs(monoRender.getSample(0, 32) - 0.1f)
-                      < 0.01f
-               && std::abs(monoRender.getSample(1, 32)
-                           - monoRender.getSample(0, 32))
+               && std::abs(
+                      monoRender.getSample(0, 17)
+                      - 0.2f * (0.5f + 0.5f * 17.0f / 64.0f))
+                      < 0.002f
+               && std::abs(monoRender.getSample(1, 33)
+                           - monoRender.getSample(0, 33))
                       < 0.0001f,
-           "Mono plugin output is duplicated consistently to stereo.");
+           "CLAP automation is sample-exact in one process call and mono output duplicates to stereo.");
+    monoEngine.seekSeconds(0.0);
+    monoEngine.play();
+    monoEngine.processActiveBlockForTesting(64);
+    juce::MessageManager::getInstance()->runDispatchLoopUntil(100);
+    const auto monoStatuses = monoEngine.pluginRuntimeStatuses();
+    expect(!monoStatuses.empty()
+               && monoStatuses.front().latencySamples == 32
+               && monoStatuses.front().parameters.size() == 301
+               && monoStatuses.front().parameters.front().name
+                      == "Gain rescanned",
+           ("Dynamic CLAP latency and metadata propagate into engine status and PDC timing"
+            " (latency "
+            + juce::String(
+                monoStatuses.empty()
+                    ? -1
+                    : monoStatuses.front().latencySamples)
+            + ", parameters "
+            + juce::String(
+                monoStatuses.empty()
+                    ? 0
+                    : static_cast<int>(
+                          monoStatuses.front().parameters.size()))
+            + ", name "
+            + (monoStatuses.empty()
+                   || monoStatuses.front().parameters.empty()
+                   ? juce::String("none")
+                   : monoStatuses.front().parameters.front().name)
+            + ").")
+               .toRawUTF8());
     monoSource.deleteFile();
 
     auto project = studio::Project::createDefault();

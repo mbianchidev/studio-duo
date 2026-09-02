@@ -342,6 +342,13 @@ void deviceTests()
                 1)
             + ").")
                .toRawUTF8());
+    const auto unavailableCaptures =
+        recoveryEngine.capturePluginStates(1000);
+    expect(unavailableCaptures.empty()
+               || (unavailableCaptures.front().result.failed()
+                   && unavailableCaptures.front()
+                          .preservePreviousState),
+           "Unavailable runtimes preserve the last verified state without blocking project save.");
 
     studio::StudioAudioEngine reloadEngine;
     auto validProject = studio::Project::createDefault();

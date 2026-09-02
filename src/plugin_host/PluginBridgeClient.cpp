@@ -98,36 +98,8 @@ juce::Result PluginBridgeClient::startInternal(const juce::PluginDescription* de
                                std::memory_order_release);
     pluginTailSeconds.store(responseParts.size() > 2 ? responseParts[2].getDoubleValue() : 0.0,
                             std::memory_order_release);
-    parameters.clear();
     if (responseParts.size() > 3)
-    {
-        juce::MemoryBlock metadata;
-        if (metadata.fromBase64Encoding(responseParts[3]))
-        {
-            const auto value = juce::JSON::parse(
-                metadata.toString());
-            if (value.isArray())
-            {
-                for (const auto& parameterValue : *value.getArray())
-                {
-                    const auto* object = parameterValue.getDynamicObject();
-                    if (object == nullptr)
-                        continue;
-                    PluginParameterDescriptor parameter;
-                    parameter.index = static_cast<int>(
-                        object->getProperty("index"));
-                    parameter.id = object->getProperty("id").toString();
-                    parameter.name = object->getProperty("name").toString();
-                    parameter.value = static_cast<float>(
-                        static_cast<double>(
-                            object->getProperty("value")));
-                    parameter.automatable = static_cast<bool>(
-                        object->getProperty("automatable"));
-                    parameters.push_back(std::move(parameter));
-                }
-            }
-        }
-    }
+        updateParameterMetadata(responseParts[3]);
     ready.store(true, std::memory_order_release);
     processingBlockSize = blockSize;
     completedOutputSamples = 0;
@@ -169,7 +141,10 @@ void PluginBridgeClient::stop()
     responseMessage.clear();
     pluginLatencySamples.store(0, std::memory_order_relaxed);
     pluginTailSeconds.store(0.0, std::memory_order_relaxed);
-    parameters.clear();
+    {
+        const std::lock_guard lock(parameterMutex);
+        parameters.clear();
+    }
 }
 
 juce::Result PluginBridgeClient::requestState(
@@ -209,15 +184,28 @@ juce::Result PluginBridgeClient::requestState(
     if (connectionLost.load(std::memory_order_acquire))
         return juce::Result::fail(
             "Plugin bridge disconnected while saving state.");
-    if (!responseMessage.startsWith("state|"))
+    if (responseMessage.startsWith("state|error|"))
+        return juce::Result::fail(
+            "Plugin state save failed: "
+            + responseMessage.fromFirstOccurrenceOf(
+                  "state|error|",
+                  false,
+                  false));
+    if (responseMessage == "state|none")
+        return juce::Result::ok();
+    if (!responseMessage.startsWith("state|data|"))
         return juce::Result::fail(
             responseMessage.isNotEmpty()
                 ? responseMessage
                 : "Plugin bridge returned no state.");
     const auto encoded =
-        responseMessage.fromFirstOccurrenceOf("|", false, false);
+        responseMessage.fromFirstOccurrenceOf(
+            "state|data|",
+            false,
+            false);
     if (encoded.isEmpty())
-        return juce::Result::ok();
+        return juce::Result::fail(
+            "Plugin bridge returned empty state data.");
     if (!state.fromBase64Encoding(encoded))
         return juce::Result::fail(
             "Plugin bridge returned invalid state data.");
@@ -529,9 +517,10 @@ double PluginBridgeClient::reportedTailSeconds() const noexcept
     return pluginTailSeconds.load(std::memory_order_acquire);
 }
 
-const std::vector<PluginParameterDescriptor>&
-PluginBridgeClient::parameterDescriptors() const noexcept
+std::vector<PluginParameterDescriptor>
+PluginBridgeClient::parameterDescriptors() const
 {
+    const std::lock_guard lock(parameterMutex);
     return parameters;
 }
 
@@ -554,11 +543,69 @@ juce::String PluginBridgeClient::diagnosticState() const
 
 void PluginBridgeClient::handleMessageFromWorker(const juce::MemoryBlock& message)
 {
+    const auto text = message.toString();
+    if (text.startsWith("latency|"))
+    {
+        const auto parts = juce::StringArray::fromTokens(
+            text,
+            "|",
+            "");
+        if (parts.size() > 1)
+            pluginLatencySamples.store(
+                parts[1].getIntValue(),
+                std::memory_order_release);
+        if (parts.size() > 2)
+            pluginTailSeconds.store(
+                parts[2].getDoubleValue(),
+                std::memory_order_release);
+        return;
+    }
+    if (text.startsWith("metadata|"))
+    {
+        updateParameterMetadata(
+            text.fromFirstOccurrenceOf(
+                "metadata|",
+                false,
+                false));
+        return;
+    }
     {
         const std::lock_guard lock(responseMutex);
-        responseMessage = message.toString();
+        responseMessage = text;
     }
     responseCondition.notify_one();
+}
+
+void PluginBridgeClient::updateParameterMetadata(
+    const juce::String& encoded)
+{
+    juce::MemoryBlock metadata;
+    if (!metadata.fromBase64Encoding(encoded))
+        return;
+    const auto value = juce::JSON::parse(metadata.toString());
+    if (!value.isArray())
+        return;
+    std::vector<PluginParameterDescriptor> updated;
+    updated.reserve(
+        static_cast<std::size_t>(value.getArray()->size()));
+    for (const auto& parameterValue : *value.getArray())
+    {
+        const auto* object = parameterValue.getDynamicObject();
+        if (object == nullptr)
+            continue;
+        PluginParameterDescriptor parameter;
+        parameter.index = static_cast<int>(
+            object->getProperty("index"));
+        parameter.id = object->getProperty("id").toString();
+        parameter.name = object->getProperty("name").toString();
+        parameter.value = static_cast<float>(
+            static_cast<double>(object->getProperty("value")));
+        parameter.automatable = static_cast<bool>(
+            object->getProperty("automatable"));
+        updated.push_back(std::move(parameter));
+    }
+    const std::lock_guard lock(parameterMutex);
+    parameters = std::move(updated);
 }
 
 void PluginBridgeClient::handleConnectionLost()

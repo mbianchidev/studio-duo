@@ -1,5 +1,8 @@
 #pragma once
 
+#include "SampleAccurateAutomationTarget.h"
+#include "ValidatedPluginStateTarget.h"
+
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include <memory>
@@ -7,6 +10,8 @@
 namespace studio
 {
 class ClapPluginInstance final : public juce::AudioPluginInstance,
+                                 public SampleAccurateAutomationTarget,
+                                 public ValidatedPluginStateTarget,
                                  private juce::Timer
 {
 public:
@@ -39,6 +44,17 @@ public:
         juce::PluginDescription& description) const override;
     bool isBusesLayoutSupported(
         const BusesLayout& layouts) const override;
+    [[nodiscard]] bool supportsSampleAccurateAutomation(
+        std::span<const PluginBridgeParameterEvent> events) const noexcept override;
+    void processBlockWithAutomation(
+        juce::AudioBuffer<float>& audio,
+        juce::MidiBuffer& midi,
+        std::span<const PluginBridgeParameterEvent> events) noexcept override;
+    juce::Result saveValidatedState(
+        juce::MemoryBlock& destination) override;
+    juce::Result restoreValidatedState(
+        const void* data,
+        int size) override;
 
 private:
     class Impl;
@@ -46,6 +62,8 @@ private:
     ClapPluginInstance(std::unique_ptr<Impl> implementation,
                        const BusesProperties& buses);
     static BusesProperties busesFor(const Impl& implementation);
+    juce::AudioProcessorParameter* addClapHostedParameter(
+        std::unique_ptr<juce::HostedAudioProcessorParameter> parameter);
     void timerCallback() override;
 
     std::unique_ptr<Impl> impl;

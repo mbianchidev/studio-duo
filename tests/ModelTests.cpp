@@ -999,6 +999,33 @@ void packagePersistence()
         error);
     const auto saveAsPackage = package.getSiblingFile(
         package.getFileNameWithoutExtension() + "-copy.studioduo");
+    const auto truncatedPackage = package.getSiblingFile(
+        package.getFileNameWithoutExtension() + "-truncated.studioduo");
+    if (stateReference.has_value())
+    {
+        juce::MemoryBlock encoded;
+        package.getChildFile(stateReference->relativePath)
+            .loadFileAsData(encoded);
+        const auto truncatedState = truncatedPackage.getChildFile(
+            stateReference->relativePath);
+        truncatedState.getParentDirectory().createDirectory();
+        truncatedState.replaceWithData(
+            encoded.getData(),
+            encoded.getSize() / 2);
+        juce::MemoryBlock rejectedState;
+        expect(!studio::PluginStateStore::load(
+                   truncatedPackage,
+                   *stateReference,
+                   rejectedState,
+                   error),
+               "Truncated plugin-state envelopes are rejected.");
+
+        const auto corruptDestination =
+            saveAsPackage.getChildFile(
+                stateReference->relativePath);
+        corruptDestination.getParentDirectory().createDirectory();
+        corruptDestination.replaceWithText("corrupt");
+    }
     expect(stateReference.has_value()
                && studio::PluginStateStore::materialize(
                    package,
@@ -1014,7 +1041,7 @@ void packagePersistence()
                    copiedState,
                    error)
                && copiedState == state,
-           "Save As materializes package-relative plugin state blobs.");
+           "Save As atomically replaces corrupt destination state blobs.");
 
     auto invalid = project;
     studio::ToneSnapshot orphan;
@@ -1034,6 +1061,7 @@ void packagePersistence()
 
     package.deleteRecursively();
     saveAsPackage.deleteRecursively();
+    truncatedPackage.deleteRecursively();
     invalidPackage.deleteRecursively();
 }
 

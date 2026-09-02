@@ -1651,9 +1651,10 @@ void MainComponent::saveProjectTo(const juce::File& package)
     };
 
     const auto normalised = ProjectFile::normalisePackagePath(package);
-    if (project.name == "Untitled")
-        project.name = normalised.getFileNameWithoutExtension();
     auto projectToSave = project;
+    if (projectToSave.name == "Untitled")
+        projectToSave.name =
+            normalised.getFileNameWithoutExtension();
 
     const auto resumePlayback = audioEngine.isPlaying();
     if (resumePlayback)
@@ -1684,10 +1685,22 @@ void MainComponent::saveProjectTo(const juce::File& package)
             continue;
         if (capture.result.failed())
         {
-            stateWarning = capture.name
-                + ": "
-                + capture.result.getErrorMessage();
-            continue;
+            if (capture.preservePreviousState)
+            {
+                stateWarning = capture.name
+                    + ": "
+                    + capture.result.getErrorMessage();
+                continue;
+            }
+            if (resumePlayback)
+                audioEngine.play();
+            finishSave();
+            showError(
+                "Project save failed",
+                capture.name
+                    + ": "
+                    + capture.result.getErrorMessage());
+            return;
         }
         if (capture.state.isEmpty())
             continue;
@@ -1733,8 +1746,27 @@ void MainComponent::saveProjectTo(const juce::File& package)
         showError("Project save failed", result.getErrorMessage());
         return;
     }
+    juce::String verificationError;
+    const auto verified = ProjectFile::load(
+        normalised,
+        verificationError);
+    if (!verified.has_value()
+        || verified->id != projectToSave.id)
+    {
+        if (resumePlayback)
+            audioEngine.play();
+        finishSave();
+        showError(
+            "Project save failed",
+            verificationError.isNotEmpty()
+                ? verificationError
+                : juce::String(
+                      "The saved project did not pass revalidation."));
+        return;
+    }
 
     applyPluginStateReferences(projectToSave, project);
+    project.name = projectToSave.name;
     projectPackage = normalised;
     reducedIsolationMarkerSignature.clear();
     updateReducedIsolationMarker();

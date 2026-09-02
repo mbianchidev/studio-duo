@@ -20,6 +20,10 @@ void pluginCompatibilityTests()
 
     const auto report = studio::PluginCompatibilityValidator::validate(
         *descriptions[0]);
+    auto failedChecks = juce::String();
+    for (const auto& check : report.checks)
+        if (check.status == "fail")
+            failedChecks << check.name << ": " << check.message << "; ";
     expect(report.status == "pass"
                && std::all_of(
                    report.checks.cbegin(),
@@ -29,7 +33,12 @@ void pluginCompatibilityTests()
                        return check.status == "pass"
                            || check.status == "skip";
                    }),
-           "Public-standard compatibility validation passes the CLAP fixture.");
+           ("Public-standard compatibility validation passes the CLAP fixture"
+            + (failedChecks.isNotEmpty()
+                   ? " (" + failedChecks + ")"
+                   : juce::String())
+            + ".")
+               .toRawUTF8());
     juce::String error;
     const auto restored =
         studio::PluginValidationReport::fromVar(report.toVar(), error);

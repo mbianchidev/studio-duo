@@ -1,5 +1,7 @@
 #pragma once
 
+#include "plugin_host/SampleAccurateAutomationTarget.h"
+
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include <array>
@@ -21,7 +23,8 @@ enum class UtilityDeviceType
     generator
 };
 
-class UtilityDeviceProcessor final : public juce::AudioProcessor
+class UtilityDeviceProcessor final : public juce::AudioProcessor,
+                                     public SampleAccurateAutomationTarget
 {
 public:
     explicit UtilityDeviceProcessor(UtilityDeviceType type);
@@ -46,6 +49,12 @@ public:
     void setStateInformation(const void* data, int size) override;
     bool isBusesLayoutSupported(
         const BusesLayout& layouts) const override;
+    [[nodiscard]] bool supportsSampleAccurateAutomation(
+        std::span<const PluginBridgeParameterEvent> events) const noexcept override;
+    void processBlockWithAutomation(
+        juce::AudioBuffer<float>& audio,
+        juce::MidiBuffer& midi,
+        std::span<const PluginBridgeParameterEvent> events) noexcept override;
 
     [[nodiscard]] UtilityDeviceType deviceType() const noexcept;
     [[nodiscard]] double meterValue(const juce::String& meter) const;

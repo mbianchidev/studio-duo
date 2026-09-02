@@ -9,13 +9,17 @@ typedef struct test_plugin {
     clap_plugin_t plugin;
     const clap_host_t* host;
     const clap_host_thread_check_t* thread_check;
-    double parameters[300];
+    const clap_host_params_t* host_params;
+    double parameters[301];
+    uint32_t cookies[301];
     uint32_t thread_violations;
     uint32_t activation_count;
     uint32_t main_thread_callbacks;
     bool active;
     bool processing;
     bool requested_host_actions;
+    bool requested_parameter_rescan;
+    uint32_t metadata_epoch;
 } test_plugin_t;
 
 static const char* features[] = {
@@ -139,6 +143,11 @@ static clap_process_status plugin_process(const clap_plugin_t* plugin,
             {
                 const clap_event_param_value_t* value =
                     (const clap_event_param_value_t*) header;
+                if (value->param_id >= 1
+                    && value->param_id <= 301
+                    && value->cookie
+                        != &instance->cookies[value->param_id - 1])
+                    ++instance->thread_violations;
                 if (value->param_id == 1)
                     instance->parameters[0] = value->value;
                 else if (value->param_id >= 2
@@ -202,7 +211,7 @@ static bool audio_ports_get(const clap_plugin_t* plugin,
 static uint32_t params_count(const clap_plugin_t* plugin)
 {
     expect_main_thread(plugin);
-    return 300;
+    return self(plugin)->metadata_epoch > 0 ? 301 : 300;
 }
 
 static bool params_get_info(const clap_plugin_t* plugin,
@@ -210,24 +219,39 @@ static bool params_get_info(const clap_plugin_t* plugin,
                             clap_param_info_t* info)
 {
     expect_main_thread(plugin);
-    if (index >= 300 || info == NULL)
+    if (index >= params_count(plugin) || info == NULL)
         return false;
     memset(info, 0, sizeof(*info));
     info->id = index + 1;
     info->flags = index >= 298
         ? CLAP_PARAM_IS_READONLY
         : CLAP_PARAM_IS_AUTOMATABLE;
+    if (index == 297)
+        info->flags |= CLAP_PARAM_REQUIRES_PROCESS;
     if (index == 0)
-        snprintf(info->name, sizeof(info->name), "Gain");
+        snprintf(
+            info->name,
+            sizeof(info->name),
+            "%s",
+            self(plugin)->metadata_epoch > 0
+                ? "Gain rescanned"
+                : "Gain");
     else if (index == 298)
         snprintf(info->name, sizeof(info->name), "Main thread callbacks");
     else if (index == 299)
         snprintf(info->name, sizeof(info->name), "Thread violations");
+    else if (index == 300)
+        snprintf(info->name, sizeof(info->name), "Added parameter");
     else
         snprintf(info->name, sizeof(info->name), "Parameter %u", index + 1);
-    info->min_value = 0.0;
-    info->max_value = index >= 298 ? 1000.0 : 1.0;
-    info->default_value = index >= 298 ? 0.0 : 0.5;
+    info->min_value = index == 1 ? -24.0 : 0.0;
+    info->max_value = index == 1
+        ? 24.0
+        : index >= 298 ? 1000.0 : 1.0;
+    info->default_value = index == 1
+        ? 0.0
+        : index >= 298 ? 0.0 : 0.5;
+    info->cookie = &self(plugin)->cookies[index];
     return true;
 }
 
@@ -236,12 +260,15 @@ static bool params_get_value(const clap_plugin_t* plugin,
                              double* value)
 {
     expect_main_thread(plugin);
-    if (param_id < 1 || param_id > 300 || value == NULL)
+    if (param_id < 1 || param_id > params_count(plugin)
+        || value == NULL)
         return false;
     if (param_id == 299)
         *value = self(plugin)->main_thread_callbacks;
     else if (param_id == 300)
         *value = self(plugin)->thread_violations;
+    else if (param_id <= 298)
+        *value = self(plugin)->parameters[param_id - 1];
     else
         *value = self(plugin)->parameters[param_id - 1];
     return true;
@@ -254,7 +281,7 @@ static bool params_value_to_text(const clap_plugin_t* plugin,
                                  uint32_t capacity)
 {
     expect_main_thread(plugin);
-    if (param_id < 1 || param_id > 300
+    if (param_id < 1 || param_id > params_count(plugin)
         || text == NULL || capacity == 0)
         return false;
     snprintf(text, capacity, "%.3f", value);
@@ -293,6 +320,13 @@ static void params_flush(const clap_plugin_t* plugin,
         {
             const clap_event_param_value_t* value =
                 (const clap_event_param_value_t*) header;
+            if (value->param_id >= 1
+                && value->param_id <= 301
+                && value->cookie
+                    != &self(plugin)->cookies[value->param_id - 1])
+                ++self(plugin)->thread_violations;
+            if (value->param_id == 298)
+                ++self(plugin)->thread_violations;
             if (value->param_id >= 1 && value->param_id <= 298)
                 self(plugin)->parameters[value->param_id - 1] =
                     value->value;
@@ -318,18 +352,23 @@ static bool state_save(const clap_plugin_t* plugin,
                        const clap_ostream_t* stream)
 {
     expect_main_thread(plugin);
+    if (self(plugin)->parameters[295] > 0.9)
+        return false;
+    const auto bytes = self(plugin)->parameters[296] > 0.9
+        ? sizeof(self(plugin)->parameters) / 2
+        : sizeof(self(plugin)->parameters);
     return state_write(
                stream,
                self(plugin)->parameters,
-               sizeof(self(plugin)->parameters))
-        == (int64_t) sizeof(self(plugin)->parameters);
+               bytes)
+        == (int64_t) bytes;
 }
 
 static bool state_load(const clap_plugin_t* plugin,
                        const clap_istream_t* stream)
 {
     expect_main_thread(plugin);
-    double parameters[300];
+    double parameters[301];
     if (state_read(stream, parameters, sizeof(parameters))
         != (int64_t) sizeof(parameters))
         return false;
@@ -397,6 +436,15 @@ static void plugin_on_main_thread(const clap_plugin_t* plugin)
 {
     expect_main_thread(plugin);
     ++self(plugin)->main_thread_callbacks;
+    if (!self(plugin)->requested_parameter_rescan
+        && self(plugin)->host_params != NULL)
+    {
+        self(plugin)->requested_parameter_rescan = true;
+        self(plugin)->metadata_epoch = 1;
+        self(plugin)->host_params->rescan(
+            self(plugin)->host,
+            CLAP_PARAM_RESCAN_INFO | CLAP_PARAM_RESCAN_ALL);
+    }
 }
 
 static const clap_plugin_t* create_plugin(const clap_plugin_factory_t* factory,
@@ -415,8 +463,17 @@ static const clap_plugin_t* create_plugin(const clap_plugin_factory_t* factory,
         (const clap_host_thread_check_t*) host->get_extension(
             host,
             CLAP_EXT_THREAD_CHECK);
+    instance->host_params =
+        (const clap_host_params_t*) host->get_extension(
+            host,
+            CLAP_EXT_PARAMS);
+    for (uint32_t index = 0; index < 301; ++index)
+    {
+        instance->cookies[index] = index + 1;
+    }
     for (uint32_t index = 0; index < 298; ++index)
         instance->parameters[index] = 0.5;
+    instance->parameters[1] = 0.0;
     if (instance->thread_check == NULL
         || !instance->thread_check->is_main_thread(host))
         ++instance->thread_violations;

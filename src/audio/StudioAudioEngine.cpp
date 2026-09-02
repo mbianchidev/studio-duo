@@ -25,6 +25,16 @@ juce::AudioFormatWriterOptions writerOptions(double sampleRate, int channels)
         .withBitsPerSample(24);
 }
 
+std::int64_t wrapLoopPosition(std::int64_t position,
+                              std::int64_t loopStart,
+                              std::int64_t loopEnd) noexcept
+{
+    const auto loopLength = loopEnd - loopStart;
+    if (loopLength <= 0 || position < loopEnd)
+        return position;
+    return loopStart + (position - loopStart) % loopLength;
+}
+
 std::shared_ptr<juce::AudioProcessor> messageThreadOwnedProcessor(
     std::unique_ptr<juce::AudioProcessor> processor)
 {
@@ -364,7 +374,7 @@ StudioAudioEngine::InsertRuntime::InsertRuntime()
         static_cast<std::size_t>(
             PluginBridgeSharedState::maxParameterEvents * 2)
         + static_cast<std::size_t>(
-            PluginBridgeSharedState::maxBlockSize / 32 + 2));
+            PluginBridgeSharedState::maxBlockSize / 8 + 2));
 }
 
 StudioAudioEngine::InsertRuntime::~InsertRuntime()
@@ -505,6 +515,7 @@ void StudioAudioEngine::shutdown()
     {
         const juce::ScopedLock lock(pluginRequestLock);
         pendingPluginRequests.clear();
+        activePluginRequests.clear();
         pendingPluginSnapshot.reset();
         pendingPluginFingerprint.clear();
         buildingPluginFingerprint.clear();
@@ -586,7 +597,19 @@ void StudioAudioEngine::seekSeconds(double seconds) noexcept
 {
     if (renderInProgress.load(std::memory_order_acquire))
         return;
-    const auto target = static_cast<std::int64_t>(std::max(0.0, seconds) * currentSampleRate());
+    auto target = static_cast<std::int64_t>(
+        std::max(0.0, seconds) * currentSampleRate());
+    const auto snapshotIndex = activeSnapshot.load(
+        std::memory_order_acquire);
+    const auto& snapshot = snapshots[static_cast<std::size_t>(
+        snapshotIndex)];
+    if (snapshot.loopEnabled)
+    {
+        target = wrapLoopPosition(
+            target,
+            snapshot.loopStartSample,
+            snapshot.loopEndSample);
+    }
     playheadSample.store(target, std::memory_order_release);
 }
 
@@ -662,6 +685,26 @@ double StudioAudioEngine::activeSnapshotSampleRateForTesting() const noexcept
     const auto index = activeSnapshot.load(std::memory_order_acquire);
     return snapshots[static_cast<std::size_t>(index)].sampleRate;
 }
+
+void StudioAudioEngine::processActiveBlockForTesting(int samples)
+{
+    juce::AudioBuffer<float> output(
+        2,
+        std::max(1, samples));
+    output.clear();
+    float* channels[] {
+        output.getWritePointer(0),
+        output.getWritePointer(1)
+    };
+    juce::AudioIODeviceCallbackContext context;
+    audioDeviceIOCallbackWithContext(
+        nullptr,
+        0,
+        channels,
+        2,
+        output.getNumSamples(),
+        context);
+}
 #endif
 
 std::vector<StudioAudioEngine::RecordingProgress> StudioAudioEngine::recordingProgress() const
@@ -682,41 +725,123 @@ std::vector<StudioAudioEngine::RecordingProgress> StudioAudioEngine::recordingPr
     return progress;
 }
 
-std::vector<StudioAudioEngine::PluginRuntimeStatus> StudioAudioEngine::pluginRuntimeStatuses() const
+std::vector<StudioAudioEngine::PluginRuntimeStatus>
+StudioAudioEngine::pluginRuntimeStatuses()
 {
     const juce::ScopedLock graphLock(pluginRequestLock);
-    std::vector<PluginRuntimeStatus> statuses;
+    const auto runtimeIndex = activePluginRuntime.load(
+        std::memory_order_acquire);
+    const auto& graph = pluginRuntimeGraphs[static_cast<std::size_t>(
+        runtimeIndex)];
+    auto timingChanged = false;
     {
         const juce::ScopedLock statusLock(pluginStatusLock);
-        statuses = pluginStatuses;
-    }
-
-    const auto& graph = pluginRuntimeGraphs[static_cast<std::size_t>(
-        activePluginRuntime.load(std::memory_order_acquire))];
-    for (auto& status : statuses)
-    {
-        if (status.state != PluginRuntimeStatus::State::ready)
-            continue;
-
-        for (const auto& track : graph.tracks)
+        for (auto& status : pluginStatuses)
         {
-            const auto insert = std::find_if(track.inserts.cbegin(),
-                                             track.inserts.cend(),
-                                             [&status](const auto& candidate)
+            if (status.state != PluginRuntimeStatus::State::ready)
+                continue;
+
+            for (const auto& track : graph.tracks)
             {
-                return candidate.insertId == status.insertId;
-            });
-            if (insert != track.inserts.cend()
-                && insert->inProcess == nullptr
-                && (insert->bridge == nullptr || !insert->bridge->isReady()))
-            {
-                status.state = PluginRuntimeStatus::State::failed;
-                status.message = "Sandbox worker disconnected";
+                const auto insert = std::find_if(
+                    track.inserts.cbegin(),
+                    track.inserts.cend(),
+                    [&status](const auto& candidate)
+                    {
+                        return candidate.insertId == status.insertId;
+                    });
+                if (insert == track.inserts.cend())
+                    continue;
+                if (insert->inProcess == nullptr
+                    && (insert->bridge == nullptr
+                        || !insert->bridge->isReady()))
+                {
+                    status.state = PluginRuntimeStatus::State::failed;
+                    status.message = "Sandbox worker disconnected";
+                    break;
+                }
+
+                const auto latency = insert->inProcess != nullptr
+                    ? insert->inProcess->getLatencySamples()
+                    : insert->bridge->reportedLatencySamples();
+                const auto tail = insert->inProcess != nullptr
+                    ? insert->inProcess->getTailLengthSeconds()
+                    : insert->bridge->reportedTailSeconds();
+                if (latency != status.latencySamples
+                    || std::abs(tail - status.tailSeconds) > 0.000001)
+                {
+                    status.latencySamples = latency;
+                    status.tailSeconds = tail;
+                    const auto request = std::find_if(
+                        activePluginRequests.begin(),
+                        activePluginRequests.end(),
+                        [&status](const auto& candidate)
+                        {
+                            return candidate.insertId == status.insertId;
+                        });
+                    if (request != activePluginRequests.end())
+                    {
+                        request->latencySamples = latency;
+                        request->tailSeconds = tail;
+                        timingChanged = true;
+                    }
+                }
+                if (insert->inProcess != nullptr)
+                {
+                    std::vector<PluginParameterDescriptor> parameters;
+                    const auto& hosted =
+                        insert->inProcess->getParameters();
+                    parameters.reserve(
+                        static_cast<std::size_t>(hosted.size()));
+                    for (int index = 0; index < hosted.size(); ++index)
+                    {
+                        const auto* parameter = hosted[index];
+                        const auto* identified = dynamic_cast<
+                            const juce::HostedAudioProcessorParameter*>(
+                            parameter);
+                        parameters.push_back({
+                            index,
+                            identified != nullptr
+                                ? identified->getParameterID()
+                                : juce::String(index),
+                            parameter->getName(128),
+                            parameter->getValue(),
+                            parameter->isAutomatable()
+                        });
+                    }
+                    status.parameters = std::move(parameters);
+                }
+                else if (insert->bridge != nullptr)
+                {
+                    status.parameters =
+                        insert->bridge->parameterDescriptors();
+                }
                 break;
             }
         }
     }
-    return statuses;
+    if (timingChanged)
+    {
+        const auto source = activeSnapshot.load(
+            std::memory_order_acquire);
+        auto refreshed = snapshots[static_cast<std::size_t>(source)];
+        configureRuntimeTiming(refreshed, activePluginRequests);
+        const auto destination = chooseWritableSnapshot();
+        snapshots[static_cast<std::size_t>(destination)] =
+            std::move(refreshed);
+        snapshotGenerations[static_cast<std::size_t>(destination)].store(
+            activePluginGeneration,
+            std::memory_order_release);
+        activeSnapshot.store(destination, std::memory_order_release);
+        activeRenderPair.store(
+            renderPair(
+                activePluginGeneration,
+                destination,
+                runtimeIndex),
+            std::memory_order_release);
+    }
+    const juce::ScopedLock statusLock(pluginStatusLock);
+    return pluginStatuses;
 }
 
 std::vector<StudioAudioEngine::TrackMeterSnapshot>
@@ -931,11 +1056,31 @@ StudioAudioEngine::capturePluginStatesOnRuntimeThread(
                 capture.result = insert.bridge->requestState(
                     capture.state,
                     std::chrono::milliseconds(timeout));
+                capture.preservePreviousState =
+                    capture.result.failed()
+                    && !capture.result.getErrorMessage().startsWith(
+                        "Plugin state save failed:");
             }
             else if (insert.inProcess != nullptr)
             {
                 juce::MemoryBlock processorState;
-                insert.inProcess->getStateInformation(processorState);
+                if (auto* validated =
+                        dynamic_cast<ValidatedPluginStateTarget*>(
+                            insert.inProcess.get()))
+                {
+                    capture.result =
+                        validated->saveValidatedState(processorState);
+                    if (capture.result.failed())
+                    {
+                        captures.push_back(std::move(capture));
+                        continue;
+                    }
+                }
+                else
+                {
+                    insert.inProcess->getStateInformation(
+                        processorState);
+                }
                 if (insert.araDocument != nullptr)
                 {
                     juce::MemoryBlock araState;
@@ -958,6 +1103,7 @@ StudioAudioEngine::capturePluginStatesOnRuntimeThread(
             {
                 capture.result = juce::Result::fail(
                     "The plugin runtime is unavailable.");
+                capture.preservePreviousState = true;
             }
             captures.push_back(std::move(capture));
         }
@@ -3154,12 +3300,11 @@ void StudioAudioEngine::renderSourceBlock(RenderSource& source,
     for (int sample = 0; sample < samples; ++sample)
     {
         auto position = timelineSample + sample;
-        if (loopEnabled && position >= loopEndSample)
-        {
-            const auto loopLength = loopEndSample - loopStartSample;
-            if (loopLength > 0)
-                position = loopStartSample + (position - loopStartSample) % loopLength;
-        }
+        if (loopEnabled)
+            position = wrapLoopPosition(
+                position,
+                loopStartSample,
+                loopEndSample);
         float left = 0.0f;
         float right = 0.0f;
         for (const auto& clip : source.clips)
@@ -3426,13 +3571,26 @@ void StudioAudioEngine::processRuntimeChain(std::uint64_t key,
                     processInProcessRuntime(insert, buffer, sidechain);
                     continue;
                 }
+                const auto events =
+                    std::span<const PluginBridgeParameterEvent>(
+                        insert.parameterEvents.data(),
+                        static_cast<std::size_t>(
+                            insert.parameterEventCount));
+                if (processInProcessRuntime(
+                        insert,
+                        buffer,
+                        sidechain,
+                        0,
+                        events))
+                {
+                    continue;
+                }
 
-                constexpr auto automationQuantum = 32;
                 auto& boundaries = insert.automationBoundaries;
                 boundaries.clear();
                 boundaries.push_back(0);
                 boundaries.push_back(buffer.getNumSamples());
-                auto hasRamp = false;
+                auto automationStride = buffer.getNumSamples();
                 for (int eventIndex = 0;
                      eventIndex < insert.parameterEventCount;
                      ++eventIndex)
@@ -3447,18 +3605,35 @@ void StudioAudioEngine::processRuntimeChain(std::uint64_t key,
                          & PluginBridgeParameterEvent::rampFlag)
                         != 0)
                     {
-                        hasRamp = true;
                         const auto end = std::min(
                             buffer.getNumSamples(),
                             static_cast<int>(event.rampEndOffset));
                         boundaries.push_back(end);
+                        const auto span = std::max(1, end - start);
+                        const auto delta = std::abs(
+                            event.rampEndValue - event.value);
+                        const auto toleranceStride = delta > 0.0f
+                            ? static_cast<int>(std::floor(
+                                  0.002f
+                                  * static_cast<float>(span)
+                                  / delta))
+                            : span;
+                        if (span >= 8)
+                        {
+                            automationStride = std::min(
+                                automationStride,
+                                std::clamp(
+                                    std::max(1, toleranceStride),
+                                    8,
+                                    span));
+                        }
                     }
                 }
-                if (hasRamp)
+                if (automationStride < buffer.getNumSamples())
                 {
-                    for (auto offset = automationQuantum;
+                    for (auto offset = automationStride;
                          offset < buffer.getNumSamples();
-                         offset += automationQuantum)
+                         offset += automationStride)
                         boundaries.push_back(offset);
                 }
                 std::sort(boundaries.begin(), boundaries.end());
@@ -3537,13 +3712,21 @@ void StudioAudioEngine::processRuntimeChain(std::uint64_t key,
 
 }
 
-void StudioAudioEngine::processInProcessRuntime(
+bool StudioAudioEngine::processInProcessRuntime(
     InsertRuntime& insert,
     juce::AudioBuffer<float>& buffer,
     const juce::AudioBuffer<float>* sidechain,
-    int sidechainSampleOffset) noexcept
+    int sidechainSampleOffset,
+    std::span<const PluginBridgeParameterEvent> automation) noexcept
 {
     auto& processor = *insert.inProcess;
+    auto* automationTarget =
+        dynamic_cast<SampleAccurateAutomationTarget*>(&processor);
+    if (!automation.empty()
+        && (automationTarget == nullptr
+            || !automationTarget->supportsSampleAccurateAutomation(
+                automation)))
+        return false;
     const auto mainChannels = processor.getBusCount(true) > 0
         ? processor.getChannelCountOfBus(true, 0)
         : processor.getTotalNumInputChannels();
@@ -3559,8 +3742,14 @@ void StudioAudioEngine::processInProcessRuntime(
     if (!useScratch)
     {
         insert.midi.clear();
-        processor.processBlock(buffer, insert.midi);
-        return;
+        if (automationTarget != nullptr && !automation.empty())
+            automationTarget->processBlockWithAutomation(
+                buffer,
+                insert.midi,
+                automation);
+        else
+            processor.processBlock(buffer, insert.midi);
+        return true;
     }
 
     auto& scratch = insert.inProcessBuffer;
@@ -3609,7 +3798,13 @@ void StudioAudioEngine::processInProcessRuntime(
         scratch.getArrayOfWritePointers(),
         scratch.getNumChannels(),
         buffer.getNumSamples());
-    processor.processBlock(scratchView, insert.midi);
+    if (automationTarget != nullptr && !automation.empty())
+        automationTarget->processBlockWithAutomation(
+            scratchView,
+            insert.midi,
+            automation);
+    else
+        processor.processBlock(scratchView, insert.midi);
     for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
     {
         const auto outputChannel =
@@ -3635,6 +3830,7 @@ void StudioAudioEngine::processInProcessRuntime(
             buffer.clear(channel, 0, buffer.getNumSamples());
         }
     }
+    return true;
 }
 
 double StudioAudioEngine::tempoAt(const RenderSnapshot& snapshot,
@@ -4271,9 +4467,34 @@ void StudioAudioEngine::runPluginRuntimeBuilder()
                     }
                 }
                 if (!processorState.isEmpty())
-                    processor->setStateInformation(
-                        processorState.getData(),
-                        static_cast<int>(processorState.getSize()));
+                {
+                    if (auto* validated =
+                            dynamic_cast<ValidatedPluginStateTarget*>(
+                                processor.get()))
+                    {
+                        if (const auto stateResult =
+                                validated->restoreValidatedState(
+                                    processorState.getData(),
+                                    static_cast<int>(
+                                        processorState.getSize()));
+                            stateResult.failed())
+                        {
+                            status.state =
+                                PluginRuntimeStatus::State::failed;
+                            status.message =
+                                stateResult.getErrorMessage();
+                            statuses.push_back(std::move(status));
+                            continue;
+                        }
+                    }
+                    else
+                    {
+                        processor->setStateInformation(
+                            processorState.getData(),
+                            static_cast<int>(
+                                processorState.getSize()));
+                    }
+                }
                 std::unique_ptr<AraDocumentHost> araDocument;
                 if (request.bridgeMode == PluginBridgeMode::araCompatibility)
                 {
@@ -4506,6 +4727,7 @@ void StudioAudioEngine::runPluginRuntimeBuilder()
             }
             activePluginFingerprint = fingerprint;
             activePluginGeneration = generation;
+            activePluginRequests = requests;
             buildingPluginFingerprint.clear();
         }
         pluginLateBlocks.store(0, std::memory_order_relaxed);
@@ -4733,6 +4955,13 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
         const auto recordingTransportEnd = renderingRecording
             ? recordingTransportEndSample.load(std::memory_order_relaxed)
             : -1;
+        if (renderLooping)
+        {
+            position = wrapLoopPosition(
+                position,
+                snapshot.loopStartSample,
+                snapshot.loopEndSample);
+        }
         auto outputOffset = 0;
 
         while (outputOffset < numSamples)
@@ -4740,8 +4969,7 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
             auto samplesThisBlock = std::min(
                 numSamples - outputOffset,
                 PluginBridgeSharedState::maxBlockSize);
-            if (renderLooping
-                && position < snapshot.loopEndSample)
+            if (renderLooping)
             {
                 samplesThisBlock = static_cast<int>(
                     std::min<std::int64_t>(
@@ -5244,14 +5472,11 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
                     float clickLeft = 0.0f;
                     float clickRight = 0.0f;
                     auto clickPosition = position + sample;
-                    if (renderLooping
-                        && clickPosition >= snapshot.loopEndSample)
-                    {
-                        const auto loopLength = snapshot.loopEndSample - snapshot.loopStartSample;
-                        if (loopLength > 0)
-                            clickPosition = snapshot.loopStartSample
-                                + (clickPosition - snapshot.loopStartSample) % loopLength;
-                    }
+                    if (renderLooping)
+                        clickPosition = wrapLoopPosition(
+                            clickPosition,
+                            snapshot.loopStartSample,
+                            snapshot.loopEndSample);
                     if (renderingRecording || clickPosition < snapshot.contentLengthSamples)
                         addMetronome(snapshot, clickPosition, clickLeft, clickRight);
                     snapshot.clickBuffer.setSample(0, sample, clickLeft);
@@ -5318,10 +5543,10 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
             if (renderLooping
                 && position >= snapshot.loopEndSample)
             {
-                const auto loopLength = snapshot.loopEndSample - snapshot.loopStartSample;
-                if (loopLength > 0)
-                    position = snapshot.loopStartSample
-                        + (position - snapshot.loopStartSample) % loopLength;
+                position = wrapLoopPosition(
+                    position,
+                    snapshot.loopStartSample,
+                    snapshot.loopEndSample);
             }
             else if (!renderingRecording && position >= snapshot.lengthSamples)
             {

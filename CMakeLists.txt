@@ -126,8 +126,10 @@ set(STUDIO_DUO_PLUGIN_SOURCES
     src/plugin_host/PluginEditorWindow.h
     src/plugin_host/PluginFormats.cpp
     src/plugin_host/PluginFormats.h
+    src/plugin_host/SampleAccurateAutomationTarget.h
     src/plugin_host/PluginStateStore.cpp
     src/plugin_host/PluginStateStore.h
+    src/plugin_host/ValidatedPluginStateTarget.h
     src/plugin_host/ScreamForgeValidation.cpp
     src/plugin_host/ScreamForgeValidation.h
 )

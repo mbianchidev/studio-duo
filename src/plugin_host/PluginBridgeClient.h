@@ -43,8 +43,8 @@ public:
     [[nodiscard]] std::uint64_t lateBlockCount() const noexcept;
     [[nodiscard]] int reportedLatencySamples() const noexcept;
     [[nodiscard]] double reportedTailSeconds() const noexcept;
-    [[nodiscard]] const std::vector<PluginParameterDescriptor>&
-        parameterDescriptors() const noexcept;
+    [[nodiscard]] std::vector<PluginParameterDescriptor>
+        parameterDescriptors() const;
     [[nodiscard]] juce::String diagnosticState() const;
 
 private:
@@ -63,6 +63,7 @@ private:
     juce::Result sendEditorCommand(const juce::String& command,
                                   int width = 0,
                                   int height = 0);
+    void updateParameterMetadata(const juce::String& encoded);
 
     juce::File sharedFile;
     std::unique_ptr<juce::MemoryMappedFile> mapping;
@@ -95,6 +96,7 @@ private:
     std::atomic<int> pluginLatencySamples { 0 };
     std::atomic<double> pluginTailSeconds { 0.0 };
     std::vector<PluginParameterDescriptor> parameters;
+    mutable std::mutex parameterMutex;
     std::mutex commandMutex;
     std::mutex responseMutex;
     std::condition_variable responseCondition;

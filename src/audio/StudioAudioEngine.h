@@ -7,6 +7,7 @@
 #include "plugin_host/PluginBridgeClient.h"
 #include "plugin_host/AraDocumentHost.h"
 #include "plugin_host/PluginEditorWindow.h"
+#include "plugin_host/SampleAccurateAutomationTarget.h"
 
 #include <juce_audio_devices/juce_audio_devices.h>
 #include <juce_audio_formats/juce_audio_formats.h>
@@ -110,6 +111,7 @@ public:
         juce::String name;
         juce::Result result { juce::Result::ok() };
         juce::MemoryBlock state;
+        bool preservePreviousState = false;
     };
 
     StudioAudioEngine();
@@ -136,9 +138,10 @@ public:
 #if defined(STUDIO_DUO_TESTING)
     [[nodiscard]] int minimumRouteBufferCapacityForTesting() const noexcept;
     [[nodiscard]] double activeSnapshotSampleRateForTesting() const noexcept;
+    void processActiveBlockForTesting(int samples);
 #endif
     [[nodiscard]] std::vector<RecordingProgress> recordingProgress() const;
-    [[nodiscard]] std::vector<PluginRuntimeStatus> pluginRuntimeStatuses() const;
+    [[nodiscard]] std::vector<PluginRuntimeStatus> pluginRuntimeStatuses();
     [[nodiscard]] std::vector<TrackMeterSnapshot> trackMeterSnapshots() const;
     [[nodiscard]] std::vector<PluginStateCapture> capturePluginStates(
         int timeoutMilliseconds);
@@ -473,11 +476,12 @@ private:
                              const std::vector<RenderSource::PluginAutomation>*
                                  automation = nullptr,
                              std::int64_t timelineSample = 0) noexcept;
-    static void processInProcessRuntime(
+    static bool processInProcessRuntime(
         InsertRuntime& insert,
         juce::AudioBuffer<float>& buffer,
         const juce::AudioBuffer<float>* sidechain,
-        int sidechainSampleOffset = 0) noexcept;
+        int sidechainSampleOffset = 0,
+        std::span<const PluginBridgeParameterEvent> automation = {}) noexcept;
     void requestPluginRuntime(std::vector<PluginRuntimeRequest> requests,
                               RenderSnapshot snapshot,
                               bool renderOwned);
@@ -561,6 +565,7 @@ private:
     juce::ThreadPool pluginRuntimeBuilder { 1 };
     mutable juce::CriticalSection pluginRequestLock;
     std::vector<PluginRuntimeRequest> pendingPluginRequests;
+    std::vector<PluginRuntimeRequest> activePluginRequests;
     std::optional<RenderSnapshot> pendingPluginSnapshot;
     std::uint64_t pendingSnapshotGeneration = 0;
     juce::String pendingPluginFingerprint;

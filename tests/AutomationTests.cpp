@@ -388,6 +388,69 @@ void automationTests()
                && looped.getSample(0, 125) > 0.1f
                && std::abs(looped.getSample(0, 175)) < 0.001f,
            "Track automation wraps exactly with audio at mid-block loop boundaries.");
+    engine.seekSeconds(loopProject.loopEndSeconds);
+    expect(engine.positionSeconds() < 1.0 / 48000.0,
+           "Seeking exactly to loop end normalizes to loop start.");
+    engine.seekSeconds(250.0 / 48000.0);
+    expect(std::abs(
+               engine.positionSeconds() - 50.0 / 48000.0)
+               < 1.0 / 48000.0,
+           "Seeking beyond loop end normalizes before the first automation block.");
+
+    auto exactProject = studio::Project::createDefault();
+    auto exactClip = clip;
+    exactClip.durationSeconds = 64.0 / 48000.0;
+    exactClip.sourceLengthSeconds = exactClip.durationSeconds;
+    exactClip.sourceRangeEndSeconds = exactClip.durationSeconds;
+    exactProject.tracks.front().clips.push_back(exactClip);
+    studio::PluginInsert exactInsert;
+    exactInsert.pluginIdentifier = "studio.device.gain";
+    exactInsert.name = "Exact gain";
+    exactInsert.format = "Studio Duo";
+    exactInsert.bundledDevice = true;
+    exactInsert.bridgeMode =
+        studio::PluginBridgeMode::trustedInProcess;
+    exactProject.tracks.front().inserts.push_back(exactInsert);
+    studio::AutomationLane exactLane;
+    exactLane.target.type =
+        studio::AutomationTargetType::deviceParameter;
+    exactLane.target.trackId = exactProject.tracks.front().id;
+    exactLane.target.insertId = exactInsert.id;
+    exactLane.target.parameterIndex = 0;
+    exactLane.interpolation =
+        studio::AutomationInterpolation::linear;
+    exactLane.points = {
+        { juce::Uuid().toString(), 0.0, 0.5 },
+        { juce::Uuid().toString(), 64.0 / 48000.0, 1.0 }
+    };
+    exactProject.automationLanes.push_back(exactLane);
+    studio::StudioAudioEngine::PluginRuntimeRequest exactRequest;
+    exactRequest.trackId = exactProject.tracks.front().id;
+    exactRequest.insertId = exactInsert.id;
+    exactRequest.name = exactInsert.name;
+    exactRequest.deviceIdentifier = exactInsert.pluginIdentifier;
+    exactRequest.bridgeMode =
+        studio::PluginBridgeMode::trustedInProcess;
+    juce::AudioBuffer<float> exactRender;
+    expect(engine.renderToBuffer(
+               exactProject,
+               exactRender,
+               48000.0,
+               { exactRequest })
+               .wasOk(),
+           "Processor-native gain ramps render.");
+    const auto expectedAt17 = 0.2f
+        * juce::Decibels::decibelsToGain(
+            24.0f * 17.0f / 64.0f);
+    const auto expectedAt33 = 0.2f
+        * juce::Decibels::decibelsToGain(
+            24.0f * 33.0f / 64.0f);
+    expect(std::abs(exactRender.getSample(0, 17) - expectedAt17)
+                   < 0.002f
+               && std::abs(
+                      exactRender.getSample(0, 33) - expectedAt33)
+                      < 0.002f,
+           "Bundled linear automation evaluates on every exact sample.");
 
     auto stressProject = studio::Project::createDefault();
     auto stressClip = clip;
@@ -420,6 +483,14 @@ void automationTests()
               stressClip.durationSeconds,
               0.8 }
         };
+        if (parameter == 0)
+        {
+            parameterLane.points.insert(
+                parameterLane.points.begin() + 1,
+                { juce::Uuid().toString(),
+                  1.0 / 48000.0,
+                  0.3 });
+        }
         stressProject.automationLanes.push_back(
             std::move(parameterLane));
     }

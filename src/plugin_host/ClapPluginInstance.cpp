@@ -6,6 +6,7 @@
 #include <atomic>
 #include <climits>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <limits>
 #include <optional>
@@ -62,6 +63,11 @@ juce::AudioChannelSet channelSet(std::uint32_t channels)
 class ClapPluginInstance::Impl
 {
 public:
+    static constexpr std::size_t maximumScheduledAutomationEvents =
+        static_cast<std::size_t>(
+            PluginBridgeSharedState::maxParameterEvents)
+        * 4;
+
     struct Module
     {
         ~Module()
@@ -415,6 +421,14 @@ public:
             return plainValue.load(std::memory_order_relaxed);
         }
 
+        [[nodiscard]] double plainForNormalized(
+            float normalized) const noexcept
+        {
+            return info.min_value
+                + (info.max_value - info.min_value)
+                    * juce::jlimit(0.0f, 1.0f, normalized);
+        }
+
         void refresh()
         {
             double value = info.default_value;
@@ -434,9 +448,31 @@ public:
             return dirty.load(std::memory_order_acquire);
         }
 
+        [[nodiscard]] bool requiresProcess() const noexcept
+        {
+            return (info.flags & CLAP_PARAM_REQUIRES_PROCESS) != 0;
+        }
+
         void updateFromPlugin(double value) noexcept
         {
             plainValue.store(value, std::memory_order_relaxed);
+            dirty.store(false, std::memory_order_release);
+        }
+
+        void updateInfo(const clap_param_info_t& value)
+        {
+            info = value;
+            refresh();
+        }
+
+        void markRemoved()
+        {
+            info.cookie = nullptr;
+            info.flags |= CLAP_PARAM_IS_READONLY | CLAP_PARAM_IS_HIDDEN;
+            std::snprintf(
+                info.name,
+                sizeof(info.name),
+                "Removed parameter");
             dirty.store(false, std::memory_order_release);
         }
 
@@ -624,11 +660,25 @@ public:
             });
     }
 
-    void buildDirtyParameterEvents()
+    [[nodiscard]] bool hasDirtyProcessParameters() const noexcept
+    {
+        return std::any_of(
+            parameters.cbegin(),
+            parameters.cend(),
+            [](const auto* parameter)
+            {
+                return parameter->requiresProcess()
+                    && parameter->isDirty();
+            });
+    }
+
+    void buildDirtyParameterEvents(bool processDelivery)
     {
         inputEvents.count = 0;
         for (auto* parameter : parameters)
         {
+            if (!processDelivery && parameter->requiresProcess())
+                continue;
             if (!parameter->consumeDirty())
                 continue;
             if (inputEvents.count >= inputEvents.values.size())
@@ -685,7 +735,7 @@ public:
             processing.load(std::memory_order_acquire);
         if (wasProcessing)
             stopProcessingOnAudioThread();
-        buildDirtyParameterEvents();
+        buildDirtyParameterEvents(false);
         const auto explicitlyRequested =
             flushRequested.exchange(false, std::memory_order_acq_rel);
         if (inputEvents.count == 0 && !explicitlyRequested)
@@ -723,6 +773,91 @@ public:
             inputPointers[index].resize(inputs[index].channels);
         for (std::size_t index = 0; index < outputs.size(); ++index)
             outputPointers[index].resize(outputs[index].channels);
+    }
+
+    void rebuildParameterMetadata(
+        ClapPluginInstance& owner,
+        bool rebuildAll)
+    {
+        if (params == nullptr)
+            return;
+
+        lifecycleChanging.store(true, std::memory_order_seq_cst);
+        waitForAudioCalls();
+        const auto wasActive = active.load(std::memory_order_acquire);
+        if (rebuildAll)
+        {
+            stopProcessingOnAudioThread();
+            if (active.exchange(false, std::memory_order_acq_rel))
+                plugin->deactivate(plugin);
+        }
+
+        std::vector<Parameter*> hosted;
+        for (auto* parameter : owner.getParameters())
+            if (auto* clapParameter =
+                    dynamic_cast<Parameter*>(parameter))
+                hosted.push_back(clapParameter);
+
+        const auto count = params->count(plugin);
+        std::vector<Parameter*> rebuilt;
+        rebuilt.reserve(count);
+        for (std::uint32_t index = 0; index < count; ++index)
+        {
+            clap_param_info_t info {};
+            if (!params->get_info(plugin, index, &info))
+                continue;
+            if (index < hosted.size())
+            {
+                hosted[index]->updateInfo(info);
+                rebuilt.push_back(hosted[index]);
+            }
+            else
+            {
+                auto parameter = std::make_unique<Parameter>(
+                    info,
+                    plugin,
+                    params);
+                auto* added = dynamic_cast<Parameter*>(
+                    owner.addClapHostedParameter(
+                        std::move(parameter)));
+                if (added != nullptr)
+                {
+                    hosted.push_back(added);
+                    rebuilt.push_back(added);
+                }
+            }
+        }
+        for (std::size_t index = rebuilt.size();
+             index < hosted.size();
+             ++index)
+            hosted[index]->markRemoved();
+        parameters = std::move(rebuilt);
+        inputEvents.values.resize(
+            parameters.size()
+            + maximumScheduledAutomationEvents);
+        scheduledAutomationEventCount = 0;
+
+        if (rebuildAll && wasActive)
+        {
+            if (plugin->activate(
+                    plugin,
+                    sampleRate,
+                    1,
+                    static_cast<std::uint32_t>(
+                        maximumBlockSize)))
+            {
+                active.store(true, std::memory_order_release);
+                host->processRequested.store(
+                    true,
+                    std::memory_order_release);
+                refreshLatency(owner);
+            }
+        }
+        lifecycleChanging.store(false, std::memory_order_seq_cst);
+        owner.updateHostDisplay(
+            juce::AudioProcessor::ChangeDetails {}
+                .withParameterInfoChanged(true)
+                .withLatencyChanged(rebuildAll));
     }
 
     void refreshLatency(ClapPluginInstance& owner)
@@ -790,8 +925,18 @@ public:
         const auto rescanFlags = parameterRescanFlags.exchange(
             0,
             std::memory_order_acq_rel);
-        if ((rescanFlags & CLAP_PARAM_RESCAN_VALUES) != 0)
+        if ((rescanFlags & CLAP_PARAM_RESCAN_ALL) != 0)
+            rebuildParameterMetadata(owner, true);
+        else if ((rescanFlags & CLAP_PARAM_RESCAN_INFO) != 0)
+            rebuildParameterMetadata(owner, false);
+        else if ((rescanFlags & CLAP_PARAM_RESCAN_VALUES) != 0)
             refreshParameters();
+        if ((rescanFlags & CLAP_PARAM_RESCAN_TEXT) != 0)
+        {
+            owner.updateHostDisplay(
+                juce::AudioProcessor::ChangeDetails {}
+                    .withParameterInfoChanged(true));
+        }
 
         if (flushRequested.load(std::memory_order_acquire)
             || hasDirtyParameters())
@@ -818,6 +963,9 @@ public:
     std::vector<std::vector<float*>> inputPointers;
     std::vector<std::vector<float*>> outputPointers;
     InputEvents inputEvents;
+    std::vector<clap_event_param_value_t> scheduledAutomationEvents;
+    std::uint32_t scheduledAutomationEventCount = 0;
+    std::atomic<std::uint64_t> scheduledAutomationEventsDropped { 0 };
     OutputEvents outputEvents;
     std::atomic<bool> active { false };
     std::atomic<bool> processing { false };
@@ -910,10 +1058,23 @@ ClapPluginInstance::ClapPluginInstance(
             impl->plugin,
             impl->params);
         impl->parameters.push_back(parameter.get());
-        addHostedParameter(std::move(parameter));
+        addClapHostedParameter(std::move(parameter));
     }
-    impl->inputEvents.values.resize(impl->parameters.size());
+    impl->scheduledAutomationEvents.resize(
+        Impl::maximumScheduledAutomationEvents);
+    impl->inputEvents.values.resize(
+        impl->parameters.size()
+        + Impl::maximumScheduledAutomationEvents);
     startTimerHz(50);
+}
+
+juce::AudioProcessorParameter*
+ClapPluginInstance::addClapHostedParameter(
+    std::unique_ptr<juce::HostedAudioProcessorParameter> parameter)
+{
+    auto* result = parameter.get();
+    addHostedParameter(std::move(parameter));
+    return result;
 }
 
 ClapPluginInstance::~ClapPluginInstance()
@@ -1062,7 +1223,29 @@ void ClapPluginInstance::processBlock(juce::AudioBuffer<float>& audio,
         }
         impl->processing.store(true, std::memory_order_release);
     }
-    impl->buildDirtyParameterEvents();
+    impl->buildDirtyParameterEvents(true);
+    for (std::uint32_t index = 0;
+         index < impl->scheduledAutomationEventCount
+         && impl->inputEvents.count < impl->inputEvents.values.size();
+         ++index)
+    {
+        if (impl->scheduledAutomationEvents[index].header.time
+            < static_cast<std::uint32_t>(audio.getNumSamples()))
+        {
+            impl->inputEvents.values[impl->inputEvents.count++] =
+                impl->scheduledAutomationEvents[index];
+        }
+    }
+    impl->scheduledAutomationEventCount = 0;
+    std::sort(
+        impl->inputEvents.values.begin(),
+        impl->inputEvents.values.begin() + impl->inputEvents.count,
+        [](const auto& left, const auto& right)
+        {
+            return left.header.time == right.header.time
+                ? left.param_id < right.param_id
+                : left.header.time < right.header.time;
+        });
 
     const auto inputCount = impl->inputs.size();
     const auto outputCount = impl->outputs.size();
@@ -1234,13 +1417,62 @@ void ClapPluginInstance::changeProgramName(int, const juce::String&)
 void ClapPluginInstance::getStateInformation(
     juce::MemoryBlock& destination)
 {
+    if (const auto result = saveValidatedState(destination);
+        result.failed())
+    {
+        juce::Logger::writeToLog(
+            "clap.state: " + result.getErrorMessage());
+    }
+}
+
+void ClapPluginInstance::setStateInformation(const void* data, int size)
+{
+    if (const auto result = restoreValidatedState(data, size);
+        result.failed())
+    {
+        juce::Logger::writeToLog(
+            "clap.state: " + result.getErrorMessage());
+    }
+}
+
+juce::Result ClapPluginInstance::saveValidatedState(
+    juce::MemoryBlock& destination)
+{
     destination.reset();
     if (impl->state == nullptr)
-        return;
+        return juce::Result::ok();
+
     const auto save = [this, &destination]
     {
+        if (impl->hasDirtyProcessParameters())
+        {
+            const auto wasActive =
+                impl->active.load(std::memory_order_acquire);
+            if (!wasActive)
+                prepareToPlay(
+                    impl->sampleRate,
+                    impl->maximumBlockSize);
+            juce::AudioBuffer<float> silence(
+                std::max({
+                    1,
+                    getTotalNumInputChannels(),
+                    getTotalNumOutputChannels()
+                }),
+                std::max(
+                    1,
+                    std::min(64, impl->maximumBlockSize)));
+            silence.clear();
+            juce::MidiBuffer midi;
+            processBlock(silence, midi);
+            if (!wasActive)
+                releaseResources();
+            if (impl->hasDirtyProcessParameters())
+                return juce::Result::fail(
+                    "The CLAP plugin did not accept a process-only parameter before save.");
+        }
         impl->flushParameters(true);
-        juce::MemoryOutputStream output(destination, true);
+        juce::MemoryBlock candidate;
+        juce::MemoryOutputStream output(candidate, true);
         clap_ostream_t stream {
             &output,
             [](const clap_ostream_t* value,
@@ -1256,22 +1488,64 @@ void ClapPluginInstance::getStateInformation(
                     : -1;
             }
         };
-        impl->state->save(impl->plugin, &stream);
+        const auto saved = impl->state->save(
+            impl->plugin,
+            &stream);
+        output.flush();
+        if (!saved || candidate.isEmpty())
+            return juce::Result::fail(
+                "The CLAP plugin failed to save complete state.");
+
+        juce::MemoryInputStream validationInput(
+            candidate,
+            false);
+        clap_istream_t validationStream {
+            &validationInput,
+            [](const clap_istream_t* value,
+               void* data,
+               std::uint64_t bytes) -> std::int64_t
+            {
+                auto* source = static_cast<juce::MemoryInputStream*>(
+                    value->ctx);
+                const auto requested = static_cast<int>(
+                    std::min<std::uint64_t>(
+                        bytes,
+                        static_cast<std::uint64_t>(INT_MAX)));
+                return static_cast<std::int64_t>(
+                    source->read(data, requested));
+            }
+        };
+        if (!impl->state->load(
+                impl->plugin,
+                &validationStream))
+            return juce::Result::fail(
+                "The CLAP plugin rejected its saved state.");
+
+        impl->refreshParameters();
+        destination = std::move(candidate);
         impl->stateDirty.store(false, std::memory_order_release);
+        return juce::Result::ok();
     };
     const auto* messages =
         juce::MessageManager::getInstanceWithoutCreating();
     if (messages != nullptr && messages->isThisTheMessageThread())
-        save();
-    else if (!juce::MessageManager::callSync(save))
-        juce::Logger::writeToLog(
-            "clap.state: save main thread unavailable");
+        return save();
+    const auto result = juce::MessageManager::callSync(save);
+    return result.has_value()
+        ? *result
+        : juce::Result::fail(
+              "The CLAP state save main thread is unavailable.");
 }
 
-void ClapPluginInstance::setStateInformation(const void* data, int size)
+juce::Result ClapPluginInstance::restoreValidatedState(
+    const void* data,
+    int size)
 {
-    if (impl->state == nullptr || data == nullptr || size <= 0)
-        return;
+    if (impl->state == nullptr)
+        return juce::Result::ok();
+    if (data == nullptr || size <= 0)
+        return juce::Result::fail("CLAP state data is empty.");
+
     const auto load = [this, data, size]
     {
         impl->lifecycleChanging.store(true, std::memory_order_seq_cst);
@@ -1297,26 +1571,171 @@ void ClapPluginInstance::setStateInformation(const void* data, int size)
                     source->read(destination, requested));
             }
         };
-        if (impl->state->load(impl->plugin, &stream))
+        if (!impl->state->load(impl->plugin, &stream))
         {
-            impl->refreshParameters();
-            if (impl->active.load(std::memory_order_acquire))
-            {
-                Impl::Host::AudioThreadScope audioThread;
-                impl->plugin->reset(impl->plugin);
-            }
-            impl->steadyTime = 0;
-            impl->stateDirty.store(false, std::memory_order_release);
+            impl->lifecycleChanging.store(
+                false,
+                std::memory_order_seq_cst);
+            return juce::Result::fail(
+                "The CLAP plugin rejected restored state.");
         }
+        impl->refreshParameters();
+        if (impl->active.load(std::memory_order_acquire))
+        {
+            Impl::Host::AudioThreadScope audioThread;
+            impl->plugin->reset(impl->plugin);
+        }
+        impl->steadyTime = 0;
+        impl->stateDirty.store(false, std::memory_order_release);
         impl->lifecycleChanging.store(false, std::memory_order_seq_cst);
+        return juce::Result::ok();
     };
     const auto* messages =
         juce::MessageManager::getInstanceWithoutCreating();
     if (messages != nullptr && messages->isThisTheMessageThread())
-        load();
-    else if (!juce::MessageManager::callSync(load))
-        juce::Logger::writeToLog(
-            "clap.state: load main thread unavailable");
+        return load();
+    const auto result = juce::MessageManager::callSync(load);
+    return result.has_value()
+        ? *result
+        : juce::Result::fail(
+              "The CLAP state load main thread is unavailable.");
+}
+
+bool ClapPluginInstance::supportsSampleAccurateAutomation(
+    std::span<const PluginBridgeParameterEvent>) const noexcept
+{
+    return true;
+}
+
+void ClapPluginInstance::processBlockWithAutomation(
+    juce::AudioBuffer<float>& audio,
+    juce::MidiBuffer& midi,
+    std::span<const PluginBridgeParameterEvent> events) noexcept
+{
+    if (impl->lifecycleChanging.load(std::memory_order_seq_cst))
+    {
+        audio.clear();
+        return;
+    }
+    impl->processCallsInFlight.fetch_add(
+        1,
+        std::memory_order_seq_cst);
+    struct AutomationScope
+    {
+        ~AutomationScope()
+        {
+            count.fetch_sub(1, std::memory_order_seq_cst);
+        }
+        std::atomic<int>& count;
+    } automationScope { impl->processCallsInFlight };
+    if (impl->lifecycleChanging.load(std::memory_order_seq_cst))
+    {
+        audio.clear();
+        return;
+    }
+
+    struct ScheduledAutomationScope
+    {
+        ~ScheduledAutomationScope()
+        {
+            count = 0;
+        }
+        std::uint32_t& count;
+    } scheduledScope { impl->scheduledAutomationEventCount };
+    impl->scheduledAutomationEventCount = 0;
+    const auto append = [this](std::uint32_t parameterIndex,
+                               int sampleOffset,
+                               float value)
+    {
+        if (parameterIndex
+            >= static_cast<std::uint32_t>(
+                impl->parameters.size()))
+        {
+            impl->scheduledAutomationEventsDropped.fetch_add(
+                1,
+                std::memory_order_relaxed);
+            return;
+        }
+        if (impl->scheduledAutomationEventCount
+            >= impl->scheduledAutomationEvents.size())
+        {
+            impl->scheduledAutomationEventsDropped.fetch_add(
+                1,
+                std::memory_order_relaxed);
+            return;
+        }
+        const auto* parameter =
+            impl->parameters[static_cast<std::size_t>(
+                parameterIndex)];
+        auto& scheduled = impl->scheduledAutomationEvents[
+            impl->scheduledAutomationEventCount++];
+        scheduled = {};
+        scheduled.header.size = sizeof(scheduled);
+        scheduled.header.time = static_cast<std::uint32_t>(
+            sampleOffset);
+        scheduled.header.space_id = CLAP_CORE_EVENT_SPACE_ID;
+        scheduled.header.type = CLAP_EVENT_PARAM_VALUE;
+        scheduled.param_id = parameter->info.id;
+        scheduled.cookie = parameter->info.cookie;
+        scheduled.note_id = -1;
+        scheduled.port_index = -1;
+        scheduled.channel = -1;
+        scheduled.key = -1;
+        scheduled.value = parameter->plainForNormalized(value);
+    };
+
+    for (const auto& event : events)
+    {
+        const auto start = juce::jlimit(
+            0,
+            std::max(0, audio.getNumSamples() - 1),
+            static_cast<int>(event.sampleOffset));
+        if ((event.flags & PluginBridgeParameterEvent::rampFlag)
+                != 0
+            && event.rampEndOffset > event.sampleOffset)
+        {
+            const auto end = std::min(
+                audio.getNumSamples() - 1,
+                static_cast<int>(event.rampEndOffset));
+            const auto duration = static_cast<float>(
+                event.rampEndOffset - event.sampleOffset);
+            for (auto sample = start; sample <= end; ++sample)
+            {
+                const auto progress = static_cast<float>(
+                    sample - static_cast<int>(event.sampleOffset))
+                    / duration;
+                append(
+                    event.parameterIndex,
+                    sample,
+                    event.value
+                        + (event.rampEndValue - event.value)
+                            * progress);
+            }
+        }
+        else
+        {
+            append(
+                event.parameterIndex,
+                start,
+                event.value);
+        }
+    }
+    for (const auto& event : events)
+    {
+        if (event.parameterIndex
+            >= static_cast<std::uint32_t>(
+                impl->parameters.size()))
+            continue;
+        auto* parameter = impl->parameters[
+            static_cast<std::size_t>(event.parameterIndex)];
+        parameter->updateFromPlugin(
+            parameter->plainForNormalized(
+                (event.flags & PluginBridgeParameterEvent::rampFlag)
+                        != 0
+                    ? event.rampEndValue
+                    : event.value));
+    }
+    processBlock(audio, midi);
 }
 
 void ClapPluginInstance::timerCallback()
