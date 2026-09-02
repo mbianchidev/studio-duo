@@ -242,4 +242,76 @@ void deviceTests()
            "Bundled devices render through the playback processor graph.");
     expect(rendered.getMagnitude(0, 0, 512) > 0.01f,
            "Plugin-inclusive rendering includes bundled DSP output.");
+
+    auto failedRenderProject = studio::Project::createDefault();
+    studio::PluginInsert unavailableInsert;
+    unavailableInsert.pluginIdentifier = "studio.device.unavailable";
+    unavailableInsert.name = "Unavailable Device";
+    unavailableInsert.format = "Studio Duo";
+    unavailableInsert.bundledDevice = true;
+    unavailableInsert.bridgeMode = studio::PluginBridgeMode::trustedInProcess;
+    failedRenderProject.tracks.front().inserts.push_back(unavailableInsert);
+
+    studio::StudioAudioEngine::PluginRuntimeRequest unavailableRequest;
+    unavailableRequest.trackId = failedRenderProject.tracks.front().id;
+    unavailableRequest.insertId = unavailableInsert.id;
+    unavailableRequest.name = unavailableInsert.name;
+    unavailableRequest.deviceIdentifier = unavailableInsert.pluginIdentifier;
+    unavailableRequest.bridgeMode =
+        studio::PluginBridgeMode::trustedInProcess;
+    studio::StudioAudioEngine recoveryEngine;
+    expect(recoveryEngine.updateProject(
+               failedRenderProject,
+               { unavailableRequest })
+               .wasOk(),
+           "The live project accepts a recoverable failed processor.");
+    for (int attempt = 0;
+         attempt < 100 && recoveryEngine.pluginRuntimeTransitionPending();
+         ++attempt)
+        juce::Thread::sleep(10);
+    juce::AudioBuffer<float> failedRender;
+    expect(recoveryEngine.renderToBuffer(
+               failedRenderProject,
+               failedRender,
+               44100.0,
+               { unavailableRequest })
+               .failed(),
+           "Unavailable processors fail plugin-inclusive rendering.");
+    for (int attempt = 0;
+         attempt < 100 && recoveryEngine.pluginRuntimeTransitionPending();
+         ++attempt)
+        juce::Thread::sleep(10);
+    expect(!recoveryEngine.pluginRuntimeTransitionPending()
+               && std::abs(
+                      recoveryEngine.activeSnapshotSampleRateForTesting()
+                      - 48000.0)
+                      < 0.1,
+           ("Failed plugin-inclusive rendering restores the live runtime"
+            " (snapshot sample rate "
+            + juce::String(
+                recoveryEngine.activeSnapshotSampleRateForTesting(),
+                1)
+            + ").")
+               .toRawUTF8());
+
+    studio::StudioAudioEngine reloadEngine;
+    auto validProject = studio::Project::createDefault();
+    expect(reloadEngine.updateProject(validProject).wasOk(),
+           "A valid project is ready before a rejected runtime reload.");
+    for (int attempt = 0;
+         attempt < 100 && reloadEngine.pluginRuntimeTransitionPending();
+         ++attempt)
+        juce::Thread::sleep(10);
+
+    auto invalidProject = validProject;
+    studio::RoutingConnection invalidRoute;
+    invalidRoute.kind = studio::RouteKind::send;
+    invalidRoute.sourceTrackId = "missing-track";
+    invalidRoute.destination.type = studio::RouteEndpointType::track;
+    invalidRoute.destination.trackId = validProject.tracks.front().id;
+    invalidProject.routingConnections.push_back(invalidRoute);
+    expect(reloadEngine.forcePluginRuntimeReload(invalidProject, {}).failed(),
+           "Invalid live projects reject explicit runtime reloads.");
+    expect(!reloadEngine.pluginRuntimeTransitionPending(),
+           "Rejected runtime reloads preserve the previous stable state.");
 }

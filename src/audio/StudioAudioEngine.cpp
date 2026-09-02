@@ -441,6 +441,32 @@ double StudioAudioEngine::currentSampleRate() const noexcept
     return sampleRate.load(std::memory_order_acquire);
 }
 
+#if defined(STUDIO_DUO_TESTING)
+int StudioAudioEngine::minimumRouteBufferCapacityForTesting() const noexcept
+{
+    const auto index = activeSnapshot.load(std::memory_order_acquire);
+    const auto& snapshot = snapshots[static_cast<std::size_t>(index)];
+    auto capacity = PluginBridgeSharedState::maxBlockSize;
+    auto foundRoute = false;
+    for (const auto& track : snapshot.tracks)
+    {
+        for (const auto& route : track.routes)
+        {
+            foundRoute = true;
+            capacity = std::min(capacity,
+                                route.processingBuffer.getNumSamples());
+        }
+    }
+    return foundRoute ? capacity : 0;
+}
+
+double StudioAudioEngine::activeSnapshotSampleRateForTesting() const noexcept
+{
+    const auto index = activeSnapshot.load(std::memory_order_acquire);
+    return snapshots[static_cast<std::size_t>(index)].sampleRate;
+}
+#endif
+
 std::vector<StudioAudioEngine::RecordingProgress> StudioAudioEngine::recordingProgress() const
 {
     const auto count = activeRecorderCount.load(std::memory_order_acquire);
@@ -652,17 +678,35 @@ bool StudioAudioEngine::pluginRuntimeTransitionPending() const
         || desiredPluginFingerprint != activePluginFingerprint;
 }
 
-void StudioAudioEngine::forcePluginRuntimeReload(
+juce::Result StudioAudioEngine::forcePluginRuntimeReload(
     const Project& project,
     std::vector<PluginRuntimeRequest> pluginRequests,
     juce::String insertId)
 {
     juce::ignoreUnused(insertId);
+    juce::String previousDesiredFingerprint;
+    std::uint64_t previousDesiredGeneration = 0;
+    const auto previousMetronome = metronomeEnabled.load(
+        std::memory_order_acquire);
     {
         const juce::ScopedLock lock(pluginRequestLock);
+        previousDesiredFingerprint = desiredPluginFingerprint;
+        previousDesiredGeneration = desiredPluginGeneration;
         desiredPluginFingerprint.clear();
     }
-    updateProject(project, std::move(pluginRequests));
+    const auto result = updateProject(project, std::move(pluginRequests));
+    if (result.failed())
+    {
+        metronomeEnabled.store(previousMetronome,
+                               std::memory_order_release);
+        const juce::ScopedLock lock(pluginRequestLock);
+        if (desiredPluginFingerprint.isEmpty()
+            && desiredPluginGeneration == previousDesiredGeneration)
+        {
+            desiredPluginFingerprint = previousDesiredFingerprint;
+        }
+    }
+    return result;
 }
 
 juce::Result StudioAudioEngine::startRecording(const std::vector<RecordingRequest>& requests,
@@ -1087,7 +1131,8 @@ juce::Result StudioAudioEngine::renderToBuffer(
         playing.store(false, std::memory_order_release);
         seekSeconds(0.0);
 
-        const auto restoreSettings = [&]
+        const auto restoreSettings = [&](bool reloadLiveProject)
+            -> juce::Result
         {
             playing.store(false, std::memory_order_release);
             sampleRate.store(previousSampleRate, std::memory_order_release);
@@ -1095,8 +1140,49 @@ juce::Result StudioAudioEngine::renderToBuffer(
                                   std::memory_order_release);
             metronomeEnabled.store(previousMetronome,
                                    std::memory_order_release);
+            auto restoration = juce::Result::ok();
+            if (reloadLiveProject)
+            {
+                if (const auto result = forcePluginRuntimeReload(
+                        project,
+                        pluginRequests);
+                    result.failed())
+                {
+                    restoration = juce::Result::fail(
+                        "Could not restore the live project: "
+                        + result.getErrorMessage());
+                }
+                else
+                {
+                    for (int attempt = 0;
+                         attempt < 10000 && pluginRuntimeTransitionPending();
+                         ++attempt)
+                        juce::Thread::sleep(1);
+                    if (pluginRuntimeTransitionPending())
+                    {
+                        restoration = juce::Result::fail(
+                            "Timed out while restoring the live project.");
+                    }
+                }
+                metronomeEnabled.store(previousMetronome,
+                                       std::memory_order_release);
+            }
             if (callbackSuspended && deviceManager != nullptr)
                 deviceManager->addAudioCallback(this);
+            return restoration;
+        };
+        const auto restoreAfterFailure = [&](const juce::Result& failure,
+                                             bool reloadLiveProject)
+        {
+            if (const auto restore = restoreSettings(reloadLiveProject);
+                restore.failed())
+            {
+                return juce::Result::fail(
+                    failure.getErrorMessage()
+                    + " Live audio restoration failed: "
+                    + restore.getErrorMessage());
+            }
+            return failure;
         };
 
         if (const auto result = updateProject(
@@ -1104,8 +1190,7 @@ juce::Result StudioAudioEngine::renderToBuffer(
                 pluginRequests);
             result.failed())
         {
-            restoreSettings();
-            return result;
+            return restoreAfterFailure(result, false);
         }
         for (int attempt = 0;
              attempt < 10000 && pluginRuntimeTransitionPending();
@@ -1113,18 +1198,20 @@ juce::Result StudioAudioEngine::renderToBuffer(
             juce::Thread::sleep(1);
         if (pluginRuntimeTransitionPending())
         {
-            restoreSettings();
-            return juce::Result::fail(
-                "Timed out while preparing processors for rendering.");
+            return restoreAfterFailure(
+                juce::Result::fail(
+                    "Timed out while preparing processors for rendering."),
+                true);
         }
         for (const auto& status : pluginRuntimeStatuses())
         {
             if (status.state == PluginRuntimeStatus::State::failed
                 || status.state == PluginRuntimeStatus::State::missing)
             {
-                restoreSettings();
-                return juce::Result::fail(
-                    status.name + ": " + status.message);
+                return restoreAfterFailure(
+                    juce::Result::fail(
+                        status.name + ": " + status.message),
+                    true);
             }
         }
 
@@ -1137,9 +1224,10 @@ juce::Result StudioAudioEngine::renderToBuffer(
                 > static_cast<std::int64_t>(
                     std::numeric_limits<int>::max()))
         {
-            restoreSettings();
-            return juce::Result::fail(
-                "Rendered project is too long for a memory buffer.");
+            return restoreAfterFailure(
+                juce::Result::fail(
+                    "Rendered project is too long for a memory buffer."),
+                true);
         }
         destination.setSize(
             2,
@@ -1195,8 +1283,10 @@ juce::Result StudioAudioEngine::renderToBuffer(
                                 / renderSampleRate))));
             }
         }
-        restoreSettings();
-        forcePluginRuntimeReload(project, std::move(pluginRequests));
+        if (const auto restore = restoreSettings(true); restore.failed())
+            return juce::Result::fail(
+                "Render completed, but live audio restoration failed: "
+                + restore.getErrorMessage());
         return juce::Result::ok();
     }
 
@@ -1823,12 +1913,6 @@ void StudioAudioEngine::configureRuntimeTiming(
                 : track.runtimeLatencySamples;
             resetDelay(route.compensation,
                        routeDestinationLatency - track.runtimeLatencySamples);
-            route.processingBuffer.setSize(
-                2,
-                snapshot.processingQuantum,
-                false,
-                true,
-                false);
             route.processingBuffer.clear();
         }
     }
@@ -3246,16 +3330,15 @@ void StudioAudioEngine::runPluginRuntimeBuilder()
                                               snapshotDestination,
                                               runtimeDestination),
                                    std::memory_order_release);
+            {
+                const juce::ScopedLock statusLock(pluginStatusLock);
+                pluginStatuses = std::move(statuses);
+            }
             activePluginFingerprint = fingerprint;
             activePluginGeneration = generation;
             buildingPluginFingerprint.clear();
         }
         pluginLateBlocks.store(0, std::memory_order_relaxed);
-
-        {
-            const juce::ScopedLock lock(pluginStatusLock);
-            pluginStatuses = std::move(statuses);
-        }
     }
 }
 

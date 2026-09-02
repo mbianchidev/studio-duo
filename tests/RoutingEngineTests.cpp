@@ -203,6 +203,21 @@ void routingEngineTests()
            "Routing render source compiles as audible and processing.");
 
     studio::StudioAudioEngine engine;
+    expect(engine.updateProject(renderProject).wasOk(),
+           "Routed projects publish a real-time processing snapshot.");
+    for (int attempt = 0;
+         attempt < 100 && engine.pluginRuntimeTransitionPending();
+         ++attempt)
+        juce::Thread::sleep(10);
+    const auto routeBufferCapacity =
+        engine.minimumRouteBufferCapacityForTesting();
+    expect(routeBufferCapacity
+               >= studio::PluginBridgeSharedState::maxBlockSize,
+           ("Every routed callback buffer supports the maximum callback chunk"
+            " (capacity "
+            + juce::String(routeBufferCapacity)
+            + ").")
+               .toRawUTF8());
     const auto clipRenderFile = sourceFile.getSiblingFile(
         sourceFile.getFileNameWithoutExtension() + "-clip.wav");
     expect(engine.renderClipToWav(renderClip, clipRenderFile, 48000.0).wasOk(),

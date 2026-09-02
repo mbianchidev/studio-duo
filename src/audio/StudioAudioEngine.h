@@ -130,6 +130,10 @@ public:
     [[nodiscard]] float leftPeak() const noexcept;
     [[nodiscard]] float rightPeak() const noexcept;
     [[nodiscard]] double currentSampleRate() const noexcept;
+#if defined(STUDIO_DUO_TESTING)
+    [[nodiscard]] int minimumRouteBufferCapacityForTesting() const noexcept;
+    [[nodiscard]] double activeSnapshotSampleRateForTesting() const noexcept;
+#endif
     [[nodiscard]] std::vector<RecordingProgress> recordingProgress() const;
     [[nodiscard]] std::vector<PluginRuntimeStatus> pluginRuntimeStatuses() const;
     [[nodiscard]] std::vector<TrackMeterSnapshot> trackMeterSnapshots() const;
@@ -141,9 +145,10 @@ public:
                             juce::String& error);
     [[nodiscard]] std::uint64_t pluginLateBlockCount() const noexcept;
     [[nodiscard]] bool pluginRuntimeTransitionPending() const;
-    void forcePluginRuntimeReload(const Project& project,
-                                  std::vector<PluginRuntimeRequest> pluginRequests,
-                                  juce::String insertId = {});
+    juce::Result forcePluginRuntimeReload(
+        const Project& project,
+        std::vector<PluginRuntimeRequest> pluginRequests,
+        juce::String insertId = {});
 
     juce::Result startRecording(const std::vector<RecordingRequest>& requests,
                                 const RecordingPlan& plan);
