@@ -12,6 +12,7 @@
 #include <condition_variable>
 #include <mutex>
 #include <span>
+#include <thread>
 
 namespace studio
 {
@@ -853,6 +854,124 @@ StudioAudioEngine::delayRefreshAfterTransitionForTesting(
         quantum,
         output.begin());
     return output;
+}
+
+std::vector<float>
+StudioAudioEngine::retiredDelayGenerationForTesting()
+{
+    constexpr auto quantum = 16;
+    RenderSource::DelayCompensator firstGeneration;
+    configureDelayCompensator(
+        firstGeneration,
+        4,
+        quantum);
+    juce::AudioBuffer<float> history(2, 64);
+    for (int sample = 0; sample < history.getNumSamples(); ++sample)
+    {
+        const auto value = static_cast<float>(sample) / 100.0f;
+        history.setSample(0, sample, value);
+        history.setSample(1, sample, value);
+    }
+    applyDelayCompensation(
+        history,
+        history.getNumSamples(),
+        firstGeneration);
+
+    configureDelayCompensator(
+        firstGeneration,
+        8,
+        quantum,
+        0);
+    juce::AudioBuffer<float> initialTransition(2, 4);
+    for (int sample = 0;
+         sample < initialTransition.getNumSamples();
+         ++sample)
+    {
+        const auto value =
+            static_cast<float>(64 + sample) / 100.0f;
+        initialTransition.setSample(0, sample, value);
+        initialTransition.setSample(1, sample, value);
+    }
+    applyDelayCompensation(
+        initialTransition,
+        initialTransition.getNumSamples(),
+        firstGeneration);
+
+    auto retiredGeneration = firstGeneration;
+    auto secondGeneration = firstGeneration;
+    configureDelayCompensator(
+        secondGeneration,
+        8,
+        quantum,
+        1);
+    auto thirdGeneration = secondGeneration;
+    configureDelayCompensator(
+        thirdGeneration,
+        8,
+        quantum,
+        2);
+
+    juce::AudioBuffer<float> retiredOutput(2, 1);
+    retiredOutput.setSample(0, 0, 0.68f);
+    retiredOutput.setSample(1, 0, 0.68f);
+    applyDelayCompensation(
+        retiredOutput,
+        1,
+        retiredGeneration);
+
+    juce::AudioBuffer<float> thirdOutput(2, 1);
+    thirdOutput.setSample(0, 0, 0.69f);
+    thirdOutput.setSample(1, 0, 0.69f);
+    applyDelayCompensation(
+        thirdOutput,
+        1,
+        thirdGeneration);
+    return {
+        retiredOutput.getSample(0, 0),
+        thirdOutput.getSample(0, 0)
+    };
+}
+
+std::array<int, 2>
+StudioAudioEngine::snapshotPublicationSlotsForTesting()
+{
+    StudioAudioEngine engine;
+    engine.activeSnapshot.store(0, std::memory_order_release);
+    engine.activeRenderPair.store(
+        renderPair(0, 0, 0),
+        std::memory_order_release);
+    std::atomic<bool> readerReady { false };
+    std::atomic<bool> releaseReader { false };
+    std::thread retiredReader(
+        [&engine, &readerReady, &releaseReader]
+        {
+            engine.snapshotReaders[0].fetch_add(
+                1,
+                std::memory_order_seq_cst);
+            readerReady.store(true, std::memory_order_release);
+            while (!releaseReader.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            engine.snapshotReaders[0].fetch_sub(
+                1,
+                std::memory_order_seq_cst);
+        });
+    while (!readerReady.load(std::memory_order_acquire))
+        std::this_thread::yield();
+
+    const auto secondGeneration =
+        engine.chooseWritableSnapshot();
+    engine.activeSnapshot.store(
+        secondGeneration,
+        std::memory_order_release);
+    engine.activeRenderPair.store(
+        renderPair(0, secondGeneration, 0),
+        std::memory_order_release);
+    const auto thirdGeneration =
+        engine.chooseWritableSnapshot();
+
+    releaseReader.store(true, std::memory_order_release);
+    retiredReader.join();
+    return { secondGeneration, thirdGeneration };
 }
 #endif
 
@@ -3015,10 +3134,6 @@ void StudioAudioEngine::startPluginSnapshotRefreshLocked()
             }
 
             auto refreshed = *snapshotTemplate;
-            configureRuntimeTiming(refreshed, requests);
-            const auto refreshedTemplate =
-                std::make_shared<RenderSnapshot>(refreshed);
-
             const juce::ScopedLock lock(pluginRequestLock);
             if (snapshotRevision == activeSnapshotRevision
                 && refreshRevision
@@ -3027,6 +3142,12 @@ void StudioAudioEngine::startPluginSnapshotRefreshLocked()
             {
                 const auto destination =
                     chooseWritableSnapshot();
+                configureRuntimeTiming(
+                    refreshed,
+                    requests,
+                    destination);
+                const auto refreshedTemplate =
+                    std::make_shared<RenderSnapshot>(refreshed);
                 activeSnapshotTemplate = refreshedTemplate;
                 ++activeSnapshotRevision;
                 snapshots[static_cast<std::size_t>(destination)] =
@@ -3056,7 +3177,8 @@ void StudioAudioEngine::startPluginSnapshotRefreshLocked()
 void StudioAudioEngine::configureDelayCompensator(
     RenderSource::DelayCompensator& delay,
     int samples,
-    int processingQuantum)
+    int processingQuantum,
+    int transitionProgressSlot)
 {
     const auto previousDelay = delay.delaySamples;
     const auto nextDelay = std::clamp(
@@ -3066,7 +3188,33 @@ void StudioAudioEngine::configureDelayCompensator(
     const auto requiredCapacity = nextDelay + 1;
     if (delay.state != nullptr
         && previousDelay == nextDelay)
+    {
+        if (transitionProgressSlot >= 0
+            && delay.transition.has_value())
+        {
+            const auto nextSlot = std::clamp(
+                transitionProgressSlot,
+                0,
+                2);
+            if (nextSlot
+                != delay.transition->positionSlot)
+            {
+                const auto position =
+                    delay.state->transitionPositions[
+                        static_cast<std::size_t>(
+                            delay.transition
+                                ->positionSlot)].load(
+                        std::memory_order_acquire);
+                delay.state->transitionPositions[
+                    static_cast<std::size_t>(
+                        nextSlot)].store(
+                    position,
+                    std::memory_order_release);
+                delay.transition->positionSlot = nextSlot;
+            }
+        }
         return;
+    }
 
     auto targetState = delay.state;
     if (targetState == nullptr
@@ -3117,10 +3265,11 @@ void StudioAudioEngine::configureDelayCompensator(
         transition->fadeSamples = std::max(
             1,
             processingQuantum);
-        transition->positionSlot =
-            targetState == delay.state
-                && delay.transition.has_value()
-            ? 1 - delay.transition->positionSlot
+        transition->positionSlot = transitionProgressSlot >= 0
+            ? std::clamp(transitionProgressSlot, 0, 2)
+            : targetState == delay.state
+                  && delay.transition.has_value()
+            ? (delay.transition->positionSlot + 1) % 3
             : 0;
         targetState->transitionPositions[
             static_cast<std::size_t>(
@@ -3135,7 +3284,8 @@ void StudioAudioEngine::configureDelayCompensator(
 
 void StudioAudioEngine::configureRuntimeTiming(
     RenderSnapshot& snapshot,
-    const std::vector<PluginRuntimeRequest>& pluginRequests) const
+    const std::vector<PluginRuntimeRequest>& pluginRequests,
+    int transitionProgressSlot) const
 {
     const auto latencyForKey = [&pluginRequests, &snapshot](std::uint64_t key)
     {
@@ -3203,7 +3353,8 @@ void StudioAudioEngine::configureRuntimeTiming(
             configureDelayCompensator(
                 source.compensation,
                 alignedInputLatency - source.runtimeLatencySamples,
-                snapshot.processingQuantum);
+                snapshot.processingQuantum,
+                transitionProgressSlot);
 
         track.runtimeLatencySamples = alignedInputLatency
             + latencyForKey(track.runtimeKey);
@@ -3241,7 +3392,8 @@ void StudioAudioEngine::configureRuntimeTiming(
         configureDelayCompensator(
             track.compensation,
             destinationLatency - track.runtimeLatencySamples,
-            snapshot.processingQuantum);
+            snapshot.processingQuantum,
+            transitionProgressSlot);
         for (auto& route : track.routes)
         {
             const auto routeDestinationLatency = route.destinationIndex >= 0
@@ -3251,7 +3403,8 @@ void StudioAudioEngine::configureRuntimeTiming(
             configureDelayCompensator(
                 route.compensation,
                 routeDestinationLatency - track.runtimeLatencySamples,
-                snapshot.processingQuantum);
+                snapshot.processingQuantum,
+                transitionProgressSlot);
             route.processingBuffer.clear();
         }
     }
@@ -3260,7 +3413,8 @@ void StudioAudioEngine::configureRuntimeTiming(
     configureDelayCompensator(
         snapshot.clickCompensation,
         masterInputLatency + masterLatency,
-        snapshot.processingQuantum);
+        snapshot.processingQuantum,
+        transitionProgressSlot);
     snapshot.lengthSamples = snapshot.contentLengthSamples
         + masterInputLatency
         + masterLatency
@@ -4651,15 +4805,16 @@ void StudioAudioEngine::requestPluginRuntime(
             resolvePluginAutomationParameterIds(
                 snapshot,
                 statuses);
+            const auto destination = chooseWritableSnapshot();
             configureRuntimeTiming(
                 snapshot,
-                activePluginRequests);
+                activePluginRequests,
+                destination);
             activeSnapshotTemplate =
                 std::make_shared<RenderSnapshot>(snapshot);
             ++activeSnapshotRevision;
             ++pluginSnapshotRefreshRevision;
             pluginSnapshotRefreshPending = false;
-            const auto destination = chooseWritableSnapshot();
             snapshots[static_cast<std::size_t>(destination)] = std::move(snapshot);
             snapshotGenerations[static_cast<std::size_t>(destination)].store(
                 activePluginGeneration,
@@ -5234,15 +5389,18 @@ void StudioAudioEngine::runPluginRuntimeBuilder()
             resolvePluginAutomationParameterIds(
                 *pendingPluginSnapshot,
                 statuses);
-            configureRuntimeTiming(*pendingPluginSnapshot, requests);
+            const auto runtimeDestination = chooseWritableRuntime();
+            const auto snapshotDestination = chooseWritableSnapshot();
+            configureRuntimeTiming(
+                *pendingPluginSnapshot,
+                requests,
+                snapshotDestination);
             activeSnapshotTemplate =
                 std::make_shared<RenderSnapshot>(
                     *pendingPluginSnapshot);
             ++activeSnapshotRevision;
             ++pluginSnapshotRefreshRevision;
             pluginSnapshotRefreshPending = false;
-            const auto runtimeDestination = chooseWritableRuntime();
-            const auto snapshotDestination = chooseWritableSnapshot();
             pluginRuntimeGraphs[static_cast<std::size_t>(runtimeDestination)] = std::move(graph);
             snapshots[static_cast<std::size_t>(snapshotDestination)]
                 = std::move(*pendingPluginSnapshot);

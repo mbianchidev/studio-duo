@@ -150,6 +150,10 @@ public:
         delayRefreshAfterTransitionForTesting(
             int previousDelay,
             int nextDelay);
+    [[nodiscard]] static std::vector<float>
+        retiredDelayGenerationForTesting();
+    [[nodiscard]] static std::array<int, 2>
+        snapshotPublicationSlotsForTesting();
 #endif
     [[nodiscard]] std::vector<RecordingProgress> recordingProgress() const;
     [[nodiscard]] std::vector<PluginRuntimeStatus> pluginRuntimeStatuses();
@@ -216,7 +220,7 @@ private:
                 int writePosition = 0;
                 juce::AudioBuffer<float> buffer;
                 std::atomic<std::int64_t> samplesWritten { 0 };
-                std::array<std::atomic<int>, 2>
+                std::array<std::atomic<int>, 3>
                     transitionPositions {};
             };
 
@@ -504,12 +508,15 @@ private:
         const juce::AudioBuffer<float>& source,
         double targetSampleRate,
         juce::String& error) const;
-    void configureRuntimeTiming(RenderSnapshot& snapshot,
-                                const std::vector<PluginRuntimeRequest>& pluginRequests) const;
+    void configureRuntimeTiming(
+        RenderSnapshot& snapshot,
+        const std::vector<PluginRuntimeRequest>& pluginRequests,
+        int transitionProgressSlot = -1) const;
     static void configureDelayCompensator(
         RenderSource::DelayCompensator& delay,
         int samples,
-        int processingQuantum);
+        int processingQuantum,
+        int transitionProgressSlot = -1);
     void resolvePluginAutomationParameterIds(
         const RenderSnapshot& snapshot,
         const std::vector<PluginRuntimeStatus>& statuses) const;

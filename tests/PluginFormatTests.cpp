@@ -39,6 +39,12 @@ void pluginFormatTests()
     const auto refreshedAfterTransition =
         studio::StudioAudioEngine::
             delayRefreshAfterTransitionForTesting(4, 200);
+    const auto retiredGeneration =
+        studio::StudioAudioEngine::
+            retiredDelayGenerationForTesting();
+    const auto publicationSlots =
+        studio::StudioAudioEngine::
+            snapshotPublicationSlotsForTesting();
     expect(increasedDelay.size() == 16
                && std::abs(increasedDelay.front() - 0.60f)
                       < 0.0001f
@@ -76,6 +82,17 @@ void pluginFormatTests()
                       refreshedAfterTransition.back() - 0.95f)
                       < 0.0001f,
            "A later unchanged-delay refresh retains completed transition progress and cannot replay the old ring.");
+    expect(retiredGeneration.size() == 2
+               && std::abs(
+                      retiredGeneration[0] - 0.6293333f)
+                      < 0.0001f
+               && std::abs(
+                      retiredGeneration[1] - 0.6393333f)
+                      < 0.0001f,
+           "A blocked retired delay generation keeps independent progress across two newer publications.");
+    expect(publicationSlots[0] == 1
+               && publicationSlots[1] == 2,
+           "Two newer snapshot publications reserve distinct slots while a retired generation remains blocked.");
 
     studio::ClapPluginFormat clapFormat;
     juce::OwnedArray<juce::PluginDescription> descriptions;
