@@ -23,5 +23,9 @@ public:
                      const PluginStateReference& reference,
                      juce::MemoryBlock& state,
                      juce::String& error);
+    static bool materialize(const juce::File& sourcePackage,
+                            const juce::File& destinationPackage,
+                            const PluginStateReference& reference,
+                            juce::String& error);
 };
 }

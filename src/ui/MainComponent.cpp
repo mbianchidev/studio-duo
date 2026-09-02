@@ -16,6 +16,102 @@ namespace studio
 {
 namespace
 {
+void copyPluginStateReference(const PluginInsert& source,
+                              PluginInsert& destination)
+{
+    destination.stateFile = source.stateFile;
+    destination.stateHash = source.stateHash;
+}
+
+void applyPluginStateReferences(const Project& source,
+                                Project& destination)
+{
+    for (const auto& sourceTrack : source.tracks)
+    {
+        auto* destinationTrack = destination.findTrack(sourceTrack.id);
+        if (destinationTrack == nullptr)
+            continue;
+        for (const auto& sourceInsert : sourceTrack.inserts)
+        {
+            const auto destinationInsert = std::find_if(
+                destinationTrack->inserts.begin(),
+                destinationTrack->inserts.end(),
+                [&sourceInsert](const auto& candidate)
+                {
+                    return candidate.id == sourceInsert.id;
+                });
+            if (destinationInsert != destinationTrack->inserts.end())
+                copyPluginStateReference(
+                    sourceInsert,
+                    *destinationInsert);
+        }
+    }
+    for (const auto& sourceSnapshot : source.toneSnapshots)
+    {
+        const auto destinationSnapshot = std::find_if(
+            destination.toneSnapshots.begin(),
+            destination.toneSnapshots.end(),
+            [&sourceSnapshot](const auto& candidate)
+            {
+                return candidate.id == sourceSnapshot.id;
+            });
+        if (destinationSnapshot == destination.toneSnapshots.end())
+            continue;
+        for (const auto& sourceInsert : sourceSnapshot.inserts)
+        {
+            const auto destinationInsert = std::find_if(
+                destinationSnapshot->inserts.begin(),
+                destinationSnapshot->inserts.end(),
+                [&sourceInsert](const auto& candidate)
+                {
+                    return candidate.id == sourceInsert.id;
+                });
+            if (destinationInsert != destinationSnapshot->inserts.end())
+                copyPluginStateReference(
+                    sourceInsert,
+                    *destinationInsert);
+        }
+    }
+    for (const auto& sourceSnapshot : source.mixerSnapshots)
+    {
+        const auto destinationSnapshot = std::find_if(
+            destination.mixerSnapshots.begin(),
+            destination.mixerSnapshots.end(),
+            [&sourceSnapshot](const auto& candidate)
+            {
+                return candidate.id == sourceSnapshot.id;
+            });
+        if (destinationSnapshot == destination.mixerSnapshots.end())
+            continue;
+        for (const auto& sourceTrack : sourceSnapshot.tracks)
+        {
+            const auto destinationTrack = std::find_if(
+                destinationSnapshot->tracks.begin(),
+                destinationSnapshot->tracks.end(),
+                [&sourceTrack](const auto& candidate)
+                {
+                    return candidate.trackId == sourceTrack.trackId;
+                });
+            if (destinationTrack == destinationSnapshot->tracks.end())
+                continue;
+            for (const auto& sourceInsert : sourceTrack.inserts)
+            {
+                const auto destinationInsert = std::find_if(
+                    destinationTrack->inserts.begin(),
+                    destinationTrack->inserts.end(),
+                    [&sourceInsert](const auto& candidate)
+                    {
+                        return candidate.id == sourceInsert.id;
+                    });
+                if (destinationInsert != destinationTrack->inserts.end())
+                    copyPluginStateReference(
+                        sourceInsert,
+                        *destinationInsert);
+            }
+        }
+    }
+}
+
 class TrackColourSelector final : public juce::ColourSelector,
                                   private juce::ChangeListener
 {
@@ -1537,9 +1633,27 @@ void MainComponent::showAudioSettings()
 
 void MainComponent::saveProjectTo(const juce::File& package)
 {
+    if (exportInProgress)
+    {
+        setStatus("Another save or render is already in progress.", true);
+        return;
+    }
+    exportInProgress = true;
+    stopTimer();
+    exportInputBlocker.setVisible(true);
+    exportInputBlocker.toFront(false);
+    exportInputBlocker.grabKeyboardFocus();
+    const auto finishSave = [this]
+    {
+        exportInputBlocker.setVisible(false);
+        startTimerHz(30);
+        exportInProgress = false;
+    };
+
     const auto normalised = ProjectFile::normalisePackagePath(package);
     if (project.name == "Untitled")
         project.name = normalised.getFileNameWithoutExtension();
+    auto projectToSave = project;
 
     const auto resumePlayback = audioEngine.isPlaying();
     if (resumePlayback)
@@ -1551,11 +1665,12 @@ void MainComponent::saveProjectTo(const juce::File& package)
         {
             if (resumePlayback)
                 audioEngine.play();
+            finishSave();
             showError("Project save failed",
                       capture.result.getErrorMessage());
             return;
         }
-        auto* track = project.findTrack(capture.trackId);
+        auto* track = projectToSave.findTrack(capture.trackId);
         if (track == nullptr)
             continue;
         const auto insert = std::find_if(
@@ -1586,6 +1701,7 @@ void MainComponent::saveProjectTo(const juce::File& package)
         {
             if (resumePlayback)
                 audioEngine.play();
+            finishSave();
             showError("Project save failed", stateError);
             return;
         }
@@ -1593,15 +1709,32 @@ void MainComponent::saveProjectTo(const juce::File& package)
         insert->stateHash = reference->hash;
     }
 
-    const auto result = ProjectFile::save(project, normalised);
+    juce::String materializeError;
+    if (!materializePluginStateReferences(
+            projectToSave,
+            projectPackage,
+            normalised,
+            stateWarning,
+            materializeError))
+    {
+        if (resumePlayback)
+            audioEngine.play();
+        finishSave();
+        showError("Project save failed", materializeError);
+        return;
+    }
+
+    const auto result = ProjectFile::save(projectToSave, normalised);
     if (result.failed())
     {
         if (resumePlayback)
             audioEngine.play();
+        finishSave();
         showError("Project save failed", result.getErrorMessage());
         return;
     }
 
+    applyPluginStateReferences(projectToSave, project);
     projectPackage = normalised;
     reducedIsolationMarkerSignature.clear();
     updateReducedIsolationMarker();
@@ -1609,12 +1742,147 @@ void MainComponent::saveProjectTo(const juce::File& package)
     projectLabel.setText(project.name, juce::dontSendNotification);
     if (resumePlayback)
         audioEngine.play();
+    finishSave();
     setStatus(
         "Saved "
             + projectPackage.getFullPathName()
             + (stateWarning.isNotEmpty()
                    ? " (preserved prior state: " + stateWarning + ")"
                    : juce::String()));
+}
+
+bool MainComponent::captureCurrentPluginStates(
+    const std::vector<juce::String>& trackIds,
+    juce::String& error)
+{
+    const auto needsProcessorState = std::any_of(
+        trackIds.cbegin(),
+        trackIds.cend(),
+        [this](const auto& trackId)
+        {
+            const auto* track = project.findTrack(trackId);
+            return track != nullptr && !track->inserts.empty();
+        });
+    if (!needsProcessorState)
+        return true;
+    if (!projectPackage.exists())
+    {
+        error = "Save the project before capturing processor state.";
+        return false;
+    }
+    for (auto& capture : audioEngine.capturePluginStates(2000))
+    {
+        if (capture.insertId.isEmpty())
+        {
+            error = capture.result.getErrorMessage();
+            return false;
+        }
+        if (std::find(trackIds.cbegin(),
+                      trackIds.cend(),
+                      capture.trackId) == trackIds.cend())
+            continue;
+        if (capture.result.failed())
+        {
+            error = capture.name
+                + ": "
+                + capture.result.getErrorMessage();
+            return false;
+        }
+        if (capture.state.isEmpty())
+            continue;
+
+        auto* track = project.findTrack(capture.trackId);
+        if (track == nullptr)
+            continue;
+        const auto insert = std::find_if(
+            track->inserts.begin(),
+            track->inserts.end(),
+            [&capture](const auto& candidate)
+            {
+                return candidate.id == capture.insertId;
+            });
+        if (insert == track->inserts.end())
+            continue;
+
+        const auto reference = PluginStateStore::store(
+            projectPackage,
+            capture.state,
+            error);
+        if (!reference.has_value())
+            return false;
+        insert->stateFile = reference->relativePath;
+        insert->stateHash = reference->hash;
+    }
+    return true;
+}
+
+bool MainComponent::materializePluginStateReferences(
+    Project& projectToSave,
+    const juce::File& sourcePackage,
+    const juce::File& destinationPackage,
+    juce::String& warning,
+    juce::String& error) const
+{
+    const auto appendWarning = [&warning](const juce::String& value)
+    {
+        if (value.isEmpty())
+            return;
+        if (warning.isNotEmpty())
+            warning << "; ";
+        warning << value;
+    };
+    const auto materializeInsert = [&](PluginInsert& insert)
+    {
+        if (insert.stateFile.isEmpty() && insert.stateHash.isEmpty())
+            return true;
+        juce::String stateError;
+        if (PluginStateStore::materialize(
+                sourcePackage,
+                destinationPackage,
+                { insert.stateFile, insert.stateHash },
+                stateError))
+            return true;
+
+        juce::MemoryBlock sourceState;
+        juce::String sourceError;
+        if (PluginStateStore::load(
+                sourcePackage,
+                { insert.stateFile, insert.stateHash },
+                sourceState,
+                sourceError))
+        {
+            error = (insert.name.isNotEmpty()
+                         ? insert.name
+                         : juce::String("Plugin"))
+                + ": "
+                + stateError;
+            return false;
+        }
+
+        appendWarning(
+            (insert.name.isNotEmpty()
+                 ? insert.name
+                 : juce::String("Plugin"))
+            + ": discarded unavailable prior state");
+        insert.stateFile.clear();
+        insert.stateHash.clear();
+        return true;
+    };
+
+    for (auto& track : projectToSave.tracks)
+        for (auto& insert : track.inserts)
+            if (!materializeInsert(insert))
+                return false;
+    for (auto& snapshot : projectToSave.toneSnapshots)
+        for (auto& insert : snapshot.inserts)
+            if (!materializeInsert(insert))
+                return false;
+    for (auto& snapshot : projectToSave.mixerSnapshots)
+        for (auto& track : snapshot.tracks)
+            for (auto& insert : track.inserts)
+                if (!materializeInsert(insert))
+                    return false;
+    return true;
 }
 
 void MainComponent::openProjectFrom(const juce::File& package)
@@ -4473,6 +4741,24 @@ void MainComponent::createPluginTonePath(const juce::String& sourceTrackId)
 void MainComponent::captureToneSnapshot(const juce::String& routeId)
 {
     juce::String error;
+    const auto route = std::find_if(
+        project.reampRoutes.cbegin(),
+        project.reampRoutes.cend(),
+        [&routeId](const auto& candidate)
+        {
+            return candidate.id == routeId;
+        });
+    if (route == project.reampRoutes.cend()
+        || !captureCurrentPluginStates(
+            { route->returnTrackId },
+            error))
+    {
+        showError("Tone snapshot failed",
+                  error.isNotEmpty()
+                      ? error
+                      : juce::String("The reamp route no longer exists."));
+        return;
+    }
     const auto snapshot = ReampSnapshotService::capture(
         project,
         routeId,
@@ -4562,6 +4848,16 @@ void MainComponent::renderToneSnapshots(const juce::String& routeId,
             : snapshots.back();
         snapshots = { selected };
     }
+    if (exportInProgress)
+    {
+        setStatus("A render is already in progress.", true);
+        return;
+    }
+    exportInProgress = true;
+    stopTimer();
+    exportInputBlocker.setVisible(true);
+    exportInputBlocker.toFront(false);
+    exportInputBlocker.grabKeyboardFocus();
 
     const auto outputDirectory =
         projectPackage.getChildFile("renders").getChildFile("tones");
@@ -4577,6 +4873,9 @@ void MainComponent::renderToneSnapshots(const juce::String& routeId,
         {
             return pluginRuntimeRequests(renderProject);
         });
+    exportInputBlocker.setVisible(false);
+    startTimerHz(30);
+    exportInProgress = false;
     auto updatedSnapshots = project.toneSnapshots;
     juce::File referenceFile;
     for (const auto& report : reports)
@@ -4755,6 +5054,11 @@ void MainComponent::captureMixerSnapshot()
 {
     const auto rootId = project.rootTrackId(selectedTrackId);
     juce::String error;
+    if (!captureCurrentPluginStates({ rootId }, error))
+    {
+        showError("Mixer snapshot failed", error);
+        return;
+    }
     const auto snapshot = MixerSnapshotService::capture(
         project,
         { rootId },

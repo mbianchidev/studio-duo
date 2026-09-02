@@ -90,4 +90,36 @@ bool PluginStateStore::load(const juce::File& package,
     }
     return true;
 }
+
+bool PluginStateStore::materialize(
+    const juce::File& sourcePackage,
+    const juce::File& destinationPackage,
+    const PluginStateReference& reference,
+    juce::String& error)
+{
+    if (reference.relativePath.isEmpty() && reference.hash.isEmpty())
+        return true;
+
+    juce::MemoryBlock state;
+    juce::String destinationError;
+    if (load(destinationPackage,
+             reference,
+             state,
+             destinationError))
+        return true;
+
+    state.reset();
+    if (!load(sourcePackage, reference, state, error))
+        return false;
+    const auto stored = store(destinationPackage, state, error);
+    if (!stored.has_value()
+        || stored->relativePath != reference.relativePath
+        || stored->hash != reference.hash)
+    {
+        if (error.isEmpty())
+            error = "Copied plugin state did not preserve its reference.";
+        return false;
+    }
+    return true;
+}
 }

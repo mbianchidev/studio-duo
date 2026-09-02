@@ -60,6 +60,15 @@ private:
     void beginExportMix();
     void showAudioSettings();
     void saveProjectTo(const juce::File& package);
+    bool captureCurrentPluginStates(
+        const std::vector<juce::String>& trackIds,
+        juce::String& error);
+    bool materializePluginStateReferences(
+        Project& projectToSave,
+        const juce::File& sourcePackage,
+        const juce::File& destinationPackage,
+        juce::String& warning,
+        juce::String& error) const;
     void openProjectFrom(const juce::File& package);
     void importAudioFile(const juce::File& source);
     void exportMixTo(const juce::File& destination);

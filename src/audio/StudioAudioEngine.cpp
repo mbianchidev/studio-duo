@@ -124,19 +124,23 @@ bool StudioAudioEngine::waitForPluginRuntimeTransition(
         messages != nullptr && messages->isThisTheMessageThread())
     {
         while (pluginRuntimeTransitionPending()
+               && !shuttingDown.load(std::memory_order_acquire)
                && std::chrono::steady_clock::now() < deadline)
         {
             messages->runDispatchLoopUntil(5);
         }
-        return !pluginRuntimeTransitionPending();
+        return !shuttingDown.load(std::memory_order_acquire)
+            && !pluginRuntimeTransitionPending();
     }
 #endif
     while (pluginRuntimeTransitionPending()
+           && !shuttingDown.load(std::memory_order_acquire)
            && std::chrono::steady_clock::now() < deadline)
     {
         juce::Thread::sleep(1);
     }
-    return !pluginRuntimeTransitionPending();
+    return !shuttingDown.load(std::memory_order_acquire)
+        && !pluginRuntimeTransitionPending();
 }
 
 StudioAudioEngine::LockFreeRecorder::LockFreeRecorder()

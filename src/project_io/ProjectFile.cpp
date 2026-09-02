@@ -30,6 +30,11 @@ juce::File ProjectFile::normalisePackagePath(const juce::File& requestedPath)
 
 juce::Result ProjectFile::save(const Project& project, const juce::File& requestedPackageDirectory)
 {
+    juce::String validationError;
+    if (!Project::fromVar(project.toVar(), validationError).has_value())
+        return juce::Result::fail(
+            "Project validation failed: " + validationError);
+
     const auto packageDirectory = normalisePackagePath(requestedPackageDirectory);
     if (!packageDirectory.createDirectory())
         return juce::Result::fail("Could not create project package: " + packageDirectory.getFullPathName());

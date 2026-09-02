@@ -283,6 +283,8 @@ private:
 
     std::vector<ReampRoute> oldRoutes;
     std::vector<ReampRoute> newRoutes;
+    std::vector<ToneSnapshot> oldToneSnapshots;
+    bool capturedOldSnapshots = false;
 };
 
 struct ProjectTransportState

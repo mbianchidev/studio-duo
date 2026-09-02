@@ -1025,13 +1025,59 @@ bool SetReampRoutesCommand::perform(Project& project, juce::String& error)
 {
     if (!validate(project, newRoutes, error))
         return false;
-    project.reampRoutes = newRoutes;
+
+    auto candidate = project;
+    candidate.reampRoutes = newRoutes;
+    candidate.toneSnapshots.erase(
+        std::remove_if(
+            candidate.toneSnapshots.begin(),
+            candidate.toneSnapshots.end(),
+            [&candidate](const auto& snapshot)
+            {
+                return std::none_of(
+                    candidate.reampRoutes.cbegin(),
+                    candidate.reampRoutes.cend(),
+                    [&snapshot](const auto& route)
+                    {
+                        return route.id == snapshot.reampRouteId;
+                    });
+            }),
+        candidate.toneSnapshots.end());
+    for (auto& route : candidate.reampRoutes)
+    {
+        const auto active = std::find_if(
+            candidate.toneSnapshots.cbegin(),
+            candidate.toneSnapshots.cend(),
+            [&route](const auto& snapshot)
+            {
+                return snapshot.id == route.activeSnapshotId
+                    && snapshot.reampRouteId == route.id;
+            });
+        if (active == candidate.toneSnapshots.cend())
+            route.activeSnapshotId.clear();
+    }
+
+    juce::String validationError;
+    if (!Project::fromVar(candidate.toVar(), validationError).has_value())
+    {
+        error = "Reamp route edit would invalidate the project: "
+            + validationError;
+        return false;
+    }
+    if (!capturedOldSnapshots)
+    {
+        oldToneSnapshots = project.toneSnapshots;
+        capturedOldSnapshots = true;
+    }
+    project.reampRoutes = std::move(candidate.reampRoutes);
+    project.toneSnapshots = std::move(candidate.toneSnapshots);
     return true;
 }
 
 void SetReampRoutesCommand::undo(Project& project)
 {
     project.reampRoutes = oldRoutes;
+    project.toneSnapshots = oldToneSnapshots;
 }
 
 bool SetReampRoutesCommand::validate(const Project& project,

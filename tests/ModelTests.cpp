@@ -3,6 +3,7 @@
 #include "audio/RecordingWaveform.h"
 #include "plugin_host/PluginCatalog.h"
 #include "plugin_host/PluginBridgeProtocol.h"
+#include "plugin_host/PluginStateStore.h"
 #include "project_io/ProjectFile.h"
 #include "TestHarness.h"
 #include "TestSuites.h"
@@ -938,8 +939,37 @@ void reampWorkflow()
                && stored->sourceTrackId == project.tracks[0].id
                && stored->outputChannel == 2,
            "A hardware tone path links DI, send, and return tracks.");
+    studio::ToneSnapshot snapshot;
+    snapshot.name = "Bass tone";
+    snapshot.reampRouteId = route.id;
+    snapshot.sourceTrackId = route.sourceTrackId;
+    snapshot.returnTrackId = route.returnTrackId;
+    snapshot.sourceFingerprint = "source";
+    snapshot.chainFingerprint = "chain";
+    project.toneSnapshots.push_back(snapshot);
+    project.reampRoutes.front().activeSnapshotId = snapshot.id;
+    studio::CommandStack pruneHistory;
+    expect(pruneHistory.perform(
+               std::make_unique<studio::SetReampRoutesCommand>(
+                   project.reampRoutes,
+                   std::vector<studio::ReampRoute> {}),
+               project,
+               error)
+               && project.reampRoutes.empty()
+               && project.toneSnapshots.empty()
+               && studio::Project::fromVar(project.toVar(), error)
+                      .has_value(),
+           "Removing a reamp route atomically prunes dependent snapshots.");
+    expect(pruneHistory.undo(project)
+               && project.reampRoutes.size() == 1
+               && project.toneSnapshots.size() == 1
+               && project.reampRoutes.front().activeSnapshotId
+                      == snapshot.id,
+           "Undo restores reamp routes and their active snapshots together.");
     expect(history.undo(project), "Reamp route creation can be undone.");
-    expect(project.reampRoutes.empty(), "Undo removes the reamp relationship.");
+    expect(project.reampRoutes.empty()
+               && project.toneSnapshots.empty(),
+           "Undo removes the reamp relationship and dependent snapshots.");
 }
 
 void packagePersistence()
@@ -962,7 +992,49 @@ void packagePersistence()
            "Package stores automation in its own generation document.");
     expect(package.getChildFile("recovery/latest.json").existsAsFile(), "Package contains a recovery point.");
 
+    const auto state = juce::MemoryBlock("snapshot-state", 14);
+    const auto stateReference = studio::PluginStateStore::store(
+        package,
+        state,
+        error);
+    const auto saveAsPackage = package.getSiblingFile(
+        package.getFileNameWithoutExtension() + "-copy.studioduo");
+    expect(stateReference.has_value()
+               && studio::PluginStateStore::materialize(
+                   package,
+                   saveAsPackage,
+                   *stateReference,
+                   error),
+           error.toRawUTF8());
+    juce::MemoryBlock copiedState;
+    expect(stateReference.has_value()
+               && studio::PluginStateStore::load(
+                   saveAsPackage,
+                   *stateReference,
+                   copiedState,
+                   error)
+               && copiedState == state,
+           "Save As materializes package-relative plugin state blobs.");
+
+    auto invalid = project;
+    studio::ToneSnapshot orphan;
+    orphan.name = "Orphan";
+    orphan.reampRouteId = "missing-route";
+    orphan.sourceTrackId = project.tracks.front().id;
+    orphan.returnTrackId = project.tracks[1].id;
+    orphan.sourceFingerprint = "source";
+    orphan.chainFingerprint = "chain";
+    invalid.toneSnapshots.push_back(orphan);
+    const auto invalidPackage = package.getSiblingFile(
+        package.getFileNameWithoutExtension() + "-invalid.studioduo");
+    expect(studio::ProjectFile::save(invalid, invalidPackage).failed()
+               && !invalidPackage.getChildFile("manifest.json")
+                       .existsAsFile(),
+           "Project save rejects dangling reamp snapshot references.");
+
     package.deleteRecursively();
+    saveAsPackage.deleteRecursively();
+    invalidPackage.deleteRecursively();
 }
 
 void rejectsInvalidBaseMeter()
