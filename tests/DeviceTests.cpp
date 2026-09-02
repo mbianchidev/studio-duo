@@ -190,4 +190,30 @@ void deviceTests()
                       == studio::StudioAudioEngine::PluginRuntimeStatus::State::ready
                && statuses.front().message.containsIgnoreCase("device"),
            "Bundled devices activate in the standard insert runtime.");
+
+    studio::PluginInsert generatorInsert;
+    generatorInsert.pluginIdentifier = "studio.device.generator";
+    generatorInsert.name = "Signal Generator";
+    generatorInsert.format = "Studio Duo";
+    generatorInsert.bundledDevice = true;
+    generatorInsert.bridgeMode = studio::PluginBridgeMode::trustedInProcess;
+    auto renderProject = studio::Project::createDefault();
+    renderProject.tracks.front().inserts.push_back(generatorInsert);
+    studio::StudioAudioEngine::PluginRuntimeRequest generatorRequest;
+    generatorRequest.trackId = renderProject.tracks.front().id;
+    generatorRequest.insertId = generatorInsert.id;
+    generatorRequest.name = generatorInsert.name;
+    generatorRequest.deviceIdentifier = generatorInsert.pluginIdentifier;
+    generatorRequest.bridgeMode =
+        studio::PluginBridgeMode::trustedInProcess;
+    juce::AudioBuffer<float> rendered;
+    expect(engine.renderToBuffer(
+               renderProject,
+               rendered,
+               48000.0,
+               { generatorRequest })
+               .wasOk(),
+           "Bundled devices render through the playback processor graph.");
+    expect(rendered.getMagnitude(0, 0, 512) > 0.01f,
+           "Plugin-inclusive rendering includes bundled DSP output.");
 }

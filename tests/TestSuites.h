@@ -7,3 +7,5 @@ void pluginFormatTests();
 void pluginRecoveryTests();
 void automationTests();
 void deviceTests();
+void reampSnapshotTests();
+void renderEngineTests();

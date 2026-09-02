@@ -1185,6 +1185,8 @@ int main()
     pluginRecoveryTests();
     automationTests();
     deviceTests();
+    reampSnapshotTests();
+    renderEngineTests();
 
     if (failures == 0)
     {

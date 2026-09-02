@@ -1,5 +1,7 @@
 #include "ProjectCommands.h"
 
+#include "reamp/ReampSnapshotService.h"
+
 #include <algorithm>
 #include <numeric>
 
@@ -2125,6 +2127,8 @@ bool RemoveTrackCommand::perform(Project& project, juce::String& error)
         oldReampRoutes = project.reampRoutes;
         oldRoutingConnections = project.routingConnections;
         oldAutomationLanes = project.automationLanes;
+        oldToneSnapshots = project.toneSnapshots;
+        oldMixerSnapshots = project.mixerSnapshots;
         for (const auto& candidate : project.tracks)
         {
             oldTrackOutputs.emplace_back(candidate.id, candidate.outputTrackId);
@@ -2338,6 +2342,44 @@ bool RemoveTrackCommand::perform(Project& project, juce::String& error)
                                lane.target.routeId) == nullptr);
             }),
         project.automationLanes.end());
+    project.toneSnapshots.erase(
+        std::remove_if(
+            project.toneSnapshots.begin(),
+            project.toneSnapshots.end(),
+            [&project, &removedTrack](const auto& snapshot)
+            {
+                return removedTrack(snapshot.sourceTrackId)
+                    || removedTrack(snapshot.returnTrackId)
+                    || std::none_of(
+                        project.reampRoutes.cbegin(),
+                        project.reampRoutes.cend(),
+                        [&snapshot](const auto& route)
+                        {
+                            return route.id == snapshot.reampRouteId;
+                        });
+            }),
+        project.toneSnapshots.end());
+    for (auto& snapshot : project.mixerSnapshots)
+    {
+        snapshot.tracks.erase(
+            std::remove_if(
+                snapshot.tracks.begin(),
+                snapshot.tracks.end(),
+                [&removedTrack](const auto& track)
+                {
+                    return removedTrack(track.trackId);
+                }),
+            snapshot.tracks.end());
+    }
+    project.mixerSnapshots.erase(
+        std::remove_if(
+            project.mixerSnapshots.begin(),
+            project.mixerSnapshots.end(),
+            [](const auto& snapshot)
+            {
+                return snapshot.tracks.empty();
+            }),
+        project.mixerSnapshots.end());
     return true;
 }
 
@@ -2357,6 +2399,8 @@ void RemoveTrackCommand::undo(Project& project)
     project.reampRoutes = oldReampRoutes;
     project.routingConnections = oldRoutingConnections;
     project.automationLanes = oldAutomationLanes;
+    project.toneSnapshots = oldToneSnapshots;
+    project.mixerSnapshots = oldMixerSnapshots;
     for (const auto& [restoredTrackId, outputTrackId] : oldTrackOutputs)
         if (auto* track = project.findTrack(restoredTrackId))
             track->outputTrackId = outputTrackId;
@@ -2433,6 +2477,7 @@ bool DuplicateTrackCommand::perform(Project& project, juce::String& error)
         std::vector<std::pair<juce::String, juce::String>> idMap;
         std::vector<std::pair<juce::String, juce::String>> insertIdMap;
         std::vector<std::pair<juce::String, juce::String>> routeIdMap;
+        std::vector<std::pair<juce::String, juce::String>> reampRouteIdMap;
         std::vector<juce::String> sendReturnTemplateIds;
         auto maximumSourceIndex = std::size_t { 0 };
         for (std::size_t index = 0; index < project.tracks.size(); ++index)
@@ -2605,6 +2650,7 @@ bool DuplicateTrackCommand::perform(Project& project, juce::String& error)
             duplicate.sourceTrackId = mappedId(route.sourceTrackId);
             duplicate.returnTrackId = mappedId(route.returnTrackId);
             duplicate.ownsReturnTrack = true;
+            reampRouteIdMap.emplace_back(route.id, duplicate.id);
             duplicatedRoutes.push_back(std::move(duplicate));
         }
         const auto mappedInsertId = [&insertIdMap](const juce::String& originalId)
@@ -2663,6 +2709,29 @@ bool DuplicateTrackCommand::perform(Project& project, juce::String& error)
                 point.id = juce::Uuid().toString();
             duplicatedAutomationLanes.push_back(std::move(duplicate));
         }
+        for (const auto& snapshot : project.toneSnapshots)
+        {
+            const auto routeMapping = std::find_if(
+                reampRouteIdMap.cbegin(),
+                reampRouteIdMap.cend(),
+                [&snapshot](const auto& mapping)
+                {
+                    return mapping.first == snapshot.reampRouteId;
+                });
+            if (routeMapping == reampRouteIdMap.cend())
+                continue;
+            auto duplicate = snapshot;
+            duplicate.id = juce::Uuid().toString();
+            duplicate.name += " Copy";
+            duplicate.reampRouteId = routeMapping->second;
+            duplicate.sourceTrackId = mappedId(snapshot.sourceTrackId);
+            duplicate.returnTrackId = mappedId(snapshot.returnTrackId);
+            duplicate.frozen = false;
+            duplicate.frozenTrackId.clear();
+            duplicate.renderFile.clear();
+            duplicate.renderHash.clear();
+            duplicatedToneSnapshots.push_back(std::move(duplicate));
+        }
         createdDuplicate = true;
     }
 
@@ -2691,6 +2760,21 @@ bool DuplicateTrackCommand::perform(Project& project, juce::String& error)
         project.automationLanes.end(),
         duplicatedAutomationLanes.begin(),
         duplicatedAutomationLanes.end());
+    for (auto& snapshot : duplicatedToneSnapshots)
+    {
+        snapshot.sourceFingerprint =
+            ReampSnapshotService::sourceFingerprint(
+                project,
+                snapshot.sourceTrackId);
+        snapshot.chainFingerprint =
+            ReampSnapshotService::chainFingerprint(
+                project,
+                snapshot.reampRouteId);
+    }
+    project.toneSnapshots.insert(
+        project.toneSnapshots.end(),
+        duplicatedToneSnapshots.begin(),
+        duplicatedToneSnapshots.end());
     if (!project.validateRoutingGraph(error))
     {
         undo(project);
@@ -2756,10 +2840,400 @@ void DuplicateTrackCommand::undo(Project& project)
                     });
             }),
         project.automationLanes.end());
+    project.toneSnapshots.erase(
+        std::remove_if(
+            project.toneSnapshots.begin(),
+            project.toneSnapshots.end(),
+            [this](const auto& candidate)
+            {
+                return std::any_of(
+                    duplicatedToneSnapshots.cbegin(),
+                    duplicatedToneSnapshots.cend(),
+                    [&candidate](const auto& duplicate)
+                    {
+                        return candidate.id == duplicate.id;
+                    });
+            }),
+        project.toneSnapshots.end());
 }
 
 const juce::String& DuplicateTrackCommand::duplicatedTrackId() const noexcept
 {
     return duplicatedRootTrackId;
+}
+
+AddToneSnapshotCommand::AddToneSnapshotCommand(ToneSnapshot snapshotToAdd)
+    : snapshot(std::move(snapshotToAdd))
+{
+}
+
+juce::String AddToneSnapshotCommand::name() const
+{
+    return "Capture tone snapshot";
+}
+
+bool AddToneSnapshotCommand::perform(Project& project, juce::String& error)
+{
+    if (std::any_of(
+            project.toneSnapshots.cbegin(),
+            project.toneSnapshots.cend(),
+            [this](const auto& candidate)
+            {
+                return candidate.id == snapshot.id;
+            }))
+    {
+        error = "A tone snapshot with the same ID already exists.";
+        return false;
+    }
+    if (!ToneSnapshot::fromVar(snapshot.toVar(), error).has_value())
+        return false;
+    project.toneSnapshots.push_back(snapshot);
+    return true;
+}
+
+void AddToneSnapshotCommand::undo(Project& project)
+{
+    project.toneSnapshots.erase(
+        std::remove_if(
+            project.toneSnapshots.begin(),
+            project.toneSnapshots.end(),
+            [this](const auto& candidate)
+            {
+                return candidate.id == snapshot.id;
+            }),
+        project.toneSnapshots.end());
+}
+
+SetToneSnapshotsCommand::SetToneSnapshotsCommand(
+    std::vector<ToneSnapshot> before,
+    std::vector<ToneSnapshot> after)
+    : oldSnapshots(std::move(before)),
+      newSnapshots(std::move(after))
+{
+}
+
+juce::String SetToneSnapshotsCommand::name() const
+{
+    return "Update tone snapshots";
+}
+
+bool SetToneSnapshotsCommand::perform(Project& project, juce::String& error)
+{
+    std::vector<juce::String> ids;
+    for (const auto& snapshot : newSnapshots)
+    {
+        if (!ToneSnapshot::fromVar(snapshot.toVar(), error).has_value()
+            || std::find(ids.cbegin(), ids.cend(), snapshot.id)
+                != ids.cend())
+        {
+            if (error.isEmpty())
+                error = "Tone snapshot IDs must be unique.";
+            return false;
+        }
+        ids.push_back(snapshot.id);
+    }
+    project.toneSnapshots = newSnapshots;
+    return true;
+}
+
+void SetToneSnapshotsCommand::undo(Project& project)
+{
+    project.toneSnapshots = oldSnapshots;
+}
+
+RecallToneSnapshotCommand::RecallToneSnapshotCommand(
+    ToneSnapshot snapshotToRecall)
+    : snapshot(std::move(snapshotToRecall))
+{
+}
+
+juce::String RecallToneSnapshotCommand::name() const
+{
+    return "Recall tone snapshot";
+}
+
+bool RecallToneSnapshotCommand::perform(Project& project, juce::String& error)
+{
+    auto* returnTrack = project.findTrack(snapshot.returnTrackId);
+    const auto route = std::find_if(
+        project.reampRoutes.begin(),
+        project.reampRoutes.end(),
+        [this](const auto& candidate)
+        {
+            return candidate.id == snapshot.reampRouteId;
+        });
+    if (returnTrack == nullptr || route == project.reampRoutes.end())
+    {
+        error = "The tone snapshot route is unavailable.";
+        return false;
+    }
+    if (!capturedOriginal)
+    {
+        oldReturnTrack = *returnTrack;
+        oldRoutes = project.routingConnections;
+        oldAutomation = project.automationLanes;
+        oldActiveSnapshotId = route->activeSnapshotId;
+        capturedOriginal = true;
+    }
+
+    returnTrack->volumeDecibels = snapshot.returnVolumeDecibels;
+    returnTrack->pan = snapshot.returnPan;
+    returnTrack->polarityInverted = snapshot.returnPolarityInverted;
+    returnTrack->inserts = snapshot.inserts;
+    const auto touches = [this](const RoutingConnection& connection)
+    {
+        return connection.sourceTrackId == snapshot.sourceTrackId
+            || connection.sourceTrackId == snapshot.returnTrackId
+            || connection.destination.trackId == snapshot.sourceTrackId
+            || connection.destination.trackId == snapshot.returnTrackId;
+    };
+    project.routingConnections.erase(
+        std::remove_if(
+            project.routingConnections.begin(),
+            project.routingConnections.end(),
+            touches),
+        project.routingConnections.end());
+    project.routingConnections.insert(
+        project.routingConnections.end(),
+        snapshot.routes.begin(),
+        snapshot.routes.end());
+    project.automationLanes.erase(
+        std::remove_if(
+            project.automationLanes.begin(),
+            project.automationLanes.end(),
+            [this](const auto& lane)
+            {
+                return lane.target.trackId == snapshot.sourceTrackId
+                    || lane.target.trackId == snapshot.returnTrackId;
+            }),
+        project.automationLanes.end());
+    project.automationLanes.insert(
+        project.automationLanes.end(),
+        snapshot.automation.begin(),
+        snapshot.automation.end());
+    route->activeSnapshotId = snapshot.id;
+    if (!project.validateRoutingGraph(error))
+    {
+        undo(project);
+        return false;
+    }
+    return true;
+}
+
+void RecallToneSnapshotCommand::undo(Project& project)
+{
+    if (auto* returnTrack = project.findTrack(snapshot.returnTrackId))
+        *returnTrack = oldReturnTrack;
+    project.routingConnections = oldRoutes;
+    project.automationLanes = oldAutomation;
+    const auto route = std::find_if(
+        project.reampRoutes.begin(),
+        project.reampRoutes.end(),
+        [this](const auto& candidate)
+        {
+            return candidate.id == snapshot.reampRouteId;
+        });
+    if (route != project.reampRoutes.end())
+        route->activeSnapshotId = oldActiveSnapshotId;
+}
+
+AddMixerSnapshotCommand::AddMixerSnapshotCommand(
+    MixerSnapshot snapshotToAdd)
+    : snapshot(std::move(snapshotToAdd))
+{
+}
+
+juce::String AddMixerSnapshotCommand::name() const
+{
+    return "Capture mixer snapshot";
+}
+
+bool AddMixerSnapshotCommand::perform(Project& project, juce::String& error)
+{
+    if (std::any_of(
+            project.mixerSnapshots.cbegin(),
+            project.mixerSnapshots.cend(),
+            [this](const auto& candidate)
+            {
+                return candidate.id == snapshot.id;
+            }))
+    {
+        error = "A mixer snapshot with the same ID already exists.";
+        return false;
+    }
+    if (!MixerSnapshot::fromVar(snapshot.toVar(), error).has_value())
+        return false;
+    project.mixerSnapshots.push_back(snapshot);
+    return true;
+}
+
+void AddMixerSnapshotCommand::undo(Project& project)
+{
+    project.mixerSnapshots.erase(
+        std::remove_if(
+            project.mixerSnapshots.begin(),
+            project.mixerSnapshots.end(),
+            [this](const auto& candidate)
+            {
+                return candidate.id == snapshot.id;
+            }),
+        project.mixerSnapshots.end());
+}
+
+AddRenderReportsCommand::AddRenderReportsCommand(
+    std::vector<RenderReport> reportsToAdd)
+    : reports(std::move(reportsToAdd))
+{
+}
+
+juce::String AddRenderReportsCommand::name() const
+{
+    return "Add render reports";
+}
+
+bool AddRenderReportsCommand::perform(Project& project, juce::String& error)
+{
+    for (const auto& report : reports)
+    {
+        if (!RenderReport::fromVar(report.toVar(), error).has_value()
+            || std::any_of(
+                project.renderReports.cbegin(),
+                project.renderReports.cend(),
+                [&report](const auto& candidate)
+                {
+                    return candidate.id == report.id;
+                }))
+        {
+            if (error.isEmpty())
+                error = "Render report IDs must be unique.";
+            return false;
+        }
+    }
+    project.renderReports.insert(project.renderReports.end(),
+                                 reports.begin(),
+                                 reports.end());
+    return true;
+}
+
+void AddRenderReportsCommand::undo(Project& project)
+{
+    project.renderReports.erase(
+        std::remove_if(
+            project.renderReports.begin(),
+            project.renderReports.end(),
+            [this](const auto& candidate)
+            {
+                return std::any_of(
+                    reports.cbegin(),
+                    reports.cend(),
+                    [&candidate](const auto& report)
+                    {
+                        return report.id == candidate.id;
+                    });
+            }),
+        project.renderReports.end());
+}
+
+RecallMixerSnapshotCommand::RecallMixerSnapshotCommand(
+    MixerSnapshot snapshotToRecall)
+    : snapshot(std::move(snapshotToRecall))
+{
+}
+
+juce::String RecallMixerSnapshotCommand::name() const
+{
+    return "Recall mixer snapshot";
+}
+
+bool RecallMixerSnapshotCommand::perform(Project& project,
+                                         juce::String& error)
+{
+    if (!capturedOriginal)
+    {
+        for (const auto& state : snapshot.tracks)
+        {
+            const auto* track = project.findTrack(state.trackId);
+            if (track == nullptr)
+            {
+                error = "A mixer snapshot track is unavailable.";
+                return false;
+            }
+            oldTracks.push_back(*track);
+        }
+        oldRoutes = project.routingConnections;
+        oldAutomation = project.automationLanes;
+        capturedOriginal = true;
+    }
+
+    std::vector<juce::String> trackIds;
+    for (const auto& state : snapshot.tracks)
+    {
+        auto* track = project.findTrack(state.trackId);
+        if (track == nullptr)
+        {
+            error = "A mixer snapshot track is unavailable.";
+            return false;
+        }
+        trackIds.push_back(track->id);
+        track->volumeDecibels = state.volumeDecibels;
+        track->pan = state.pan;
+        track->muted = state.muted;
+        track->solo = state.solo;
+        track->soloSafe = state.soloSafe;
+        track->polarityInverted = state.polarityInverted;
+        track->channelLayout = state.channelLayout;
+        track->folderTrackId = state.folderTrackId;
+        track->controlledTrackIds = state.controlledTrackIds;
+        track->inserts = state.inserts;
+    }
+    const auto touches = [&trackIds](const RoutingConnection& route)
+    {
+        return std::find(trackIds.cbegin(),
+                         trackIds.cend(),
+                         route.sourceTrackId) != trackIds.cend()
+            || std::find(trackIds.cbegin(),
+                         trackIds.cend(),
+                         route.destination.trackId) != trackIds.cend();
+    };
+    project.routingConnections.erase(
+        std::remove_if(
+            project.routingConnections.begin(),
+            project.routingConnections.end(),
+            touches),
+        project.routingConnections.end());
+    project.routingConnections.insert(
+        project.routingConnections.end(),
+        snapshot.routes.begin(),
+        snapshot.routes.end());
+    project.automationLanes.erase(
+        std::remove_if(
+            project.automationLanes.begin(),
+            project.automationLanes.end(),
+            [&trackIds](const auto& lane)
+            {
+                return std::find(trackIds.cbegin(),
+                                 trackIds.cend(),
+                                 lane.target.trackId) != trackIds.cend();
+            }),
+        project.automationLanes.end());
+    project.automationLanes.insert(
+        project.automationLanes.end(),
+        snapshot.automation.begin(),
+        snapshot.automation.end());
+    if (!project.validateRoutingGraph(error))
+    {
+        undo(project);
+        return false;
+    }
+    return true;
+}
+
+void RecallMixerSnapshotCommand::undo(Project& project)
+{
+    for (const auto& oldTrack : oldTracks)
+        if (auto* track = project.findTrack(oldTrack.id))
+            *track = oldTrack;
+    project.routingConnections = oldRoutes;
+    project.automationLanes = oldAutomation;
 }
 }

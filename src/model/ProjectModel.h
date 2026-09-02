@@ -145,6 +145,7 @@ struct ReampRoute
     bool polarityInverted = false;
     bool enabled = true;
     bool ownsReturnTrack = false;
+    juce::String activeSnapshotId;
 
     [[nodiscard]] juce::var toVar() const;
     static std::optional<ReampRoute> fromVar(const juce::var& value,
@@ -248,6 +249,85 @@ struct Track
     static std::optional<Track> fromVar(const juce::var& value, juce::String& error);
 };
 
+struct ToneSnapshot
+{
+    juce::String id { juce::Uuid().toString() };
+    juce::String name { "Tone snapshot" };
+    juce::String reampRouteId;
+    juce::String sourceTrackId;
+    juce::String returnTrackId;
+    float returnVolumeDecibels = 0.0f;
+    float returnPan = 0.0f;
+    bool returnPolarityInverted = false;
+    std::vector<PluginInsert> inserts;
+    std::vector<RoutingConnection> routes;
+    std::vector<AutomationLane> automation;
+    juce::String sourceFingerprint;
+    juce::String chainFingerprint;
+    juce::String renderFile;
+    juce::String renderHash;
+    juce::String frozenTrackId;
+    float comparisonGainDecibels = 0.0f;
+    bool frozen = false;
+
+    [[nodiscard]] juce::var toVar() const;
+    static std::optional<ToneSnapshot> fromVar(const juce::var& value,
+                                               juce::String& error);
+};
+
+struct MixerTrackSnapshot
+{
+    juce::String trackId;
+    float volumeDecibels = 0.0f;
+    float pan = 0.0f;
+    bool muted = false;
+    bool solo = false;
+    bool soloSafe = false;
+    bool polarityInverted = false;
+    ChannelLayout channelLayout = ChannelLayout::stereo;
+    juce::String folderTrackId;
+    std::vector<juce::String> controlledTrackIds;
+    std::vector<PluginInsert> inserts;
+
+    [[nodiscard]] juce::var toVar() const;
+    static std::optional<MixerTrackSnapshot> fromVar(
+        const juce::var& value,
+        juce::String& error);
+};
+
+struct MixerSnapshot
+{
+    juce::String id { juce::Uuid().toString() };
+    juce::String name { "Mixer snapshot" };
+    std::vector<MixerTrackSnapshot> tracks;
+    std::vector<RoutingConnection> routes;
+    std::vector<AutomationLane> automation;
+
+    [[nodiscard]] juce::var toVar() const;
+    static std::optional<MixerSnapshot> fromVar(const juce::var& value,
+                                                juce::String& error);
+};
+
+struct RenderReport
+{
+    juce::String id { juce::Uuid().toString() };
+    juce::String scope;
+    juce::String outputFile;
+    juce::String sourceHash;
+    juce::String chainHash;
+    juce::String outputHash;
+    juce::String mode;
+    juce::String status;
+    juce::String warning;
+    juce::String error;
+    double durationSeconds = 0.0;
+    juce::String createdAt;
+
+    [[nodiscard]] juce::var toVar() const;
+    static std::optional<RenderReport> fromVar(const juce::var& value,
+                                               juce::String& error);
+};
+
 class Project
 {
 public:
@@ -278,6 +358,9 @@ public:
     std::vector<ReampRoute> reampRoutes;
     std::vector<RoutingConnection> routingConnections;
     std::vector<AutomationLane> automationLanes;
+    std::vector<ToneSnapshot> toneSnapshots;
+    std::vector<MixerSnapshot> mixerSnapshots;
+    std::vector<RenderReport> renderReports;
     std::vector<Track> tracks;
 
     static Project createDefault();

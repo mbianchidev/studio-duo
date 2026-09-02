@@ -2,6 +2,8 @@
 
 #include "automation/AutomationRecorder.h"
 #include "plugin_host/PluginStateStore.h"
+#include "reamp/ReampSnapshotService.h"
+#include "render/RenderEngine.h"
 
 #include <StudioDuoBrandData.h>
 
@@ -1686,7 +1688,11 @@ void MainComponent::exportMixTo(const juce::File& destination)
             }
         }
 
-    const auto result = audioEngine.renderToWav(exportProject, destination, 48000.0);
+    const auto result = audioEngine.renderToWav(
+        exportProject,
+        destination,
+        48000.0,
+        pluginRuntimeRequests());
     if (result.failed())
     {
         showError("Export failed", result.getErrorMessage());
@@ -3900,6 +3906,79 @@ void MainComponent::showTrackingMenu()
                 setStatus("Sending reamp calibration pulse...");
             });
         }
+        menu.addSeparator();
+        menu.addItem("Capture tone snapshot",
+                     [this, routeId]
+                     {
+                         captureToneSnapshot(routeId);
+                     });
+        juce::PopupMenu snapshotMenu;
+        std::vector<const ToneSnapshot*> routeSnapshots;
+        for (const auto& snapshot : project.toneSnapshots)
+        {
+            if (snapshot.reampRouteId != routeId)
+                continue;
+            routeSnapshots.push_back(&snapshot);
+            auto label = snapshot.name;
+            const auto stale =
+                ReampSnapshotService::staleReason(project, snapshot);
+            if (stale.isNotEmpty())
+                label << " [STALE: " << stale << "]";
+            if (snapshot.id == route->activeSnapshotId)
+                label << " [ACTIVE]";
+            snapshotMenu.addItem(
+                label,
+                [this, snapshotId = snapshot.id]
+                {
+                    recallToneSnapshot(snapshotId);
+                });
+        }
+        if (routeSnapshots.empty())
+            snapshotMenu.addItem("No snapshots", false, false, [] {});
+        menu.addSubMenu("Recall tone snapshot", snapshotMenu);
+        if (!routeSnapshots.empty() && route->type == TonePathType::plugin)
+        {
+            const auto* active = std::find_if(
+                                     routeSnapshots.cbegin(),
+                                     routeSnapshots.cend(),
+                                     [route](const auto* snapshot)
+                                     {
+                                         return snapshot->id
+                                             == route->activeSnapshotId;
+                                     })
+                    != routeSnapshots.cend()
+                ? *std::find_if(
+                      routeSnapshots.cbegin(),
+                      routeSnapshots.cend(),
+                      [route](const auto* snapshot)
+                      {
+                          return snapshot->id == route->activeSnapshotId;
+                      })
+                : routeSnapshots.back();
+            menu.addItem("Freeze active tone",
+                         [this, routeId]
+                         {
+                             renderToneSnapshots(routeId, false, true, false);
+                         });
+            menu.addItem("Print active tone",
+                         [this, routeId]
+                         {
+                             renderToneSnapshots(routeId, false, false, true);
+                         });
+            menu.addItem("Batch render all tones",
+                         [this, routeId]
+                         {
+                             renderToneSnapshots(routeId, true, false, false);
+                         });
+            if (active != nullptr && active->frozen)
+            {
+                menu.addItem("Unfreeze active tone",
+                             [this, snapshotId = active->id]
+                             {
+                                 unfreezeToneSnapshot(snapshotId);
+                             });
+            }
+        }
         menu.addItem("Remove tone path", [this, routeId]
         {
             changeReampRoutes([routeId](auto& routes)
@@ -3914,6 +3993,22 @@ void MainComponent::showTrackingMenu()
             });
         });
     }
+
+    menu.addSeparator();
+    menu.addSectionHeader("Mixer snapshots");
+    menu.addItem("Capture selected track snapshot",
+                 [this] { captureMixerSnapshot(); });
+    juce::PopupMenu mixerSnapshots;
+    for (const auto& snapshot : project.mixerSnapshots)
+        mixerSnapshots.addItem(
+            snapshot.name,
+            [this, snapshotId = snapshot.id]
+            {
+                recallMixerSnapshot(snapshotId);
+            });
+    if (project.mixerSnapshots.empty())
+        mixerSnapshots.addItem("No mixer snapshots", false, false, [] {});
+    menu.addSubMenu("Recall mixer snapshot", mixerSnapshots);
 
     menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(trackingButton));
 }
@@ -4208,6 +4303,323 @@ void MainComponent::createPluginTonePath(const juce::String& sourceTrackId)
     }
 }
 
+void MainComponent::captureToneSnapshot(const juce::String& routeId)
+{
+    juce::String error;
+    const auto snapshot = ReampSnapshotService::capture(
+        project,
+        routeId,
+        "Tone "
+            + juce::String(
+                static_cast<int>(project.toneSnapshots.size() + 1)),
+        error);
+    if (!snapshot.has_value())
+    {
+        showError("Tone snapshot failed", error);
+        return;
+    }
+    if (perform(std::make_unique<AddToneSnapshotCommand>(*snapshot)))
+        recallToneSnapshot(snapshot->id);
+}
+
+void MainComponent::recallToneSnapshot(const juce::String& snapshotId)
+{
+    const auto snapshot = std::find_if(
+        project.toneSnapshots.cbegin(),
+        project.toneSnapshots.cend(),
+        [&snapshotId](const auto& candidate)
+        {
+            return candidate.id == snapshotId;
+        });
+    if (snapshot == project.toneSnapshots.cend())
+    {
+        setStatus("The tone snapshot no longer exists.", true);
+        return;
+    }
+    const auto stale = ReampSnapshotService::staleReason(project, *snapshot);
+    if (perform(std::make_unique<RecallToneSnapshotCommand>(*snapshot)))
+        setStatus(
+            "Recalled "
+                + snapshot->name
+                + (stale.isNotEmpty() ? " (stale: " + stale + ")"
+                                      : juce::String()));
+}
+
+void MainComponent::renderToneSnapshots(const juce::String& routeId,
+                                        bool allSnapshots,
+                                        bool freeze,
+                                        bool print)
+{
+    if (!projectPackage.exists())
+    {
+        showError("Save required",
+                  "Save the project before rendering tone snapshots.");
+        return;
+    }
+    const auto route = std::find_if(
+        project.reampRoutes.cbegin(),
+        project.reampRoutes.cend(),
+        [&routeId](const auto& candidate)
+        {
+            return candidate.id == routeId;
+        });
+    if (route == project.reampRoutes.cend()
+        || route->type != TonePathType::plugin)
+    {
+        setStatus(
+            "Plugin tone snapshots can render offline; hardware paths require a recorded return.",
+            true);
+        return;
+    }
+
+    std::vector<ToneSnapshot> snapshots;
+    for (const auto& snapshot : project.toneSnapshots)
+        if (snapshot.reampRouteId == routeId)
+            snapshots.push_back(snapshot);
+    if (snapshots.empty())
+    {
+        setStatus("Capture a tone snapshot before rendering.", true);
+        return;
+    }
+    if (!allSnapshots)
+    {
+        const auto active = std::find_if(
+            snapshots.cbegin(),
+            snapshots.cend(),
+            [route](const auto& snapshot)
+            {
+                return snapshot.id == route->activeSnapshotId;
+            });
+        const auto selected = active != snapshots.cend()
+            ? *active
+            : snapshots.back();
+        snapshots = { selected };
+    }
+
+    const auto outputDirectory =
+        projectPackage.getChildFile("renders").getChildFile("tones");
+    setStatus("Rendering "
+              + juce::String(static_cast<int>(snapshots.size()))
+              + (snapshots.size() == 1 ? " tone..." : " tones..."));
+    auto reports = RenderEngine::batchToneSnapshots(
+        audioEngine,
+        project,
+        snapshots,
+        outputDirectory,
+        [this](const auto& renderProject)
+        {
+            return pluginRuntimeRequests(renderProject);
+        });
+    auto updatedSnapshots = project.toneSnapshots;
+    juce::File referenceFile;
+    for (const auto& report : reports)
+    {
+        if (report.status != "success")
+            continue;
+        const auto snapshotId =
+            report.scope.fromFirstOccurrenceOf("reamp:", false, false);
+        const auto snapshot = std::find_if(
+            updatedSnapshots.begin(),
+            updatedSnapshots.end(),
+            [&snapshotId](const auto& candidate)
+            {
+                return candidate.id == snapshotId;
+            });
+        if (snapshot == updatedSnapshots.end())
+            continue;
+        const juce::File output(report.outputFile);
+        snapshot->renderFile = output.isAChildOf(projectPackage)
+            ? output.getRelativePathFrom(projectPackage)
+            : output.getFullPathName();
+        snapshot->renderHash = report.outputHash;
+        if (!referenceFile.existsAsFile())
+        {
+            referenceFile = output;
+            snapshot->comparisonGainDecibels = 0.0f;
+        }
+        else
+        {
+            juce::String matchError;
+            if (const auto gain = RenderEngine::levelMatchGainDecibels(
+                    referenceFile,
+                    output,
+                    matchError);
+                gain.has_value())
+                snapshot->comparisonGainDecibels =
+                    static_cast<float>(*gain);
+        }
+    }
+
+    std::vector<std::unique_ptr<ProjectCommand>> commands;
+    commands.push_back(std::make_unique<AddRenderReportsCommand>(reports));
+    const auto success = std::find_if(
+        reports.cbegin(),
+        reports.cend(),
+        [](const auto& report)
+        {
+            return report.status == "success";
+        });
+    if ((freeze || print) && success != reports.cend())
+    {
+        const auto snapshotId =
+            success->scope.fromFirstOccurrenceOf("reamp:", false, false);
+        const auto snapshot = std::find_if(
+            updatedSnapshots.begin(),
+            updatedSnapshots.end(),
+            [&snapshotId](const auto& candidate)
+            {
+                return candidate.id == snapshotId;
+            });
+        const auto* returnTrack = snapshot != updatedSnapshots.end()
+            ? project.findTrack(snapshot->returnTrackId)
+            : nullptr;
+        juce::String durationError;
+        const auto duration = audioEngine.audioFileDuration(
+            juce::File(success->outputFile),
+            durationError);
+        if (snapshot != updatedSnapshots.end()
+            && returnTrack != nullptr
+            && duration.has_value())
+        {
+            Track renderedTrack;
+            renderedTrack.name = snapshot->name
+                + (freeze ? " Freeze" : " Print");
+            renderedTrack.type = TrackType::audio;
+            renderedTrack.colour = returnTrack->colour.brighter(0.15f);
+            renderedTrack.outputTrackId = returnTrack->outputTrackId;
+            AudioClip clip;
+            clip.name = renderedTrack.name;
+            clip.sourceFile = juce::File(success->outputFile);
+            clip.durationSeconds = *duration;
+            clip.sourceLengthSeconds = *duration;
+            clip.sourceRangeEndSeconds = *duration;
+            clip.colour = renderedTrack.colour;
+            renderedTrack.clips.push_back(std::move(clip));
+            const auto renderedTrackId = renderedTrack.id;
+            commands.push_back(std::make_unique<AddTrackCommand>(
+                std::move(renderedTrack)));
+            if (freeze)
+            {
+                const auto before = TrackMixState::fromTrack(*returnTrack);
+                auto after = before;
+                after.muted = true;
+                commands.push_back(std::make_unique<SetTrackMixCommand>(
+                    returnTrack->id,
+                    before,
+                    after));
+                snapshot->frozen = true;
+                snapshot->frozenTrackId = renderedTrackId;
+            }
+        }
+    }
+    commands.push_back(std::make_unique<SetToneSnapshotsCommand>(
+        project.toneSnapshots,
+        std::move(updatedSnapshots)));
+    if (perform(std::make_unique<BatchProjectCommand>(
+            allSnapshots ? "Batch render tone snapshots"
+                         : freeze ? "Freeze tone snapshot"
+                                  : print ? "Print tone snapshot"
+                                          : "Render tone snapshot",
+            std::move(commands))))
+    {
+        const auto failures = static_cast<int>(std::count_if(
+            reports.cbegin(),
+            reports.cend(),
+            [](const auto& report)
+            {
+                return report.status != "success";
+            }));
+        setStatus(
+            "Rendered "
+                + juce::String(
+                    static_cast<int>(reports.size()) - failures)
+                + " tone(s); "
+                + juce::String(failures)
+                + " failed.");
+    }
+}
+
+void MainComponent::unfreezeToneSnapshot(const juce::String& snapshotId)
+{
+    const auto snapshot = std::find_if(
+        project.toneSnapshots.cbegin(),
+        project.toneSnapshots.cend(),
+        [&snapshotId](const auto& candidate)
+        {
+            return candidate.id == snapshotId;
+        });
+    if (snapshot == project.toneSnapshots.cend()
+        || !snapshot->frozen
+        || snapshot->frozenTrackId.isEmpty())
+        return;
+    const auto* returnTrack = project.findTrack(snapshot->returnTrackId);
+    if (returnTrack == nullptr)
+        return;
+
+    auto updated = project.toneSnapshots;
+    const auto updatedSnapshot = std::find_if(
+        updated.begin(),
+        updated.end(),
+        [&snapshotId](const auto& candidate)
+        {
+            return candidate.id == snapshotId;
+        });
+    updatedSnapshot->frozen = false;
+    updatedSnapshot->frozenTrackId.clear();
+    const auto before = TrackMixState::fromTrack(*returnTrack);
+    auto after = before;
+    after.muted = false;
+    std::vector<std::unique_ptr<ProjectCommand>> commands;
+    commands.push_back(std::make_unique<RemoveTrackCommand>(
+        snapshot->frozenTrackId));
+    commands.push_back(std::make_unique<SetTrackMixCommand>(
+        returnTrack->id,
+        before,
+        after));
+    commands.push_back(std::make_unique<SetToneSnapshotsCommand>(
+        project.toneSnapshots,
+        std::move(updated)));
+    perform(std::make_unique<BatchProjectCommand>(
+        "Unfreeze tone snapshot",
+        std::move(commands)));
+}
+
+void MainComponent::captureMixerSnapshot()
+{
+    const auto rootId = project.rootTrackId(selectedTrackId);
+    juce::String error;
+    const auto snapshot = MixerSnapshotService::capture(
+        project,
+        { rootId },
+        "Mixer "
+            + juce::String(
+                static_cast<int>(project.mixerSnapshots.size() + 1)),
+        error);
+    if (!snapshot.has_value())
+    {
+        showError("Mixer snapshot failed", error);
+        return;
+    }
+    perform(std::make_unique<AddMixerSnapshotCommand>(*snapshot));
+}
+
+void MainComponent::recallMixerSnapshot(const juce::String& snapshotId)
+{
+    const auto snapshot = std::find_if(
+        project.mixerSnapshots.cbegin(),
+        project.mixerSnapshots.cend(),
+        [&snapshotId](const auto& candidate)
+        {
+            return candidate.id == snapshotId;
+        });
+    if (snapshot == project.mixerSnapshots.cend())
+    {
+        setStatus("The mixer snapshot no longer exists.", true);
+        return;
+    }
+    perform(std::make_unique<RecallMixerSnapshotCommand>(*snapshot));
+}
+
 void MainComponent::updateInputMonitoring()
 {
     const Track* monitored = nullptr;
@@ -4313,8 +4725,14 @@ void MainComponent::updateReducedIsolationMarker()
 
 std::vector<StudioAudioEngine::PluginRuntimeRequest> MainComponent::pluginRuntimeRequests() const
 {
+    return pluginRuntimeRequests(project);
+}
+
+std::vector<StudioAudioEngine::PluginRuntimeRequest>
+MainComponent::pluginRuntimeRequests(const Project& sourceProject) const
+{
     std::vector<StudioAudioEngine::PluginRuntimeRequest> requests;
-    for (const auto& track : project.tracks)
+    for (const auto& track : sourceProject.tracks)
     {
         for (const auto& insert : track.inserts)
         {
@@ -4330,8 +4748,8 @@ std::vector<StudioAudioEngine::PluginRuntimeRequest> MainComponent::pluginRuntim
                 ? insert.pluginIdentifier
                 : juce::String();
             request.sidechainChannels = std::any_of(
-                project.routingConnections.cbegin(),
-                project.routingConnections.cend(),
+                sourceProject.routingConnections.cbegin(),
+                sourceProject.routingConnections.cend(),
                 [&insert](const auto& route)
                 {
                     return route.enabled

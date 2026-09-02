@@ -644,6 +644,8 @@ private:
     std::vector<ReampRoute> oldReampRoutes;
     std::vector<RoutingConnection> oldRoutingConnections;
     std::vector<AutomationLane> oldAutomationLanes;
+    std::vector<ToneSnapshot> oldToneSnapshots;
+    std::vector<MixerSnapshot> oldMixerSnapshots;
     std::vector<std::pair<juce::String, TrackRoutingState>> oldTrackRoutingStates;
     std::vector<std::pair<juce::String, juce::String>> oldTrackOutputs;
     bool capturedOriginal = false;
@@ -666,7 +668,91 @@ private:
     std::vector<ReampRoute> duplicatedRoutes;
     std::vector<RoutingConnection> duplicatedConnections;
     std::vector<AutomationLane> duplicatedAutomationLanes;
+    std::vector<ToneSnapshot> duplicatedToneSnapshots;
     std::size_t insertionIndex = 0;
     bool createdDuplicate = false;
+};
+
+class AddToneSnapshotCommand final : public ProjectCommand
+{
+public:
+    explicit AddToneSnapshotCommand(ToneSnapshot snapshotToAdd);
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    ToneSnapshot snapshot;
+};
+
+class SetToneSnapshotsCommand final : public ProjectCommand
+{
+public:
+    SetToneSnapshotsCommand(std::vector<ToneSnapshot> before,
+                            std::vector<ToneSnapshot> after);
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    std::vector<ToneSnapshot> oldSnapshots;
+    std::vector<ToneSnapshot> newSnapshots;
+};
+
+class RecallToneSnapshotCommand final : public ProjectCommand
+{
+public:
+    explicit RecallToneSnapshotCommand(ToneSnapshot snapshotToRecall);
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    ToneSnapshot snapshot;
+    Track oldReturnTrack;
+    std::vector<RoutingConnection> oldRoutes;
+    std::vector<AutomationLane> oldAutomation;
+    juce::String oldActiveSnapshotId;
+    bool capturedOriginal = false;
+};
+
+class AddMixerSnapshotCommand final : public ProjectCommand
+{
+public:
+    explicit AddMixerSnapshotCommand(MixerSnapshot snapshotToAdd);
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    MixerSnapshot snapshot;
+};
+
+class AddRenderReportsCommand final : public ProjectCommand
+{
+public:
+    explicit AddRenderReportsCommand(std::vector<RenderReport> reportsToAdd);
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    std::vector<RenderReport> reports;
+};
+
+class RecallMixerSnapshotCommand final : public ProjectCommand
+{
+public:
+    explicit RecallMixerSnapshotCommand(MixerSnapshot snapshotToRecall);
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    MixerSnapshot snapshot;
+    std::vector<Track> oldTracks;
+    std::vector<RoutingConnection> oldRoutes;
+    std::vector<AutomationLane> oldAutomation;
+    bool capturedOriginal = false;
 };
 }

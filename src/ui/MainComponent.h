@@ -108,11 +108,22 @@ private:
     void promptTempoChange();
     void promptMeterChange();
     void createPluginTonePath(const juce::String& sourceTrackId);
+    void captureToneSnapshot(const juce::String& routeId);
+    void recallToneSnapshot(const juce::String& snapshotId);
+    void renderToneSnapshots(const juce::String& routeId,
+                             bool allSnapshots,
+                             bool freeze,
+                             bool print);
+    void unfreezeToneSnapshot(const juce::String& snapshotId);
+    void captureMixerSnapshot();
+    void recallMixerSnapshot(const juce::String& snapshotId);
     void updateTimelineSize();
     void zoomTimeline(double factor, bool reset = false);
     void projectChanged(bool writeRecovery = true, bool markDirty = true);
     void updateReducedIsolationMarker();
     [[nodiscard]] std::vector<StudioAudioEngine::PluginRuntimeRequest> pluginRuntimeRequests() const;
+    [[nodiscard]] std::vector<StudioAudioEngine::PluginRuntimeRequest>
+        pluginRuntimeRequests(const Project& sourceProject) const;
     bool perform(std::unique_ptr<ProjectCommand> command);
     void changeSelectedTrackState(const std::function<void(TrackMixState&)>& change);
     void changeTransportState(const std::function<void(ProjectTransportState&)>& change);

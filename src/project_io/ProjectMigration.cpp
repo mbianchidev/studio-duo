@@ -108,6 +108,7 @@ std::optional<juce::var> ProjectMigration::migrateToCurrent(
 
     addEmptyArray(*object, "routingConnections");
     addEmptyArray(*object, "automationLanes");
+    addEmptyArray(*object, "toneSnapshots");
     addEmptyArray(*object, "mixerSnapshots");
     addEmptyArray(*object, "renderReports");
     object->setProperty("formatVersion", Project::currentFormatVersion);

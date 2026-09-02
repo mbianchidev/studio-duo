@@ -991,16 +991,17 @@ StudioAudioEngine::takeLatencyCalibrationResult()
 
 juce::Result StudioAudioEngine::renderToWav(const Project& project,
                                             const juce::File& destination,
-                                            double renderSampleRate)
+                                            double renderSampleRate,
+                                            std::vector<PluginRuntimeRequest> pluginRequests)
 {
-    if (project.hasActivePluginInserts())
-        return juce::Result::fail(
-            "Fast export cannot omit active plugins. Bypass inserts or use playback capture until real-time bounce ships.");
-
-    juce::String error;
-    auto snapshot = buildSnapshot(project, renderSampleRate, {}, error);
-    if (!snapshot.has_value())
-        return juce::Result::fail(error);
+    juce::AudioBuffer<float> rendered;
+    if (const auto result = renderToBuffer(
+            project,
+            rendered,
+            renderSampleRate,
+            std::move(pluginRequests));
+        result.failed())
+        return result;
 
     if (!destination.getParentDirectory().createDirectory())
         return juce::Result::fail("Could not create the export directory.");
@@ -1016,28 +1017,12 @@ juce::Result StudioAudioEngine::renderToWav(const Project& project,
     if (writer == nullptr)
         return juce::Result::fail("Could not create the WAV export writer.");
 
-    juce::AudioBuffer<float> block(2, 2048);
-    std::int64_t position = 0;
-    while (position < snapshot->lengthSamples)
-    {
-        const auto samplesThisBlock = static_cast<int>(
-            std::min<std::int64_t>(block.getNumSamples(), snapshot->lengthSamples - position));
-        block.clear();
-
-        for (int sample = 0; sample < samplesThisBlock; ++sample)
-        {
-            float left = 0.0f;
-            float right = 0.0f;
-            mixSample(*snapshot, position + sample, left, right);
-            block.setSample(0, sample, juce::jlimit(-1.0f, 1.0f, left));
-            block.setSample(1, sample, juce::jlimit(-1.0f, 1.0f, right));
-        }
-
-        if (!writer->writeFromAudioSampleBuffer(block, 0, samplesThisBlock))
-            return juce::Result::fail("The WAV export stopped while writing audio.");
-
-        position += samplesThisBlock;
-    }
+    if (!writer->writeFromAudioSampleBuffer(
+            rendered,
+            0,
+            rendered.getNumSamples()))
+        return juce::Result::fail(
+            "The WAV export stopped while writing audio.");
 
     writer->flush();
     return juce::Result::ok();
@@ -1046,13 +1031,146 @@ juce::Result StudioAudioEngine::renderToWav(const Project& project,
 juce::Result StudioAudioEngine::renderToBuffer(
     const Project& project,
     juce::AudioBuffer<float>& destination,
-    double renderSampleRate)
+    double renderSampleRate,
+    std::vector<PluginRuntimeRequest> pluginRequests)
 {
     if (renderSampleRate <= 0.0)
         return juce::Result::fail("Render sample rate must be positive.");
-    if (project.hasActivePluginInserts())
+    if (project.hasActivePluginInserts() && pluginRequests.empty())
         return juce::Result::fail(
             "Buffer rendering cannot omit active plugins.");
+
+    if (!pluginRequests.empty())
+    {
+        auto renderProject = project;
+        renderProject.metronomeEnabled = false;
+        for (auto& route : renderProject.routingConnections)
+            if (route.kind == RouteKind::controlRoom)
+                route.enabled = false;
+
+        const auto previousSampleRate = sampleRate.load(
+            std::memory_order_acquire);
+        const auto previousBlockSize = deviceBlockSize.load(
+            std::memory_order_acquire);
+        const auto previousMetronome = metronomeEnabled.load(
+            std::memory_order_acquire);
+        sampleRate.store(renderSampleRate, std::memory_order_release);
+        constexpr auto renderBlockSize = 512;
+        deviceBlockSize.store(renderBlockSize, std::memory_order_release);
+        metronomeEnabled.store(false, std::memory_order_release);
+        playing.store(false, std::memory_order_release);
+        seekSeconds(0.0);
+
+        const auto restoreSettings = [&]
+        {
+            playing.store(false, std::memory_order_release);
+            sampleRate.store(previousSampleRate, std::memory_order_release);
+            deviceBlockSize.store(previousBlockSize,
+                                  std::memory_order_release);
+            metronomeEnabled.store(previousMetronome,
+                                   std::memory_order_release);
+        };
+
+        if (const auto result = updateProject(
+                renderProject,
+                pluginRequests);
+            result.failed())
+        {
+            restoreSettings();
+            return result;
+        }
+        for (int attempt = 0;
+             attempt < 10000 && pluginRuntimeTransitionPending();
+             ++attempt)
+            juce::Thread::sleep(1);
+        if (pluginRuntimeTransitionPending())
+        {
+            restoreSettings();
+            return juce::Result::fail(
+                "Timed out while preparing processors for rendering.");
+        }
+        for (const auto& status : pluginRuntimeStatuses())
+        {
+            if (status.state == PluginRuntimeStatus::State::failed
+                || status.state == PluginRuntimeStatus::State::missing)
+            {
+                restoreSettings();
+                return juce::Result::fail(
+                    status.name + ": " + status.message);
+            }
+        }
+
+        const auto snapshotIndex = activeSnapshot.load(
+            std::memory_order_acquire);
+        const auto length = snapshots[static_cast<std::size_t>(
+            snapshotIndex)].lengthSamples;
+        if (length <= 0
+            || length
+                > static_cast<std::int64_t>(
+                    std::numeric_limits<int>::max()))
+        {
+            restoreSettings();
+            return juce::Result::fail(
+                "Rendered project is too long for a memory buffer.");
+        }
+        destination.setSize(
+            2,
+            static_cast<int>(length),
+            false,
+            true,
+            false);
+        destination.clear();
+
+        const auto realtime = std::any_of(
+            pluginRequests.cbegin(),
+            pluginRequests.cend(),
+            [](const auto& request)
+            {
+                return !request.bypassed
+                    && !request.missing
+                    && request.deviceIdentifier.isEmpty()
+                    && request.bridgeMode == PluginBridgeMode::sandboxed;
+            });
+        juce::AudioBuffer<float> block(2, renderBlockSize);
+        juce::AudioIODeviceCallbackContext context;
+        playing.store(true, std::memory_order_release);
+        auto offset = 0;
+        while (offset < destination.getNumSamples())
+        {
+            const auto samples = std::min(
+                renderBlockSize,
+                destination.getNumSamples() - offset);
+            block.clear();
+            float* outputs[] {
+                block.getWritePointer(0),
+                block.getWritePointer(1)
+            };
+            audioDeviceIOCallbackWithContext(
+                nullptr,
+                0,
+                outputs,
+                2,
+                samples,
+                context);
+            destination.copyFrom(0, offset, block, 0, 0, samples);
+            destination.copyFrom(1, offset, block, 1, 0, samples);
+            offset += samples;
+            if (realtime)
+            {
+                juce::Thread::sleep(
+                    std::max(
+                        1,
+                        static_cast<int>(
+                            std::ceil(
+                                static_cast<double>(samples)
+                                * 1000.0
+                                / renderSampleRate))));
+            }
+        }
+        restoreSettings();
+        forcePluginRuntimeReload(project, std::move(pluginRequests));
+        return juce::Result::ok();
+    }
 
     juce::String error;
     auto snapshot = buildSnapshot(project, renderSampleRate, {}, error);

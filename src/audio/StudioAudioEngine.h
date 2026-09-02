@@ -156,10 +156,15 @@ public:
                                  double sampleRate);
     juce::Result renderToBuffer(const Project& project,
                                 juce::AudioBuffer<float>& destination,
-                                double sampleRate);
+                                double sampleRate,
+                                std::vector<PluginRuntimeRequest> pluginRequests = {});
     juce::Result startLatencyCalibration(int outputChannel, int inputChannel);
     std::optional<LatencyCalibrationResult> takeLatencyCalibrationResult();
-    juce::Result renderToWav(const Project& project, const juce::File& destination, double sampleRate);
+    juce::Result renderToWav(
+        const Project& project,
+        const juce::File& destination,
+        double sampleRate,
+        std::vector<PluginRuntimeRequest> pluginRequests = {});
 
 private:
     struct RenderClip

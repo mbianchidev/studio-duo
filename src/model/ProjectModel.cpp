@@ -230,6 +230,7 @@ juce::var ReampRoute::toVar() const
     object->setProperty("polarityInverted", polarityInverted);
     object->setProperty("enabled", enabled);
     object->setProperty("ownsReturnTrack", ownsReturnTrack);
+    object->setProperty("activeSnapshotId", activeSnapshotId);
     return juce::var(object.release());
 }
 
@@ -263,6 +264,8 @@ std::optional<ReampRoute> ReampRoute::fromVar(const juce::var& value,
     route.polarityInverted = booleanProperty(*object, "polarityInverted", false);
     route.enabled = booleanProperty(*object, "enabled", true);
     route.ownsReturnTrack = booleanProperty(*object, "ownsReturnTrack", false);
+    route.activeSnapshotId =
+        object->getProperty("activeSnapshotId").toString();
     if (route.id.isEmpty()
         || route.name.trim().isEmpty()
         || route.sourceTrackId.isEmpty()
@@ -801,6 +804,315 @@ std::optional<Track> Track::fromVar(const juce::var& value, juce::String& error)
     }
 
     return track;
+}
+
+juce::var ToneSnapshot::toVar() const
+{
+    auto object = std::make_unique<juce::DynamicObject>();
+    object->setProperty("id", id);
+    object->setProperty("name", name);
+    object->setProperty("reampRouteId", reampRouteId);
+    object->setProperty("sourceTrackId", sourceTrackId);
+    object->setProperty("returnTrackId", returnTrackId);
+    object->setProperty("returnVolumeDecibels", returnVolumeDecibels);
+    object->setProperty("returnPan", returnPan);
+    object->setProperty("returnPolarityInverted", returnPolarityInverted);
+    object->setProperty("sourceFingerprint", sourceFingerprint);
+    object->setProperty("chainFingerprint", chainFingerprint);
+    object->setProperty("renderFile", renderFile);
+    object->setProperty("renderHash", renderHash);
+    object->setProperty("frozenTrackId", frozenTrackId);
+    object->setProperty("comparisonGainDecibels", comparisonGainDecibels);
+    object->setProperty("frozen", frozen);
+    juce::Array<juce::var> insertValues;
+    for (const auto& insert : inserts)
+        insertValues.add(insert.toVar());
+    object->setProperty("inserts", juce::var(insertValues));
+    juce::Array<juce::var> routeValues;
+    for (const auto& route : routes)
+        routeValues.add(route.toVar());
+    object->setProperty("routes", juce::var(routeValues));
+    juce::Array<juce::var> automationValues;
+    for (const auto& lane : automation)
+        automationValues.add(lane.toVar());
+    object->setProperty("automation", juce::var(automationValues));
+    return juce::var(object.release());
+}
+
+std::optional<ToneSnapshot> ToneSnapshot::fromVar(
+    const juce::var& value,
+    juce::String& error)
+{
+    const auto* object = requireObject(value, error, "Tone snapshot");
+    if (object == nullptr)
+        return std::nullopt;
+    ToneSnapshot snapshot;
+    snapshot.id = object->getProperty("id").toString();
+    snapshot.name = object->getProperty("name").toString();
+    snapshot.reampRouteId = object->getProperty("reampRouteId").toString();
+    snapshot.sourceTrackId = object->getProperty("sourceTrackId").toString();
+    snapshot.returnTrackId = object->getProperty("returnTrackId").toString();
+    snapshot.returnVolumeDecibels = static_cast<float>(
+        numberProperty(*object, "returnVolumeDecibels", 0.0));
+    snapshot.returnPan = static_cast<float>(
+        numberProperty(*object, "returnPan", 0.0));
+    snapshot.returnPolarityInverted = booleanProperty(
+        *object,
+        "returnPolarityInverted",
+        false);
+    snapshot.sourceFingerprint =
+        object->getProperty("sourceFingerprint").toString();
+    snapshot.chainFingerprint =
+        object->getProperty("chainFingerprint").toString();
+    snapshot.renderFile = object->getProperty("renderFile").toString();
+    snapshot.renderHash = object->getProperty("renderHash").toString();
+    snapshot.frozenTrackId =
+        object->getProperty("frozenTrackId").toString();
+    snapshot.comparisonGainDecibels = static_cast<float>(
+        numberProperty(*object, "comparisonGainDecibels", 0.0));
+    snapshot.frozen = booleanProperty(*object, "frozen", false);
+
+    const auto insertValues = object->getProperty("inserts");
+    const auto routeValues = object->getProperty("routes");
+    const auto automationValues = object->getProperty("automation");
+    if (!insertValues.isArray()
+        || !routeValues.isArray()
+        || !automationValues.isArray())
+    {
+        error = "Tone snapshot collections must be arrays.";
+        return std::nullopt;
+    }
+    for (const auto& insertValue : *insertValues.getArray())
+    {
+        auto insert = PluginInsert::fromVar(insertValue, error);
+        if (!insert.has_value())
+            return std::nullopt;
+        snapshot.inserts.push_back(std::move(*insert));
+    }
+    for (const auto& routeValue : *routeValues.getArray())
+    {
+        auto route = RoutingConnection::fromVar(routeValue, error);
+        if (!route.has_value())
+            return std::nullopt;
+        snapshot.routes.push_back(std::move(*route));
+    }
+    for (const auto& automationValue : *automationValues.getArray())
+    {
+        auto lane = AutomationLane::fromVar(automationValue, error);
+        if (!lane.has_value())
+            return std::nullopt;
+        snapshot.automation.push_back(std::move(*lane));
+    }
+    if (snapshot.id.isEmpty()
+        || snapshot.name.trim().isEmpty()
+        || snapshot.reampRouteId.isEmpty()
+        || snapshot.sourceTrackId.isEmpty()
+        || snapshot.returnTrackId.isEmpty()
+        || snapshot.sourceFingerprint.isEmpty()
+        || snapshot.chainFingerprint.isEmpty())
+    {
+        error = "Tone snapshot identity and fingerprints cannot be empty.";
+        return std::nullopt;
+    }
+    return snapshot;
+}
+
+juce::var MixerTrackSnapshot::toVar() const
+{
+    auto object = std::make_unique<juce::DynamicObject>();
+    object->setProperty("trackId", trackId);
+    object->setProperty("volumeDecibels", volumeDecibels);
+    object->setProperty("pan", pan);
+    object->setProperty("muted", muted);
+    object->setProperty("solo", solo);
+    object->setProperty("soloSafe", soloSafe);
+    object->setProperty("polarityInverted", polarityInverted);
+    object->setProperty("channelLayout", channelLayoutToString(channelLayout));
+    object->setProperty("folderTrackId", folderTrackId);
+    juce::Array<juce::var> controlledValues;
+    for (const auto& id : controlledTrackIds)
+        controlledValues.add(id);
+    object->setProperty("controlledTrackIds", juce::var(controlledValues));
+    juce::Array<juce::var> insertValues;
+    for (const auto& insert : inserts)
+        insertValues.add(insert.toVar());
+    object->setProperty("inserts", juce::var(insertValues));
+    return juce::var(object.release());
+}
+
+std::optional<MixerTrackSnapshot> MixerTrackSnapshot::fromVar(
+    const juce::var& value,
+    juce::String& error)
+{
+    const auto* object = requireObject(value, error, "Mixer track snapshot");
+    if (object == nullptr)
+        return std::nullopt;
+    const auto layout = channelLayoutFromString(
+        object->getProperty("channelLayout").toString());
+    if (!layout.has_value())
+    {
+        error = "Mixer snapshot contains an unsupported channel layout.";
+        return std::nullopt;
+    }
+    MixerTrackSnapshot snapshot;
+    snapshot.trackId = object->getProperty("trackId").toString();
+    snapshot.volumeDecibels = static_cast<float>(
+        numberProperty(*object, "volumeDecibels", 0.0));
+    snapshot.pan = static_cast<float>(numberProperty(*object, "pan", 0.0));
+    snapshot.muted = booleanProperty(*object, "muted", false);
+    snapshot.solo = booleanProperty(*object, "solo", false);
+    snapshot.soloSafe = booleanProperty(*object, "soloSafe", false);
+    snapshot.polarityInverted = booleanProperty(
+        *object,
+        "polarityInverted",
+        false);
+    snapshot.channelLayout = *layout;
+    snapshot.folderTrackId =
+        object->getProperty("folderTrackId").toString();
+    const auto controlledValues = object->getProperty("controlledTrackIds");
+    const auto insertValues = object->getProperty("inserts");
+    if (!controlledValues.isArray() || !insertValues.isArray())
+    {
+        error = "Mixer snapshot collections must be arrays.";
+        return std::nullopt;
+    }
+    for (const auto& controlled : *controlledValues.getArray())
+        snapshot.controlledTrackIds.push_back(controlled.toString());
+    for (const auto& insertValue : *insertValues.getArray())
+    {
+        auto insert = PluginInsert::fromVar(insertValue, error);
+        if (!insert.has_value())
+            return std::nullopt;
+        snapshot.inserts.push_back(std::move(*insert));
+    }
+    if (snapshot.trackId.isEmpty())
+    {
+        error = "Mixer track snapshot requires a track ID.";
+        return std::nullopt;
+    }
+    return snapshot;
+}
+
+juce::var MixerSnapshot::toVar() const
+{
+    auto object = std::make_unique<juce::DynamicObject>();
+    object->setProperty("id", id);
+    object->setProperty("name", name);
+    juce::Array<juce::var> trackValues;
+    for (const auto& track : tracks)
+        trackValues.add(track.toVar());
+    object->setProperty("tracks", juce::var(trackValues));
+    juce::Array<juce::var> routeValues;
+    for (const auto& route : routes)
+        routeValues.add(route.toVar());
+    object->setProperty("routes", juce::var(routeValues));
+    juce::Array<juce::var> automationValues;
+    for (const auto& lane : automation)
+        automationValues.add(lane.toVar());
+    object->setProperty("automation", juce::var(automationValues));
+    return juce::var(object.release());
+}
+
+std::optional<MixerSnapshot> MixerSnapshot::fromVar(
+    const juce::var& value,
+    juce::String& error)
+{
+    const auto* object = requireObject(value, error, "Mixer snapshot");
+    if (object == nullptr)
+        return std::nullopt;
+    MixerSnapshot snapshot;
+    snapshot.id = object->getProperty("id").toString();
+    snapshot.name = object->getProperty("name").toString();
+    const auto trackValues = object->getProperty("tracks");
+    const auto routeValues = object->getProperty("routes");
+    const auto automationValues = object->getProperty("automation");
+    if (!trackValues.isArray()
+        || !routeValues.isArray()
+        || !automationValues.isArray())
+    {
+        error = "Mixer snapshot collections must be arrays.";
+        return std::nullopt;
+    }
+    for (const auto& trackValue : *trackValues.getArray())
+    {
+        auto track = MixerTrackSnapshot::fromVar(trackValue, error);
+        if (!track.has_value())
+            return std::nullopt;
+        snapshot.tracks.push_back(std::move(*track));
+    }
+    for (const auto& routeValue : *routeValues.getArray())
+    {
+        auto route = RoutingConnection::fromVar(routeValue, error);
+        if (!route.has_value())
+            return std::nullopt;
+        snapshot.routes.push_back(std::move(*route));
+    }
+    for (const auto& automationValue : *automationValues.getArray())
+    {
+        auto lane = AutomationLane::fromVar(automationValue, error);
+        if (!lane.has_value())
+            return std::nullopt;
+        snapshot.automation.push_back(std::move(*lane));
+    }
+    if (snapshot.id.isEmpty()
+        || snapshot.name.trim().isEmpty()
+        || snapshot.tracks.empty())
+    {
+        error = "Mixer snapshot requires an ID, name, and tracks.";
+        return std::nullopt;
+    }
+    return snapshot;
+}
+
+juce::var RenderReport::toVar() const
+{
+    auto object = std::make_unique<juce::DynamicObject>();
+    object->setProperty("id", id);
+    object->setProperty("scope", scope);
+    object->setProperty("outputFile", outputFile);
+    object->setProperty("sourceHash", sourceHash);
+    object->setProperty("chainHash", chainHash);
+    object->setProperty("outputHash", outputHash);
+    object->setProperty("mode", mode);
+    object->setProperty("status", status);
+    object->setProperty("warning", warning);
+    object->setProperty("error", error);
+    object->setProperty("durationSeconds", durationSeconds);
+    object->setProperty("createdAt", createdAt);
+    return juce::var(object.release());
+}
+
+std::optional<RenderReport> RenderReport::fromVar(
+    const juce::var& value,
+    juce::String& parseError)
+{
+    const auto* object = requireObject(value, parseError, "Render report");
+    if (object == nullptr)
+        return std::nullopt;
+    RenderReport report;
+    report.id = object->getProperty("id").toString();
+    report.scope = object->getProperty("scope").toString();
+    report.outputFile = object->getProperty("outputFile").toString();
+    report.sourceHash = object->getProperty("sourceHash").toString();
+    report.chainHash = object->getProperty("chainHash").toString();
+    report.outputHash = object->getProperty("outputHash").toString();
+    report.mode = object->getProperty("mode").toString();
+    report.status = object->getProperty("status").toString();
+    report.warning = object->getProperty("warning").toString();
+    report.error = object->getProperty("error").toString();
+    report.durationSeconds = numberProperty(
+        *object,
+        "durationSeconds",
+        0.0);
+    report.createdAt = object->getProperty("createdAt").toString();
+    if (report.id.isEmpty()
+        || report.scope.isEmpty()
+        || report.status.isEmpty())
+    {
+        parseError = "Render report requires an ID, scope, and status.";
+        return std::nullopt;
+    }
+    return report;
 }
 
 Project Project::createDefault()
@@ -1380,6 +1692,18 @@ juce::var Project::toVar() const
     for (const auto& lane : automationLanes)
         automationValues.add(lane.toVar());
     object->setProperty("automationLanes", juce::var(automationValues));
+    juce::Array<juce::var> toneSnapshotValues;
+    for (const auto& snapshot : toneSnapshots)
+        toneSnapshotValues.add(snapshot.toVar());
+    object->setProperty("toneSnapshots", juce::var(toneSnapshotValues));
+    juce::Array<juce::var> mixerSnapshotValues;
+    for (const auto& snapshot : mixerSnapshots)
+        mixerSnapshotValues.add(snapshot.toVar());
+    object->setProperty("mixerSnapshots", juce::var(mixerSnapshotValues));
+    juce::Array<juce::var> reportValues;
+    for (const auto& report : renderReports)
+        reportValues.add(report.toVar());
+    object->setProperty("renderReports", juce::var(reportValues));
 
     juce::Array<juce::var> trackValues;
     trackValues.ensureStorageAllocated(static_cast<int>(tracks.size()));
@@ -1530,6 +1854,39 @@ std::optional<Project> Project::fromVar(const juce::var& value, juce::String& er
                         return std::nullopt;
                     project.automationLanes.push_back(std::move(*lane));
                 }
+                const auto toneSnapshotValues = object->getProperty("toneSnapshots");
+                if (toneSnapshotValues.isArray())
+                {
+                    for (const auto& snapshotValue : *toneSnapshotValues.getArray())
+                    {
+                        auto snapshot = ToneSnapshot::fromVar(snapshotValue, error);
+                        if (!snapshot.has_value())
+                            return std::nullopt;
+                        project.toneSnapshots.push_back(std::move(*snapshot));
+                    }
+                }
+                const auto mixerSnapshotValues = object->getProperty("mixerSnapshots");
+                if (mixerSnapshotValues.isArray())
+                {
+                    for (const auto& snapshotValue : *mixerSnapshotValues.getArray())
+                    {
+                        auto snapshot = MixerSnapshot::fromVar(snapshotValue, error);
+                        if (!snapshot.has_value())
+                            return std::nullopt;
+                        project.mixerSnapshots.push_back(std::move(*snapshot));
+                    }
+                }
+                const auto reportValues = object->getProperty("renderReports");
+                if (reportValues.isArray())
+                {
+                    for (const auto& reportValue : *reportValues.getArray())
+                    {
+                        auto report = RenderReport::fromVar(reportValue, error);
+                        if (!report.has_value())
+                            return std::nullopt;
+                        project.renderReports.push_back(std::move(*report));
+                    }
+                }
             }
         }
     }
@@ -1666,6 +2023,77 @@ std::optional<Project> Project::fromVar(const juce::var& value, juce::String& er
             }
         }
         automationLaneIds.push_back(lane.id);
+    }
+    std::vector<juce::String> toneSnapshotIds;
+    for (const auto& snapshot : project.toneSnapshots)
+    {
+        const auto route = std::find_if(
+            project.reampRoutes.cbegin(),
+            project.reampRoutes.cend(),
+            [&snapshot](const auto& candidate)
+            {
+                return candidate.id == snapshot.reampRouteId;
+            });
+        if (route == project.reampRoutes.cend()
+            || route->sourceTrackId != snapshot.sourceTrackId
+            || route->returnTrackId != snapshot.returnTrackId
+            || std::find(toneSnapshotIds.cbegin(),
+                         toneSnapshotIds.cend(),
+                         snapshot.id) != toneSnapshotIds.cend())
+        {
+            error = "Tone snapshots reference unavailable routes or duplicate IDs.";
+            return std::nullopt;
+        }
+        toneSnapshotIds.push_back(snapshot.id);
+    }
+    for (const auto& route : project.reampRoutes)
+    {
+        if (route.activeSnapshotId.isEmpty())
+            continue;
+        const auto snapshot = std::find_if(
+            project.toneSnapshots.cbegin(),
+            project.toneSnapshots.cend(),
+            [&route](const auto& candidate)
+            {
+                return candidate.id == route.activeSnapshotId
+                    && candidate.reampRouteId == route.id;
+            });
+        if (snapshot == project.toneSnapshots.cend())
+        {
+            error = "A reamp route references an unavailable active snapshot.";
+            return std::nullopt;
+        }
+    }
+    std::vector<juce::String> mixerSnapshotIds;
+    for (const auto& snapshot : project.mixerSnapshots)
+    {
+        if (std::find(mixerSnapshotIds.cbegin(),
+                      mixerSnapshotIds.cend(),
+                      snapshot.id) != mixerSnapshotIds.cend()
+            || std::any_of(
+                snapshot.tracks.cbegin(),
+                snapshot.tracks.cend(),
+                [&project](const auto& track)
+                {
+                    return project.findTrack(track.trackId) == nullptr;
+                }))
+        {
+            error = "Mixer snapshots reference unavailable tracks or duplicate IDs.";
+            return std::nullopt;
+        }
+        mixerSnapshotIds.push_back(snapshot.id);
+    }
+    std::vector<juce::String> reportIds;
+    for (const auto& report : project.renderReports)
+    {
+        if (std::find(reportIds.cbegin(),
+                      reportIds.cend(),
+                      report.id) != reportIds.cend())
+        {
+            error = "Render report IDs must be unique.";
+            return std::nullopt;
+        }
+        reportIds.push_back(report.id);
     }
 
     return project;

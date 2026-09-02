@@ -98,6 +98,8 @@ set(STUDIO_DUO_MODEL_SOURCES
     src/project_io/ProjectFile.h
     src/project_io/ProjectMigration.cpp
     src/project_io/ProjectMigration.h
+    src/reamp/ReampSnapshotService.cpp
+    src/reamp/ReampSnapshotService.h
 )
 
 set(STUDIO_DUO_PLUGIN_SOURCES
@@ -151,6 +153,8 @@ target_sources(
         src/plugin_host/PluginBridgeWorker.h
         src/plugin_host/PluginScanWorker.cpp
         src/plugin_host/PluginScanWorker.h
+        src/render/RenderEngine.cpp
+        src/render/RenderEngine.h
         src/ui/MainComponent.cpp
         src/ui/MainComponent.h
         src/ui/AutomationPanel.cpp
@@ -281,6 +285,8 @@ if(STUDIO_DUO_BUILD_TESTS)
             tests/PluginRecoveryTests.cpp
             tests/AutomationTests.cpp
             tests/DeviceTests.cpp
+            tests/ReampSnapshotTests.cpp
+            tests/RenderEngineTests.cpp
             src/ui/RoutingUiModel.cpp
             src/ui/RoutingUiModel.h
             src/audio/StudioAudioEngine.cpp
@@ -304,6 +310,8 @@ if(STUDIO_DUO_BUILD_TESTS)
             src/devices/DeviceRegistry.h
             src/devices/UtilityDeviceProcessor.cpp
             src/devices/UtilityDeviceProcessor.h
+            src/render/RenderEngine.cpp
+            src/render/RenderEngine.h
             ${STUDIO_DUO_MODEL_SOURCES}
     )
 
