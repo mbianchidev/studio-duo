@@ -3,9 +3,13 @@
 
 #include "plugin_host/PluginFormats.h"
 #include "plugin_host/ClapPluginFormat.h"
+#include "plugin_host/PluginBridgeClient.h"
 #include "plugin_host/ValidatedPluginStateTarget.h"
 #include "model/ProjectCommands.h"
 #include "audio/StudioAudioEngine.h"
+
+#include <atomic>
+#include <thread>
 
 void pluginFormatTests()
 {
@@ -62,14 +66,75 @@ void pluginFormatTests()
     expect(instance->getParameters().size() == 300,
            "CLAP parameters are exposed without truncation.");
     juce::MessageManager::getInstance()->runDispatchLoopUntil(100);
+    const auto parameterCount = instance->getParameters().size();
+    const auto* removedParameter = dynamic_cast<
+        juce::HostedAudioProcessorParameter*>(
+        parameterCount > 249
+            ? instance->getParameters()[249]
+            : nullptr);
+    const auto* followingParameter = dynamic_cast<
+        juce::HostedAudioProcessorParameter*>(
+        parameterCount > 250
+            ? instance->getParameters()[250]
+            : nullptr);
+    const auto* addedParameter = dynamic_cast<
+        juce::HostedAudioProcessorParameter*>(
+        parameterCount > 300
+            ? instance->getParameters()[300]
+            : nullptr);
     expect(instance->getLatencySamples() == 32
-               && instance->getParameters().size() == 301
-               && instance->getParameters()[0]->getName(128)
-                      == "Gain rescanned"
-               && instance->getParameters()[298]->getValue() > 0.0f
-               && std::abs(instance->getParameters()[299]->getValue())
-                      < 0.0001f,
-           "CLAP restart, callback, latency, and thread-check requests drain on valid threads.");
+              && parameterCount == 301
+              && instance->getParameters()[0]->getName(128)
+                     == "Gain rescanned"
+              && removedParameter != nullptr
+              && removedParameter->getParameterID() == "250"
+              && !removedParameter->isAutomatable()
+              && followingParameter != nullptr
+              && followingParameter->getParameterID() == "251"
+              && addedParameter != nullptr
+              && addedParameter->getParameterID() == "301"
+              && instance->getParameters()[298]->getValue() > 0.0f
+              && std::abs(instance->getParameters()[299]->getValue())
+                     < 0.0001f,
+           ("CLAP rescans preserve stable parameter-ID slots while restart, callback, latency, and thread-check requests drain"
+            " (count "
+            + juce::String(parameterCount)
+            + ", removed "
+            + (removedParameter != nullptr
+                   ? removedParameter->getParameterID()
+                   : juce::String("none"))
+            + ", following "
+            + (followingParameter != nullptr
+                   ? followingParameter->getParameterID()
+                   : juce::String("none"))
+            + ", added "
+            + (addedParameter != nullptr
+                   ? addedParameter->getParameterID()
+                   : juce::String("none"))
+            + ", latency "
+            + juce::String(instance->getLatencySamples())
+            + ", name "
+            + instance->getParameters()[0]->getName(128)
+            + ", removed automatable "
+            + juce::String(
+                  removedParameter != nullptr
+                      && removedParameter->isAutomatable()
+                      ? 1
+                      : 0)
+            + ", callbacks "
+            + juce::String(
+                  parameterCount > 298
+                      ? instance->getParameters()[298]
+                            ->getValue()
+                      : -1.0f)
+            + ", violations "
+            + juce::String(
+                  parameterCount > 299
+                      ? instance->getParameters()[299]
+                            ->getValue()
+                      : -1.0f)
+            + ").")
+               .toRawUTF8());
     auto* exactAutomation =
         dynamic_cast<studio::SampleAccurateAutomationTarget*>(
             instance.get());
@@ -77,6 +142,21 @@ void pluginFormatTests()
     rangedEvent.parameterIndex = 1;
     rangedEvent.sampleOffset = 17;
     rangedEvent.value = 0.5f;
+    auto oversizedEvent = rangedEvent;
+    oversizedEvent.parameterIndex = 0;
+    oversizedEvent.sampleOffset = 0;
+    oversizedEvent.flags =
+        studio::PluginBridgeParameterEvent::rampFlag;
+    oversizedEvent.rampEndOffset = 65536;
+    oversizedEvent.rampEndValue = 1.0f;
+    expect(exactAutomation != nullptr
+               && !exactAutomation
+                       ->supportsSampleAccurateAutomation(
+                           std::span<
+                               const studio::PluginBridgeParameterEvent>(
+                               &oversizedEvent,
+                               1)),
+           "CLAP rejects oversized exact automation before partial delivery.");
     if (exactAutomation != nullptr)
     {
         audio.clear();
@@ -129,6 +209,21 @@ void pluginFormatTests()
            "CLAP partial state blobs fail round-trip validation.");
     instance->getParameters()[296]->setValueNotifyingHost(0.0f);
     instance->processBlock(audio, midi);
+    instance->getParameters()[0]->setValueNotifyingHost(0.4f);
+    instance->getParameters()[294]->setValueNotifyingHost(1.0f);
+    instance->processBlock(audio, midi);
+    expect(validatedState != nullptr
+               && validatedState
+                      ->saveValidatedState(failedState)
+                      .failed()
+               && failedState.isEmpty()
+               && std::abs(
+                      instance->getParameters()[0]->getValue()
+                      - 0.4f)
+                      < 0.0001f,
+           "CLAP state validation uses a disposable instance and cannot mutate live DSP state on failure.");
+    instance->getParameters()[294]->setValueNotifyingHost(0.0f);
+    instance->processBlock(audio, midi);
     const std::uint8_t malformedState = 0;
     expect(validatedState != nullptr
                && validatedState->restoreValidatedState(
@@ -159,6 +254,53 @@ void pluginFormatTests()
                       < 0.0001f,
            "Process-only CLAP parameters receive a silent process block and persist while stopped.");
     instance->releaseResources();
+
+    studio::PluginBridgeClient sandbox(
+        juce::File(STUDIO_DUO_BRIDGE_WORKER_PATH));
+    const auto sandboxStart = sandbox.startPlugin(
+        *descriptions[0],
+        48000.0,
+        64);
+    auto sandboxCaptureSucceeded = sandboxStart.wasOk();
+    std::atomic<bool> keepProcessing { sandboxCaptureSucceeded };
+    std::thread sandboxAudioThread;
+    if (sandboxCaptureSucceeded)
+    {
+        sandboxAudioThread = std::thread(
+            [&sandbox, &keepProcessing]
+            {
+                juce::AudioBuffer<float> block(2, 64);
+                while (keepProcessing.load(
+                    std::memory_order_acquire))
+                {
+                    block.clear();
+                    sandbox.processBlock(block);
+                }
+            });
+        for (auto capture = 0;
+             capture < 12 && sandboxCaptureSucceeded;
+             ++capture)
+        {
+            juce::MemoryBlock captured;
+            sandboxCaptureSucceeded =
+                sandbox.requestState(
+                    captured,
+                    std::chrono::seconds(2))
+                    .wasOk()
+                && !captured.isEmpty();
+        }
+        keepProcessing.store(false, std::memory_order_release);
+        sandboxAudioThread.join();
+    }
+    sandbox.stop();
+    expect(
+        sandboxCaptureSucceeded,
+        (juce::String(
+             "Sandbox CLAP state capture remains deadlock-free under concurrent processing")
+         + (sandboxStart.failed()
+                ? ": " + sandboxStart.getErrorMessage()
+                : juce::String()))
+            .toRawUTF8());
 
     const auto monoSource = juce::File::getSpecialLocation(
                                 juce::File::tempDirectory)
@@ -209,6 +351,7 @@ void pluginFormatTests()
         studio::AutomationTargetType::pluginParameter;
     monoAutomation.target.trackId = monoProject.tracks.front().id;
     monoAutomation.target.insertId = monoInsert.id;
+    monoAutomation.target.parameterId = "1";
     monoAutomation.target.parameterIndex = 0;
     monoAutomation.interpolation =
         studio::AutomationInterpolation::linear;
@@ -243,17 +386,28 @@ void pluginFormatTests()
                            - monoRender.getSample(0, 33))
                       < 0.0001f,
            "CLAP automation is sample-exact in one process call and mono output duplicates to stereo.");
-    monoEngine.seekSeconds(0.0);
-    monoEngine.play();
-    monoEngine.processActiveBlockForTesting(64);
+    std::atomic<bool> runRealtimeStress { true };
+    std::thread realtimeStressThread(
+        [&monoEngine, &runRealtimeStress]
+        {
+            while (runRealtimeStress.load(
+                std::memory_order_acquire))
+            {
+                monoEngine.seekSeconds(0.0);
+                monoEngine.play();
+                monoEngine.processActiveBlockForTesting(64);
+            }
+        });
     juce::MessageManager::getInstance()->runDispatchLoopUntil(100);
     const auto monoStatuses = monoEngine.pluginRuntimeStatuses();
+    runRealtimeStress.store(false, std::memory_order_release);
+    realtimeStressThread.join();
     expect(!monoStatuses.empty()
                && monoStatuses.front().latencySamples == 32
                && monoStatuses.front().parameters.size() == 301
                && monoStatuses.front().parameters.front().name
                       == "Gain rescanned",
-           ("Dynamic CLAP latency and metadata propagate into engine status and PDC timing"
+           (           "Dynamic CLAP latency and metadata propagate into engine status and PDC timing without cloning mutable realtime buffers"
             " (latency "
             + juce::String(
                 monoStatuses.empty()

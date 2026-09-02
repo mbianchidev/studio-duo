@@ -59,43 +59,29 @@ void PluginBridgeWorker::handleMessageFromCoordinator(const juce::MemoryBlock& m
         const auto command = stream.readString();
         if (command == "get-state")
         {
-            juce::MemoryBlock state;
-            auto stateResult = juce::Result::ok();
-            {
-                const std::lock_guard lock(pluginMutex);
-                if (plugin != nullptr)
+            juce::MessageManager::callAsync(
+                [this]
                 {
-                    if (auto* validated =
-                            dynamic_cast<ValidatedPluginStateTarget*>(
-                                plugin.get()))
-                    {
-                        stateResult =
-                            validated->saveValidatedState(state);
-                    }
-                    else
-                    {
-                        plugin->getStateInformation(state);
-                    }
-                }
-            }
-            if (stateResult.failed())
-                sendStatus(
-                    "state|error|"
-                    + stateResult.getErrorMessage());
-            else if (state.isEmpty())
-                sendStatus("state|none");
-            else
-                sendStatus("state|data|" + state.toBase64Encoding());
+                    captureStateOnMessageThread();
+                });
         }
         else if (command == "set-parameter")
         {
             const auto parameterIndex = stream.readInt();
             const auto value = stream.readFloat();
-            const std::lock_guard lock(pluginMutex);
-            if (plugin != nullptr
-                && parameterIndex >= 0
-                && parameterIndex < plugin->getParameters().size())
-                plugin->getParameters()[parameterIndex]->setValue(value);
+            juce::MessageManager::callAsync(
+                [this, parameterIndex, value]
+                {
+                    const std::lock_guard lock(pluginMutex);
+                    if (plugin != nullptr
+                        && parameterIndex >= 0
+                        && parameterIndex
+                            < plugin->getParameters().size())
+                    {
+                        plugin->getParameters()[
+                            parameterIndex]->setValue(value);
+                    }
+                });
         }
         else if (command == "show-editor")
         {
@@ -204,6 +190,53 @@ void PluginBridgeWorker::handleMessageFromCoordinator(const juce::MemoryBlock& m
         });
 }
 
+void PluginBridgeWorker::captureStateOnMessageThread()
+{
+    stateCaptureRequested.store(true, std::memory_order_release);
+    const auto deadline =
+        juce::Time::getMillisecondCounterHiRes() + 2000.0;
+    while (processingBlocksInFlight.load(
+              std::memory_order_acquire) != 0
+          && juce::Time::getMillisecondCounterHiRes()
+              < deadline)
+    {
+        juce::Thread::sleep(1);
+    }
+
+    juce::MemoryBlock state;
+    auto stateResult = juce::Result::ok();
+    if (processingBlocksInFlight.load(
+           std::memory_order_acquire) != 0)
+    {
+        stateResult = juce::Result::fail(
+           "Timed out waiting for sandbox processing to pause before state capture.");
+    }
+    else if (plugin != nullptr)
+    {
+        if (auto* validated =
+               dynamic_cast<ValidatedPluginStateTarget*>(
+                   plugin.get()))
+        {
+           stateResult =
+               validated->saveValidatedState(state);
+        }
+        else
+        {
+           plugin->getStateInformation(state);
+        }
+    }
+    stateCaptureRequested.store(false, std::memory_order_release);
+
+    if (stateResult.failed())
+        sendStatus(
+           "state|error|"
+           + stateResult.getErrorMessage());
+    else if (state.isEmpty())
+        sendStatus("state|none");
+    else
+        sendStatus("state|data|" + state.toBase64Encoding());
+}
+
 void PluginBridgeWorker::handleConnectionLost()
 {
     signalThreadShouldExit();
@@ -226,6 +259,24 @@ void PluginBridgeWorker::run()
         if (plugin == nullptr)
         {
             PluginBridgeProtocol::processAvailableBlock(*sharedState);
+            continue;
+        }
+
+        processingBlocksInFlight.fetch_add(
+            1,
+            std::memory_order_acq_rel);
+        struct ProcessingScope
+        {
+            ~ProcessingScope()
+            {
+                count.fetch_sub(1, std::memory_order_acq_rel);
+            }
+            std::atomic<int>& count;
+        } processingScope { processingBlocksInFlight };
+        if (stateCaptureRequested.load(
+                std::memory_order_acquire))
+        {
+            wait(1);
             continue;
         }
 
@@ -324,6 +375,7 @@ void PluginBridgeWorker::run()
                                 span));
                     }
                 }
+
             }
             if (automationStride < samples)
             {

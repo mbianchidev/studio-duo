@@ -4,7 +4,11 @@
 
 namespace studio
 {
-PluginBridgeClient::PluginBridgeClient() = default;
+PluginBridgeClient::PluginBridgeClient(
+    juce::File executable)
+    : workerExecutable(std::move(executable))
+{
+}
 
 PluginBridgeClient::~PluginBridgeClient()
 {
@@ -46,7 +50,11 @@ juce::Result PluginBridgeClient::startInternal(const juce::PluginDescription* de
         return result;
 
     connectionLost.store(false, std::memory_order_release);
-    if (!launchWorkerProcess(juce::File::getSpecialLocation(juce::File::currentExecutableFile),
+    const auto executable = workerExecutable.existsAsFile()
+        ? workerExecutable
+        : juce::File::getSpecialLocation(
+              juce::File::currentExecutableFile);
+    if (!launchWorkerProcess(executable,
                              pluginBridgeProcessId,
                              5000,
                              0))

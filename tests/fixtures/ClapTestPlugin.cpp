@@ -211,7 +211,20 @@ static bool audio_ports_get(const clap_plugin_t* plugin,
 static uint32_t params_count(const clap_plugin_t* plugin)
 {
     expect_main_thread(plugin);
-    return self(plugin)->metadata_epoch > 0 ? 301 : 300;
+    return 300;
+}
+
+static clap_id parameter_id_for_index(
+    const clap_plugin_t* plugin,
+    uint32_t index)
+{
+    if (self(plugin)->metadata_epoch == 0)
+        return index + 1;
+    if (index < 249)
+        return index + 1;
+    if (index < 299)
+        return index + 2;
+    return 301;
 }
 
 static bool params_get_info(const clap_plugin_t* plugin,
@@ -222,13 +235,15 @@ static bool params_get_info(const clap_plugin_t* plugin,
     if (index >= params_count(plugin) || info == NULL)
         return false;
     memset(info, 0, sizeof(*info));
-    info->id = index + 1;
-    info->flags = index >= 298
+    const clap_id parameter_id =
+        parameter_id_for_index(plugin, index);
+    info->id = parameter_id;
+    info->flags = parameter_id >= 299
         ? CLAP_PARAM_IS_READONLY
         : CLAP_PARAM_IS_AUTOMATABLE;
-    if (index == 297)
+    if (parameter_id == 298)
         info->flags |= CLAP_PARAM_REQUIRES_PROCESS;
-    if (index == 0)
+    if (parameter_id == 1)
         snprintf(
             info->name,
             sizeof(info->name),
@@ -236,22 +251,23 @@ static bool params_get_info(const clap_plugin_t* plugin,
             self(plugin)->metadata_epoch > 0
                 ? "Gain rescanned"
                 : "Gain");
-    else if (index == 298)
+    else if (parameter_id == 299)
         snprintf(info->name, sizeof(info->name), "Main thread callbacks");
-    else if (index == 299)
+    else if (parameter_id == 300)
         snprintf(info->name, sizeof(info->name), "Thread violations");
-    else if (index == 300)
+    else if (parameter_id == 301)
         snprintf(info->name, sizeof(info->name), "Added parameter");
     else
-        snprintf(info->name, sizeof(info->name), "Parameter %u", index + 1);
-    info->min_value = index == 1 ? -24.0 : 0.0;
-    info->max_value = index == 1
+        snprintf(info->name, sizeof(info->name), "Parameter %u", parameter_id);
+    info->min_value = parameter_id == 2 ? -24.0 : 0.0;
+    info->max_value = parameter_id == 2
         ? 24.0
-        : index >= 298 ? 1000.0 : 1.0;
-    info->default_value = index == 1
+        : parameter_id >= 299 ? 1000.0 : 1.0;
+    info->default_value = parameter_id == 2
         ? 0.0
-        : index >= 298 ? 0.0 : 0.5;
-    info->cookie = &self(plugin)->cookies[index];
+        : parameter_id >= 299 ? 0.0 : 0.5;
+    info->cookie =
+        &self(plugin)->cookies[parameter_id - 1];
     return true;
 }
 
@@ -260,7 +276,9 @@ static bool params_get_value(const clap_plugin_t* plugin,
                              double* value)
 {
     expect_main_thread(plugin);
-    if (param_id < 1 || param_id > params_count(plugin)
+    if (param_id < 1 || param_id > 301
+        || (self(plugin)->metadata_epoch > 0
+            && param_id == 250)
         || value == NULL)
         return false;
     if (param_id == 299)
@@ -281,7 +299,9 @@ static bool params_value_to_text(const clap_plugin_t* plugin,
                                  uint32_t capacity)
 {
     expect_main_thread(plugin);
-    if (param_id < 1 || param_id > params_count(plugin)
+    if (param_id < 1 || param_id > 301
+        || (self(plugin)->metadata_epoch > 0
+            && param_id == 250)
         || text == NULL || capacity == 0)
         return false;
     snprintf(text, capacity, "%.3f", value);
@@ -372,6 +392,11 @@ static bool state_load(const clap_plugin_t* plugin,
     if (state_read(stream, parameters, sizeof(parameters))
         != (int64_t) sizeof(parameters))
         return false;
+    if (parameters[294] > 0.9)
+    {
+        self(plugin)->parameters[0] = 0.125;
+        return false;
+    }
     memcpy(self(plugin)->parameters, parameters, sizeof(parameters));
     return true;
 }

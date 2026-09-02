@@ -37,6 +37,7 @@ private:
     void hideEditor();
     void focusEditor();
     void resizeEditor(int width, int height);
+    void captureStateOnMessageThread();
     juce::String parameterMetadata() const;
     void audioProcessorParameterChanged(
         juce::AudioProcessor*,
@@ -56,6 +57,8 @@ private:
     juce::MidiBuffer midiBuffer;
     std::vector<int> automationBoundaries;
     std::mutex pluginMutex;
+    std::atomic<bool> stateCaptureRequested { false };
+    std::atomic<int> processingBlocksInFlight { 0 };
     int mainInputChannels = 2;
     int sidechainInputChannels = 0;
     int mainOutputChannels = 2;

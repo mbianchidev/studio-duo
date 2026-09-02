@@ -17,7 +17,8 @@ namespace studio
 class PluginBridgeClient final : private juce::ChildProcessCoordinator
 {
 public:
-    PluginBridgeClient();
+    explicit PluginBridgeClient(
+        juce::File workerExecutable = {});
     ~PluginBridgeClient() override;
 
     juce::Result start();
@@ -66,6 +67,7 @@ private:
     void updateParameterMetadata(const juce::String& encoded);
 
     juce::File sharedFile;
+    juce::File workerExecutable;
     std::unique_ptr<juce::MemoryMappedFile> mapping;
     PluginBridgeSharedState* sharedState = nullptr;
     std::array<std::array<float, PluginBridgeSharedState::maxBlockSize>,

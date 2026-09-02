@@ -332,6 +332,8 @@ public:
 
         void setValue(float normalized) override
         {
+            if (isRemoved())
+                return;
             plainValue.store(
                 info.min_value
                     + (info.max_value - info.min_value)
@@ -462,18 +464,32 @@ public:
         void updateInfo(const clap_param_info_t& value)
         {
             info = value;
+            removed.store(false, std::memory_order_release);
             refresh();
         }
 
         void markRemoved()
         {
             info.cookie = nullptr;
-            info.flags |= CLAP_PARAM_IS_READONLY | CLAP_PARAM_IS_HIDDEN;
+            constexpr auto mutableFlags =
+                static_cast<clap_param_info_flags>(
+                    CLAP_PARAM_IS_AUTOMATABLE
+                    | CLAP_PARAM_IS_MODULATABLE
+                    | CLAP_PARAM_REQUIRES_PROCESS);
+            info.flags &= ~mutableFlags;
+            info.flags |=
+                CLAP_PARAM_IS_READONLY | CLAP_PARAM_IS_HIDDEN;
             std::snprintf(
                 info.name,
                 sizeof(info.name),
                 "Removed parameter");
             dirty.store(false, std::memory_order_release);
+            removed.store(true, std::memory_order_release);
+        }
+
+        [[nodiscard]] bool isRemoved() const noexcept
+        {
+            return removed.load(std::memory_order_acquire);
         }
 
         clap_param_info_t info {};
@@ -483,6 +499,7 @@ public:
         const clap_plugin_params_t* params = nullptr;
         std::atomic<double> plainValue { 0.0 };
         std::atomic<bool> dirty { false };
+        std::atomic<bool> removed { false };
     };
 
     struct InputEvents
@@ -644,7 +661,8 @@ public:
             parameters.end(),
             [id](const auto* parameter)
             {
-                return parameter->info.id == id;
+                return !parameter->isRemoved()
+                    && parameter->info.id == id;
             });
         return found != parameters.end() ? *found : nullptr;
     }
@@ -656,7 +674,8 @@ public:
             parameters.cend(),
             [](const auto* parameter)
             {
-                return parameter->isDirty();
+                return !parameter->isRemoved()
+                    && parameter->isDirty();
             });
     }
 
@@ -667,7 +686,8 @@ public:
             parameters.cend(),
             [](const auto* parameter)
             {
-                return parameter->requiresProcess()
+                return !parameter->isRemoved()
+                    && parameter->requiresProcess()
                     && parameter->isDirty();
             });
     }
@@ -677,6 +697,8 @@ public:
         inputEvents.count = 0;
         for (auto* parameter : parameters)
         {
+            if (parameter->isRemoved())
+                continue;
             if (!processDelivery && parameter->requiresProcess())
                 continue;
             if (!parameter->consumeDirty())
@@ -799,17 +821,30 @@ public:
                 hosted.push_back(clapParameter);
 
         const auto count = params->count(plugin);
-        std::vector<Parameter*> rebuilt;
-        rebuilt.reserve(count);
+        std::vector<clap_id> seenIds;
+        seenIds.reserve(count);
         for (std::uint32_t index = 0; index < count; ++index)
         {
             clap_param_info_t info {};
             if (!params->get_info(plugin, index, &info))
                 continue;
-            if (index < hosted.size())
+            if (std::find(
+                    seenIds.begin(),
+                    seenIds.end(),
+                    info.id) != seenIds.end())
+                continue;
+            seenIds.push_back(info.id);
+
+            const auto existing = std::find_if(
+                hosted.begin(),
+                hosted.end(),
+                [&info](const auto* parameter)
+                {
+                    return parameter->info.id == info.id;
+                });
+            if (existing != hosted.end())
             {
-                hosted[index]->updateInfo(info);
-                rebuilt.push_back(hosted[index]);
+                (*existing)->updateInfo(info);
             }
             else
             {
@@ -821,17 +856,18 @@ public:
                     owner.addClapHostedParameter(
                         std::move(parameter)));
                 if (added != nullptr)
-                {
                     hosted.push_back(added);
-                    rebuilt.push_back(added);
-                }
             }
         }
-        for (std::size_t index = rebuilt.size();
-             index < hosted.size();
-             ++index)
-            hosted[index]->markRemoved();
-        parameters = std::move(rebuilt);
+        for (auto* parameter : hosted)
+        {
+            if (std::find(
+                    seenIds.begin(),
+                    seenIds.end(),
+                    parameter->info.id) == seenIds.end())
+                parameter->markRemoved();
+        }
+        parameters = std::move(hosted);
         inputEvents.values.resize(
             parameters.size()
             + maximumScheduledAutomationEvents);
@@ -943,6 +979,69 @@ public:
         {
             flushParameters(false);
         }
+    }
+
+    juce::Result validateSavedState(
+        const juce::MemoryBlock& candidate)
+    {
+        auto validationHost = std::make_unique<Host>(*this);
+        const auto id = pluginId(description.fileOrIdentifier);
+        const auto* validationPlugin =
+            module->factory->create_plugin(
+                module->factory,
+                &validationHost->value,
+                id.toRawUTF8());
+        if (validationPlugin == nullptr
+            || validationPlugin == plugin)
+            return juce::Result::fail(
+                "The CLAP plugin could not create a disposable state-validation instance.");
+
+        struct PluginGuard
+        {
+            ~PluginGuard()
+            {
+                if (value != nullptr)
+                    value->destroy(value);
+            }
+            const clap_plugin_t* value = nullptr;
+        } pluginGuard { validationPlugin };
+        if (!validationPlugin->init(validationPlugin))
+            return juce::Result::fail(
+                "The CLAP state-validation instance failed to initialize.");
+
+        const auto* validationState =
+            static_cast<const clap_plugin_state_t*>(
+                validationPlugin->get_extension(
+                    validationPlugin,
+                    CLAP_EXT_STATE));
+        if (validationState == nullptr)
+            return juce::Result::fail(
+                "The disposable CLAP instance does not expose state loading.");
+
+        juce::MemoryInputStream input(candidate, false);
+        clap_istream_t stream {
+            &input,
+            [](const clap_istream_t* value,
+               void* destination,
+               std::uint64_t bytes) -> std::int64_t
+            {
+                auto* source =
+                    static_cast<juce::MemoryInputStream*>(
+                        value->ctx);
+                const auto requested = static_cast<int>(
+                    std::min<std::uint64_t>(
+                        bytes,
+                        static_cast<std::uint64_t>(INT_MAX)));
+                return static_cast<std::int64_t>(
+                    source->read(destination, requested));
+            }
+        };
+        return validationState->load(
+                   validationPlugin,
+                   &stream)
+            ? juce::Result::ok()
+            : juce::Result::fail(
+                  "The CLAP plugin rejected its saved state in a disposable validation instance.");
     }
 
     std::shared_ptr<Module> module;
@@ -1496,32 +1595,10 @@ juce::Result ClapPluginInstance::saveValidatedState(
             return juce::Result::fail(
                 "The CLAP plugin failed to save complete state.");
 
-        juce::MemoryInputStream validationInput(
-            candidate,
-            false);
-        clap_istream_t validationStream {
-            &validationInput,
-            [](const clap_istream_t* value,
-               void* data,
-               std::uint64_t bytes) -> std::int64_t
-            {
-                auto* source = static_cast<juce::MemoryInputStream*>(
-                    value->ctx);
-                const auto requested = static_cast<int>(
-                    std::min<std::uint64_t>(
-                        bytes,
-                        static_cast<std::uint64_t>(INT_MAX)));
-                return static_cast<std::int64_t>(
-                    source->read(data, requested));
-            }
-        };
-        if (!impl->state->load(
-                impl->plugin,
-                &validationStream))
-            return juce::Result::fail(
-                "The CLAP plugin rejected its saved state.");
-
-        impl->refreshParameters();
+        if (const auto validation =
+                impl->validateSavedState(candidate);
+            validation.failed())
+            return validation;
         destination = std::move(candidate);
         impl->stateDirty.store(false, std::memory_order_release);
         return juce::Result::ok();
@@ -1602,8 +1679,49 @@ juce::Result ClapPluginInstance::restoreValidatedState(
 }
 
 bool ClapPluginInstance::supportsSampleAccurateAutomation(
-    std::span<const PluginBridgeParameterEvent>) const noexcept
+    std::span<const PluginBridgeParameterEvent> events) const noexcept
 {
+    if (impl->lifecycleChanging.load(std::memory_order_seq_cst))
+        return false;
+
+    impl->processCallsInFlight.fetch_add(
+        1,
+        std::memory_order_seq_cst);
+    struct SupportScope
+    {
+        ~SupportScope()
+        {
+            count.fetch_sub(1, std::memory_order_seq_cst);
+        }
+        std::atomic<int>& count;
+    } supportScope { impl->processCallsInFlight };
+    if (impl->lifecycleChanging.load(std::memory_order_seq_cst))
+        return false;
+
+    std::uint64_t required = 0;
+    for (const auto& event : events)
+    {
+        if (event.parameterIndex
+                >= static_cast<std::uint32_t>(
+                    impl->parameters.size())
+            || impl->parameters[
+                   static_cast<std::size_t>(
+                       event.parameterIndex)]->isRemoved())
+            return false;
+
+        const auto expanded = (event.flags
+                                  & PluginBridgeParameterEvent::rampFlag)
+                    != 0
+                && event.rampEndOffset > event.sampleOffset
+            ? static_cast<std::uint64_t>(
+                  event.rampEndOffset - event.sampleOffset)
+                + 1
+            : 1;
+        required += expanded;
+        if (required
+            > Impl::maximumScheduledAutomationEvents)
+            return false;
+    }
     return true;
 }
 
@@ -1634,6 +1752,41 @@ void ClapPluginInstance::processBlockWithAutomation(
         return;
     }
 
+    std::uint64_t required = 0;
+    for (const auto& event : events)
+    {
+        if (event.parameterIndex
+                >= static_cast<std::uint32_t>(
+                    impl->parameters.size())
+            || impl->parameters[
+                   static_cast<std::size_t>(
+                       event.parameterIndex)]->isRemoved())
+        {
+            impl->scheduledAutomationEventsDropped.fetch_add(
+                1,
+                std::memory_order_relaxed);
+            processBlock(audio, midi);
+            return;
+        }
+        required += (event.flags
+                        & PluginBridgeParameterEvent::rampFlag)
+                    != 0
+                && event.rampEndOffset > event.sampleOffset
+            ? static_cast<std::uint64_t>(
+                  event.rampEndOffset - event.sampleOffset)
+                + 1
+            : 1;
+        if (required
+            > Impl::maximumScheduledAutomationEvents)
+        {
+            impl->scheduledAutomationEventsDropped.fetch_add(
+                static_cast<std::uint64_t>(events.size()),
+                std::memory_order_relaxed);
+            processBlock(audio, midi);
+            return;
+        }
+    }
+
     struct ScheduledAutomationScope
     {
         ~ScheduledAutomationScope()
@@ -1647,23 +1800,11 @@ void ClapPluginInstance::processBlockWithAutomation(
                                int sampleOffset,
                                float value)
     {
-        if (parameterIndex
-            >= static_cast<std::uint32_t>(
-                impl->parameters.size()))
-        {
-            impl->scheduledAutomationEventsDropped.fetch_add(
-                1,
-                std::memory_order_relaxed);
-            return;
-        }
-        if (impl->scheduledAutomationEventCount
-            >= impl->scheduledAutomationEvents.size())
-        {
-            impl->scheduledAutomationEventsDropped.fetch_add(
-                1,
-                std::memory_order_relaxed);
-            return;
-        }
+        jassert(parameterIndex
+            < static_cast<std::uint32_t>(
+                impl->parameters.size()));
+        jassert(impl->scheduledAutomationEventCount
+            < impl->scheduledAutomationEvents.size());
         const auto* parameter =
             impl->parameters[static_cast<std::size_t>(
                 parameterIndex)];

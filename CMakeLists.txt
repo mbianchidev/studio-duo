@@ -395,6 +395,7 @@ if(STUDIO_DUO_BUILD_TESTS)
             PRIVATE
                 STUDIO_DUO_ARA_FIXTURE_PATH="$<TARGET_BUNDLE_DIR:StudioDuoAraFixture_VST3>"
                 STUDIO_DUO_CLAP_FIXTURE_PATH="$<TARGET_BUNDLE_DIR:StudioDuoClapFixture>"
+                STUDIO_DUO_BRIDGE_WORKER_PATH="$<TARGET_FILE:StudioDuo>"
         )
     else()
         target_compile_definitions(
@@ -402,10 +403,12 @@ if(STUDIO_DUO_BUILD_TESTS)
             PRIVATE
                 STUDIO_DUO_ARA_FIXTURE_PATH="$<TARGET_FILE:StudioDuoAraFixture_VST3>"
                 STUDIO_DUO_CLAP_FIXTURE_PATH="$<TARGET_FILE:StudioDuoClapFixture>"
+                STUDIO_DUO_BRIDGE_WORKER_PATH="$<TARGET_FILE:StudioDuo>"
         )
     endif()
     add_dependencies(
         StudioDuoTests
+        StudioDuo
         StudioDuoAraFixture_VST3
         StudioDuoClapFixture
     )

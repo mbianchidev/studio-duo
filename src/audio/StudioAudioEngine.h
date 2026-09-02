@@ -221,6 +221,7 @@ private:
         struct PluginAutomation
         {
             juce::String insertId;
+            juce::String parameterId;
             int parameterIndex = -1;
             CompiledAutomationLane lane;
         };
@@ -449,6 +450,9 @@ private:
         juce::String& error) const;
     void configureRuntimeTiming(RenderSnapshot& snapshot,
                                 const std::vector<PluginRuntimeRequest>& pluginRequests) const;
+    void resolvePluginAutomationParameterIds(
+        RenderSnapshot& snapshot,
+        const PluginRuntimeGraph& graph) const;
     static void mixSample(RenderSnapshot& snapshot,
                           std::int64_t timelineSample,
                           float& left,
@@ -579,7 +583,9 @@ private:
     bool pluginBuilderRunning = false;
     bool pluginStateCapturePending = false;
     bool pendingEditorCloseRequired = false;
+    bool pluginTimingRefreshPending = false;
     std::atomic<bool> pluginStateOperationActive { false };
+    std::atomic<bool> snapshotCloneOperationActive { false };
     std::atomic<int> exclusiveAudioOperation { 0 };
     std::atomic<int> pluginControlOperationsInFlight { 0 };
     std::atomic<bool> renderInProgress { false };
