@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://studioduo.dev/schema/automation-v1.schema.json",
+  "title": "Studio Duo automation generation v1",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "projectId",
+    "lanes"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "projectId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "lanes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "target",
+          "timebase",
+          "interpolation",
+          "points"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "timebase": {
+            "enum": [
+              "seconds",
+              "beats"
+            ]
+          },
+          "interpolation": {
+            "enum": [
+              "step",
+              "linear"
+            ]
+          },
+          "target": {
+            "type": "object",
+            "required": [
+              "type",
+              "trackId"
+            ],
+            "additionalProperties": true
+          },
+          "points": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "position",
+                "value"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "position": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "value": {
+                  "type": "number"
+                }
+              }
+            }
+          }
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "additionalProperties": false
+}

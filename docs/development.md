@@ -3,7 +3,8 @@
 Studio Duo is a C++20 desktop application built with JUCE 9. The default CMake
 configuration fetches the pinned JUCE source when a compatible package is not
 already installed. It also fetches the MIT-licensed Signalsmith Stretch 1.1.0
-headers used for pitch-preserving elastic audio.
+headers used for pitch-preserving elastic audio, CLAP 1.2.10 and clap-helpers
+for CLAP hosting, and the Apache-2.0 ARA SDK 2.3.0 for ARA compatibility mode.
 
 ## Prerequisites
 
@@ -82,7 +83,7 @@ behavior from the saved punch, count-in, and pre/post-roll settings. The audio
 callback clips capture to punch boundaries at sample resolution while allowing
 playback and the routed metronome to continue through pre-roll and post-roll.
 
-Plugin discovery sits beside the main process boundary:
+Plugin discovery and validation sit beside the main process boundary:
 
 ```text
 Plugin browser and persistent catalog
@@ -91,31 +92,33 @@ Per-plugin coordinator request
         |
 Studio Duo scan worker process
         |
-VST3 / Audio Unit metadata probe
+VST3 / Audio Unit / CLAP metadata and compatibility probe
 ```
 
 The scanner launches the Studio Duo executable in worker mode, sends one plugin
 identifier at a time, enforces a 30-second response deadline, and blacklists a
 plugin when its worker disconnects or times out. The worker remains reusable
 for the app session so repeated scans do not leave terminated child processes
-waiting to be reaped.
+waiting to be reaped. A versioned compatibility database records scan crashes,
+runtime disconnects, timeouts, supported modes, and public-standard validation
+results.
 
 Tracks persist ordered plugin insert records independently from plugin
 availability. Each record keeps the standard plugin identifier, format, vendor,
 version, source identifier, bridge mode, bypass state, reported latency, and
 relative opaque-state reference. This lets missing plugins survive project
-exchange and lets the upcoming DSP bridge activate the same model without a
-schema rewrite.
+exchange and lets sandboxed, trusted, ARA, and bundled runtimes use one model.
 
 The bridge transport maps a fixed-size file into the host and worker processes.
 The audio callback publishes only when the worker has consumed the prior input,
 then reads the previous completed output. It never allocates, locks, waits, or
 uses IPC. A late worker causes the client to reuse the last valid output, or
 silence before the first completed block, and increments a diagnostic counter.
-The current worker is a deterministic pass-through used to validate transport
-and lifecycle behavior. It can also receive a catalog `PluginDescription`,
-instantiate that plugin in the worker, restore opaque state, validate the
-current channel count, prepare it, and process shared blocks without loading
+Each sequence-bound block includes main and sidechain audio plus bounded
+sample-offset parameter events. The worker can receive a catalog
+`PluginDescription`, instantiate VST3, Audio Unit, or CLAP processors, restore
+opaque state, negotiate buses, process parameter events at exact sample
+boundaries, and return latency, tail, and parameter metadata without loading
 third-party code into the DAW.
 
 Playback builds parent-track render nodes containing ordinary clips plus
@@ -124,14 +127,12 @@ inserts process the group result, and master inserts process the final mix.
 Snapshots and worker graphs share one published generation descriptor, so the
 audio callback never combines routing from different project states.
 
-Root tracks are ordered as an acyclic output graph before a snapshot is
-published. Audio, instrument, aux, and bus tracks can feed a stereo bus or the
-master, and buses can feed later buses. Every summing destination aligns its
-incoming plugin latencies before processing its own inserts. The audio callback
-clears all route buffers once per block, processes source tracks before their
-destinations, and adds each completed buffer only to its selected output.
-Offline export follows the same nested bus gain, pan, mute, and solo path when
-active inserts are absent.
+Root tracks are ordered as an acyclic dependency graph before a snapshot is
+published. Audio, instrument, aux, and bus tracks can fan out through main
+routes, sends, sidechains, parallel paths, and hardware outputs. Every summing
+destination aligns incoming processor and bridge latency before running its
+inserts. The audio callback clears preallocated route buffers once per block
+and processes sources before every destination.
 
 Each bridge reports plugin latency and tail duration after preparation. The
 engine aligns child sources, parent tracks, the master path, and the metronome,
@@ -139,26 +140,59 @@ then feeds silence long enough to drain reported tails. Crashed or
 startup-failed workers switch to an equivalent dry delay rather than shifting
 their path early. Seek and Stop rebuild the pipeline before playback resumes.
 
-Fast offline export refuses projects with effective active inserts rather than
-silently omitting processing. A plugin-inclusive real-time bounce remains a
-later checkpoint.
+Processor-inclusive export uses the same runtime graph. Bundled and trusted
+processors run offline; sandboxed third-party processors keep their one-block
+pipeline and use a paced real-time fallback. Processing is never silently
+omitted.
 
 Run the transport and installed-plugin activation diagnostics with:
 
 ```sh
 "build/StudioDuo_artefacts/Release/Studio Duo.app/Contents/MacOS/Studio Duo" --bridge-self-test
 "build/StudioDuo_artefacts/Release/Studio Duo.app/Contents/MacOS/Studio Duo" --bridge-plugin-self-test
+"build/StudioDuo_artefacts/Release/Studio Duo.app/Contents/MacOS/Studio Duo" --validate-plugin "<catalog identifier>"
+"build/StudioDuo_artefacts/Release/Studio Duo.app/Contents/MacOS/Studio Duo" --validate-scream-forge
 ```
 
-The second command selects a compatible effect from the local catalog without
-printing its identity.
+The bridge activation command selects a compatible effect from the local
+catalog without printing its identity. Compatibility commands emit structured
+JSON and return `0` for pass, `1` for failure, and `2` when the requested plugin
+is not installed.
 
 Project saves use a `.studioduo` directory package. Session data is written to
 a new generation before `manifest.json` is atomically replaced. The latest
 complete state is also copied to `recovery/latest.json`.
 
-Project format version 2 adds explicit root-track output routing. Version 1
-projects migrate with every non-master track routed directly to the master.
+Project format version 3 adds the typed routing graph, separate automation
+generations, processor policy/state metadata, tone and mixer snapshots, and
+render reports. Ordered migrations preserve version 1 direct-master behavior
+and convert version 2 `outputTrackId` values into explicit main-output routes.
+
+Routing snapshots compile main outputs, arbitrary pre/post-fader sends,
+sidechains, parallel paths, hardware maps, folders, VCAs, solo-safe closure,
+and control-room monitoring into a topological processing plan. Delay
+compensation follows every summing and sidechain dependency. Per-route delay
+lines allow one source to feed destinations with different path latencies.
+
+Automation lanes use seconds or musical beats and compile off-thread to integer
+sample positions. Track and route controls evaluate per sample. External plugin
+events travel in the same bridge record as their audio block; linear ramps emit
+dense sample-offset events. Read, touch, latch, write, trim, and preview edits
+remain typed and undoable.
+
+Bundled devices use the same processor, parameter, state, automation, sidechain,
+and render paths as external inserts. Their processing allocates state during
+prepare/reset, suppresses denormals, and avoids locks, file access, or logging
+inside `processBlock`.
+
+ARA-capable VST3 and Audio Unit instances can opt into an in-process document
+binding. Studio Duo writes a recovery point before activation, shows the
+reduced-isolation warning, records an unclean-session marker, and reopens marked
+instances safe-disabled until explicit reload.
+
+Plugin state is captured outside the callback and stored once under
+`plugin-state/<sha256>.bin`. Missing or crashed processors keep their insert ID,
+routing, automation targets, policy, and prior state reference.
 
 Audio files remain immutable. Clips store source references and non-destructive
 start, offset, duration, gain, and mute decisions.

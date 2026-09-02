@@ -2,9 +2,8 @@
 
 Studio Duo is under active development. The current application includes the
 Phase 1 vertical slice, Phase 2 professional tracking and editing workflows, and
-the first Phase 3 routing foundation. Sends, sidechains, VCAs, control-room
-routing, automation, real-time plugin-inclusive bounce, MIDI, mastering,
-DAWproject exchange, and bundled devices remain on the roadmap.
+the complete Phase 3 mixer and plugin platform. MIDI composition, DAWproject
+exchange, and mastering remain later roadmap phases.
 
 ## Current capabilities
 
@@ -19,10 +18,18 @@ DAWproject exchange, and bundled devices remain on the roadmap.
 - Take lanes, playlists, comping, and linked multitrack editing
 - Hardware reamp routing, calibration, polarity, and fine alignment
 - Plugin tone paths that reference the original DI media
-- Sandboxed VST3 and Audio Unit discovery and processing
-- Persistent plugin chains, opaque state, missing-plugin preservation, bypass,
-  latency metadata, crash status, and explicit reload
-- Nested stereo bus output routing with cycle prevention
+- Sandboxed VST3, Audio Unit, and CLAP discovery and processing
+- Explicit ARA 2 compatibility and trusted in-process modes with recovery
+  warnings and safe-disabled reopening
+- Persistent plugin state, compatibility records, missing-plugin replacement,
+  latency metadata, crash/timeout diagnostics, and per-insert reload
+- Pre/post-fader sends, sidechains, parallel paths, auxes, nested buses,
+  folders, VCAs, control room, hardware outputs, and solo-safe routing
+- Sample-accurate mixer, send, bundled-device, and plugin automation
+- Parametric EQ, compressor, true-peak limiter, reverb, gate, gain, polarity,
+  delay, tuner, and signal generator devices
+- Tone and mixer snapshots, level-matched A/B, stale detection, freeze, print,
+  plugin-inclusive rendering, batch reports, and Scream Forge validation
 - Versioned `.studioduo` packages, generation saves, and recovery points
 - Deterministic 48 kHz, 24-bit stereo WAV export when active plugins are absent
 
@@ -146,29 +153,63 @@ Double-click a track name in the inspector, timeline, or mixer to edit its name.
 **COLOR** provides palette choices and an HSV/RGB picker. Appearance changes are
 persistent and undoable.
 
-Use **+ BUS TRACK** to create a stereo summing bus. Select a root track and
+Use **+ TRACK** for audio, aux, bus, folder, VCA, and control-room tracks.
+**+ BUS TRACK** remains a direct bus shortcut. Select a root track and
 choose **OUTPUT** in the inspector. Audio, instrument, aux, and bus tracks can
 feed a bus or the master. Buses can feed later buses. Destinations that would
 create a cycle are excluded.
 
-Bus gain, pan, mute, solo, and plugin inserts process the summed input. Plugin
-latencies are aligned at every summing destination. Deleting a bus reroutes its
-incoming tracks to the master; undo restores the bus and its routes.
+The routing panel adds pre-fader and post-fader sends, plugin sidechains, and
+direct hardware outputs. Click a route to change tap, level, mute, enablement,
+or remove it. Aux and bus tracks sum every incoming path. The graph rejects
+cycles across main routes, sends, and sidechains.
+
+**TRACK** in the routing panel changes mono/stereo layout, polarity, solo-safe
+state, folder placement, and VCA assignment. Folder mute and solo scope their
+children without hiding summing; use a bus for audio summing. VCAs control the
+assigned track faders without changing signal routing.
+
+A control-room track receives the master monitor path without entering exports.
+Its menu selects monitor hardware, dim, mono, mute, inserts, and click routing.
+Mixer strips show separate pre-fader and post-fader meters. Plugin and bridge
+latencies are aligned at every summing and sidechain destination.
+
+## Automate controls and plugin parameters
+
+Choose **AUTOMATION** to open the lane editor for the selected track.
+
+- Select read, touch, latch, write, trim, or preview mode.
+- Arm writing with **WRITE ARM**.
+- Add lanes for volume, pan, mute, polarity, sends, bundled devices, or
+  automatable plugin parameters.
+- Choose seconds or beat time, and linear or step interpolation.
+- Add or remove points at the playhead with a normalized value.
+
+Beat lanes follow tempo ramps and abrupt changes. Playback schedules mixer
+changes and plugin events at exact sample offsets. Mixer fader and pan gestures
+write the armed track according to its selected mode. Preview remains
+non-destructive until a lane edit is committed.
 
 ## Use plugins
 
-Choose **SCAN** in the plugin catalog to probe installed VST3 plugins and Audio
-Units outside the main process. Select a catalog entry and choose **ADD** to
-attach it to the selected track.
+Choose **SCAN** in the processor catalog to probe installed VST3 plugins, Audio
+Units, and CLAP bundles outside the main process. Bundled utility devices are
+always listed. Select an entry and choose **ADD** to attach it to the selected
+track.
 
-Ready inserts process playback in sandbox workers. The inspector reports
-loading, ready, missing, bypassed, crashed, and late-block states. Click a
-crashed insert status to reload its worker. Missing plugins retain their
-identifier, routing, automation-ready model data, and opaque state reference.
+Ready external inserts process playback in sandbox workers. Double-click an
+insert to open its generic parameter editor. Right-click to choose sandboxed,
+trusted in-process, or advertised ARA 2 mode. ARA activation requires a saved
+project, writes a recovery point, and warns about reduced crash isolation.
 
-Fast offline export refuses a project with effective active inserts rather than
-silently omitting processing. Plugin-inclusive real-time bounce is a later
-roadmap checkpoint.
+The inspector reports loading, ready, missing, bypassed, recovery-disabled,
+crashed, and late-block states. Click a failed insert to reload that runtime.
+Click a missing insert, then choose a catalog processor to replace it while
+preserving the insert ID, routing, automation, and prior state reference.
+
+**TEST** runs black-box public-standard compatibility checks in a separate
+process. The tracking menu can validate installed Scream Forge VST3, Audio Unit,
+and advertised ARA capability without proprietary source code.
 
 ## Create reamp paths
 
@@ -183,6 +224,21 @@ plus the saved fine-alignment offset and can invert polarity.
 A plugin path creates a non-destructive audio track that references the active
 DI playlist. Add inserts to that track to build the tone without replacing the
 source DI.
+
+For a selected tone path, **TRACKING SETUP** can:
+
+- Capture named snapshots of routing, processor state, level, and automation
+- Recall a snapshot with undo
+- Show stale state after the DI, playlist, routing, automation, or chain changes
+- Freeze a plugin tone to an immutable WAV while preserving and muting the live
+  return
+- Unfreeze by restoring the live return and removing the frozen track
+- Print a tone to a separate editable audio track
+- Batch render every snapshot with one JSON report per item
+
+Rendered snapshots store content hashes. Batch comparison uses deterministic
+gated RMS trims for level-matched A/B; it does not claim mastering-loudness
+compliance.
 
 ## Navigate the timeline
 
@@ -200,11 +256,15 @@ Studio Duo projects are versioned `.studioduo` directory packages. A save writes
 a new session generation before atomically replacing `manifest.json`; the latest
 complete state is also copied to `recovery/latest.json`.
 
-Project format version 2 adds explicit root-track output routing. Version 1
-projects load with every non-master track routed directly to the master.
+Project format version 3 stores a typed routing graph, separate automation
+generations, content-addressed plugin state, compatibility policy, tone and
+mixer snapshots, and render reports. Version 1 and 2 projects migrate on load.
+See [project-format.md](project-format.md).
 
-Stereo WAV export is deterministic at 48 kHz and 24-bit depth when no effective
-active plugin inserts are present.
+Stereo WAV export is 48 kHz and 24-bit. Projects without processors use the
+fast deterministic graph. Bundled and trusted processors render offline;
+sandboxed third-party processors use the same one-block pipeline in a real-time
+fallback so processing is never silently omitted.
 
 ## Brand assets
 

@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://studioduo.dev/schema/project-v3.schema.json",
+  "title": "Studio Duo session format v3",
+  "type": "object",
+  "required": [
+    "formatVersion",
+    "id",
+    "name",
+    "tracks",
+    "routingConnections",
+    "toneSnapshots",
+    "mixerSnapshots",
+    "renderReports"
+  ],
+  "properties": {
+    "formatVersion": {
+      "const": 3
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "tracks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "type",
+          "inserts",
+          "clips"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "type": {
+            "enum": [
+              "audio",
+              "instrument",
+              "midi",
+              "aux",
+              "bus",
+              "folder",
+              "vca",
+              "controlRoom",
+              "master"
+            ]
+          },
+          "inserts": {
+            "type": "array"
+          },
+          "clips": {
+            "type": "array"
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "routingConnections": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "tap",
+          "sourceTrackId",
+          "destination"
+        ],
+        "additionalProperties": true
+      }
+    },
+    "toneSnapshots": {
+      "type": "array"
+    },
+    "mixerSnapshots": {
+      "type": "array"
+    },
+    "renderReports": {
+      "type": "array",
+      "items": {
+        "$ref": "render-report-v1.schema.json"
+      }
+    }
+  },
+  "additionalProperties": true
+}

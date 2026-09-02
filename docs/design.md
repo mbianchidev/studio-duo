@@ -1,6 +1,6 @@
 # Studio Duo product and technical design
 
-Status: accepted product direction
+Status: accepted product direction; Phases 1-3 implemented
 
 Date: 2026-08-30
 
@@ -490,13 +490,21 @@ format before feature breadth grows.
 
 ### Phase 3: mixer and plugin platform
 
-- Full routing graph, buses, sends, sidechains, VCAs, and control room
-- Automation and plugin delay compensation
-- VST3, AU, CLAP, and ARA 2 support
-- Plugin crash recovery and compatibility database
-- Bundled utility devices
-- Complete plugin-backed reamp snapshots and batch rendering
-- Scream Forge VST3, AU, and ARA 2 compatibility validation
+Completed in the working application:
+
+- Full routing graph, buses, sends, sidechains, VCAs, folders, control room,
+  flexible hardware outputs, solo-safe behavior, and latency compensation
+- Sample-accurate read, touch, latch, write, trim, and preview automation
+- Sandboxed VST3, Audio Unit, and CLAP hosting plus explicit reduced-isolation
+  ARA 2 compatibility mode
+- Plugin state capture, crash/timeout records, explicit reload, safe-disabled
+  recovery, and missing-plugin replacement
+- Parametric EQ, compressor, true-peak limiter, algorithmic reverb, noise gate,
+  gain, polarity, delay, tuner, and signal generator devices
+- Plugin-backed tone snapshots, scoped mixer snapshots, level-matched A/B,
+  stale detection, freeze, print, batch rendering, and render reports
+- Public-standard Scream Forge VST3, Audio Unit, and ARA-capability validation
+  without proprietary source or license-service integration
 
 ### Phase 4: MIDI and composition
 

@@ -6,6 +6,8 @@
   version 1.0 scope, architecture, roadmap, and exit criteria
 - [Development](development.md): prerequisites, builds, tests, architecture,
   real-time rules, persistence, and implementation details
+- [Native project format](project-format.md): version 3 package layout,
+  generations, schemas, state hashes, recovery, and migrations
 - [Contributing](contributing.md): coding expectations and pull-request workflow
 
 The README at the repository root is intentionally limited to orientation and
