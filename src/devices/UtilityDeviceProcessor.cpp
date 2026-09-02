@@ -717,7 +717,8 @@ float UtilityDeviceProcessor::parameter(ParameterSlot slot) const noexcept
 }
 
 bool UtilityDeviceProcessor::supportsSampleAccurateAutomation(
-    std::span<const PluginBridgeParameterEvent> events) const noexcept
+    std::span<const PluginBridgeParameterEvent> events,
+    int) const noexcept
 {
     return type == UtilityDeviceType::gain
         && std::all_of(
@@ -735,7 +736,9 @@ void UtilityDeviceProcessor::processBlockWithAutomation(
     std::span<const PluginBridgeParameterEvent> events) noexcept
 {
     juce::ignoreUnused(midi);
-    if (!supportsSampleAccurateAutomation(events))
+    if (!supportsSampleAccurateAutomation(
+            events,
+            audio.getNumSamples()))
     {
         processBlock(audio, midi);
         return;

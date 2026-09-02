@@ -45,8 +45,13 @@ public:
     bool isBusesLayoutSupported(
         const BusesLayout& layouts) const override;
     [[nodiscard]] bool supportsSampleAccurateAutomation(
-        std::span<const PluginBridgeParameterEvent> events) const noexcept override;
+        std::span<const PluginBridgeParameterEvent> events,
+        int numSamples) const noexcept override;
     void processBlockWithAutomation(
+        juce::AudioBuffer<float>& audio,
+        juce::MidiBuffer& midi,
+        std::span<const PluginBridgeParameterEvent> events) noexcept override;
+    bool processBlockWithAutomationOrFallback(
         juce::AudioBuffer<float>& audio,
         juce::MidiBuffer& midi,
         std::span<const PluginBridgeParameterEvent> events) noexcept override;

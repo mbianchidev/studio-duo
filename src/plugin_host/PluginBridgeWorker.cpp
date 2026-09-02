@@ -192,21 +192,35 @@ void PluginBridgeWorker::handleMessageFromCoordinator(const juce::MemoryBlock& m
 
 void PluginBridgeWorker::captureStateOnMessageThread()
 {
-    stateCaptureRequested.store(true, std::memory_order_release);
+    pluginAccessState.fetch_or(
+        stateCaptureBit,
+        std::memory_order_seq_cst);
+    struct CaptureScope
+    {
+        ~CaptureScope()
+        {
+           state.fetch_and(
+               PluginBridgeWorker::processingCountMask,
+               std::memory_order_seq_cst);
+        }
+        std::atomic<std::uint32_t>& state;
+    } captureScope { pluginAccessState };
+
     const auto deadline =
         juce::Time::getMillisecondCounterHiRes() + 2000.0;
-    while (processingBlocksInFlight.load(
-              std::memory_order_acquire) != 0
-          && juce::Time::getMillisecondCounterHiRes()
-              < deadline)
+    while ((pluginAccessState.load(std::memory_order_seq_cst)
+               & processingCountMask)
+           != 0
+          && juce::Time::getMillisecondCounterHiRes() < deadline)
     {
         juce::Thread::sleep(1);
     }
 
     juce::MemoryBlock state;
     auto stateResult = juce::Result::ok();
-    if (processingBlocksInFlight.load(
-           std::memory_order_acquire) != 0)
+    if ((pluginAccessState.load(std::memory_order_seq_cst)
+           & processingCountMask)
+        != 0)
     {
         stateResult = juce::Result::fail(
            "Timed out waiting for sandbox processing to pause before state capture.");
@@ -225,8 +239,6 @@ void PluginBridgeWorker::captureStateOnMessageThread()
            plugin->getStateInformation(state);
         }
     }
-    stateCaptureRequested.store(false, std::memory_order_release);
-
     if (stateResult.failed())
         sendStatus(
            "state|error|"
@@ -262,23 +274,39 @@ void PluginBridgeWorker::run()
             continue;
         }
 
-        processingBlocksInFlight.fetch_add(
-            1,
-            std::memory_order_acq_rel);
+        auto accessState =
+            pluginAccessState.load(std::memory_order_seq_cst);
+        auto admitted = false;
+        while ((accessState & stateCaptureBit) == 0)
+        {
+            if ((accessState & processingCountMask)
+                == processingCountMask)
+                break;
+            if (pluginAccessState.compare_exchange_weak(
+                    accessState,
+                    accessState + 1,
+                    std::memory_order_seq_cst,
+                    std::memory_order_seq_cst))
+            {
+                admitted = true;
+                break;
+            }
+        }
+        if (!admitted)
+        {
+            PluginBridgeProtocol::processAvailableBlock(
+                *sharedState);
+            wait(1);
+            continue;
+        }
         struct ProcessingScope
         {
             ~ProcessingScope()
             {
-                count.fetch_sub(1, std::memory_order_acq_rel);
+                state.fetch_sub(1, std::memory_order_seq_cst);
             }
-            std::atomic<int>& count;
-        } processingScope { processingBlocksInFlight };
-        if (stateCaptureRequested.load(
-                std::memory_order_acquire))
-        {
-            wait(1);
-            continue;
-        }
+            std::atomic<std::uint32_t>& state;
+        } processingScope { pluginAccessState };
 
         const std::lock_guard pluginLock(pluginMutex);
         const auto channels = std::min(
@@ -318,20 +346,20 @@ void PluginBridgeWorker::run()
         auto* automationTarget =
             dynamic_cast<SampleAccurateAutomationTarget*>(
                 plugin.get());
-        if (automationTarget != nullptr
-            && automationTarget->supportsSampleAccurateAutomation(
-                events))
+        if (automationTarget != nullptr)
         {
             juce::AudioBuffer<float> view(
                 processBuffer.getArrayOfWritePointers(),
                 processingChannels,
                 samples);
-            automationTarget->processBlockWithAutomation(
-                view,
-                midiBuffer,
-                events);
+            if (!automationTarget
+                     ->processBlockWithAutomationOrFallback(
+                         view,
+                         midiBuffer,
+                         events))
+                automationTarget = nullptr;
         }
-        else
+        if (automationTarget == nullptr)
         {
             automationBoundaries.clear();
             automationBoundaries.push_back(0);

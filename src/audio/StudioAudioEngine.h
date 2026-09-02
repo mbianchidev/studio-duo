@@ -452,7 +452,9 @@ private:
                                 const std::vector<PluginRuntimeRequest>& pluginRequests) const;
     void resolvePluginAutomationParameterIds(
         RenderSnapshot& snapshot,
-        const PluginRuntimeGraph& graph) const;
+        const std::vector<PluginRuntimeStatus>& statuses) const;
+    void startPluginSnapshotRefreshLocked(
+        std::vector<PluginRuntimeStatus> statuses);
     static void mixSample(RenderSnapshot& snapshot,
                           std::int64_t timelineSample,
                           float& left,
@@ -549,6 +551,7 @@ private:
     std::array<RenderSnapshot, 3> snapshots;
     std::atomic<std::uint64_t> activeRenderPair { 0 };
     std::array<std::atomic<std::uint64_t>, 3> snapshotGenerations {};
+    std::array<std::atomic<int>, 3> snapshotReaders {};
     std::atomic<int> activeSnapshot { 0 };
     std::atomic<int> readingSnapshot { -1 };
     std::atomic<std::int64_t> playheadSample { 0 };
@@ -563,6 +566,7 @@ private:
     std::atomic<float> outputRightPeak { 0.0f };
     std::array<PluginRuntimeGraph, 3> pluginRuntimeGraphs;
     std::array<std::atomic<std::uint64_t>, 3> pluginRuntimeGenerations {};
+    std::array<std::atomic<int>, 3> pluginRuntimeReaders {};
     std::atomic<int> activePluginRuntime { 0 };
     std::atomic<int> readingPluginRuntime { -1 };
     std::atomic<int> audioCallbacksInFlight { 0 };
@@ -583,9 +587,12 @@ private:
     bool pluginBuilderRunning = false;
     bool pluginStateCapturePending = false;
     bool pendingEditorCloseRequired = false;
-    bool pluginTimingRefreshPending = false;
+    std::shared_ptr<const RenderSnapshot> activeSnapshotTemplate;
+    std::uint64_t activeSnapshotRevision = 0;
+    std::uint64_t pluginSnapshotRefreshRevision = 0;
+    bool pluginSnapshotRefreshPending = false;
+    bool pluginSnapshotRefreshRunning = false;
     std::atomic<bool> pluginStateOperationActive { false };
-    std::atomic<bool> snapshotCloneOperationActive { false };
     std::atomic<int> exclusiveAudioOperation { 0 };
     std::atomic<int> pluginControlOperationsInFlight { 0 };
     std::atomic<bool> renderInProgress { false };

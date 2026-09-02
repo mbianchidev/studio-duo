@@ -57,8 +57,10 @@ private:
     juce::MidiBuffer midiBuffer;
     std::vector<int> automationBoundaries;
     std::mutex pluginMutex;
-    std::atomic<bool> stateCaptureRequested { false };
-    std::atomic<int> processingBlocksInFlight { 0 };
+    static constexpr std::uint32_t stateCaptureBit = 1u << 31;
+    static constexpr std::uint32_t processingCountMask =
+        ~stateCaptureBit;
+    std::atomic<std::uint32_t> pluginAccessState { 0 };
     int mainInputChannels = 2;
     int sidechainInputChannels = 0;
     int mainOutputChannels = 2;

@@ -10,6 +10,7 @@ typedef struct test_plugin {
     const clap_host_t* host;
     const clap_host_thread_check_t* thread_check;
     const clap_host_params_t* host_params;
+    const clap_host_latency_t* host_latency;
     double parameters[301];
     uint32_t cookies[301];
     uint32_t thread_violations;
@@ -19,6 +20,8 @@ typedef struct test_plugin {
     bool processing;
     bool requested_host_actions;
     bool requested_parameter_rescan;
+    bool latency_change_requested;
+    bool latency_change_reported;
     uint32_t metadata_epoch;
 } test_plugin_t;
 
@@ -151,9 +154,18 @@ static clap_process_status plugin_process(const clap_plugin_t* plugin,
                 if (value->param_id == 1)
                     instance->parameters[0] = value->value;
                 else if (value->param_id >= 2
-                         && value->param_id <= 298)
+                         && (value->param_id <= 298
+                             || value->param_id == 301))
                     instance->parameters[value->param_id - 1] =
                         value->value;
+                if (value->param_id == 293
+                    && value->value > 0.9
+                    && !instance->latency_change_requested)
+                {
+                    instance->latency_change_requested = true;
+                    instance->host->request_callback(
+                        instance->host);
+                }
             }
             ++event_index;
         }
@@ -238,7 +250,8 @@ static bool params_get_info(const clap_plugin_t* plugin,
     const clap_id parameter_id =
         parameter_id_for_index(plugin, index);
     info->id = parameter_id;
-    info->flags = parameter_id >= 299
+    info->flags = parameter_id == 299
+            || parameter_id == 300
         ? CLAP_PARAM_IS_READONLY
         : CLAP_PARAM_IS_AUTOMATABLE;
     if (parameter_id == 298)
@@ -262,10 +275,14 @@ static bool params_get_info(const clap_plugin_t* plugin,
     info->min_value = parameter_id == 2 ? -24.0 : 0.0;
     info->max_value = parameter_id == 2
         ? 24.0
-        : parameter_id >= 299 ? 1000.0 : 1.0;
+        : parameter_id == 299 || parameter_id == 300
+        ? 1000.0
+        : 1.0;
     info->default_value = parameter_id == 2
         ? 0.0
-        : parameter_id >= 299 ? 0.0 : 0.5;
+        : parameter_id == 299 || parameter_id == 300
+        ? 0.0
+        : 0.5;
     info->cookie =
         &self(plugin)->cookies[parameter_id - 1];
     return true;
@@ -404,6 +421,8 @@ static bool state_load(const clap_plugin_t* plugin,
 static uint32_t latency_get(const clap_plugin_t* plugin)
 {
     expect_main_thread(plugin);
+    if (self(plugin)->latency_change_reported)
+        return 64;
     return self(plugin)->activation_count > 1 ? 32 : 0;
 }
 
@@ -470,6 +489,14 @@ static void plugin_on_main_thread(const clap_plugin_t* plugin)
             self(plugin)->host,
             CLAP_PARAM_RESCAN_INFO | CLAP_PARAM_RESCAN_ALL);
     }
+    if (self(plugin)->latency_change_requested
+        && !self(plugin)->latency_change_reported
+        && self(plugin)->host_latency != NULL)
+    {
+        self(plugin)->latency_change_reported = true;
+        self(plugin)->host_latency->changed(
+            self(plugin)->host);
+    }
 }
 
 static const clap_plugin_t* create_plugin(const clap_plugin_factory_t* factory,
@@ -492,6 +519,10 @@ static const clap_plugin_t* create_plugin(const clap_plugin_factory_t* factory,
         (const clap_host_params_t*) host->get_extension(
             host,
             CLAP_EXT_PARAMS);
+    instance->host_latency =
+        (const clap_host_latency_t*) host->get_extension(
+            host,
+            CLAP_EXT_LATENCY);
     for (uint32_t index = 0; index < 301; ++index)
     {
         instance->cookies[index] = index + 1;

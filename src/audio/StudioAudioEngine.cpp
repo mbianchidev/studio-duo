@@ -505,13 +505,16 @@ void StudioAudioEngine::shutdown()
     readingSnapshot.store(-1, std::memory_order_release);
     for (auto& generation : snapshotGenerations)
         generation.store(0, std::memory_order_relaxed);
+    for (auto& readers : snapshotReaders)
+        readers.store(0, std::memory_order_relaxed);
     for (auto& generation : pluginRuntimeGenerations)
         generation.store(0, std::memory_order_relaxed);
+    for (auto& readers : pluginRuntimeReaders)
+        readers.store(0, std::memory_order_relaxed);
     pluginLateBlocks.store(0, std::memory_order_relaxed);
     pluginAutomationEventsDropped.store(
         0,
         std::memory_order_relaxed);
-    snapshotCloneOperationActive.store(false, std::memory_order_release);
     exclusiveAudioOperation.store(0, std::memory_order_release);
     {
         const juce::ScopedLock lock(pluginRequestLock);
@@ -530,7 +533,11 @@ void StudioAudioEngine::shutdown()
         pluginBuilderRunning = false;
         pluginStateCapturePending = false;
         pendingEditorCloseRequired = false;
-        pluginTimingRefreshPending = false;
+        activeSnapshotTemplate.reset();
+        activeSnapshotRevision = 0;
+        pluginSnapshotRefreshRevision = 0;
+        pluginSnapshotRefreshPending = false;
+        pluginSnapshotRefreshRunning = false;
     }
     {
         const juce::ScopedLock lock(pluginStatusLock);
@@ -601,16 +608,16 @@ void StudioAudioEngine::seekSeconds(double seconds) noexcept
         return;
     auto target = static_cast<std::int64_t>(
         std::max(0.0, seconds) * currentSampleRate());
-    const auto snapshotIndex = activeSnapshot.load(
-        std::memory_order_acquire);
-    const auto& snapshot = snapshots[static_cast<std::size_t>(
-        snapshotIndex)];
-    if (snapshot.loopEnabled)
     {
-        target = wrapLoopPosition(
-            target,
-            snapshot.loopStartSample,
-            snapshot.loopEndSample);
+        const juce::ScopedLock lock(pluginRequestLock);
+        if (activeSnapshotTemplate != nullptr
+            && activeSnapshotTemplate->loopEnabled)
+        {
+            target = wrapLoopPosition(
+                target,
+                activeSnapshotTemplate->loopStartSample,
+                activeSnapshotTemplate->loopEndSample);
+        }
     }
     playheadSample.store(target, std::memory_order_release);
 }
@@ -666,8 +673,10 @@ double StudioAudioEngine::currentSampleRate() const noexcept
 #if defined(STUDIO_DUO_TESTING)
 int StudioAudioEngine::minimumRouteBufferCapacityForTesting() const noexcept
 {
-    const auto index = activeSnapshot.load(std::memory_order_acquire);
-    const auto& snapshot = snapshots[static_cast<std::size_t>(index)];
+    const juce::ScopedLock lock(pluginRequestLock);
+    const auto& snapshot = activeSnapshotTemplate != nullptr
+        ? *activeSnapshotTemplate
+        : snapshots.front();
     auto capacity = PluginBridgeSharedState::maxBlockSize;
     auto foundRoute = false;
     for (const auto& track : snapshot.tracks)
@@ -684,8 +693,10 @@ int StudioAudioEngine::minimumRouteBufferCapacityForTesting() const noexcept
 
 double StudioAudioEngine::activeSnapshotSampleRateForTesting() const noexcept
 {
-    const auto index = activeSnapshot.load(std::memory_order_acquire);
-    return snapshots[static_cast<std::size_t>(index)].sampleRate;
+    const juce::ScopedLock lock(pluginRequestLock);
+    return activeSnapshotTemplate != nullptr
+        ? activeSnapshotTemplate->sampleRate
+        : snapshots.front().sampleRate;
 }
 
 void StudioAudioEngine::processActiveBlockForTesting(int samples)
@@ -736,6 +747,25 @@ StudioAudioEngine::pluginRuntimeStatuses()
     const auto& graph = pluginRuntimeGraphs[static_cast<std::size_t>(
         runtimeIndex)];
     auto timingChanged = false;
+    auto parameterLayoutChanged = false;
+    const auto layoutDiffers = [](
+        const auto& previous,
+        const auto& current)
+    {
+        if (previous.size() != current.size())
+            return true;
+        for (std::size_t index = 0;
+             index < previous.size();
+             ++index)
+        {
+            if (previous[index].index != current[index].index
+                || previous[index].id != current[index].id
+                || previous[index].automatable
+                    != current[index].automatable)
+                return true;
+        }
+        return false;
+    };
     {
         const juce::ScopedLock statusLock(pluginStatusLock);
         for (auto& status : pluginStatuses)
@@ -801,82 +831,54 @@ StudioAudioEngine::pluginRuntimeStatuses()
                         const auto* identified = dynamic_cast<
                             const juce::HostedAudioProcessorParameter*>(
                             parameter);
+                        const auto* ranged = dynamic_cast<
+                            const juce::RangedAudioParameter*>(
+                            parameter);
                         parameters.push_back({
                             index,
                             identified != nullptr
                                 ? identified->getParameterID()
+                                : ranged != nullptr
+                                ? ranged->paramID
                                 : juce::String(index),
                             parameter->getName(128),
                             parameter->getValue(),
                             parameter->isAutomatable()
                         });
                     }
+                    parameterLayoutChanged =
+                        parameterLayoutChanged
+                        || layoutDiffers(
+                            status.parameters,
+                            parameters);
                     status.parameters = std::move(parameters);
                 }
                 else if (insert->bridge != nullptr)
                 {
-                    status.parameters =
+                    auto parameters =
                         insert->bridge->parameterDescriptors();
+                    parameterLayoutChanged =
+                        parameterLayoutChanged
+                        || layoutDiffers(
+                            status.parameters,
+                            parameters);
+                    status.parameters = std::move(parameters);
                 }
                 break;
             }
         }
     }
-    pluginTimingRefreshPending =
-        pluginTimingRefreshPending || timingChanged;
-    if (pluginTimingRefreshPending
-        && activeRecorderCount.load(
-               std::memory_order_acquire) == 0)
+    if (timingChanged || parameterLayoutChanged)
     {
-        snapshotCloneOperationActive.store(
-            true,
-            std::memory_order_release);
-        struct SnapshotCloneScope
-        {
-            ~SnapshotCloneScope()
-            {
-                active.store(false, std::memory_order_release);
-            }
-            std::atomic<bool>& active;
-        } snapshotCloneScope { snapshotCloneOperationActive };
-
-        const auto deadline =
-            juce::Time::getMillisecondCounterHiRes() + 2000.0;
-        while (audioCallbacksInFlight.load(
-                   std::memory_order_acquire) != 0
-               && juce::Time::getMillisecondCounterHiRes()
-                   < deadline)
-        {
-            juce::Thread::sleep(1);
-        }
-        if (audioCallbacksInFlight.load(
-                std::memory_order_acquire) == 0)
-        {
-            const auto source = activeSnapshot.load(
-                std::memory_order_acquire);
-            auto refreshed =
-                snapshots[static_cast<std::size_t>(source)];
-            configureRuntimeTiming(
-                refreshed,
-                activePluginRequests);
-            const auto destination = chooseWritableSnapshot();
-            snapshots[static_cast<std::size_t>(destination)] =
-                std::move(refreshed);
-            snapshotGenerations[
-                static_cast<std::size_t>(destination)].store(
-                activePluginGeneration,
-                std::memory_order_release);
-            activeSnapshot.store(
-                destination,
-                std::memory_order_release);
-            activeRenderPair.store(
-                renderPair(
-                    activePluginGeneration,
-                    destination,
-                    runtimeIndex),
-                std::memory_order_release);
-            pluginTimingRefreshPending = false;
-        }
+        const juce::ScopedLock statusLock(pluginStatusLock);
+        ++pluginSnapshotRefreshRevision;
+        pluginSnapshotRefreshPending = true;
+        startPluginSnapshotRefreshLocked(pluginStatuses);
+    }
+    else if (pluginSnapshotRefreshPending)
+    {
+        const juce::ScopedLock statusLock(pluginStatusLock);
+        startPluginSnapshotRefreshLocked(pluginStatuses);
     }
     const juce::ScopedLock statusLock(pluginStatusLock);
     return pluginStatuses;
@@ -1608,6 +1610,8 @@ bool StudioAudioEngine::pluginRuntimeTransitionPending() const
     const juce::ScopedLock lock(pluginRequestLock);
     return pluginBuilderRunning
         || hasPendingPluginRequest
+        || pluginSnapshotRefreshPending
+        || pluginSnapshotRefreshRunning
         || desiredPluginFingerprint != activePluginFingerprint;
 }
 
@@ -2090,13 +2094,13 @@ juce::Result StudioAudioEngine::renderToBuffer(
             callbackSuspended = true;
             for (int attempt = 0;
                  attempt < 1000
-                 && (readingSnapshot.load(std::memory_order_acquire) >= 0
-                     || readingPluginRuntime.load(std::memory_order_acquire)
-                         >= 0);
+                 && audioCallbacksInFlight.load(
+                        std::memory_order_acquire)
+                     > 0;
                  ++attempt)
                 juce::Thread::sleep(1);
-            if (readingSnapshot.load(std::memory_order_acquire) >= 0
-                || readingPluginRuntime.load(std::memory_order_acquire) >= 0)
+            if (audioCallbacksInFlight.load(
+                    std::memory_order_acquire) > 0)
             {
                 deviceManager->addAudioCallback(this);
                 return juce::Result::fail(
@@ -2190,7 +2194,8 @@ juce::Result StudioAudioEngine::renderToBuffer(
                     "Timed out while preparing processors for rendering."),
                 true);
         }
-        for (const auto& status : pluginRuntimeStatuses())
+        const auto renderStatuses = pluginRuntimeStatuses();
+        for (const auto& status : renderStatuses)
         {
             if (status.state == PluginRuntimeStatus::State::failed
                 || status.state == PluginRuntimeStatus::State::missing)
@@ -2200,6 +2205,13 @@ juce::Result StudioAudioEngine::renderToBuffer(
                         status.name + ": " + status.message),
                     true);
             }
+        }
+        if (!waitForPluginRuntimeTransition(10000))
+        {
+            return restoreAfterFailure(
+                    juce::Result::fail(
+                        "Timed out while refreshing processor timing for rendering."),
+                    true);
         }
 
         const auto snapshotIndex = activeSnapshot.load(
@@ -2777,77 +2789,38 @@ std::optional<StudioAudioEngine::RenderSnapshot> StudioAudioEngine::buildSnapsho
 
 void StudioAudioEngine::resolvePluginAutomationParameterIds(
     RenderSnapshot& snapshot,
-    const PluginRuntimeGraph& graph) const
+    const std::vector<PluginRuntimeStatus>& statuses) const
 {
-    const auto resolve = [&graph](
+    const auto resolve = [&statuses](
         std::uint64_t key,
         auto& lanes)
     {
-        const auto track = std::find_if(
-            graph.tracks.begin(),
-            graph.tracks.end(),
-            [key](const auto& candidate)
-            {
-                return candidate.key == key;
-            });
-        if (track == graph.tracks.end())
-            return;
-
         for (auto& lane : lanes)
         {
             if (lane.parameterId.isEmpty())
                 continue;
-            const auto insert = std::find_if(
-                track->inserts.begin(),
-                track->inserts.end(),
-                [&lane](const auto& candidate)
+            const auto status = std::find_if(
+                statuses.begin(),
+                statuses.end(),
+                [key, &lane](const auto& candidate)
                 {
-                    return candidate.insertId == lane.insertId;
+                    return runtimeKey(candidate.trackId) == key
+                        && candidate.insertId == lane.insertId;
                 });
-            if (insert == track->inserts.end())
+            if (status == statuses.end())
             {
                 lane.parameterIndex = -1;
                 continue;
             }
 
             lane.parameterIndex = -1;
-            if (insert->inProcess != nullptr)
+            for (const auto& parameter : status->parameters)
             {
-                const auto& parameters =
-                    insert->inProcess->getParameters();
-                for (int index = 0;
-                     index < parameters.size();
-                     ++index)
+                if (parameter.automatable
+                    && parameter.id == lane.parameterId)
                 {
-                    const auto* parameter = parameters[index];
-                    const auto* hosted = dynamic_cast<
-                        const juce::HostedAudioProcessorParameter*>(
-                        parameter);
-                    const auto* ranged = dynamic_cast<
-                        const juce::RangedAudioParameter*>(
-                        parameter);
-                    const auto parameterId = hosted != nullptr
-                        ? hosted->getParameterID()
-                        : ranged != nullptr
-                        ? ranged->paramID
-                        : juce::String(index);
-                    if (parameterId == lane.parameterId)
-                    {
-                        lane.parameterIndex = index;
-                        break;
-                    }
-                }
-            }
-            else if (insert->bridge != nullptr)
-            {
-                for (const auto& parameter :
-                     insert->bridge->parameterDescriptors())
-                {
-                    if (parameter.id == lane.parameterId)
-                    {
-                        lane.parameterIndex = parameter.index;
-                        break;
-                    }
+                    lane.parameterIndex = parameter.index;
+                    break;
                 }
             }
         }
@@ -2862,6 +2835,87 @@ void StudioAudioEngine::resolvePluginAutomationParameterIds(
     resolve(
         snapshot.masterRuntimeKey,
         snapshot.masterPluginAutomation);
+}
+
+void StudioAudioEngine::startPluginSnapshotRefreshLocked(
+    std::vector<PluginRuntimeStatus> runtimeStatuses)
+{
+    if (!pluginSnapshotRefreshPending
+        || pluginSnapshotRefreshRunning
+        || activeSnapshotTemplate == nullptr)
+        return;
+
+    pluginSnapshotRefreshRunning = true;
+    const auto snapshotTemplate = activeSnapshotTemplate;
+    const auto requests = activePluginRequests;
+    const auto generation = activePluginGeneration;
+    const auto runtimeIndex = activePluginRuntime.load(
+        std::memory_order_acquire);
+    const auto snapshotRevision = activeSnapshotRevision;
+    const auto refreshRevision =
+        pluginSnapshotRefreshRevision;
+    pluginRuntimeBuilder.addJob(
+        [this,
+         snapshotTemplate,
+         requests,
+         statuses = std::move(runtimeStatuses),
+         generation,
+         runtimeIndex,
+         snapshotRevision,
+         refreshRevision]() mutable
+        {
+            if (shuttingDown.load(std::memory_order_acquire))
+            {
+                const juce::ScopedLock lock(pluginRequestLock);
+                pluginSnapshotRefreshRunning = false;
+                return;
+            }
+
+            auto refreshed = *snapshotTemplate;
+            resolvePluginAutomationParameterIds(
+                refreshed,
+                statuses);
+            configureRuntimeTiming(refreshed, requests);
+
+            const juce::ScopedLock lock(pluginRequestLock);
+            if (snapshotRevision == activeSnapshotRevision
+                && refreshRevision
+                    == pluginSnapshotRefreshRevision
+                && snapshotTemplate == activeSnapshotTemplate)
+            {
+                const auto destination =
+                    chooseWritableSnapshot();
+                snapshots[static_cast<std::size_t>(destination)] =
+                    std::move(refreshed);
+                snapshotGenerations[
+                    static_cast<std::size_t>(destination)].store(
+                    generation,
+                    std::memory_order_release);
+                activeSnapshot.store(
+                    destination,
+                    std::memory_order_release);
+                activeRenderPair.store(
+                    renderPair(
+                        generation,
+                        destination,
+                        runtimeIndex),
+                    std::memory_order_release);
+                pluginSnapshotRefreshPending = false;
+            }
+            pluginSnapshotRefreshRunning = false;
+            if (pluginSnapshotRefreshPending
+                && !shuttingDown.load(std::memory_order_acquire))
+            {
+                std::vector<PluginRuntimeStatus> currentStatuses;
+                {
+                    const juce::ScopedLock statusLock(
+                        pluginStatusLock);
+                    currentStatuses = pluginStatuses;
+                }
+                startPluginSnapshotRefreshLocked(
+                    std::move(currentStatuses));
+            }
+        });
 }
 
 void StudioAudioEngine::configureRuntimeTiming(
@@ -3852,10 +3906,7 @@ bool StudioAudioEngine::processInProcessRuntime(
     auto& processor = *insert.inProcess;
     auto* automationTarget =
         dynamic_cast<SampleAccurateAutomationTarget*>(&processor);
-    if (!automation.empty()
-        && (automationTarget == nullptr
-            || !automationTarget->supportsSampleAccurateAutomation(
-                automation)))
+    if (!automation.empty() && automationTarget == nullptr)
         return false;
     const auto mainChannels = processor.getBusCount(true) > 0
         ? processor.getChannelCountOfBus(true, 0)
@@ -3873,10 +3924,14 @@ bool StudioAudioEngine::processInProcessRuntime(
     {
         insert.midi.clear();
         if (automationTarget != nullptr && !automation.empty())
-            automationTarget->processBlockWithAutomation(
-                buffer,
-                insert.midi,
-                automation);
+        {
+            if (!automationTarget
+                     ->processBlockWithAutomationOrFallback(
+                         buffer,
+                         insert.midi,
+                         automation))
+                return false;
+        }
         else
             processor.processBlock(buffer, insert.midi);
         return true;
@@ -3929,10 +3984,14 @@ bool StudioAudioEngine::processInProcessRuntime(
         scratch.getNumChannels(),
         buffer.getNumSamples());
     if (automationTarget != nullptr && !automation.empty())
-        automationTarget->processBlockWithAutomation(
-            scratchView,
-            insert.midi,
-            automation);
+    {
+        if (!automationTarget
+                 ->processBlockWithAutomationOrFallback(
+                     scratchView,
+                     insert.midi,
+                     automation))
+            return false;
+    }
     else
         processor.processBlock(scratchView, insert.midi);
     for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
@@ -4103,14 +4162,25 @@ void StudioAudioEngine::addMetronome(const RenderSnapshot& snapshot,
 
 int StudioAudioEngine::chooseWritableSnapshot() const noexcept
 {
-    const auto active = activeSnapshot.load(std::memory_order_acquire);
-    const auto reading = readingSnapshot.load(std::memory_order_acquire);
-
-    for (int index = 0; index < static_cast<int>(snapshots.size()); ++index)
-        if (index != active && index != reading)
-            return index;
-
-    return (active + 1) % static_cast<int>(snapshots.size());
+    for (;;)
+    {
+        const auto pair =
+            activeRenderPair.load(std::memory_order_acquire);
+        const auto active =
+            static_cast<int>((pair >> 2) & 0x3);
+        for (int index = 0;
+             index < static_cast<int>(snapshots.size());
+             ++index)
+        {
+            if (index != active
+                && snapshotReaders[
+                       static_cast<std::size_t>(index)].load(
+                       std::memory_order_seq_cst)
+                    == 0)
+                return index;
+        }
+        juce::Thread::sleep(1);
+    }
 }
 
 int StudioAudioEngine::meterSlotFor(const juce::String& trackId)
@@ -4276,10 +4346,22 @@ void StudioAudioEngine::requestPluginRuntime(
         {
             const auto runtime =
                 activePluginRuntime.load(std::memory_order_acquire);
+            std::vector<PluginRuntimeStatus> statuses;
+            {
+                const juce::ScopedLock statusLock(pluginStatusLock);
+                statuses = pluginStatuses;
+            }
             resolvePluginAutomationParameterIds(
                 snapshot,
-                pluginRuntimeGraphs[
-                    static_cast<std::size_t>(runtime)]);
+                statuses);
+            configureRuntimeTiming(
+                snapshot,
+                activePluginRequests);
+            activeSnapshotTemplate =
+                std::make_shared<RenderSnapshot>(snapshot);
+            ++activeSnapshotRevision;
+            ++pluginSnapshotRefreshRevision;
+            pluginSnapshotRefreshPending = false;
             const auto destination = chooseWritableSnapshot();
             snapshots[static_cast<std::size_t>(destination)] = std::move(snapshot);
             snapshotGenerations[static_cast<std::size_t>(destination)].store(
@@ -4710,10 +4792,15 @@ void StudioAudioEngine::runPluginRuntimeBuilder()
                         const auto* hosted = dynamic_cast<
                             const juce::HostedAudioProcessorParameter*>(
                             parameter);
+                        const auto* ranged = dynamic_cast<
+                            const juce::RangedAudioParameter*>(
+                            parameter);
                         status.parameters.push_back({
                             index,
                             hosted != nullptr
                                 ? hosted->getParameterID()
+                                : ranged != nullptr
+                                ? ranged->paramID
                                 : juce::String(index),
                             parameter->getName(128),
                             parameter->getValue(),
@@ -4840,8 +4927,14 @@ void StudioAudioEngine::runPluginRuntimeBuilder()
 
             resolvePluginAutomationParameterIds(
                 *pendingPluginSnapshot,
-                graph);
+                statuses);
             configureRuntimeTiming(*pendingPluginSnapshot, requests);
+            activeSnapshotTemplate =
+                std::make_shared<RenderSnapshot>(
+                    *pendingPluginSnapshot);
+            ++activeSnapshotRevision;
+            ++pluginSnapshotRefreshRevision;
+            pluginSnapshotRefreshPending = false;
             const auto runtimeDestination = chooseWritableRuntime();
             const auto snapshotDestination = chooseWritableSnapshot();
             pluginRuntimeGraphs[static_cast<std::size_t>(runtimeDestination)] = std::move(graph);
@@ -4936,14 +5029,25 @@ std::uint64_t StudioAudioEngine::renderPair(std::uint64_t generation,
 
 int StudioAudioEngine::chooseWritableRuntime() const noexcept
 {
-    const auto active = activePluginRuntime.load(std::memory_order_acquire);
-    const auto reading = readingPluginRuntime.load(std::memory_order_acquire);
-
-    for (int index = 0; index < static_cast<int>(pluginRuntimeGraphs.size()); ++index)
-        if (index != active && index != reading)
-            return index;
-
-    return (active + 1) % static_cast<int>(pluginRuntimeGraphs.size());
+    for (;;)
+    {
+        const auto pair =
+            activeRenderPair.load(std::memory_order_acquire);
+        const auto active = static_cast<int>(pair & 0x3);
+        for (int index = 0;
+             index
+                 < static_cast<int>(pluginRuntimeGraphs.size());
+             ++index)
+        {
+            if (index != active
+                && pluginRuntimeReaders[
+                       static_cast<std::size_t>(index)].load(
+                       std::memory_order_seq_cst)
+                    == 0)
+                return index;
+        }
+        juce::Thread::sleep(1);
+    }
 }
 
 void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inputChannelData,
@@ -5040,9 +5144,7 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
         if (outputChannelData[channel] != nullptr)
             juce::FloatVectorOperations::clear(outputChannelData[channel], numSamples);
 
-    if (pluginStateOperationActive.load(std::memory_order_acquire)
-        || snapshotCloneOperationActive.load(
-            std::memory_order_acquire))
+    if (pluginStateOperationActive.load(std::memory_order_acquire))
     {
         outputLeftPeak.store(0.0f, std::memory_order_relaxed);
         outputRightPeak.store(0.0f, std::memory_order_relaxed);
@@ -5064,28 +5166,56 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
     {
         int snapshotIndex = 0;
         int runtimeIndex = 0;
-        auto pairAcquired = false;
-        for (int attempt = 0; attempt < 3; ++attempt)
+        for (;;)
         {
             const auto pair = activeRenderPair.load(std::memory_order_acquire);
             runtimeIndex = static_cast<int>(pair & 0x3);
             snapshotIndex = static_cast<int>((pair >> 2) & 0x3);
-            readingSnapshot.store(snapshotIndex, std::memory_order_release);
-            readingPluginRuntime.store(runtimeIndex, std::memory_order_release);
+            snapshotReaders[
+                static_cast<std::size_t>(snapshotIndex)].fetch_add(
+                1,
+                std::memory_order_seq_cst);
+            pluginRuntimeReaders[
+                static_cast<std::size_t>(runtimeIndex)].fetch_add(
+                1,
+                std::memory_order_seq_cst);
             if (pair == activeRenderPair.load(std::memory_order_acquire))
-            {
-                pairAcquired = true;
                 break;
-            }
+            pluginRuntimeReaders[
+                static_cast<std::size_t>(runtimeIndex)].fetch_sub(
+                1,
+                std::memory_order_seq_cst);
+            snapshotReaders[
+                static_cast<std::size_t>(snapshotIndex)].fetch_sub(
+                1,
+                std::memory_order_seq_cst);
         }
-        if (!pairAcquired)
+        readingSnapshot.store(snapshotIndex, std::memory_order_release);
+        readingPluginRuntime.store(runtimeIndex, std::memory_order_release);
+        struct RenderPairScope
         {
-            readingSnapshot.store(-1, std::memory_order_release);
-            readingPluginRuntime.store(-1, std::memory_order_release);
-            outputLeftPeak.store(0.0f, std::memory_order_relaxed);
-            outputRightPeak.store(0.0f, std::memory_order_relaxed);
-            return;
-        }
+            ~RenderPairScope()
+            {
+                readingRuntime.store(-1, std::memory_order_release);
+                readingSnapshot.store(-1, std::memory_order_release);
+                runtimeReaders.fetch_sub(
+                    1,
+                    std::memory_order_seq_cst);
+                snapshotReaders.fetch_sub(
+                    1,
+                    std::memory_order_seq_cst);
+            }
+            std::atomic<int>& snapshotReaders;
+            std::atomic<int>& runtimeReaders;
+            std::atomic<int>& readingSnapshot;
+            std::atomic<int>& readingRuntime;
+        } renderPairScope {
+            snapshotReaders[static_cast<std::size_t>(snapshotIndex)],
+            pluginRuntimeReaders[
+                static_cast<std::size_t>(runtimeIndex)],
+            readingSnapshot,
+            readingPluginRuntime
+        };
 
         auto& snapshot = snapshots[static_cast<std::size_t>(snapshotIndex)];
         auto position = playheadSample.load(std::memory_order_acquire);
@@ -5697,8 +5827,6 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
         }
 
         playheadSample.store(position, std::memory_order_release);
-        readingPluginRuntime.store(-1, std::memory_order_release);
-        readingSnapshot.store(-1, std::memory_order_release);
     }
 
     if (!calibrationBlockActive

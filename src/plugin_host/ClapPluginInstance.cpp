@@ -58,6 +58,52 @@ juce::AudioChannelSet channelSet(std::uint32_t channels)
     return juce::AudioChannelSet::discreteChannels(
         static_cast<int>(channels));
 }
+
+int boundedEventOffset(
+    std::uint32_t offset,
+    int upperBound) noexcept
+{
+    return static_cast<int>(std::min<std::uint64_t>(
+        offset,
+        static_cast<std::uint64_t>(
+            std::max(0, upperBound))));
+}
+
+bool automationFitsCapacity(
+    std::span<const PluginBridgeParameterEvent> events,
+    int numSamples,
+    std::size_t capacity) noexcept
+{
+    if (numSamples <= 0)
+        return events.empty();
+
+    const auto lastSample = numSamples - 1;
+    std::uint64_t required = 0;
+    for (const auto& event : events)
+    {
+        const auto start = boundedEventOffset(
+            event.sampleOffset,
+            lastSample);
+        auto expanded = std::uint64_t { 1 };
+        if ((event.flags
+             & PluginBridgeParameterEvent::rampFlag)
+                != 0
+            && event.rampEndOffset > event.sampleOffset)
+        {
+            const auto end = boundedEventOffset(
+                event.rampEndOffset,
+                lastSample);
+            expanded = end >= start
+                ? static_cast<std::uint64_t>(
+                      end - start + 1)
+                : 0;
+        }
+        required += expanded;
+        if (required > capacity)
+            return false;
+    }
+    return true;
+}
 }
 
 class ClapPluginInstance::Impl
@@ -565,6 +611,11 @@ public:
     Impl()
         : outputEvents(*this)
     {
+        automationBoundaries.reserve(
+            static_cast<std::size_t>(
+                PluginBridgeSharedState::maxParameterEvents * 2)
+            + static_cast<std::size_t>(
+                PluginBridgeSharedState::maxBlockSize / 8 + 2));
     }
 
     static std::unique_ptr<Impl> create(
@@ -795,6 +846,124 @@ public:
             inputPointers[index].resize(inputs[index].channels);
         for (std::size_t index = 0; index < outputs.size(); ++index)
             outputPointers[index].resize(outputs[index].channels);
+    }
+
+    void processAutomationFallback(
+        ClapPluginInstance& owner,
+        juce::AudioBuffer<float>& audio,
+        juce::MidiBuffer& midi,
+        std::span<const PluginBridgeParameterEvent> events) noexcept
+    {
+        const auto samples = audio.getNumSamples();
+        automationBoundaries.clear();
+        automationBoundaries.push_back(0);
+        automationBoundaries.push_back(samples);
+        auto automationStride = samples;
+        for (const auto& event : events)
+        {
+            const auto start = boundedEventOffset(
+                event.sampleOffset,
+                samples);
+            automationBoundaries.push_back(start);
+            if ((event.flags
+                 & PluginBridgeParameterEvent::rampFlag)
+                == 0)
+                continue;
+
+            const auto end = boundedEventOffset(
+                event.rampEndOffset,
+                samples);
+            automationBoundaries.push_back(end);
+            const auto span = std::max(1, end - start);
+            const auto delta = std::abs(
+                event.rampEndValue - event.value);
+            const auto toleranceStride = delta > 0.0f
+                ? static_cast<int>(std::floor(
+                      0.002f
+                      * static_cast<float>(span)
+                      / delta))
+                : span;
+            if (span >= 8)
+            {
+                automationStride = std::min(
+                    automationStride,
+                    std::clamp(
+                        std::max(1, toleranceStride),
+                        8,
+                        span));
+            }
+        }
+        if (automationStride < samples)
+        {
+            for (auto offset = automationStride;
+                 offset < samples;
+                 offset += automationStride)
+                automationBoundaries.push_back(offset);
+        }
+        std::sort(
+            automationBoundaries.begin(),
+            automationBoundaries.end());
+        automationBoundaries.erase(
+            std::unique(
+                automationBoundaries.begin(),
+                automationBoundaries.end()),
+            automationBoundaries.end());
+
+        for (std::size_t boundary = 0;
+             boundary + 1 < automationBoundaries.size();
+             ++boundary)
+        {
+            const auto offset = automationBoundaries[boundary];
+            const auto next = automationBoundaries[boundary + 1];
+            for (const auto& event : events)
+            {
+                if (event.parameterIndex
+                        >= static_cast<std::uint32_t>(
+                            parameters.size())
+                    || parameters[
+                           static_cast<std::size_t>(
+                               event.parameterIndex)]->isRemoved())
+                    continue;
+
+                const auto start = boundedEventOffset(
+                    event.sampleOffset,
+                    samples);
+                const auto end = boundedEventOffset(
+                    event.rampEndOffset,
+                    samples);
+                auto* parameter = parameters[
+                    static_cast<std::size_t>(
+                        event.parameterIndex)];
+                if ((event.flags
+                     & PluginBridgeParameterEvent::rampFlag)
+                        != 0
+                    && offset >= start
+                    && offset <= end
+                    && end > start)
+                {
+                    const auto progress = static_cast<float>(
+                        offset - start)
+                        / static_cast<float>(end - start);
+                    parameter->setValue(
+                        event.value
+                        + (event.rampEndValue - event.value)
+                            * progress);
+                }
+                else if (offset == start)
+                {
+                    parameter->setValue(event.value);
+                }
+            }
+
+            if (next <= offset)
+                continue;
+            juce::AudioBuffer<float> segment(
+                audio.getArrayOfWritePointers(),
+                audio.getNumChannels(),
+                offset,
+                next - offset);
+            owner.processBlock(segment, midi);
+        }
     }
 
     void rebuildParameterMetadata(
@@ -1063,6 +1232,7 @@ public:
     std::vector<std::vector<float*>> outputPointers;
     InputEvents inputEvents;
     std::vector<clap_event_param_value_t> scheduledAutomationEvents;
+    std::vector<int> automationBoundaries;
     std::uint32_t scheduledAutomationEventCount = 0;
     std::atomic<std::uint64_t> scheduledAutomationEventsDropped { 0 };
     OutputEvents outputEvents;
@@ -1073,6 +1243,7 @@ public:
     std::int64_t steadyTime = 0;
     std::atomic<bool> lifecycleChanging { false };
     std::atomic<int> processCallsInFlight { 0 };
+    inline static thread_local int lifecycleAdmissionDepth = 0;
     std::atomic<bool> flushRequested { false };
     std::atomic<std::uint32_t> parameterRescanFlags { 0 };
     std::atomic<std::uint32_t> audioPortRescanFlags { 0 };
@@ -1285,7 +1456,8 @@ void ClapPluginInstance::processBlock(juce::AudioBuffer<float>& audio,
                                       juce::MidiBuffer&)
 {
     juce::ScopedNoDenormals noDenormals;
-    if (impl->lifecycleChanging.load(std::memory_order_seq_cst))
+    if (impl->lifecycleChanging.load(std::memory_order_seq_cst)
+        && Impl::lifecycleAdmissionDepth == 0)
     {
         audio.clear();
         return;
@@ -1299,7 +1471,8 @@ void ClapPluginInstance::processBlock(juce::AudioBuffer<float>& audio,
         }
         std::atomic<int>& count;
     } processScope { impl->processCallsInFlight };
-    if (impl->lifecycleChanging.load(std::memory_order_seq_cst)
+    if ((impl->lifecycleChanging.load(std::memory_order_seq_cst)
+         && Impl::lifecycleAdmissionDepth == 0)
         || !impl->active.load(std::memory_order_acquire))
     {
         audio.clear();
@@ -1679,7 +1852,8 @@ juce::Result ClapPluginInstance::restoreValidatedState(
 }
 
 bool ClapPluginInstance::supportsSampleAccurateAutomation(
-    std::span<const PluginBridgeParameterEvent> events) const noexcept
+    std::span<const PluginBridgeParameterEvent> events,
+    int numSamples) const noexcept
 {
     if (impl->lifecycleChanging.load(std::memory_order_seq_cst))
         return false;
@@ -1698,7 +1872,6 @@ bool ClapPluginInstance::supportsSampleAccurateAutomation(
     if (impl->lifecycleChanging.load(std::memory_order_seq_cst))
         return false;
 
-    std::uint64_t required = 0;
     for (const auto& event : events)
     {
         if (event.parameterIndex
@@ -1708,21 +1881,11 @@ bool ClapPluginInstance::supportsSampleAccurateAutomation(
                    static_cast<std::size_t>(
                        event.parameterIndex)]->isRemoved())
             return false;
-
-        const auto expanded = (event.flags
-                                  & PluginBridgeParameterEvent::rampFlag)
-                    != 0
-                && event.rampEndOffset > event.sampleOffset
-            ? static_cast<std::uint64_t>(
-                  event.rampEndOffset - event.sampleOffset)
-                + 1
-            : 1;
-        required += expanded;
-        if (required
-            > Impl::maximumScheduledAutomationEvents)
-            return false;
     }
-    return true;
+    return automationFitsCapacity(
+        events,
+        numSamples,
+        Impl::maximumScheduledAutomationEvents);
 }
 
 void ClapPluginInstance::processBlockWithAutomation(
@@ -1751,8 +1914,23 @@ void ClapPluginInstance::processBlockWithAutomation(
         audio.clear();
         return;
     }
+    struct LifecycleAdmissionScope
+    {
+        LifecycleAdmissionScope()
+        {
+            ++Impl::lifecycleAdmissionDepth;
+        }
+        ~LifecycleAdmissionScope()
+        {
+            --Impl::lifecycleAdmissionDepth;
+        }
+    } lifecycleAdmissionScope;
 
-    std::uint64_t required = 0;
+    auto requiresFallback = !automationFitsCapacity(
+        events,
+        audio.getNumSamples(),
+        Impl::maximumScheduledAutomationEvents);
+    auto invalidEvents = std::uint64_t { 0 };
     for (const auto& event : events)
     {
         if (event.parameterIndex
@@ -1762,29 +1940,22 @@ void ClapPluginInstance::processBlockWithAutomation(
                    static_cast<std::size_t>(
                        event.parameterIndex)]->isRemoved())
         {
-            impl->scheduledAutomationEventsDropped.fetch_add(
-                1,
-                std::memory_order_relaxed);
-            processBlock(audio, midi);
-            return;
+            requiresFallback = true;
+            ++invalidEvents;
         }
-        required += (event.flags
-                        & PluginBridgeParameterEvent::rampFlag)
-                    != 0
-                && event.rampEndOffset > event.sampleOffset
-            ? static_cast<std::uint64_t>(
-                  event.rampEndOffset - event.sampleOffset)
-                + 1
-            : 1;
-        if (required
-            > Impl::maximumScheduledAutomationEvents)
-        {
-            impl->scheduledAutomationEventsDropped.fetch_add(
-                static_cast<std::uint64_t>(events.size()),
-                std::memory_order_relaxed);
-            processBlock(audio, midi);
-            return;
-        }
+    }
+    if (invalidEvents > 0)
+        impl->scheduledAutomationEventsDropped.fetch_add(
+            invalidEvents,
+            std::memory_order_relaxed);
+    if (requiresFallback)
+    {
+        impl->processAutomationFallback(
+            *this,
+            audio,
+            midi,
+            events);
+        return;
     }
 
     struct ScheduledAutomationScope
@@ -1827,24 +1998,24 @@ void ClapPluginInstance::processBlockWithAutomation(
 
     for (const auto& event : events)
     {
-        const auto start = juce::jlimit(
-            0,
-            std::max(0, audio.getNumSamples() - 1),
-            static_cast<int>(event.sampleOffset));
+        const auto start = boundedEventOffset(
+            event.sampleOffset,
+            audio.getNumSamples() - 1);
         if ((event.flags & PluginBridgeParameterEvent::rampFlag)
                 != 0
             && event.rampEndOffset > event.sampleOffset)
         {
-            const auto end = std::min(
-                audio.getNumSamples() - 1,
-                static_cast<int>(event.rampEndOffset));
-            const auto duration = static_cast<float>(
+            const auto end = boundedEventOffset(
+                event.rampEndOffset,
+                audio.getNumSamples() - 1);
+            const auto duration = static_cast<double>(
                 event.rampEndOffset - event.sampleOffset);
             for (auto sample = start; sample <= end; ++sample)
             {
                 const auto progress = static_cast<float>(
-                    sample - static_cast<int>(event.sampleOffset))
-                    / duration;
+                    (static_cast<double>(sample)
+                     - static_cast<double>(event.sampleOffset))
+                    / duration);
                 append(
                     event.parameterIndex,
                     sample,
@@ -1877,6 +2048,15 @@ void ClapPluginInstance::processBlockWithAutomation(
                     : event.value));
     }
     processBlock(audio, midi);
+}
+
+bool ClapPluginInstance::processBlockWithAutomationOrFallback(
+    juce::AudioBuffer<float>& audio,
+    juce::MidiBuffer& midi,
+    std::span<const PluginBridgeParameterEvent> events) noexcept
+{
+    processBlockWithAutomation(audio, midi, events);
+    return true;
 }
 
 void ClapPluginInstance::timerCallback()

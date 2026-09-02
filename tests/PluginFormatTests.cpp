@@ -142,21 +142,60 @@ void pluginFormatTests()
     rangedEvent.parameterIndex = 1;
     rangedEvent.sampleOffset = 17;
     rangedEvent.value = 0.5f;
-    auto oversizedEvent = rangedEvent;
-    oversizedEvent.parameterIndex = 0;
-    oversizedEvent.sampleOffset = 0;
-    oversizedEvent.flags =
-        studio::PluginBridgeParameterEvent::rampFlag;
-    oversizedEvent.rampEndOffset = 65536;
-    oversizedEvent.rampEndValue = 1.0f;
+    std::vector<studio::PluginBridgeParameterEvent>
+        capacityEvents(16);
+    for (std::size_t index = 0;
+         index < capacityEvents.size();
+         ++index)
+    {
+        auto& event = capacityEvents[index];
+        event.parameterIndex = static_cast<std::uint32_t>(index);
+        event.sampleOffset = 0;
+        event.value = 0.0f;
+        event.flags =
+            studio::PluginBridgeParameterEvent::rampFlag;
+        event.rampEndOffset = 4096;
+        event.rampEndValue = 1.0f;
+    }
+    expect(exactAutomation != nullptr
+               && exactAutomation
+                      ->supportsSampleAccurateAutomation(
+                         capacityEvents,
+                         4096),
+           "Sixteen full-block CLAP ramps fit the exact event capacity.");
+    capacityEvents.push_back(capacityEvents.front());
     expect(exactAutomation != nullptr
                && !exactAutomation
                        ->supportsSampleAccurateAutomation(
-                           std::span<
-                               const studio::PluginBridgeParameterEvent>(
-                               &oversizedEvent,
-                               1)),
-           "CLAP rejects oversized exact automation before partial delivery.");
+                          capacityEvents,
+                          4096),
+           "CLAP rejects exact automation only after the clamped event capacity is exceeded.");
+    juce::AudioBuffer<float> fallbackAudio(2, 4096);
+    for (int channel = 0;
+         channel < fallbackAudio.getNumChannels();
+         ++channel)
+    {
+        juce::FloatVectorOperations::fill(
+            fallbackAudio.getWritePointer(channel),
+            1.0f,
+            fallbackAudio.getNumSamples());
+    }
+    const auto guardedFallback =
+        exactAutomation != nullptr
+        && exactAutomation
+               ->processBlockWithAutomationOrFallback(
+                   fallbackAudio,
+                   midi,
+                   capacityEvents);
+    expect(guardedFallback
+               && std::isfinite(
+                   fallbackAudio.getSample(0, 4095))
+               && instance->getParameters()[0]->getValue()
+                      > 0.99f,
+           "Oversized CLAP automation falls back while retaining lifecycle admission.");
+    for (int index = 0; index < 17; ++index)
+        instance->getParameters()[index]->setValue(0.5f);
+    instance->processBlock(audio, midi);
     if (exactAutomation != nullptr)
     {
         audio.clear();
@@ -360,6 +399,16 @@ void pluginFormatTests()
         { juce::Uuid().toString(), 64.0 / 48000.0, 1.0 }
     };
     monoProject.automationLanes.push_back(monoAutomation);
+    auto lateParameterAutomation = monoAutomation;
+    lateParameterAutomation.id = juce::Uuid().toString();
+    lateParameterAutomation.target.parameterId = "301";
+    lateParameterAutomation.target.parameterIndex = 0;
+    lateParameterAutomation.points = {
+        { juce::Uuid().toString(), 0.0, 0.75 },
+        { juce::Uuid().toString(), 64.0 / 48000.0, 0.75 }
+    };
+    monoProject.automationLanes.push_back(
+        lateParameterAutomation);
     studio::StudioAudioEngine::PluginRuntimeRequest monoRequest;
     monoRequest.trackId = monoProject.tracks.front().id;
     monoRequest.insertId = monoInsert.id;
@@ -386,9 +435,58 @@ void pluginFormatTests()
                            - monoRender.getSample(0, 33))
                       < 0.0001f,
            "CLAP automation is sample-exact in one process call and mono output duplicates to stereo.");
+    monoEngine.seekSeconds(0.0);
+    monoEngine.play();
+    monoEngine.processActiveBlockForTesting(64);
+    juce::MessageManager::getInstance()->runDispatchLoopUntil(100);
+    const auto monoStatuses = monoEngine.pluginRuntimeStatuses();
+    for (int attempt = 0;
+         attempt < 100
+         && monoEngine.pluginRuntimeTransitionPending();
+         ++attempt)
+    {
+        juce::MessageManager::getInstance()
+            ->runDispatchLoopUntil(10);
+    }
+    monoEngine.seekSeconds(0.0);
+    monoEngine.play();
+    monoEngine.processActiveBlockForTesting(64);
+    const auto metadataRefreshedStatuses =
+        monoEngine.pluginRuntimeStatuses();
+    auto lateParameterValue = -1.0f;
+    if (!metadataRefreshedStatuses.empty())
+    {
+        const auto lateParameter = std::find_if(
+            metadataRefreshedStatuses.front().parameters.begin(),
+            metadataRefreshedStatuses.front().parameters.end(),
+            [](const auto& parameter)
+            {
+                return parameter.id == "301";
+            });
+        if (lateParameter
+            != metadataRefreshedStatuses.front().parameters.end())
+            lateParameterValue = lateParameter->value;
+    }
+    error.clear();
+    expect(monoEngine.setPluginParameter(
+               monoInsert.id,
+               292,
+               1.0f,
+               error),
+           error.toRawUTF8());
+    monoEngine.seekSeconds(0.0);
+    monoEngine.play();
+    monoEngine.processActiveBlockForTesting(64);
+    juce::MessageManager::getInstance()->runDispatchLoopUntil(50);
+
     std::atomic<bool> runRealtimeStress { true };
+    std::atomic<int> realtimeBlocks { 0 };
+    std::atomic<int> silentRealtimeBlocks { 0 };
     std::thread realtimeStressThread(
-        [&monoEngine, &runRealtimeStress]
+        [&monoEngine,
+         &runRealtimeStress,
+         &realtimeBlocks,
+         &silentRealtimeBlocks]
         {
             while (runRealtimeStress.load(
                 std::memory_order_acquire))
@@ -396,10 +494,28 @@ void pluginFormatTests()
                 monoEngine.seekSeconds(0.0);
                 monoEngine.play();
                 monoEngine.processActiveBlockForTesting(64);
+                const auto block = realtimeBlocks.fetch_add(
+                    1,
+                    std::memory_order_relaxed);
+                if (block > 4
+                    && monoEngine.leftPeak() <= 0.0f)
+                {
+                    silentRealtimeBlocks.fetch_add(
+                        1,
+                        std::memory_order_relaxed);
+                }
             }
         });
-    juce::MessageManager::getInstance()->runDispatchLoopUntil(100);
-    const auto monoStatuses = monoEngine.pluginRuntimeStatuses();
+    const auto timingRefreshedStatuses =
+        monoEngine.pluginRuntimeStatuses();
+    for (int attempt = 0;
+         attempt < 100
+         && monoEngine.pluginRuntimeTransitionPending();
+         ++attempt)
+    {
+        juce::MessageManager::getInstance()
+            ->runDispatchLoopUntil(10);
+    }
     runRealtimeStress.store(false, std::memory_order_release);
     realtimeStressThread.join();
     expect(!monoStatuses.empty()
@@ -426,6 +542,20 @@ void pluginFormatTests()
                    : monoStatuses.front().parameters.front().name)
             + ").")
                .toRawUTF8());
+    expect(realtimeBlocks.load(std::memory_order_relaxed) > 5
+              && silentRealtimeBlocks.load(
+                     std::memory_order_relaxed)
+                     == 0,
+           "Realtime transport remains audible while refreshed snapshots are prepared and published.");
+    expect(!monoEngine.pluginRuntimeTransitionPending()
+              && !metadataRefreshedStatuses.empty()
+              && std::abs(lateParameterValue - 0.75f)
+                     < 0.0001f,
+           "Late CLAP rescan IDs re-resolve and republish automation without a project rebuild.");
+    expect(!timingRefreshedStatuses.empty()
+              && timingRefreshedStatuses.front().latencySamples
+                     == 64,
+           "Live latency changes publish refreshed PDC timing without stopping audio.");
     monoSource.deleteFile();
 
     auto project = studio::Project::createDefault();
