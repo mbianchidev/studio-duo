@@ -1042,6 +1042,32 @@ juce::Result StudioAudioEngine::renderToBuffer(
 
     if (!pluginRequests.empty())
     {
+        if (isRecording()
+            || recordingFinalizing.load(std::memory_order_acquire))
+            return juce::Result::fail(
+                "Stop and finalize recording before rendering.");
+
+        auto callbackSuspended = false;
+        if (deviceManager != nullptr)
+        {
+            deviceManager->removeAudioCallback(this);
+            callbackSuspended = true;
+            for (int attempt = 0;
+                 attempt < 1000
+                 && (readingSnapshot.load(std::memory_order_acquire) >= 0
+                     || readingPluginRuntime.load(std::memory_order_acquire)
+                         >= 0);
+                 ++attempt)
+                juce::Thread::sleep(1);
+            if (readingSnapshot.load(std::memory_order_acquire) >= 0
+                || readingPluginRuntime.load(std::memory_order_acquire) >= 0)
+            {
+                deviceManager->addAudioCallback(this);
+                return juce::Result::fail(
+                    "Audio callback did not stop before rendering.");
+            }
+        }
+
         auto renderProject = project;
         renderProject.metronomeEnabled = false;
         for (auto& route : renderProject.routingConnections)
@@ -1069,6 +1095,8 @@ juce::Result StudioAudioEngine::renderToBuffer(
                                   std::memory_order_release);
             metronomeEnabled.store(previousMetronome,
                                    std::memory_order_release);
+            if (callbackSuspended && deviceManager != nullptr)
+                deviceManager->addAudioCallback(this);
         };
 
         if (const auto result = updateProject(
