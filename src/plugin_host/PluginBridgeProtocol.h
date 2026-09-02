@@ -46,6 +46,7 @@ struct alignas(64) PluginBridgeSharedState
     std::atomic<std::uint32_t> workerSequence { 0 };
     std::atomic<std::uint32_t> shutdownRequested { 0 };
     std::atomic<std::uint32_t> numChannels { 0 };
+    std::atomic<std::uint32_t> numOutputChannels { 0 };
     std::atomic<std::uint32_t> sidechainChannels { 0 };
     std::atomic<std::uint32_t> numSamples { 0 };
     std::atomic<std::uint32_t> parameterEventCount { 0 };
@@ -95,9 +96,24 @@ public:
             }
         }
 
+        state.numOutputChannels.store(
+            static_cast<std::uint32_t>(channels),
+            std::memory_order_relaxed);
         state.workerSequence.store(hostSequence, std::memory_order_release);
         state.heartbeat.fetch_add(1, std::memory_order_relaxed);
         return true;
+    }
+
+    static int outputSourceChannel(int pluginOutputChannels,
+                                   int destinationChannel) noexcept
+    {
+        if (pluginOutputChannels <= 0 || destinationChannel < 0)
+            return -1;
+        if (pluginOutputChannels == 1)
+            return 0;
+        return destinationChannel < pluginOutputChannels
+            ? destinationChannel
+            : -1;
     }
 
     static int parameterEventCount(

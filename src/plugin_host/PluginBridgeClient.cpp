@@ -411,7 +411,9 @@ void PluginBridgeClient::fetchWorkerOutput() noexcept
         return;
 
     const auto outputChannels = std::min(
-        static_cast<int>(sharedState->numChannels.load(std::memory_order_relaxed)),
+        static_cast<int>(
+            sharedState->numOutputChannels.load(
+                std::memory_order_relaxed)),
         PluginBridgeSharedState::maxChannels);
     const auto outputSize = std::min(
         static_cast<int>(sharedState->numSamples.load(std::memory_order_relaxed)),
@@ -420,9 +422,10 @@ void PluginBridgeClient::fetchWorkerOutput() noexcept
     {
         for (int channel = 0; channel < PluginBridgeSharedState::maxChannels; ++channel)
         {
-            const auto sourceChannel = outputChannels > 0 ? std::min(channel,
-                                                                     outputChannels - 1)
-                                                          : -1;
+            const auto sourceChannel =
+                PluginBridgeProtocol::outputSourceChannel(
+                    outputChannels,
+                    channel);
             auto& destination = completedOutput[static_cast<std::size_t>(channel)];
             if (sourceChannel >= 0)
                 std::copy_n(sharedState->output[static_cast<std::size_t>(sourceChannel)].begin(),

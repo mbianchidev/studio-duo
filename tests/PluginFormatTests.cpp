@@ -53,8 +53,14 @@ void pluginFormatTests()
     expect(std::abs(audio.getSample(0, 32) - 0.5f) < 0.0001f,
            "CLAP instances process audio.");
 
-    expect(instance->getParameters().size() == 1,
-           "CLAP parameters are exposed to the host.");
+    expect(instance->getParameters().size() == 300,
+           "CLAP parameters are exposed without truncation.");
+    juce::MessageManager::getInstance()->runDispatchLoopUntil(100);
+    expect(instance->getLatencySamples() == 32
+               && instance->getParameters()[298]->getValue() > 0.0f
+               && std::abs(instance->getParameters()[299]->getValue())
+                      < 0.0001f,
+           "CLAP restart, callback, latency, and thread-check requests drain on valid threads.");
     juce::MemoryBlock state;
     instance->getStateInformation(state);
     instance->getParameters()[0]->setValueNotifyingHost(0.25f);
@@ -63,7 +69,99 @@ void pluginFormatTests()
     expect(std::abs(instance->getParameters()[0]->getValue() - 0.5f)
                < 0.0001f,
            "CLAP opaque state restores parameter values.");
+    instance->getParameters()[257]->setValueNotifyingHost(0.75f);
+    instance->processBlock(audio, midi);
+    juce::MemoryBlock highParameterState;
+    instance->getStateInformation(highParameterState);
+    instance->getParameters()[257]->setValueNotifyingHost(0.1f);
+    instance->processBlock(audio, midi);
+    instance->setStateInformation(
+        highParameterState.getData(),
+        static_cast<int>(highParameterState.getSize()));
+    expect(std::abs(instance->getParameters()[257]->getValue() - 0.75f)
+               < 0.0001f,
+           "CLAP parameters beyond index 256 reach processing and state.");
     instance->releaseResources();
+    instance->getParameters()[0]->setValueNotifyingHost(0.25f);
+    juce::MemoryBlock stoppedState;
+    instance->getStateInformation(stoppedState);
+    instance->getParameters()[0]->setValueNotifyingHost(0.75f);
+    instance->setStateInformation(
+        stoppedState.getData(),
+        static_cast<int>(stoppedState.getSize()));
+    expect(std::abs(instance->getParameters()[0]->getValue() - 0.25f)
+               < 0.0001f,
+           "CLAP edits flush and persist while processing is stopped.");
+
+    const auto monoSource = juce::File::getSpecialLocation(
+                                juce::File::tempDirectory)
+                                .getNonexistentChildFile(
+                                    "StudioDuoMonoPlugin",
+                                    ".wav",
+                                    false);
+    {
+        juce::WavAudioFormat wav;
+        std::unique_ptr<juce::OutputStream> stream =
+            monoSource.createOutputStream();
+        auto writer = wav.createWriterFor(
+            stream,
+            juce::AudioFormatWriterOptions {}
+                .withSampleRate(48000.0)
+                .withNumChannels(2)
+                .withBitsPerSample(24));
+        juce::AudioBuffer<float> source(2, 64);
+        for (int sample = 0; sample < source.getNumSamples(); ++sample)
+        {
+            source.setSample(0, sample, 0.2f);
+            source.setSample(1, sample, 0.8f);
+        }
+        expect(writer != nullptr
+                   && writer->writeFromAudioSampleBuffer(
+                       source,
+                       0,
+                       source.getNumSamples()),
+               "Mono plugin source can be written.");
+    }
+    auto monoProject = studio::Project::createDefault();
+    studio::AudioClip monoClip;
+    monoClip.sourceFile = monoSource;
+    monoClip.durationSeconds = 64.0 / 48000.0;
+    monoClip.sourceLengthSeconds = monoClip.durationSeconds;
+    monoClip.sourceRangeEndSeconds = monoClip.durationSeconds;
+    monoProject.tracks.front().clips.push_back(monoClip);
+    studio::PluginInsert monoInsert;
+    monoInsert.pluginIdentifier =
+        descriptions[0]->createIdentifierString();
+    monoInsert.name = descriptions[0]->name;
+    monoInsert.format = "CLAP";
+    monoInsert.bridgeMode =
+        studio::PluginBridgeMode::trustedInProcess;
+    monoProject.tracks.front().inserts.push_back(monoInsert);
+    studio::StudioAudioEngine::PluginRuntimeRequest monoRequest;
+    monoRequest.trackId = monoProject.tracks.front().id;
+    monoRequest.insertId = monoInsert.id;
+    monoRequest.name = monoInsert.name;
+    monoRequest.description = *descriptions[0];
+    monoRequest.bridgeMode =
+        studio::PluginBridgeMode::trustedInProcess;
+    studio::StudioAudioEngine monoEngine;
+    juce::AudioBuffer<float> monoRender;
+    expect(monoEngine.renderToBuffer(
+               monoProject,
+               monoRender,
+               48000.0,
+               { monoRequest })
+               .wasOk(),
+           "Mono-output CLAP renders in process.");
+    expect(monoRender.getNumChannels() == 2
+               && monoRender.getNumSamples() > 32
+               && std::abs(monoRender.getSample(0, 32) - 0.1f)
+                      < 0.01f
+               && std::abs(monoRender.getSample(1, 32)
+                           - monoRender.getSample(0, 32))
+                      < 0.0001f,
+           "Mono plugin output is duplicated consistently to stereo.");
+    monoSource.deleteFile();
 
     auto project = studio::Project::createDefault();
     studio::PluginInsert insert;
@@ -170,15 +268,21 @@ void pluginFormatTests()
     for (int attempt = 0;
          attempt < 100 && engine.pluginRuntimeTransitionPending();
          ++attempt)
-        juce::Thread::sleep(10);
+        juce::MessageManager::getInstance()->runDispatchLoopUntil(10);
     const auto statuses = engine.pluginRuntimeStatuses();
     expect(!statuses.empty()
                && statuses.front().state
                       == studio::StudioAudioEngine::PluginRuntimeStatus::State::ready
                && statuses.front().message.containsIgnoreCase("in-process")
-               && statuses.front().parameters.size() == 1
+               && statuses.front().parameters.size() == 300
                && statuses.front().parameters.front().name == "Gain",
-           "Trusted CLAP processing and parameter metadata activate in process.");
+           ("Trusted CLAP processing and parameter metadata activate in process"
+            " ("
+            + (statuses.empty()
+                   ? juce::String("no status")
+                   : statuses.front().message)
+            + ").")
+               .toRawUTF8());
     error.clear();
     expect(engine.setPluginParameter(insert.id, 0, 0.25f, error),
            error.toRawUTF8());

@@ -3539,9 +3539,17 @@ void StudioAudioEngine::processInProcessRuntime(
     int sidechainSampleOffset) noexcept
 {
     auto& processor = *insert.inProcess;
+    const auto mainChannels = processor.getBusCount(true) > 0
+        ? processor.getChannelCountOfBus(true, 0)
+        : processor.getTotalNumInputChannels();
+    const auto outputChannels = processor.getBusCount(false) > 0
+        ? processor.getChannelCountOfBus(false, 0)
+        : processor.getTotalNumOutputChannels();
     const auto useScratch = processor.getTotalNumInputChannels()
             > buffer.getNumChannels()
-        || processor.getTotalNumOutputChannels() > buffer.getNumChannels()
+        || processor.getTotalNumOutputChannels()
+            > buffer.getNumChannels()
+        || outputChannels != buffer.getNumChannels()
         || (sidechain != nullptr && processor.getBusCount(true) > 1);
     if (!useScratch)
     {
@@ -3552,9 +3560,6 @@ void StudioAudioEngine::processInProcessRuntime(
 
     auto& scratch = insert.inProcessBuffer;
     scratch.clear(0, buffer.getNumSamples());
-    const auto mainChannels = processor.getBusCount(true) > 0
-        ? processor.getChannelCountOfBus(true, 0)
-        : processor.getTotalNumInputChannels();
     for (int channel = 0;
          channel < std::min(mainChannels, buffer.getNumChannels());
          ++channel)
@@ -3600,18 +3605,19 @@ void StudioAudioEngine::processInProcessRuntime(
         scratch.getNumChannels(),
         buffer.getNumSamples());
     processor.processBlock(scratchView, insert.midi);
-    const auto outputChannels = processor.getBusCount(false) > 0
-        ? processor.getChannelCountOfBus(false, 0)
-        : processor.getTotalNumOutputChannels();
     for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
     {
-        if (channel < outputChannels)
+        const auto outputChannel =
+            PluginBridgeProtocol::outputSourceChannel(
+                outputChannels,
+                channel);
+        if (outputChannel >= 0)
         {
             const auto source =
                 processor.getChannelIndexInProcessBlockBuffer(
                     false,
                     0,
-                    channel);
+                    outputChannel);
             buffer.copyFrom(channel,
                             0,
                             scratch,

@@ -7,7 +7,15 @@
 
 typedef struct test_plugin {
     clap_plugin_t plugin;
-    double gain;
+    const clap_host_t* host;
+    const clap_host_thread_check_t* thread_check;
+    double parameters[300];
+    uint32_t thread_violations;
+    uint32_t activation_count;
+    uint32_t main_thread_callbacks;
+    bool active;
+    bool processing;
+    bool requested_host_actions;
 } test_plugin_t;
 
 static const char* features[] = {
@@ -34,14 +42,31 @@ static test_plugin_t* self(const clap_plugin_t* plugin)
     return (test_plugin_t*) plugin->plugin_data;
 }
 
+static void expect_main_thread(const clap_plugin_t* plugin)
+{
+    test_plugin_t* instance = self(plugin);
+    if (instance->thread_check == NULL
+        || !instance->thread_check->is_main_thread(instance->host))
+        ++instance->thread_violations;
+}
+
+static void expect_audio_thread(const clap_plugin_t* plugin)
+{
+    test_plugin_t* instance = self(plugin);
+    if (instance->thread_check == NULL
+        || !instance->thread_check->is_audio_thread(instance->host))
+        ++instance->thread_violations;
+}
+
 static bool plugin_init(const clap_plugin_t* plugin)
 {
-    (void) plugin;
+    expect_main_thread(plugin);
     return true;
 }
 
 static void plugin_destroy(const clap_plugin_t* plugin)
 {
+    expect_main_thread(plugin);
     free(self(plugin));
 }
 
@@ -50,29 +75,36 @@ static bool plugin_activate(const clap_plugin_t* plugin,
                             uint32_t min_frames,
                             uint32_t max_frames)
 {
-    (void) plugin;
-    return sample_rate > 0.0 && min_frames > 0 && max_frames >= min_frames;
+    test_plugin_t* instance = self(plugin);
+    expect_main_thread(plugin);
+    instance->active = true;
+    ++instance->activation_count;
+    return sample_rate > 0.0 && min_frames > 0
+        && max_frames >= min_frames;
 }
 
 static void plugin_deactivate(const clap_plugin_t* plugin)
 {
-    (void) plugin;
+    expect_main_thread(plugin);
+    self(plugin)->active = false;
 }
 
 static bool plugin_start_processing(const clap_plugin_t* plugin)
 {
-    (void) plugin;
+    expect_audio_thread(plugin);
+    self(plugin)->processing = true;
     return true;
 }
 
 static void plugin_stop_processing(const clap_plugin_t* plugin)
 {
-    (void) plugin;
+    expect_audio_thread(plugin);
+    self(plugin)->processing = false;
 }
 
 static void plugin_reset(const clap_plugin_t* plugin)
 {
-    (void) plugin;
+    expect_audio_thread(plugin);
 }
 
 static uint32_t input_event_count(const clap_input_events_t* events)
@@ -84,6 +116,14 @@ static clap_process_status plugin_process(const clap_plugin_t* plugin,
                                           const clap_process_t* process)
 {
     test_plugin_t* instance = self(plugin);
+    expect_audio_thread(plugin);
+    if (!instance->requested_host_actions)
+    {
+        instance->requested_host_actions = true;
+        instance->host->request_callback(instance->host);
+        instance->host->request_process(instance->host);
+        instance->host->request_restart(instance->host);
+    }
     uint32_t event_index = 0;
     const uint32_t event_count = input_event_count(process->in_events);
     for (uint32_t frame = 0; frame < process->frames_count; ++frame)
@@ -100,7 +140,11 @@ static clap_process_status plugin_process(const clap_plugin_t* plugin,
                 const clap_event_param_value_t* value =
                     (const clap_event_param_value_t*) header;
                 if (value->param_id == 1)
-                    instance->gain = value->value;
+                    instance->parameters[0] = value->value;
+                else if (value->param_id >= 2
+                         && value->param_id <= 298)
+                    instance->parameters[value->param_id - 1] =
+                        value->value;
             }
             ++event_index;
         }
@@ -123,7 +167,7 @@ static clap_process_status plugin_process(const clap_plugin_t* plugin,
                     ? input->data32[channel][frame]
                     : 0.0f;
                 output->data32[channel][frame] +=
-                    source * (float) instance->gain;
+                    source * (float) instance->parameters[0];
             }
         }
     }
@@ -132,7 +176,7 @@ static clap_process_status plugin_process(const clap_plugin_t* plugin,
 
 static uint32_t audio_ports_count(const clap_plugin_t* plugin, bool is_input)
 {
-    (void) plugin;
+    expect_main_thread(plugin);
     (void) is_input;
     return 1;
 }
@@ -142,39 +186,48 @@ static bool audio_ports_get(const clap_plugin_t* plugin,
                             bool is_input,
                             clap_audio_port_info_t* info)
 {
-    (void) plugin;
+    expect_main_thread(plugin);
     if (index != 0 || info == NULL)
         return false;
     memset(info, 0, sizeof(*info));
     info->id = is_input ? 10 : 20;
     snprintf(info->name, sizeof(info->name), "%s", is_input ? "Input" : "Output");
     info->flags = CLAP_AUDIO_PORT_IS_MAIN;
-    info->channel_count = 2;
-    info->port_type = CLAP_PORT_STEREO;
+    info->channel_count = is_input ? 2 : 1;
+    info->port_type = is_input ? CLAP_PORT_STEREO : CLAP_PORT_MONO;
     info->in_place_pair = CLAP_INVALID_ID;
     return true;
 }
 
 static uint32_t params_count(const clap_plugin_t* plugin)
 {
-    (void) plugin;
-    return 1;
+    expect_main_thread(plugin);
+    return 300;
 }
 
 static bool params_get_info(const clap_plugin_t* plugin,
                             uint32_t index,
                             clap_param_info_t* info)
 {
-    (void) plugin;
-    if (index != 0 || info == NULL)
+    expect_main_thread(plugin);
+    if (index >= 300 || info == NULL)
         return false;
     memset(info, 0, sizeof(*info));
-    info->id = 1;
-    info->flags = CLAP_PARAM_IS_AUTOMATABLE;
-    snprintf(info->name, sizeof(info->name), "Gain");
+    info->id = index + 1;
+    info->flags = index >= 298
+        ? CLAP_PARAM_IS_READONLY
+        : CLAP_PARAM_IS_AUTOMATABLE;
+    if (index == 0)
+        snprintf(info->name, sizeof(info->name), "Gain");
+    else if (index == 298)
+        snprintf(info->name, sizeof(info->name), "Main thread callbacks");
+    else if (index == 299)
+        snprintf(info->name, sizeof(info->name), "Thread violations");
+    else
+        snprintf(info->name, sizeof(info->name), "Parameter %u", index + 1);
     info->min_value = 0.0;
-    info->max_value = 1.0;
-    info->default_value = 0.5;
+    info->max_value = index >= 298 ? 1000.0 : 1.0;
+    info->default_value = index >= 298 ? 0.0 : 0.5;
     return true;
 }
 
@@ -182,9 +235,15 @@ static bool params_get_value(const clap_plugin_t* plugin,
                              clap_id param_id,
                              double* value)
 {
-    if (param_id != 1 || value == NULL)
+    expect_main_thread(plugin);
+    if (param_id < 1 || param_id > 300 || value == NULL)
         return false;
-    *value = self(plugin)->gain;
+    if (param_id == 299)
+        *value = self(plugin)->main_thread_callbacks;
+    else if (param_id == 300)
+        *value = self(plugin)->thread_violations;
+    else
+        *value = self(plugin)->parameters[param_id - 1];
     return true;
 }
 
@@ -194,8 +253,9 @@ static bool params_value_to_text(const clap_plugin_t* plugin,
                                  char* text,
                                  uint32_t capacity)
 {
-    (void) plugin;
-    if (param_id != 1 || text == NULL || capacity == 0)
+    expect_main_thread(plugin);
+    if (param_id < 1 || param_id > 300
+        || text == NULL || capacity == 0)
         return false;
     snprintf(text, capacity, "%.3f", value);
     return true;
@@ -206,8 +266,9 @@ static bool params_text_to_value(const clap_plugin_t* plugin,
                                  const char* text,
                                  double* value)
 {
-    (void) plugin;
-    if (param_id != 1 || text == NULL || value == NULL)
+    expect_main_thread(plugin);
+    if (param_id < 1 || param_id > 298
+        || text == NULL || value == NULL)
         return false;
     *value = strtod(text, NULL);
     return true;
@@ -218,6 +279,10 @@ static void params_flush(const clap_plugin_t* plugin,
                          const clap_output_events_t* output)
 {
     (void) output;
+    if (self(plugin)->active)
+        expect_audio_thread(plugin);
+    else
+        expect_main_thread(plugin);
     const uint32_t count = input_event_count(input);
     for (uint32_t index = 0; index < count; ++index)
     {
@@ -228,8 +293,9 @@ static void params_flush(const clap_plugin_t* plugin,
         {
             const clap_event_param_value_t* value =
                 (const clap_event_param_value_t*) header;
-            if (value->param_id == 1)
-                self(plugin)->gain = value->value;
+            if (value->param_id >= 1 && value->param_id <= 298)
+                self(plugin)->parameters[value->param_id - 1] =
+                    value->value;
         }
     }
 }
@@ -251,29 +317,35 @@ static int64_t state_read(const clap_istream_t* stream,
 static bool state_save(const clap_plugin_t* plugin,
                        const clap_ostream_t* stream)
 {
-    const double gain = self(plugin)->gain;
-    return state_write(stream, &gain, sizeof(gain)) == (int64_t) sizeof(gain);
+    expect_main_thread(plugin);
+    return state_write(
+               stream,
+               self(plugin)->parameters,
+               sizeof(self(plugin)->parameters))
+        == (int64_t) sizeof(self(plugin)->parameters);
 }
 
 static bool state_load(const clap_plugin_t* plugin,
                        const clap_istream_t* stream)
 {
-    double gain = 0.0;
-    if (state_read(stream, &gain, sizeof(gain)) != (int64_t) sizeof(gain))
+    expect_main_thread(plugin);
+    double parameters[300];
+    if (state_read(stream, parameters, sizeof(parameters))
+        != (int64_t) sizeof(parameters))
         return false;
-    self(plugin)->gain = gain;
+    memcpy(self(plugin)->parameters, parameters, sizeof(parameters));
     return true;
 }
 
 static uint32_t latency_get(const clap_plugin_t* plugin)
 {
-    (void) plugin;
-    return 0;
+    expect_main_thread(plugin);
+    return self(plugin)->activation_count > 1 ? 32 : 0;
 }
 
 static uint32_t tail_get(const clap_plugin_t* plugin)
 {
-    (void) plugin;
+    expect_main_thread(plugin);
     return 0;
 }
 
@@ -323,7 +395,8 @@ static const void* plugin_get_extension(const clap_plugin_t* plugin,
 
 static void plugin_on_main_thread(const clap_plugin_t* plugin)
 {
-    (void) plugin;
+    expect_main_thread(plugin);
+    ++self(plugin)->main_thread_callbacks;
 }
 
 static const clap_plugin_t* create_plugin(const clap_plugin_factory_t* factory,
@@ -337,7 +410,16 @@ static const clap_plugin_t* create_plugin(const clap_plugin_factory_t* factory,
     test_plugin_t* instance = (test_plugin_t*) calloc(1, sizeof(*instance));
     if (instance == NULL)
         return NULL;
-    instance->gain = 0.5;
+    instance->host = host;
+    instance->thread_check =
+        (const clap_host_thread_check_t*) host->get_extension(
+            host,
+            CLAP_EXT_THREAD_CHECK);
+    for (uint32_t index = 0; index < 298; ++index)
+        instance->parameters[index] = 0.5;
+    if (instance->thread_check == NULL
+        || !instance->thread_check->is_main_thread(host))
+        ++instance->thread_violations;
     instance->plugin.desc = &descriptor;
     instance->plugin.plugin_data = instance;
     instance->plugin.init = plugin_init;

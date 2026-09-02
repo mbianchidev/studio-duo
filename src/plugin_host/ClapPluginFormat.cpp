@@ -102,6 +102,17 @@ void ClapPluginFormat::findAllTypesForFile(
     juce::OwnedArray<juce::PluginDescription>& results,
     const juce::String& fileOrIdentifier)
 {
+    const auto* messages =
+        juce::MessageManager::getInstanceWithoutCreating();
+    if (messages != nullptr && !messages->isThisTheMessageThread())
+    {
+        juce::MessageManager::callSync(
+            [this, &results, fileOrIdentifier]
+            {
+                findAllTypesForFile(results, fileOrIdentifier);
+            });
+        return;
+    }
     const juce::File file(pluginFile(fileOrIdentifier));
     ScannedModule module(file);
     if (!module.valid())

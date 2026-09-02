@@ -323,6 +323,9 @@ void PluginBridgeWorker::run()
             else
                 std::fill_n(destination.begin(), samples, 0.0f);
         }
+        sharedState->numOutputChannels.store(
+            static_cast<std::uint32_t>(mainOutputChannels),
+            std::memory_order_relaxed);
         sharedState->workerSequence.store(hostSequence, std::memory_order_release);
     }
 }

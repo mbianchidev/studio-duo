@@ -1104,6 +1104,14 @@ void pluginBridgeProtocol()
            "Bridge transport preserves stereo samples.");
     expect(!studio::PluginBridgeProtocol::processAvailableBlock(state),
            "Bridge worker does not process the same block twice.");
+    expect(studio::PluginBridgeProtocol::outputSourceChannel(1, 0) == 0
+               && studio::PluginBridgeProtocol::outputSourceChannel(1, 1)
+                      == 0
+               && studio::PluginBridgeProtocol::outputSourceChannel(2, 1)
+                      == 1
+               && studio::PluginBridgeProtocol::outputSourceChannel(2, 2)
+                      == -1,
+           "Bridge output mapping duplicates mono and never leaks stale channels.");
     expect(studio::PluginBridgeProtocol::parameterEventCount(state) == 1
                && state.parameterEvents[0].parameterIndex == 7
                && state.parameterEvents[0].sampleOffset == 2

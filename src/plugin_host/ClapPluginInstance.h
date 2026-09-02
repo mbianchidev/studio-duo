@@ -6,7 +6,8 @@
 
 namespace studio
 {
-class ClapPluginInstance final : public juce::AudioPluginInstance
+class ClapPluginInstance final : public juce::AudioPluginInstance,
+                                 private juce::Timer
 {
 public:
     static std::unique_ptr<ClapPluginInstance> create(
@@ -45,6 +46,7 @@ private:
     ClapPluginInstance(std::unique_ptr<Impl> implementation,
                        const BusesProperties& buses);
     static BusesProperties busesFor(const Impl& implementation);
+    void timerCallback() override;
 
     std::unique_ptr<Impl> impl;
 };

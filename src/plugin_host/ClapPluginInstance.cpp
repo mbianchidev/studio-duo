@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <optional>
 #include <vector>
 
 namespace studio
@@ -117,7 +118,8 @@ public:
 
     struct Host
     {
-        Host()
+        explicit Host(Impl& implementation)
+            : owner(&implementation)
         {
             value = {
                 CLAP_VERSION,
@@ -134,9 +136,22 @@ public:
         }
 
         static const void* CLAP_ABI getExtension(
-            const clap_host_t*,
-            const char*)
+            const clap_host_t* host,
+            const char* id)
         {
+            if (id == nullptr)
+                return nullptr;
+            if (std::strcmp(id, CLAP_EXT_THREAD_CHECK) == 0)
+                return &threadCheck;
+            if (std::strcmp(id, CLAP_EXT_PARAMS) == 0)
+                return &hostParams;
+            if (std::strcmp(id, CLAP_EXT_LATENCY) == 0)
+                return &hostLatency;
+            if (std::strcmp(id, CLAP_EXT_AUDIO_PORTS) == 0)
+                return &hostAudioPorts;
+            if (std::strcmp(id, CLAP_EXT_STATE) == 0)
+                return &hostState;
+            juce::ignoreUnused(host);
             return nullptr;
         }
 
@@ -158,7 +173,116 @@ public:
                 ->callbackRequested.store(true, std::memory_order_release);
         }
 
+        static bool CLAP_ABI isMainThread(const clap_host_t*)
+        {
+            const auto* messages =
+                juce::MessageManager::getInstanceWithoutCreating();
+            return messages != nullptr
+                && messages->isThisTheMessageThread();
+        }
+
+        static bool CLAP_ABI isAudioThread(const clap_host_t*)
+        {
+            return audioThreadDepth > 0;
+        }
+
+        static void CLAP_ABI rescanParams(const clap_host_t* host,
+                                          clap_param_rescan_flags flags)
+        {
+            auto& owner = *static_cast<Host*>(host->host_data)->owner;
+            owner.parameterRescanFlags.fetch_or(
+                flags,
+                std::memory_order_release);
+        }
+
+        static void CLAP_ABI clearParam(const clap_host_t* host,
+                                        clap_id,
+                                        clap_param_clear_flags)
+        {
+            static_cast<Host*>(host->host_data)
+                ->owner->parameterRescanFlags.fetch_or(
+                    CLAP_PARAM_RESCAN_VALUES,
+                    std::memory_order_release);
+        }
+
+        static void CLAP_ABI requestFlush(const clap_host_t* host)
+        {
+            static_cast<Host*>(host->host_data)
+                ->owner->flushRequested.store(
+                    true,
+                    std::memory_order_release);
+        }
+
+        static void CLAP_ABI latencyChanged(const clap_host_t* host)
+        {
+            static_cast<Host*>(host->host_data)
+                ->owner->latencyRefreshRequested.store(
+                    true,
+                    std::memory_order_release);
+        }
+
+        static bool CLAP_ABI supportsAudioPortRescan(
+            const clap_host_t*,
+            std::uint32_t flags)
+        {
+            constexpr std::uint32_t supported =
+                CLAP_AUDIO_PORTS_RESCAN_NAMES
+                | CLAP_AUDIO_PORTS_RESCAN_FLAGS;
+            return (flags & ~supported) == 0;
+        }
+
+        static void CLAP_ABI rescanAudioPorts(
+            const clap_host_t* host,
+            std::uint32_t flags)
+        {
+            static_cast<Host*>(host->host_data)
+                ->owner->audioPortRescanFlags.fetch_or(
+                    flags,
+                    std::memory_order_release);
+        }
+
+        static void CLAP_ABI markStateDirty(const clap_host_t* host)
+        {
+            static_cast<Host*>(host->host_data)
+                ->owner->stateDirty.store(true, std::memory_order_release);
+        }
+
+        struct AudioThreadScope
+        {
+            AudioThreadScope()
+            {
+                ++audioThreadDepth;
+            }
+
+            ~AudioThreadScope()
+            {
+                --audioThreadDepth;
+            }
+        };
+
+        inline static thread_local int audioThreadDepth = 0;
+        inline static const clap_host_thread_check_t threadCheck {
+            isMainThread,
+            isAudioThread
+        };
+        inline static const clap_host_params_t hostParams {
+            rescanParams,
+            clearParam,
+            requestFlush
+        };
+        inline static const clap_host_latency_t hostLatency {
+            latencyChanged
+        };
+        inline static const clap_host_audio_ports_t hostAudioPorts {
+            supportsAudioPortRescan,
+            rescanAudioPorts
+        };
+        inline static const clap_host_state_t hostState {
+            markStateDirty
+        };
+
         clap_host_t value {};
+        Impl* owner = nullptr;
         std::atomic<bool> restartRequested { false };
         std::atomic<bool> processRequested { false };
         std::atomic<bool> callbackRequested { false };
@@ -206,6 +330,7 @@ public:
                     + (info.max_value - info.min_value)
                         * juce::jlimit(0.0f, 1.0f, normalized),
                 std::memory_order_relaxed);
+            dirty.store(true, std::memory_order_release);
         }
 
         float getDefaultValue() const override
@@ -295,6 +420,23 @@ public:
             if (params != nullptr
                 && params->get_value(pluginInstance, info.id, &value))
                 plainValue.store(value, std::memory_order_relaxed);
+            dirty.store(false, std::memory_order_release);
+        }
+
+        [[nodiscard]] bool consumeDirty() noexcept
+        {
+            return dirty.exchange(false, std::memory_order_acq_rel);
+        }
+
+        [[nodiscard]] bool isDirty() const noexcept
+        {
+            return dirty.load(std::memory_order_acquire);
+        }
+
+        void updateFromPlugin(double value) noexcept
+        {
+            plainValue.store(value, std::memory_order_relaxed);
+            dirty.store(false, std::memory_order_release);
         }
 
         clap_param_info_t info {};
@@ -303,6 +445,7 @@ public:
         const clap_plugin_t* pluginInstance = nullptr;
         const clap_plugin_params_t* params = nullptr;
         std::atomic<double> plainValue { 0.0 };
+        std::atomic<bool> dirty { false };
     };
 
     struct InputEvents
@@ -329,25 +472,46 @@ public:
         }
 
         clap_input_events_t interface {};
-        std::array<clap_event_param_value_t, 256> values {};
+        std::vector<clap_event_param_value_t> values;
         std::uint32_t count = 0;
     };
 
     struct OutputEvents
     {
-        OutputEvents()
+        explicit OutputEvents(Impl& implementation)
+            : owner(&implementation)
         {
             interface = { this, tryPush };
         }
 
-        static bool CLAP_ABI tryPush(const clap_output_events_t*,
-                                     const clap_event_header_t*)
+        static bool CLAP_ABI tryPush(
+            const clap_output_events_t* list,
+            const clap_event_header_t* header)
         {
+            if (list == nullptr
+                || header == nullptr
+                || header->space_id != CLAP_CORE_EVENT_SPACE_ID
+                || header->type != CLAP_EVENT_PARAM_VALUE
+                || header->size < sizeof(clap_event_param_value_t))
+                return true;
+            const auto* event =
+                reinterpret_cast<const clap_event_param_value_t*>(
+                    header);
+            auto* events = static_cast<OutputEvents*>(list->ctx);
+            if (auto* parameter =
+                    events->owner->parameterFor(event->param_id))
+                parameter->updateFromPlugin(event->value);
             return true;
         }
 
         clap_output_events_t interface {};
+        Impl* owner = nullptr;
     };
+
+    Impl()
+        : outputEvents(*this)
+    {
+    }
 
     static std::unique_ptr<Impl> create(
         const juce::PluginDescription& description,
@@ -360,7 +524,8 @@ public:
             error);
         if (implementation->module == nullptr)
             return {};
-        implementation->host = std::make_unique<Host>();
+        implementation->host =
+            std::make_unique<Host>(*implementation);
         const auto id = pluginId(description.fileOrIdentifier);
         if (id.isEmpty())
         {
@@ -417,6 +582,7 @@ public:
 
     void scanPorts(bool input, std::vector<Port>& destination)
     {
+        destination.clear();
         if (audioPorts == nullptr)
             return;
         const auto count = audioPorts->count(plugin, input);
@@ -434,6 +600,205 @@ public:
         }
     }
 
+    [[nodiscard]] Parameter* parameterFor(clap_id id) const noexcept
+    {
+        const auto found = std::find_if(
+            parameters.begin(),
+            parameters.end(),
+            [id](const auto* parameter)
+            {
+                return parameter->info.id == id;
+            });
+        return found != parameters.end() ? *found : nullptr;
+    }
+
+    [[nodiscard]] bool hasDirtyParameters() const noexcept
+    {
+        return std::any_of(
+            parameters.cbegin(),
+            parameters.cend(),
+            [](const auto* parameter)
+            {
+                return parameter->isDirty();
+            });
+    }
+
+    void buildDirtyParameterEvents()
+    {
+        inputEvents.count = 0;
+        for (auto* parameter : parameters)
+        {
+            if (!parameter->consumeDirty())
+                continue;
+            if (inputEvents.count >= inputEvents.values.size())
+                break;
+            auto& event = inputEvents.values[inputEvents.count++];
+            event = {};
+            event.header.size = sizeof(event);
+            event.header.time = 0;
+            event.header.space_id = CLAP_CORE_EVENT_SPACE_ID;
+            event.header.type = CLAP_EVENT_PARAM_VALUE;
+            event.param_id = parameter->info.id;
+            event.cookie = parameter->info.cookie;
+            event.note_id = -1;
+            event.port_index = -1;
+            event.channel = -1;
+            event.key = -1;
+            event.value = parameter->plain();
+        }
+    }
+
+    void waitForAudioCalls() const noexcept
+    {
+        while (processCallsInFlight.load(std::memory_order_seq_cst) > 0)
+            juce::Thread::sleep(1);
+    }
+
+    void stopProcessingOnAudioThread() noexcept
+    {
+        if (!processing)
+            return;
+        Host::AudioThreadScope audioThread;
+        plugin->stop_processing(plugin);
+        processing = false;
+    }
+
+    void flushParameters(bool force)
+    {
+        if (params == nullptr)
+            return;
+        const auto recentlyProcessed =
+            juce::Time::getMillisecondCounterHiRes()
+                - lastProcessTimeMilliseconds.load(
+                    std::memory_order_acquire)
+            < 100.0;
+        if (!force
+            && active.load(std::memory_order_acquire)
+            && processing.load(std::memory_order_acquire)
+            && recentlyProcessed)
+            return;
+
+        lifecycleChanging.store(true, std::memory_order_seq_cst);
+        waitForAudioCalls();
+        const auto wasProcessing =
+            processing.load(std::memory_order_acquire);
+        if (wasProcessing)
+            stopProcessingOnAudioThread();
+        buildDirtyParameterEvents();
+        const auto explicitlyRequested =
+            flushRequested.exchange(false, std::memory_order_acq_rel);
+        if (inputEvents.count == 0 && !explicitlyRequested)
+        {
+            lifecycleChanging.store(false, std::memory_order_seq_cst);
+            return;
+        }
+        std::optional<Host::AudioThreadScope> audioThread;
+        if (active.load(std::memory_order_acquire))
+            audioThread.emplace();
+        params->flush(
+            plugin,
+            &inputEvents.interface,
+            &outputEvents.interface);
+        if (wasProcessing)
+            host->processRequested.store(
+                true,
+                std::memory_order_release);
+        lifecycleChanging.store(false, std::memory_order_seq_cst);
+    }
+
+    void refreshParameters()
+    {
+        for (auto* parameter : parameters)
+            parameter->refresh();
+    }
+
+    void prepareAudioBuffers()
+    {
+        inputBuffers.resize(inputs.size());
+        outputBuffers.resize(outputs.size());
+        inputPointers.resize(inputs.size());
+        outputPointers.resize(outputs.size());
+        for (std::size_t index = 0; index < inputs.size(); ++index)
+            inputPointers[index].resize(inputs[index].channels);
+        for (std::size_t index = 0; index < outputs.size(); ++index)
+            outputPointers[index].resize(outputs[index].channels);
+    }
+
+    void refreshLatency(ClapPluginInstance& owner)
+    {
+        if (latency != nullptr)
+        {
+            owner.setLatencySamples(static_cast<int>(
+                latency->get(plugin)));
+        }
+    }
+
+    void drainMainThread(ClapPluginInstance& owner)
+    {
+        if (host->callbackRequested.exchange(
+                false,
+                std::memory_order_acq_rel)
+            && plugin->on_main_thread != nullptr)
+        {
+            plugin->on_main_thread(plugin);
+            refreshParameters();
+        }
+
+        const auto restart = host->restartRequested.exchange(
+            false,
+            std::memory_order_acq_rel);
+        const auto portFlags = audioPortRescanFlags.exchange(
+            0,
+            std::memory_order_acq_rel);
+        if (restart)
+        {
+            owner.prepareToPlay(sampleRate, maximumBlockSize);
+            refreshParameters();
+            owner.updateHostDisplay();
+        }
+        else if (portFlags != 0)
+        {
+            owner.updateHostDisplay();
+        }
+        else if (latencyRefreshRequested.exchange(
+                     false,
+                     std::memory_order_acq_rel))
+        {
+            refreshLatency(owner);
+            owner.updateHostDisplay();
+        }
+
+        if (host->processRequested.exchange(
+                false,
+                std::memory_order_acq_rel)
+            && active.load(std::memory_order_acquire))
+        {
+            lifecycleChanging.store(true, std::memory_order_seq_cst);
+            waitForAudioCalls();
+            if (active.load(std::memory_order_acquire)
+                && !processing.load(std::memory_order_acquire))
+            {
+                Host::AudioThreadScope audioThread;
+                processing.store(
+                    plugin->start_processing(plugin),
+                    std::memory_order_release);
+            }
+            lifecycleChanging.store(false, std::memory_order_seq_cst);
+        }
+
+        const auto rescanFlags = parameterRescanFlags.exchange(
+            0,
+            std::memory_order_acq_rel);
+        if ((rescanFlags & CLAP_PARAM_RESCAN_VALUES) != 0)
+            refreshParameters();
+
+        if (flushRequested.load(std::memory_order_acquire)
+            || hasDirtyParameters())
+        {
+            flushParameters(false);
+        }
+    }
+
     std::shared_ptr<Module> module;
     std::unique_ptr<Host> host;
     const clap_plugin_t* plugin = nullptr;
@@ -447,12 +812,25 @@ public:
     std::vector<Port> outputs;
     std::vector<Parameter*> parameters;
     juce::AudioBuffer<float> inputScratch;
+    std::vector<clap_audio_buffer_t> inputBuffers;
+    std::vector<clap_audio_buffer_t> outputBuffers;
+    std::vector<std::vector<float*>> inputPointers;
+    std::vector<std::vector<float*>> outputPointers;
     InputEvents inputEvents;
     OutputEvents outputEvents;
-    bool active = false;
-    bool processing = false;
+    std::atomic<bool> active { false };
+    std::atomic<bool> processing { false };
     double sampleRate = 48000.0;
+    int maximumBlockSize = 512;
     std::int64_t steadyTime = 0;
+    std::atomic<bool> lifecycleChanging { false };
+    std::atomic<int> processCallsInFlight { 0 };
+    std::atomic<bool> flushRequested { false };
+    std::atomic<std::uint32_t> parameterRescanFlags { 0 };
+    std::atomic<std::uint32_t> audioPortRescanFlags { 0 };
+    std::atomic<bool> latencyRefreshRequested { false };
+    std::atomic<bool> stateDirty { false };
+    std::atomic<double> lastProcessTimeMilliseconds { 0.0 };
 };
 
 juce::AudioProcessor::BusesProperties ClapPluginInstance::busesFor(
@@ -472,6 +850,30 @@ std::unique_ptr<ClapPluginInstance> ClapPluginInstance::create(
     int blockSize,
     juce::String& error)
 {
+    const auto* messages =
+        juce::MessageManager::getInstanceWithoutCreating();
+    if (messages != nullptr && !messages->isThisTheMessageThread())
+    {
+        auto created = juce::MessageManager::callSync(
+            [&description, sampleRate, blockSize, &error]
+            {
+                return ClapPluginInstance::create(
+                    description,
+                    sampleRate,
+                    blockSize,
+                    error);
+            });
+        if (created.has_value())
+            return std::move(*created);
+        error = "The CLAP main thread is unavailable.";
+        return {};
+    }
+    if (messages == nullptr)
+    {
+        error = "CLAP hosting requires an initialized message thread.";
+        return {};
+    }
+
     auto implementation = Impl::create(description, error);
     if (implementation == nullptr)
         return {};
@@ -490,8 +892,12 @@ ClapPluginInstance::ClapPluginInstance(
     : juce::AudioPluginInstance(buses),
       impl(std::move(implementation))
 {
+    impl->prepareAudioBuffers();
     if (impl->params == nullptr)
+    {
+        startTimerHz(50);
         return;
+    }
     const auto count = impl->params->count(impl->plugin);
     for (std::uint32_t index = 0; index < count; ++index)
     {
@@ -505,10 +911,13 @@ ClapPluginInstance::ClapPluginInstance(
         impl->parameters.push_back(parameter.get());
         addHostedParameter(std::move(parameter));
     }
+    impl->inputEvents.values.resize(impl->parameters.size());
+    startTimerHz(50);
 }
 
 ClapPluginInstance::~ClapPluginInstance()
 {
+    stopTimer();
     releaseResources();
 }
 
@@ -519,94 +928,131 @@ const juce::String ClapPluginInstance::getName() const
 
 void ClapPluginInstance::prepareToPlay(double sampleRate, int maximumBlockSize)
 {
-    releaseResources();
-    impl->sampleRate = sampleRate;
-    impl->inputScratch.setSize(
-        std::max(1, getTotalNumInputChannels()),
-        std::max(1, maximumBlockSize),
-        false,
-        true,
-        false);
-    impl->inputScratch.clear();
-    if (!impl->plugin->activate(impl->plugin,
-                                sampleRate,
-                                1,
-                                static_cast<std::uint32_t>(
-                                    std::max(1, maximumBlockSize))))
-        return;
-    impl->active = true;
-    impl->processing = impl->plugin->start_processing(impl->plugin);
-    if (impl->latency != nullptr)
-        setLatencySamples(static_cast<int>(
-            impl->latency->get(impl->plugin)));
+    const auto activate = [this,
+                           sampleRate,
+                           blockSize = std::max(1, maximumBlockSize)]
+    {
+        impl->lifecycleChanging.store(true, std::memory_order_seq_cst);
+        impl->waitForAudioCalls();
+        impl->stopProcessingOnAudioThread();
+        if (impl->active.exchange(false, std::memory_order_acq_rel))
+            impl->plugin->deactivate(impl->plugin);
+        impl->sampleRate = sampleRate;
+        impl->maximumBlockSize = blockSize;
+        impl->inputScratch.setSize(
+            std::max(1, getTotalNumInputChannels()),
+            impl->maximumBlockSize,
+            false,
+            true,
+            false);
+        impl->inputScratch.clear();
+        impl->steadyTime = 0;
+        if (impl->plugin->activate(
+                impl->plugin,
+                impl->sampleRate,
+                1,
+                static_cast<std::uint32_t>(
+                    impl->maximumBlockSize)))
+        {
+            impl->active.store(true, std::memory_order_release);
+            impl->host->processRequested.store(
+                true,
+                std::memory_order_release);
+            impl->refreshLatency(*this);
+        }
+        impl->lifecycleChanging.store(false, std::memory_order_seq_cst);
+    };
+    const auto* messages =
+        juce::MessageManager::getInstanceWithoutCreating();
+    if (messages != nullptr && messages->isThisTheMessageThread())
+        activate();
+    else if (!juce::MessageManager::callSync(
+                  [activate]
+                  {
+                      activate();
+                  }))
+        juce::Logger::writeToLog(
+            "clap.lifecycle: activation main thread unavailable");
 }
 
 void ClapPluginInstance::releaseResources()
 {
     if (impl == nullptr || impl->plugin == nullptr)
         return;
-    if (impl->processing)
+    const auto deactivate = [this]
     {
-        impl->plugin->stop_processing(impl->plugin);
-        impl->processing = false;
-    }
-    if (impl->active)
-    {
-        impl->plugin->deactivate(impl->plugin);
-        impl->active = false;
-    }
+        impl->lifecycleChanging.store(true, std::memory_order_seq_cst);
+        impl->waitForAudioCalls();
+        impl->stopProcessingOnAudioThread();
+        if (impl->active.exchange(false, std::memory_order_acq_rel))
+            impl->plugin->deactivate(impl->plugin);
+        impl->lifecycleChanging.store(false, std::memory_order_seq_cst);
+    };
+    const auto* messages =
+        juce::MessageManager::getInstanceWithoutCreating();
+    if (messages == nullptr || messages->isThisTheMessageThread())
+        deactivate();
+    else if (!juce::MessageManager::callSync(
+                  [deactivate]
+                  {
+                      deactivate();
+                  }))
+        juce::Logger::writeToLog(
+            "clap.lifecycle: deactivation main thread unavailable");
 }
 
 void ClapPluginInstance::processBlock(juce::AudioBuffer<float>& audio,
                                       juce::MidiBuffer&)
 {
     juce::ScopedNoDenormals noDenormals;
-    if (!impl->active || !impl->processing)
+    if (impl->lifecycleChanging.load(std::memory_order_seq_cst))
+    {
+        audio.clear();
+        return;
+    }
+    impl->processCallsInFlight.fetch_add(1, std::memory_order_seq_cst);
+    struct ProcessScope
+    {
+        ~ProcessScope()
+        {
+            count.fetch_sub(1, std::memory_order_seq_cst);
+        }
+        std::atomic<int>& count;
+    } processScope { impl->processCallsInFlight };
+    if (impl->lifecycleChanging.load(std::memory_order_seq_cst)
+        || !impl->active.load(std::memory_order_acquire))
     {
         audio.clear();
         return;
     }
 
-    impl->inputEvents.count = static_cast<std::uint32_t>(
-        std::min<std::size_t>(impl->parameters.size(),
-                              impl->inputEvents.values.size()));
-    for (std::uint32_t index = 0;
-         index < impl->inputEvents.count;
-         ++index)
+    Impl::Host::AudioThreadScope audioThread;
+    impl->lastProcessTimeMilliseconds.store(
+        juce::Time::getMillisecondCounterHiRes(),
+        std::memory_order_release);
+    if (!impl->processing.load(std::memory_order_acquire))
     {
-        const auto* parameter = impl->parameters[index];
-        auto& event = impl->inputEvents.values[index];
-        event = {};
-        event.header.size = sizeof(event);
-        event.header.time = 0;
-        event.header.space_id = CLAP_CORE_EVENT_SPACE_ID;
-        event.header.type = CLAP_EVENT_PARAM_VALUE;
-        event.param_id = parameter->info.id;
-        event.cookie = parameter->info.cookie;
-        event.note_id = -1;
-        event.port_index = -1;
-        event.channel = -1;
-        event.key = -1;
-        event.value = parameter->plain();
+        impl->host->processRequested.store(
+            false,
+            std::memory_order_release);
+        if (!impl->plugin->start_processing(impl->plugin))
+        {
+            audio.clear();
+            return;
+        }
+        impl->processing.store(true, std::memory_order_release);
     }
+    impl->buildDirtyParameterEvents();
 
-    std::array<clap_audio_buffer_t, 16> inputBuffers {};
-    std::array<clap_audio_buffer_t, 16> outputBuffers {};
-    std::array<std::array<float*, 16>, 16> inputPointers {};
-    std::array<std::array<float*, 16>, 16> outputPointers {};
-    const auto inputCount = std::min<std::size_t>(
-        impl->inputs.size(),
-        inputBuffers.size());
-    const auto outputCount = std::min<std::size_t>(
-        impl->outputs.size(),
-        outputBuffers.size());
+    const auto inputCount = impl->inputs.size();
+    const auto outputCount = impl->outputs.size();
 
     auto scratchChannel = 0;
     for (std::size_t bus = 0; bus < inputCount; ++bus)
     {
-        const auto channels = std::min<int>(
+        const auto channels = std::min(
             getChannelCountOfBus(true, static_cast<int>(bus)),
-            static_cast<int>(inputPointers[bus].size()));
+            static_cast<int>(impl->inputPointers[bus].size()));
         const auto inputId = impl->inputs[bus].id;
         const auto inPlacePair = impl->inputs[bus].inPlacePair;
         const auto pairedOutput = inPlacePair
@@ -630,7 +1076,7 @@ void ClapPluginInstance::processBlock(juce::AudioBuffer<float>& audio,
                 channel);
             if (canProcessInPlace)
             {
-                inputPointers[bus][static_cast<std::size_t>(channel)] =
+                impl->inputPointers[bus][static_cast<std::size_t>(channel)] =
                     audio.getWritePointer(bufferChannel);
             }
             else
@@ -642,14 +1088,14 @@ void ClapPluginInstance::processBlock(juce::AudioBuffer<float>& audio,
                     bufferChannel,
                     0,
                     audio.getNumSamples());
-                inputPointers[bus][static_cast<std::size_t>(channel)] =
+                impl->inputPointers[bus][static_cast<std::size_t>(channel)] =
                     impl->inputScratch.getWritePointer(
                         scratchChannel + channel);
             }
         }
         scratchChannel += channels;
-        inputBuffers[bus] = {
-            inputPointers[bus].data(),
+        impl->inputBuffers[bus] = {
+            impl->inputPointers[bus].data(),
             nullptr,
             static_cast<std::uint32_t>(channels),
             0,
@@ -658,20 +1104,20 @@ void ClapPluginInstance::processBlock(juce::AudioBuffer<float>& audio,
     }
     for (std::size_t bus = 0; bus < outputCount; ++bus)
     {
-        const auto channels = std::min<int>(
+        const auto channels = std::min(
             getChannelCountOfBus(false, static_cast<int>(bus)),
-            static_cast<int>(outputPointers[bus].size()));
+            static_cast<int>(impl->outputPointers[bus].size()));
         for (int channel = 0; channel < channels; ++channel)
         {
             const auto bufferChannel = getChannelIndexInProcessBlockBuffer(
                 false,
                 static_cast<int>(bus),
                 channel);
-            outputPointers[bus][static_cast<std::size_t>(channel)] =
+            impl->outputPointers[bus][static_cast<std::size_t>(channel)] =
                 audio.getWritePointer(bufferChannel);
         }
-        outputBuffers[bus] = {
-            outputPointers[bus].data(),
+        impl->outputBuffers[bus] = {
+            impl->outputPointers[bus].data(),
             nullptr,
             static_cast<std::uint32_t>(channels),
             0,
@@ -683,8 +1129,8 @@ void ClapPluginInstance::processBlock(juce::AudioBuffer<float>& audio,
         impl->steadyTime,
         static_cast<std::uint32_t>(audio.getNumSamples()),
         nullptr,
-        inputBuffers.data(),
-        outputBuffers.data(),
+        impl->inputBuffers.data(),
+        impl->outputBuffers.data(),
         static_cast<std::uint32_t>(inputCount),
         static_cast<std::uint32_t>(outputCount),
         &impl->inputEvents.interface,
@@ -694,13 +1140,29 @@ void ClapPluginInstance::processBlock(juce::AudioBuffer<float>& audio,
     impl->steadyTime += audio.getNumSamples();
     if (status == CLAP_PROCESS_ERROR)
         audio.clear();
+    else if (status == CLAP_PROCESS_SLEEP)
+    {
+        impl->plugin->stop_processing(impl->plugin);
+        impl->processing.store(false, std::memory_order_release);
+    }
 }
 
 double ClapPluginInstance::getTailLengthSeconds() const
 {
     if (impl->tail == nullptr)
         return 0.0;
-    const auto samples = impl->tail->get(impl->plugin);
+    const auto query = [this]
+    {
+        return impl->tail->get(impl->plugin);
+    };
+    auto samples = std::uint32_t {};
+    const auto* messages =
+        juce::MessageManager::getInstanceWithoutCreating();
+    if (messages != nullptr && messages->isThisTheMessageThread())
+        samples = query();
+    else if (auto result = juce::MessageManager::callSync(query);
+             result.has_value())
+        samples = *result;
     if (samples >= static_cast<std::uint32_t>(INT32_MAX))
         return std::numeric_limits<double>::infinity();
     return static_cast<double>(samples) / impl->sampleRate;
@@ -755,46 +1217,92 @@ void ClapPluginInstance::getStateInformation(
     destination.reset();
     if (impl->state == nullptr)
         return;
-    juce::MemoryOutputStream output(destination, true);
-    clap_ostream_t stream {
-        &output,
-        [](const clap_ostream_t* value,
-           const void* data,
-           std::uint64_t size) -> std::int64_t
-        {
-            auto* target = static_cast<juce::MemoryOutputStream*>(
-                value->ctx);
-            return target->write(data, static_cast<std::size_t>(size))
-                ? static_cast<std::int64_t>(size)
-                : -1;
-        }
+    const auto save = [this, &destination]
+    {
+        impl->flushParameters(true);
+        juce::MemoryOutputStream output(destination, true);
+        clap_ostream_t stream {
+            &output,
+            [](const clap_ostream_t* value,
+               const void* data,
+               std::uint64_t size) -> std::int64_t
+            {
+                auto* target = static_cast<juce::MemoryOutputStream*>(
+                    value->ctx);
+                return target->write(
+                           data,
+                           static_cast<std::size_t>(size))
+                    ? static_cast<std::int64_t>(size)
+                    : -1;
+            }
+        };
+        impl->state->save(impl->plugin, &stream);
+        impl->stateDirty.store(false, std::memory_order_release);
     };
-    impl->state->save(impl->plugin, &stream);
+    const auto* messages =
+        juce::MessageManager::getInstanceWithoutCreating();
+    if (messages != nullptr && messages->isThisTheMessageThread())
+        save();
+    else if (!juce::MessageManager::callSync(save))
+        juce::Logger::writeToLog(
+            "clap.state: save main thread unavailable");
 }
 
 void ClapPluginInstance::setStateInformation(const void* data, int size)
 {
     if (impl->state == nullptr || data == nullptr || size <= 0)
         return;
-    juce::MemoryInputStream input(data, static_cast<std::size_t>(size), false);
-    clap_istream_t stream {
-        &input,
-        [](const clap_istream_t* value,
-           void* destination,
-           std::uint64_t bytes) -> std::int64_t
+    const auto load = [this, data, size]
+    {
+        impl->lifecycleChanging.store(true, std::memory_order_seq_cst);
+        impl->waitForAudioCalls();
+        juce::MemoryInputStream input(
+            data,
+            static_cast<std::size_t>(size),
+            false);
+        clap_istream_t stream {
+            &input,
+            [](const clap_istream_t* value,
+               void* destination,
+               std::uint64_t bytes) -> std::int64_t
+            {
+                auto* source =
+                    static_cast<juce::MemoryInputStream*>(
+                        value->ctx);
+                const auto requested = static_cast<int>(
+                    std::min<std::uint64_t>(
+                        bytes,
+                        static_cast<std::uint64_t>(INT_MAX)));
+                return static_cast<std::int64_t>(
+                    source->read(destination, requested));
+            }
+        };
+        if (impl->state->load(impl->plugin, &stream))
         {
-            auto* source = static_cast<juce::MemoryInputStream*>(
-                value->ctx);
-            const auto requested = static_cast<int>(
-                std::min<std::uint64_t>(bytes,
-                                        static_cast<std::uint64_t>(INT_MAX)));
-            return static_cast<std::int64_t>(
-                source->read(destination, requested));
+            impl->refreshParameters();
+            if (impl->active.load(std::memory_order_acquire))
+            {
+                Impl::Host::AudioThreadScope audioThread;
+                impl->plugin->reset(impl->plugin);
+            }
+            impl->steadyTime = 0;
+            impl->stateDirty.store(false, std::memory_order_release);
         }
+        impl->lifecycleChanging.store(false, std::memory_order_seq_cst);
     };
-    if (impl->state->load(impl->plugin, &stream))
-        for (auto* parameter : impl->parameters)
-            parameter->refresh();
+    const auto* messages =
+        juce::MessageManager::getInstanceWithoutCreating();
+    if (messages != nullptr && messages->isThisTheMessageThread())
+        load();
+    else if (!juce::MessageManager::callSync(load))
+        juce::Logger::writeToLog(
+            "clap.state: load main thread unavailable");
+}
+
+void ClapPluginInstance::timerCallback()
+{
+    if (impl != nullptr && impl->plugin != nullptr)
+        impl->drainMainThread(*this);
 }
 
 void ClapPluginInstance::fillInPluginDescription(
