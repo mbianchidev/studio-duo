@@ -1,9 +1,11 @@
 #pragma once
 
 #include <juce_audio_processors/juce_audio_processors.h>
+#include <juce_dsp/juce_dsp.h>
 
 #include <array>
 #include <atomic>
+#include <memory>
 
 namespace studio
 {
@@ -118,14 +120,24 @@ private:
     std::array<Biquad, 2> equalizerFilters;
     std::array<float, 2> compressorEnvelope { 1.0f, 1.0f };
     std::array<float, 2> gateEnvelope {};
-    std::array<float, 2> limiterPrevious {};
     std::array<float, 2> limiterGain { 1.0f, 1.0f };
+    std::unique_ptr<juce::dsp::Oversampling<float>> limiterOversampling;
     juce::AudioBuffer<float> delayBuffer;
     int delayWritePosition = 0;
     juce::Reverb reverb;
     double generatorPhase = 0.0;
     std::uint32_t randomState = 0x6d2b79f5u;
     std::array<float, 2> pinkState {};
+    static constexpr int tunerHistorySize = 4096;
+    static constexpr int tunerDownsampleFactor = 4;
+    std::array<float, tunerHistorySize> tunerHistory {};
+    std::array<float, tunerHistorySize> tunerAnalysis {};
+    std::array<float, tunerHistorySize / 2> tunerCorrelation {};
+    int tunerWritePosition = 0;
+    int tunerSamplesAvailable = 0;
+    int tunerSamplesSinceAnalysis = 0;
+    int tunerDecimationCount = 0;
+    float tunerDecimationSum = 0.0f;
     std::atomic<double> detectedFrequency { 0.0 };
 };
 }

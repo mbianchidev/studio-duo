@@ -130,6 +130,35 @@ void deviceTests()
                     - secondHalf.getSample(0, 0))
                < 0.0001f,
            "Limiter release state is independent of host block boundaries.");
+    auto samplePeakLimiter =
+        studio::DeviceRegistry::create("studio.device.limiter");
+    auto truePeakLimiter =
+        studio::DeviceRegistry::create("studio.device.limiter");
+    samplePeakLimiter->prepareToPlay(48000.0, 256);
+    truePeakLimiter->prepareToPlay(48000.0, 256);
+    setParameter(*samplePeakLimiter, "truePeak", 0.0f);
+    juce::AudioBuffer<float> samplePeakSignal(2, 256);
+    juce::AudioBuffer<float> truePeakSignal(2, 256);
+    for (int channel = 0; channel < 2; ++channel)
+    {
+        for (int sample = 0; sample < 256; ++sample)
+        {
+            const auto value = static_cast<float>(
+                std::sin(
+                    juce::MathConstants<double>::twoPi
+                        * 12000.0
+                        * static_cast<double>(sample)
+                        / 48000.0
+                    + juce::MathConstants<double>::pi * 0.25));
+            samplePeakSignal.setSample(channel, sample, value);
+            truePeakSignal.setSample(channel, sample, value);
+        }
+    }
+    samplePeakLimiter->processBlock(samplePeakSignal, midi);
+    truePeakLimiter->processBlock(truePeakSignal, midi);
+    expect(truePeakSignal.getMagnitude(0, 32, 192)
+               < samplePeakSignal.getMagnitude(0, 32, 192) - 0.01f,
+           "True-peak detection catches inter-sample peaks hidden below the sample ceiling.");
 
     auto equalizer = studio::DeviceRegistry::create("studio.device.eq");
     equalizer->prepareToPlay(48000.0, 256);
@@ -190,6 +219,26 @@ void deviceTests()
                     - 440.0)
                < 5.0,
            "Tuner detects a 440 Hz test tone.");
+    tuner->reset();
+    juce::AudioBuffer<float> lowTunerAudio(2, 256);
+    auto lowPhase = 0.0;
+    for (int block = 0; block < 40; ++block)
+    {
+        for (int sample = 0; sample < lowTunerAudio.getNumSamples(); ++sample)
+        {
+            const auto signal = static_cast<float>(std::sin(lowPhase));
+            lowPhase += juce::MathConstants<double>::twoPi
+                * 82.406889
+                / 48000.0;
+            lowTunerAudio.setSample(0, sample, signal);
+            lowTunerAudio.setSample(1, sample, signal);
+        }
+        tuner->processBlock(lowTunerAudio, midi);
+    }
+    expect(std::abs(studio::DeviceRegistry::meterValue(*tuner, "frequency")
+                    - 82.406889)
+               < 2.0,
+           "Tuner detects guitar low E across small host blocks.");
 
     juce::MemoryBlock state;
     compressor->getStateInformation(state);

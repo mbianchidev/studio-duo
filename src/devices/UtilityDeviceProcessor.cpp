@@ -143,6 +143,19 @@ void UtilityDeviceProcessor::prepareToPlay(double sampleRate,
         false,
         true,
         false);
+    if (type == UtilityDeviceType::limiter)
+    {
+        limiterOversampling =
+            std::make_unique<juce::dsp::Oversampling<float>>(
+                2,
+                2,
+                juce::dsp::Oversampling<float>::
+                    filterHalfBandPolyphaseIIR,
+                true);
+        limiterOversampling->initProcessing(
+            static_cast<std::size_t>(
+                std::max(1, maximumBlockSize)));
+    }
     reset();
     reverb.setSampleRate(sampleRate);
 }
@@ -157,14 +170,23 @@ void UtilityDeviceProcessor::reset()
         filter.reset();
     compressorEnvelope.fill(1.0f);
     gateEnvelope.fill(0.0f);
-    limiterPrevious.fill(0.0f);
     limiterGain.fill(1.0f);
+    if (limiterOversampling != nullptr)
+        limiterOversampling->reset();
     delayBuffer.clear();
     delayWritePosition = 0;
     reverb.reset();
     generatorPhase = 0.0;
     randomState = 0x6d2b79f5u;
     pinkState.fill(0.0f);
+    tunerHistory.fill(0.0f);
+    tunerAnalysis.fill(0.0f);
+    tunerCorrelation.fill(0.0f);
+    tunerWritePosition = 0;
+    tunerSamplesAvailable = 0;
+    tunerSamplesSinceAnalysis = 0;
+    tunerDecimationCount = 0;
+    tunerDecimationSum = 0.0f;
     detectedFrequency.store(0.0, std::memory_order_relaxed);
 }
 
@@ -327,24 +349,46 @@ void UtilityDeviceProcessor::processLimiter(
         juce::Decibels::decibelsToGain(parameter(ParameterSlot::ceiling));
     const auto release = coefficient(parameter(ParameterSlot::release), currentSampleRate);
     const auto truePeak = parameter(ParameterSlot::truePeak) >= 0.5f;
+    juce::dsp::AudioBlock<float> oversampled;
+    auto oversamplingFactor = std::size_t { 1 };
+    if (truePeak && limiterOversampling != nullptr)
+    {
+        auto inputBlock = juce::dsp::AudioBlock<float>(audio)
+                              .getSubsetChannelBlock(
+                                  0,
+                                  static_cast<std::size_t>(
+                                      std::min(2, audio.getNumChannels())));
+        oversampled =
+            limiterOversampling->processSamplesUp(inputBlock);
+        oversamplingFactor =
+            limiterOversampling->getOversamplingFactor();
+    }
+    else if (limiterOversampling != nullptr)
+    {
+        limiterOversampling->reset();
+    }
     for (int channel = 0; channel < std::min(2, audio.getNumChannels()); ++channel)
     {
         auto gain = limiterGain[static_cast<std::size_t>(channel)];
         auto* samples = audio.getWritePointer(channel);
-        auto previous = limiterPrevious[static_cast<std::size_t>(channel)];
         for (int sample = 0; sample < audio.getNumSamples(); ++sample)
         {
             const auto current = samples[sample];
             auto peak = std::abs(current);
-            if (truePeak)
+            if (truePeak && oversampled.getNumChannels() > 0)
             {
-                for (int step = 1; step < 4; ++step)
+                const auto first = static_cast<std::size_t>(sample)
+                    * oversamplingFactor;
+                const auto end = std::min(
+                    first + oversamplingFactor,
+                    oversampled.getNumSamples());
+                for (auto index = first; index < end; ++index)
                 {
-                    const auto interpolated = previous
-                        + (current - previous)
-                            * static_cast<float>(step)
-                            / 4.0f;
-                    peak = std::max(peak, std::abs(interpolated));
+                    peak = std::max(
+                        peak,
+                        std::abs(oversampled.getSample(
+                            channel,
+                            static_cast<int>(index))));
                 }
             }
             const auto target = peak > ceiling && peak > 0.0f
@@ -354,9 +398,7 @@ void UtilityDeviceProcessor::processLimiter(
                 ? target
                 : 1.0f + release * (gain - 1.0f);
             samples[sample] = current * gain;
-            previous = current;
         }
-        limiterPrevious[static_cast<std::size_t>(channel)] = previous;
         limiterGain[static_cast<std::size_t>(channel)] = gain;
     }
 }
@@ -427,30 +469,160 @@ void UtilityDeviceProcessor::processDelay(
 void UtilityDeviceProcessor::processTuner(
     const juce::AudioBuffer<float>& audio) noexcept
 {
-    if (audio.getNumChannels() == 0 || audio.getNumSamples() < 64)
+    if (audio.getNumChannels() == 0)
         return;
-    const auto* samples = audio.getReadPointer(0);
-    const auto minimumLag = static_cast<int>(currentSampleRate / 2000.0);
-    const auto maximumLag = std::min(
-        audio.getNumSamples() / 2,
-        static_cast<int>(currentSampleRate / 50.0));
-    auto bestLag = 0;
-    auto bestCorrelation = 0.0;
+
+    for (int sample = 0; sample < audio.getNumSamples(); ++sample)
+    {
+        auto mono = 0.0f;
+        for (int channel = 0;
+             channel < std::min(2, audio.getNumChannels());
+             ++channel)
+        {
+            mono += audio.getSample(channel, sample);
+        }
+        mono /= static_cast<float>(
+            std::min(2, audio.getNumChannels()));
+        tunerDecimationSum += mono;
+        ++tunerDecimationCount;
+        if (tunerDecimationCount < tunerDownsampleFactor)
+            continue;
+
+        tunerHistory[static_cast<std::size_t>(
+            tunerWritePosition)] =
+            tunerDecimationSum
+            / static_cast<float>(tunerDownsampleFactor);
+        tunerWritePosition =
+            (tunerWritePosition + 1) % tunerHistorySize;
+        tunerSamplesAvailable = std::min(
+            tunerHistorySize,
+            tunerSamplesAvailable + 1);
+        ++tunerSamplesSinceAnalysis;
+        tunerDecimationCount = 0;
+        tunerDecimationSum = 0.0f;
+    }
+
+    const auto analysisRate =
+        currentSampleRate
+        / static_cast<double>(tunerDownsampleFactor);
+    const auto maximumLag = std::min({
+        tunerSamplesAvailable / 2,
+        static_cast<int>(analysisRate / 24.0),
+        static_cast<int>(tunerCorrelation.size()) - 1
+    });
+    const auto minimumLag = std::max(
+        2,
+        static_cast<int>(analysisRate / 2000.0));
+    if (maximumLag <= minimumLag
+        || tunerSamplesAvailable < maximumLag * 2
+        || (tunerSamplesSinceAnalysis < 256
+            && detectedFrequency.load(std::memory_order_relaxed)
+                > 0.0))
+    {
+        return;
+    }
+    tunerSamplesSinceAnalysis = 0;
+
+    const auto oldest = tunerSamplesAvailable == tunerHistorySize
+        ? tunerWritePosition
+        : 0;
+    auto mean = 0.0;
+    for (int index = 0; index < tunerSamplesAvailable; ++index)
+    {
+        const auto value = tunerHistory[static_cast<std::size_t>(
+            (oldest + index) % tunerHistorySize)];
+        tunerAnalysis[static_cast<std::size_t>(index)] = value;
+        mean += value;
+    }
+    mean /= static_cast<double>(tunerSamplesAvailable);
+    auto energy = 0.0;
+    for (int index = 0; index < tunerSamplesAvailable; ++index)
+    {
+        auto& value = tunerAnalysis[static_cast<std::size_t>(index)];
+        value -= static_cast<float>(mean);
+        energy += static_cast<double>(value) * value;
+    }
+    if (energy < 0.000001)
+    {
+        detectedFrequency.store(0.0, std::memory_order_relaxed);
+        return;
+    }
+
     for (int lag = minimumLag; lag <= maximumLag; ++lag)
     {
         auto correlation = 0.0;
-        for (int sample = 0;
-             sample + lag < audio.getNumSamples();
-             ++sample)
-            correlation += samples[sample] * samples[sample + lag];
-        if (correlation > bestCorrelation)
+        auto firstEnergy = 0.0;
+        auto secondEnergy = 0.0;
+        const auto count = tunerSamplesAvailable - lag;
+        for (int index = 0; index < count; ++index)
         {
-            bestCorrelation = correlation;
+            const auto first =
+                tunerAnalysis[static_cast<std::size_t>(index)];
+            const auto second = tunerAnalysis[static_cast<std::size_t>(
+                index + lag)];
+            correlation += static_cast<double>(first) * second;
+            firstEnergy += static_cast<double>(first) * first;
+            secondEnergy += static_cast<double>(second) * second;
+        }
+        const auto denominator = firstEnergy + secondEnergy;
+        tunerCorrelation[static_cast<std::size_t>(lag)] =
+            denominator > 0.0
+            ? static_cast<float>(2.0 * correlation / denominator)
+            : 0.0f;
+    }
+
+    auto crossedNegative = false;
+    auto bestLag = 0;
+    for (int lag = minimumLag + 1; lag < maximumLag; ++lag)
+    {
+        const auto score =
+            tunerCorrelation[static_cast<std::size_t>(lag)];
+        crossedNegative = crossedNegative || score < 0.0f;
+        if (!crossedNegative || score < 0.6f)
+            continue;
+        if (score
+                >= tunerCorrelation[static_cast<std::size_t>(lag - 1)]
+            && score
+                > tunerCorrelation[static_cast<std::size_t>(lag + 1)])
+        {
             bestLag = lag;
+            break;
+        }
+    }
+    if (bestLag == 0)
+    {
+        bestLag = minimumLag;
+        for (int lag = minimumLag + 1; lag <= maximumLag; ++lag)
+        {
+            if (tunerCorrelation[static_cast<std::size_t>(lag)]
+                > tunerCorrelation[static_cast<std::size_t>(bestLag)])
+            {
+                bestLag = lag;
+            }
+        }
+    }
+
+    auto refinedLag = static_cast<double>(bestLag);
+    if (bestLag > minimumLag && bestLag < maximumLag)
+    {
+        const auto left = tunerCorrelation[
+            static_cast<std::size_t>(bestLag - 1)];
+        const auto centre = tunerCorrelation[
+            static_cast<std::size_t>(bestLag)];
+        const auto right = tunerCorrelation[
+            static_cast<std::size_t>(bestLag + 1)];
+        const auto curvature = left - 2.0f * centre + right;
+        if (std::abs(curvature) > 0.000001f)
+        {
+            refinedLag += juce::jlimit(
+                -0.5,
+                0.5,
+                0.5 * static_cast<double>(left - right)
+                    / static_cast<double>(curvature));
         }
     }
     detectedFrequency.store(
-        bestLag > 0 ? currentSampleRate / bestLag : 0.0,
+        refinedLag > 0.0 ? analysisRate / refinedLag : 0.0,
         std::memory_order_relaxed);
 }
 

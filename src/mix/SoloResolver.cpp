@@ -120,18 +120,23 @@ std::optional<SoloResolution> SoloResolver::resolve(const Project& project,
         });
 
     SoloResolution resolution;
+    std::vector<juce::String> soloAnchors;
+    std::vector<juce::String> soloSafeTracks;
     for (const auto& track : project.tracks)
     {
         if (!isMixTrack(track))
         {
             if (track.parentTrackId.isNotEmpty() && track.solo)
-                addUnique(resolution.audibleTrackIds, track.parentTrackId);
+                addUnique(soloAnchors, track.parentTrackId);
             continue;
         }
 
-        if (!anySolo || track.solo || track.soloSafe)
+        if (!anySolo)
             addUnique(resolution.audibleTrackIds, track.id);
-
+        else if (track.solo)
+            addUnique(soloAnchors, track.id);
+        if (track.soloSafe)
+            addUnique(soloSafeTracks, track.id);
     }
 
     if (anySolo)
@@ -149,7 +154,7 @@ std::optional<SoloResolution> SoloResolver::resolve(const Project& project,
                     {
                         if (folderId == control.id)
                         {
-                            addUnique(resolution.audibleTrackIds, track.id);
+                            addUnique(soloAnchors, track.id);
                             break;
                         }
                         const auto* folder = project.findTrack(folderId);
@@ -162,10 +167,30 @@ std::optional<SoloResolution> SoloResolver::resolve(const Project& project,
             else if (control.type == TrackType::vca)
             {
                 for (const auto& controlledId : control.controlledTrackIds)
-                    addUnique(resolution.audibleTrackIds, controlledId);
+                    addUnique(soloAnchors, controlledId);
             }
         }
 
+        auto upstream = soloAnchors;
+        for (auto changed = true; changed;)
+        {
+            changed = false;
+            for (const auto& edge : edges)
+            {
+                if (!edge.audible)
+                    continue;
+                if (contains(upstream, edge.destination)
+                    && !contains(upstream, edge.source))
+                {
+                    addUnique(upstream, edge.source);
+                    changed = true;
+                }
+            }
+        }
+
+        resolution.audibleTrackIds = upstream;
+        for (const auto& trackId : soloSafeTracks)
+            addUnique(resolution.audibleTrackIds, trackId);
         for (auto changed = true; changed;)
         {
             changed = false;
@@ -174,15 +199,11 @@ std::optional<SoloResolution> SoloResolver::resolve(const Project& project,
                 if (!edge.audible)
                     continue;
                 if (contains(resolution.audibleTrackIds, edge.source)
-                    && !contains(resolution.audibleTrackIds, edge.destination))
+                    && !contains(resolution.audibleTrackIds,
+                                 edge.destination))
                 {
-                    addUnique(resolution.audibleTrackIds, edge.destination);
-                    changed = true;
-                }
-                if (contains(resolution.audibleTrackIds, edge.destination)
-                    && !contains(resolution.audibleTrackIds, edge.source))
-                {
-                    addUnique(resolution.audibleTrackIds, edge.source);
+                    addUnique(resolution.audibleTrackIds,
+                              edge.destination);
                     changed = true;
                 }
             }

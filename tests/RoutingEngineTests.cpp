@@ -31,6 +31,11 @@ void routingEngineTests()
     send.destination.type = studio::RouteEndpointType::track;
     send.destination.trackId = auxId;
     project.routingConnections.push_back(send);
+    studio::RoutingConnection siblingSend = send;
+    siblingSend.id = juce::Uuid().toString();
+    siblingSend.name = "Sibling send";
+    siblingSend.sourceTrackId = project.tracks[1].id;
+    project.routingConnections.push_back(siblingSend);
 
     juce::String error;
     const auto solo = studio::SoloResolver::resolve(project, error);
@@ -40,7 +45,7 @@ void routingEngineTests()
                && solo->isAudible(auxId)
                && solo->isAudible(safeId)
                && !solo->isAudible(project.tracks[1].id),
-           "Solo keeps routed destinations and solo-safe tracks audible.");
+           "Solo keeps routed destinations and solo-safe tracks audible without unmuting bus siblings.");
 
     project.findTrack(sourceId)->solo = false;
     project.findTrack(auxId)->solo = true;
