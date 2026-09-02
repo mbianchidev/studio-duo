@@ -340,7 +340,7 @@ private:
 
     struct InsertRuntime
     {
-        InsertRuntime() = default;
+        InsertRuntime();
         ~InsertRuntime();
         InsertRuntime(InsertRuntime&&) = default;
         InsertRuntime& operator=(InsertRuntime&&) = default;
@@ -354,8 +354,7 @@ private:
         std::unique_ptr<AraDocumentHost> araDocument;
         juce::AudioBuffer<float> inProcessBuffer;
         juce::MidiBuffer midi;
-        std::array<PluginBridgeParameterEvent,
-                   PluginBridgeSharedState::maxParameterEvents> parameterEvents {};
+        std::vector<PluginBridgeParameterEvent> parameterEvents;
         int parameterEventCount = 0;
         RenderSource::DelayCompensator failureDelay;
     };

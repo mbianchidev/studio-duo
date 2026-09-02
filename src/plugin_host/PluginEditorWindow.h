@@ -10,6 +10,8 @@ namespace studio
 class PluginEditorWindow final : public juce::DocumentWindow
 {
 public:
+    ~PluginEditorWindow() override;
+
     static std::unique_ptr<PluginEditorWindow> create(
         juce::AudioProcessor& processor,
         const juce::String& title,

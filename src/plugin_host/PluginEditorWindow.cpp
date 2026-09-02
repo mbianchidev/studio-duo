@@ -49,6 +49,16 @@ PluginEditorWindow::PluginEditorWindow(
         std::max(160, editor->getHeight()));
 }
 
+PluginEditorWindow::~PluginEditorWindow()
+{
+    if (auto* editor =
+            dynamic_cast<juce::AudioProcessorEditor*>(
+                getContentComponent()))
+    {
+        editor->getAudioProcessor()->editorBeingDeleted(editor);
+    }
+}
+
 void PluginEditorWindow::showEditor()
 {
     setVisible(true);

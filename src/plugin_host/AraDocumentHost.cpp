@@ -291,6 +291,11 @@ class ArchivingController final
     : public ARA::Host::ArchivingControllerInterface
 {
 public:
+    explicit ArchivingController(juce::String documentId)
+        : archiveId(std::move(documentId))
+    {
+    }
+
     using ReaderConverter =
         juce::ARAHostModel::ConversionFunctions<
             juce::MemoryBlock*,
@@ -389,8 +394,11 @@ public:
     ARA::ARAPersistentID getDocumentArchiveID(
         ARA::ARAArchiveReaderHostRef) noexcept override
     {
-        return nullptr;
+        return archiveId.toRawUTF8();
     }
+
+private:
+    juce::String archiveId;
 };
 
 class ContentAccessController final
@@ -1039,7 +1047,10 @@ juce::Result AraDocumentHost::bind(
             ? next->descriptor->name
             : juce::String("Studio Duo Project"),
         std::make_unique<AudioAccessController>(),
-        std::make_unique<ArchivingController>(),
+        std::make_unique<ArchivingController>(
+            next->descriptor->revision.isNotEmpty()
+                ? next->descriptor->revision
+                : juce::String("studio-duo-document")),
         std::make_unique<ContentAccessController>(*next->descriptor),
         std::make_unique<ModelUpdateController>());
     if (next->controller == nullptr)

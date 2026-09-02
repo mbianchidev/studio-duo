@@ -351,6 +351,13 @@ StudioAudioEngine::StudioAudioEngine()
     }
 }
 
+StudioAudioEngine::InsertRuntime::InsertRuntime()
+    : parameterEvents(
+          static_cast<std::size_t>(
+              PluginBridgeSharedState::maxParameterEvents))
+{
+}
+
 StudioAudioEngine::InsertRuntime::~InsertRuntime()
 {
     if (inProcess != nullptr)

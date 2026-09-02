@@ -1162,6 +1162,7 @@ void multitrackRecordingCommand()
 
 int main()
 {
+    juce::ScopedJuceInitialiser_GUI juceInitialiser;
     serializationRoundTrip();
     legacyProjectMigration();
     commandHistory();

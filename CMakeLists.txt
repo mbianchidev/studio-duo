@@ -263,6 +263,8 @@ if(STUDIO_DUO_BUILD_TESTS)
     juce_add_plugin(
         StudioDuoAraFixture
         COMPANY_NAME "Studio Duo"
+        COMPANY_WEBSITE "https://github.com/mbianchidev/studio-duo"
+        COMPANY_EMAIL "opensource@studio-duo.invalid"
         BUNDLE_ID "dev.mbianchi.studioduo.ara-fixture"
         PLUGIN_MANUFACTURER_CODE StDu
         PLUGIN_CODE ArFt

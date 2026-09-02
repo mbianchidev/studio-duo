@@ -489,6 +489,8 @@ PluginValidationReport PluginCompatibilityValidator::validate(
                  editor != nullptr
                      ? "Editor created"
                      : "Editor creation failed");
+        if (editor != nullptr)
+            instance->editorBeingDeleted(editor.get());
     }
     else
     {
