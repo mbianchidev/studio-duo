@@ -224,6 +224,8 @@ private:
     juce::TextButton trackingButton { "TRACKING SETUP" };
     juce::TextButton automationButton { "AUTOMATION" };
 
+    juce::Component inspectorContent;
+    juce::Viewport inspectorViewport;
     juce::Label inspectorName;
     juce::Label inspectorDetails;
     juce::Label inputLabel;

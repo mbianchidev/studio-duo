@@ -967,6 +967,35 @@ MainComponent::MainComponent()
     insertPanel->addKeyListener(this);
     addAndMakeVisible(*insertPanel);
 
+    inspectorViewport.setViewedComponent(&inspectorContent, false);
+    inspectorViewport.setScrollBarsShown(true, false);
+    inspectorViewport.setScrollBarThickness(8);
+    inspectorViewport.setWantsKeyboardFocus(false);
+    addAndMakeVisible(inspectorViewport);
+    for (auto* component : std::array<juce::Component*, 18> {
+             &inspectorName,
+             &inspectorDetails,
+             &inputLabel,
+             &inputSelector,
+             &stereoInputButton,
+             &monitorButton,
+             &outputLabel,
+             &outputSelector,
+             &volumeLabel,
+             &panLabel,
+             &volumeSlider,
+             &panSlider,
+             &muteButton,
+             &soloButton,
+             &armButton,
+             &trackColourButton,
+             routingPanel.get(),
+             insertPanel.get()
+         })
+    {
+        inspectorContent.addAndMakeVisible(*component);
+    }
+
     addAndMakeVisible(statusLabel);
     statusLabel.setColour(juce::Label::textColourId, juce::Colour(StudioColours::secondaryText));
     statusLabel.setJustificationType(juce::Justification::centredLeft);
@@ -1018,6 +1047,7 @@ bool MainComponent::prepareForShutdown()
         audioEngine.stopRecording();
     audioEngine.shutdown();
     timelineViewport.setViewedComponent(nullptr, false);
+    inspectorViewport.setViewedComponent(nullptr, false);
     setLookAndFeel(nullptr);
     return true;
 }
@@ -1096,6 +1126,10 @@ void MainComponent::resized()
 
     statusLabel.setBounds(status.reduced(10, 0));
     mixer->setBounds(mixerBounds);
+    inspectorViewport.setBounds(right.withTrimmedTop(34));
+    inspectorContent.setSize(
+        juce::jmax(1, inspectorViewport.getWidth() - 8),
+        juce::jmax(900, inspectorViewport.getHeight()));
     auto editToolbar = bounds.removeFromTop(38).reduced(7, 4);
     auto zoomControls = editToolbar.removeFromRight(132);
     zoomOutButton.setBounds(zoomControls.removeFromLeft(36).reduced(2));
@@ -1151,7 +1185,7 @@ void MainComponent::resized()
     sessionPanel.removeFromTop(18);
     pluginBrowser->setBounds(sessionPanel);
 
-    auto inspector = right.reduced(16, 42);
+    auto inspector = inspectorContent.getLocalBounds().reduced(16, 8);
     inspectorName.setBounds(inspector.removeFromTop(28));
     inspectorDetails.setBounds(inspector.removeFromTop(24));
     inspector.removeFromTop(12);
@@ -2581,12 +2615,22 @@ void MainComponent::addPluginToSelectedTrack(const PluginCatalogEntry& entry)
                 track->id,
                 replacing,
                 insert)))
+        {
             setStatus(entry.name + " replaced the missing insert.");
+            inspectorViewport.setViewPosition(
+                0,
+                juce::jmax(0, insertPanel->getY() - 16));
+        }
         return;
     }
 
     if (perform(std::make_unique<AddPluginInsertCommand>(track->id, insert)))
+    {
         setStatus(entry.name + " added as a sandboxed insert model.");
+        inspectorViewport.setViewPosition(
+            0,
+            juce::jmax(0, insertPanel->getY() - 16));
+    }
 }
 
 void MainComponent::validatePlugin(const PluginCatalogEntry& entry)
