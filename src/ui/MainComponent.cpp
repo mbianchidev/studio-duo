@@ -1355,27 +1355,37 @@ void MainComponent::timerCallback()
         audioEngine.play();
     }
 
-    auto* device = deviceManager.getCurrentAudioDevice();
-    juce::AudioDeviceManager::AudioDeviceSetup audioSetup;
-    deviceManager.getAudioDeviceSetup(audioSetup);
-    const auto signature = device != nullptr
-        ? audioSetup.inputDeviceName
-            + ":"
-            + device->getInputChannelNames().joinIntoString("|")
-            + ":"
-            + device->getActiveInputChannels().toString(16)
-            + ":"
-            + juce::String(device->getCurrentSampleRate(), 1)
-            + ":"
-            + juce::String(device->getCurrentBufferSizeSamples())
-        : juce::String();
-    if (signature != inputConfigurationSignature)
+    if (++inputConfigurationPollTicks >= 30)
     {
-        inputConfigurationSignature = signature;
-        refreshInputControls();
-        if (const auto result = audioEngine.updateProject(project,
-                                                          pluginRuntimeRequests()); result.failed())
-            setStatus(result.getErrorMessage(), true);
+        inputConfigurationPollTicks = 0;
+        auto* device = deviceManager.getCurrentAudioDevice();
+        juce::AudioDeviceManager::AudioDeviceSetup audioSetup;
+        deviceManager.getAudioDeviceSetup(audioSetup);
+        const auto signature = device != nullptr
+            ? audioSetup.inputDeviceName
+                + ":"
+                + audioSetup.outputDeviceName
+                + ":"
+                + device->getActiveInputChannels().toString(16)
+                + ":"
+                + device->getActiveOutputChannels().toString(16)
+                + ":"
+                + juce::String(device->getCurrentSampleRate(), 1)
+                + ":"
+                + juce::String(device->getCurrentBufferSizeSamples())
+            : juce::String();
+        if (signature != inputConfigurationSignature)
+        {
+            inputConfigurationSignature = signature;
+            refreshInputControls();
+            if (const auto result = audioEngine.updateProject(
+                    project,
+                    pluginRuntimeRequests());
+                result.failed())
+            {
+                setStatus(result.getErrorMessage(), true);
+            }
+        }
     }
 
     const auto catalogRevision = pluginCatalog.revision();

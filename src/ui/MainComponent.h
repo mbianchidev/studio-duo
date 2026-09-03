@@ -193,6 +193,7 @@ private:
     bool tempoEditActive = false;
     ProjectTransportState tempoEditStart;
     juce::String inputConfigurationSignature;
+    int inputConfigurationPollTicks = 29;
     juce::String calibratingReampRouteId;
     std::uint64_t lastRuntimeCatalogRevision = 0;
     juce::String reducedIsolationMarkerSignature;
