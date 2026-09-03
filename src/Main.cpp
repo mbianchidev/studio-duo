@@ -59,6 +59,13 @@ public:
         {
             bridgeSelfTest = std::make_unique<PluginBridgeClient>();
             pluginActivationCatalog = std::make_unique<PluginCatalog>();
+            validationIdentifier = commandLine
+                .fromFirstOccurrenceOf(
+                    "--bridge-plugin-self-test",
+                    false,
+                    false)
+                .trim()
+                .unquoted();
             juce::MessageManager::callAsync([this] { runPluginActivationSelfTest(); });
             return;
         }
@@ -157,9 +164,12 @@ private:
         }
 
         const auto entries = pluginActivationCatalog->entries();
-        const auto candidate = std::find_if(entries.cbegin(), entries.cend(), [](const auto& entry)
+        const auto candidate = std::find_if(entries.cbegin(), entries.cend(), [this](const auto& entry)
         {
-            return !entry.instrument
+            return (validationIdentifier.isEmpty()
+                    || entry.identifier == validationIdentifier
+                    || entry.name.containsIgnoreCase(validationIdentifier))
+                && !entry.instrument
                 && entry.inputChannels > 0
                 && entry.inputChannels <= PluginBridgeSharedState::maxChannels
                 && entry.outputChannels > 0
@@ -191,10 +201,33 @@ private:
         }
 
         juce::AudioBuffer<float> block(2, 512);
-        block.clear();
-        bridgeSelfTest->processBlock(block);
-        juce::Thread::sleep(10);
-        bridgeSelfTest->processBlock(block);
+        auto audioPassed = false;
+        auto phase = 0.0;
+        for (int blockIndex = 0; blockIndex < 32 && !audioPassed; ++blockIndex)
+        {
+            for (int sample = 0; sample < block.getNumSamples(); ++sample)
+            {
+                const auto value = static_cast<float>(
+                    std::sin(phase) * 0.1);
+                phase += juce::MathConstants<double>::twoPi
+                    * 220.0
+                    / 48000.0;
+                for (int channel = 0; channel < block.getNumChannels(); ++channel)
+                    block.setSample(channel, sample, value);
+            }
+            bridgeSelfTest->processBlock(block);
+            for (int channel = 0; channel < block.getNumChannels(); ++channel)
+            {
+                for (int sample = 0; sample < block.getNumSamples(); ++sample)
+                {
+                    const auto value = block.getSample(channel, sample);
+                    audioPassed = audioPassed
+                        || (std::isfinite(value)
+                            && std::abs(value) > 0.000001f);
+                }
+            }
+            juce::Thread::sleep(2);
+        }
         const auto editorResult = bridgeSelfTest->showEditor();
         if (editorResult.wasOk())
             juce::Thread::sleep(50);
@@ -202,6 +235,7 @@ private:
             ? bridgeSelfTest->hideEditor()
             : editorResult;
         const auto passed = bridgeSelfTest->isReady()
+            && audioPassed
             && editorResult.wasOk()
             && hideResult.wasOk();
         if (!passed)
@@ -210,7 +244,10 @@ private:
                 "plugin.bridge.activation-test: "
                 + (editorResult.failed()
                        ? editorResult.getErrorMessage()
-                       : hideResult.getErrorMessage()));
+                       : hideResult.failed()
+                           ? hideResult.getErrorMessage()
+                           : juce::String(
+                               "Sandbox produced no audio.")));
         }
         bridgeSelfTest->stop();
         setApplicationReturnValue(passed ? 0 : 1);

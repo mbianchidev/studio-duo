@@ -27,6 +27,9 @@ void pluginFormatTests()
 #endif
     expect(names.contains("CLAP"),
            "Supported plugin formats include CLAP.");
+    expect(
+        studio::PluginBridgeClient::recoversLateFirstOutputForTesting(),
+        "Sandbox bridges recover the first valid result after a missed deadline.");
     const auto increasedDelay =
         studio::StudioAudioEngine::delayTransitionForTesting(4, 8);
     const auto decreasedDelay =

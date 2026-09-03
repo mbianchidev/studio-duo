@@ -9,6 +9,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <chrono>
+#include <functional>
 #include <mutex>
 #include <span>
 
@@ -47,6 +48,9 @@ public:
     [[nodiscard]] std::vector<PluginParameterDescriptor>
         parameterDescriptors() const;
     [[nodiscard]] juce::String diagnosticState() const;
+#if STUDIO_DUO_TESTING
+    static bool recoversLateFirstOutputForTesting();
+#endif
 
 private:
     void handleMessageFromWorker(const juce::MemoryBlock& message) override;
@@ -103,6 +107,9 @@ private:
     std::mutex responseMutex;
     std::condition_variable responseCondition;
     juce::String responseMessage;
+#if STUDIO_DUO_TESTING
+    std::function<void()> beforeSecondFetchForTesting;
+#endif
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PluginBridgeClient)
 };

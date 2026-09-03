@@ -391,7 +391,14 @@ void PluginBridgeClient::processBlock(
     fetchWorkerOutput();
     writeOutputBlock(audio, expectedSequence);
 
+#if STUDIO_DUO_TESTING
+    if (beforeSecondFetchForTesting)
+        beforeSecondFetchForTesting();
+#endif
     fetchWorkerOutput();
+    if (expectedSequence >= 0
+        && completedSequence == expectedSequence)
+        writeOutputBlock(audio, expectedSequence);
     if (inFlightSequence < 0
         && sharedState->workerSequence.load(std::memory_order_acquire)
             == sharedState->hostSequence.load(std::memory_order_relaxed))
@@ -414,7 +421,7 @@ void PluginBridgeClient::fetchWorkerOutput() noexcept
     const auto outputSize = std::min(
         static_cast<int>(sharedState->numSamples.load(std::memory_order_relaxed)),
         processingBlockSize);
-    if (inFlightSequence >= 0 && !inFlightMissedDeadline)
+    if (inFlightSequence >= 0)
     {
         for (int channel = 0; channel < PluginBridgeSharedState::maxChannels; ++channel)
         {
@@ -438,6 +445,72 @@ void PluginBridgeClient::fetchWorkerOutput() noexcept
     inFlightMissedDeadline = false;
     lastOutputSequence = workerSequence;
 }
+
+#if STUDIO_DUO_TESTING
+bool PluginBridgeClient::recoversLateFirstOutputForTesting()
+{
+    const auto completeWorkerBlock = [](PluginBridgeSharedState& state)
+    {
+        for (int channel = 0; channel < 2; ++channel)
+        {
+            std::copy_n(
+                state.input[static_cast<std::size_t>(channel)].begin(),
+                4,
+                state.output[static_cast<std::size_t>(channel)].begin());
+        }
+        state.numOutputChannels.store(2, std::memory_order_relaxed);
+        state.workerSequence.store(
+            state.hostSequence.load(std::memory_order_relaxed),
+            std::memory_order_release);
+    };
+    const auto initialise = [](PluginBridgeClient& client,
+                               PluginBridgeSharedState& state)
+    {
+        client.sharedState = &state;
+        client.ready.store(true, std::memory_order_release);
+        client.processingBlockSize = 4;
+        juce::AudioBuffer<float> first(2, 4);
+        first.clear();
+        first.addSample(0, 0, 0.25f);
+        first.addSample(1, 0, 0.25f);
+        client.processBlock(first);
+    };
+    const auto recovered = [](const juce::AudioBuffer<float>& audio)
+    {
+        return std::abs(audio.getSample(0, 0) - 0.25f) < 0.0001f
+            && std::abs(audio.getSample(1, 0) - 0.25f) < 0.0001f;
+    };
+
+    PluginBridgeSharedState sameCallbackState;
+    PluginBridgeClient sameCallbackClient;
+    initialise(sameCallbackClient, sameCallbackState);
+    sameCallbackClient.beforeSecondFetchForTesting =
+        [&sameCallbackState, &completeWorkerBlock]
+        {
+            completeWorkerBlock(sameCallbackState);
+        };
+    juce::AudioBuffer<float> sameCallbackOutput(2, 4);
+    sameCallbackOutput.clear();
+    sameCallbackClient.processBlock(sameCallbackOutput);
+    sameCallbackClient.sharedState = nullptr;
+
+    PluginBridgeSharedState laterCallbackState;
+    PluginBridgeClient laterCallbackClient;
+    initialise(laterCallbackClient, laterCallbackState);
+    juce::AudioBuffer<float> missedDeadline(2, 4);
+    missedDeadline.clear();
+    laterCallbackClient.processBlock(missedDeadline);
+    completeWorkerBlock(laterCallbackState);
+    juce::AudioBuffer<float> laterCallbackOutput(2, 4);
+    laterCallbackOutput.clear();
+    laterCallbackClient.processBlock(laterCallbackOutput);
+    laterCallbackClient.sharedState = nullptr;
+
+    return recovered(sameCallbackOutput)
+        && recovered(laterCallbackOutput)
+        && laterCallbackClient.lateBlockCount() > 0;
+}
+#endif
 
 void PluginBridgeClient::publishInputBlock(int samples) noexcept
 {
