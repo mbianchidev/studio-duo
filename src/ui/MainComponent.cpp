@@ -236,6 +236,70 @@ private:
 };
 }
 
+class MainComponent::PanelResizer final : public juce::Component
+{
+public:
+    explicit PanelResizer(bool verticalToUse)
+        : vertical(verticalToUse)
+    {
+        setMouseCursor(vertical
+                           ? juce::MouseCursor::LeftRightResizeCursor
+                           : juce::MouseCursor::UpDownResizeCursor);
+    }
+
+    std::function<void(int)> onDrag;
+    std::function<void()> onDoubleClick;
+
+    void paint(juce::Graphics& graphics) override
+    {
+        graphics.fillAll(juce::Colour(StudioColours::window));
+        graphics.setColour(juce::Colour(
+            isMouseOverOrDragging()
+                ? StudioColours::orange
+                : StudioColours::border));
+        if (vertical)
+            graphics.fillRect(getWidth() / 2, 0, 1, getHeight());
+        else
+            graphics.fillRect(0, getHeight() / 2, getWidth(), 1);
+    }
+
+    void mouseDown(const juce::MouseEvent& event) override
+    {
+        lastScreenPosition = event.getScreenPosition();
+    }
+
+    void mouseDrag(const juce::MouseEvent& event) override
+    {
+        const auto current = event.getScreenPosition();
+        const auto delta = vertical
+            ? current.x - lastScreenPosition.x
+            : current.y - lastScreenPosition.y;
+        lastScreenPosition = current;
+        if (delta != 0 && onDrag)
+            onDrag(delta);
+    }
+
+    void mouseDoubleClick(const juce::MouseEvent&) override
+    {
+        if (onDoubleClick)
+            onDoubleClick();
+    }
+
+    void mouseEnter(const juce::MouseEvent&) override
+    {
+        repaint();
+    }
+
+    void mouseExit(const juce::MouseEvent&) override
+    {
+        repaint();
+    }
+
+private:
+    bool vertical = true;
+    juce::Point<int> lastScreenPosition;
+};
+
 MainComponent::MainComponent()
 {
     setLookAndFeel(&theme);
@@ -249,6 +313,89 @@ MainComponent::MainComponent()
     exportInputBlocker.setInterceptsMouseClicks(true, true);
     exportInputBlocker.setWantsKeyboardFocus(true);
     addChildComponent(exportInputBlocker);
+
+    leftPanelResizer = std::make_unique<PanelResizer>(true);
+    leftPanelResizer->onDrag = [this](int delta)
+    {
+        const auto maximum = juce::jmax(
+            220,
+            getWidth() - inspectorPanelWidth - 480 - 12);
+        leftPanelWidth = juce::jlimit(
+            220,
+            maximum,
+            leftPanelWidth + delta);
+        resized();
+        repaint();
+    };
+    leftPanelResizer->onDoubleClick = [this]
+    {
+        leftPanelWidth = 286;
+        resized();
+        repaint();
+    };
+    addAndMakeVisible(*leftPanelResizer);
+
+    inspectorPanelResizer = std::make_unique<PanelResizer>(true);
+    inspectorPanelResizer->onDrag = [this](int delta)
+    {
+        const auto maximum = juce::jmax(
+            0,
+            getWidth() - leftPanelWidth - 480 - 12);
+        inspectorPanelWidth = juce::jlimit(
+            0,
+            maximum,
+            inspectorPanelWidth - delta);
+        if (inspectorPanelWidth >= 80)
+            lastInspectorPanelWidth = inspectorPanelWidth;
+        resized();
+        repaint();
+    };
+    inspectorPanelResizer->onDoubleClick = [this]
+    {
+        if (inspectorPanelWidth > 0)
+        {
+            lastInspectorPanelWidth = inspectorPanelWidth;
+            inspectorPanelWidth = 0;
+        }
+        else
+        {
+            inspectorPanelWidth = lastInspectorPanelWidth;
+        }
+        resized();
+        repaint();
+    };
+    addAndMakeVisible(*inspectorPanelResizer);
+
+    mixerPanelResizer = std::make_unique<PanelResizer>(false);
+    mixerPanelResizer->onDrag = [this](int delta)
+    {
+        const auto maximum = juce::jmax(
+            0,
+            getHeight() - 76 - 28 - 260 - 6);
+        mixerPanelHeight = juce::jlimit(
+            0,
+            maximum,
+            mixerPanelHeight - delta);
+        if (mixerPanelHeight >= 80)
+            lastMixerPanelHeight = mixerPanelHeight;
+        resized();
+        repaint();
+    };
+    mixerPanelResizer->onDoubleClick = [this]
+    {
+        if (mixerPanelHeight > 0)
+        {
+            lastMixerPanelHeight = mixerPanelHeight;
+            mixerPanelHeight = 0;
+        }
+        else
+        {
+            mixerPanelHeight = lastMixerPanelHeight;
+        }
+        resized();
+        repaint();
+    };
+    addAndMakeVisible(*mixerPanelResizer);
 
     const auto configureButton = [this](juce::Button& button, const juce::String& tooltip)
     {
@@ -1071,21 +1218,36 @@ void MainComponent::paint(juce::Graphics& graphics)
     }
 
     const auto bodyTop = 76;
-    const auto mixerTop = getHeight() - 248;
+    constexpr auto resizerThickness = 6;
+    const auto mixerTop = getHeight() - 28 - mixerPanelHeight;
+    const auto bodyBottom = mixerTop - resizerThickness;
+    const auto inspectorLeft = getWidth() - inspectorPanelWidth;
     graphics.setColour(juce::Colour(StudioColours::panel));
-    graphics.fillRect(0, bodyTop, 286, mixerTop - bodyTop);
-    graphics.fillRect(getWidth() - 250, bodyTop, 250, mixerTop - bodyTop);
-    graphics.setColour(juce::Colour(StudioColours::border));
-    graphics.drawVerticalLine(285, static_cast<float>(bodyTop), static_cast<float>(mixerTop));
-    graphics.drawVerticalLine(getWidth() - 251,
-                              static_cast<float>(bodyTop),
-                              static_cast<float>(mixerTop));
+    graphics.fillRect(0,
+                      bodyTop,
+                      leftPanelWidth,
+                      bodyBottom - bodyTop);
+    if (inspectorPanelWidth > 0)
+    {
+        graphics.fillRect(inspectorLeft,
+                          bodyTop,
+                          inspectorPanelWidth,
+                          bodyBottom - bodyTop);
+    }
     graphics.setColour(juce::Colour(StudioColours::panel));
-    graphics.fillRect(286, bodyTop, getWidth() - 536, 38);
+    graphics.fillRect(leftPanelWidth + resizerThickness,
+                      bodyTop,
+                      getWidth()
+                          - leftPanelWidth
+                          - inspectorPanelWidth
+                          - resizerThickness * 2,
+                      38);
     graphics.setColour(juce::Colour(StudioColours::border));
     graphics.drawHorizontalLine(bodyTop + 37,
-                                286.0f,
-                                static_cast<float>(getWidth() - 250));
+                                static_cast<float>(
+                                    leftPanelWidth + resizerThickness),
+                                static_cast<float>(
+                                    inspectorLeft - resizerThickness));
 
     graphics.setColour(juce::Colour(StudioColours::secondaryText));
     graphics.setFont(10.5f);
@@ -1095,18 +1257,24 @@ void MainComponent::paint(juce::Graphics& graphics)
                       180,
                       18,
                       juce::Justification::centredLeft);
-    graphics.drawText("INSPECTOR",
-                      getWidth() - 234,
-                      bodyTop + 12,
-                      200,
-                      18,
-                      juce::Justification::centredLeft);
-    graphics.drawText("MIXER",
-                      14,
-                      mixerTop + 8,
-                      120,
-                      18,
-                      juce::Justification::centredLeft);
+    if (inspectorPanelWidth > 0)
+    {
+        graphics.drawText("INSPECTOR",
+                          inspectorLeft + 16,
+                          bodyTop + 12,
+                          inspectorPanelWidth - 32,
+                          18,
+                          juce::Justification::centredLeft);
+    }
+    if (mixerPanelHeight > 0)
+    {
+        graphics.drawText("MIXER",
+                          14,
+                          mixerTop + 8,
+                          120,
+                          18,
+                          juce::Justification::centredLeft);
+    }
 
     graphics.setColour(juce::Colour(StudioColours::text));
     graphics.setFont(juce::Font(juce::FontOptions(12.0f, juce::Font::bold)));
@@ -1120,13 +1288,44 @@ void MainComponent::resized()
     auto bounds = getLocalBounds();
     auto header = bounds.removeFromTop(76);
     auto status = bounds.removeFromBottom(28);
-    auto mixerBounds = bounds.removeFromBottom(220);
-    auto left = bounds.removeFromLeft(286);
-    auto right = bounds.removeFromRight(250);
+    constexpr auto resizerThickness = 6;
+    mixerPanelHeight = juce::jlimit(
+        0,
+        juce::jmax(0, bounds.getHeight() - 260 - resizerThickness),
+        mixerPanelHeight);
+    auto mixerBounds = bounds.removeFromBottom(mixerPanelHeight);
+    auto mixerResizerBounds = bounds.removeFromBottom(
+        resizerThickness);
+    const auto maximumLeftWidth = juce::jmax(
+        220,
+        bounds.getWidth() - inspectorPanelWidth - 480
+            - resizerThickness * 2);
+    leftPanelWidth = juce::jlimit(
+        220,
+        maximumLeftWidth,
+        leftPanelWidth);
+    auto left = bounds.removeFromLeft(leftPanelWidth);
+    auto leftResizerBounds = bounds.removeFromLeft(
+        resizerThickness);
+    const auto maximumInspectorWidth = juce::jmax(
+        0,
+        bounds.getWidth() - 480 - resizerThickness);
+    inspectorPanelWidth = juce::jlimit(
+        0,
+        maximumInspectorWidth,
+        inspectorPanelWidth);
+    auto right = bounds.removeFromRight(inspectorPanelWidth);
+    auto inspectorResizerBounds = bounds.removeFromRight(
+        resizerThickness);
 
     statusLabel.setBounds(status.reduced(10, 0));
     mixer->setBounds(mixerBounds);
+    mixer->setVisible(mixerPanelHeight > 0);
+    mixerPanelResizer->setBounds(mixerResizerBounds);
+    leftPanelResizer->setBounds(leftResizerBounds);
+    inspectorPanelResizer->setBounds(inspectorResizerBounds);
     inspectorViewport.setBounds(right.withTrimmedTop(34));
+    inspectorViewport.setVisible(inspectorPanelWidth > 0);
     inspectorContent.setSize(
         juce::jmax(1, inspectorViewport.getWidth() - 8),
         juce::jmax(900, inspectorViewport.getHeight()));

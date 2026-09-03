@@ -149,6 +149,11 @@ The inspector and lower mixer expose gain, pan, mute, and solo. Gain defaults to
 Double-click a fader lane to return to `0.0 dB` or a pan knob to return to
 center.
 
+Drag the vertical dividers to resize the session/catalog sidebar and inspector.
+Drag the horizontal divider above the mixer to change its height. Double-click
+the inspector or mixer divider to collapse that panel to zero and restore its
+previous size.
+
 Double-click a track name in the inspector, timeline, or mixer to edit its name.
 **COLOR** provides palette choices and an HSV/RGB picker. Appearance changes are
 persistent and undoable.

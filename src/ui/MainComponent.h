@@ -33,6 +33,8 @@ public:
     void resized() override;
 
 private:
+    class PanelResizer;
+
     class ExportInputBlocker final : public juce::Component
     {
     public:
@@ -254,6 +256,14 @@ private:
     juce::Viewport timelineViewport;
     TimelineComponent timeline;
     std::unique_ptr<MixerPanel> mixer;
+    std::unique_ptr<PanelResizer> leftPanelResizer;
+    std::unique_ptr<PanelResizer> inspectorPanelResizer;
+    std::unique_ptr<PanelResizer> mixerPanelResizer;
+    int leftPanelWidth = 286;
+    int inspectorPanelWidth = 250;
+    int mixerPanelHeight = 220;
+    int lastInspectorPanelWidth = 250;
+    int lastMixerPanelHeight = 220;
     PluginCatalog pluginCatalog;
     std::unique_ptr<PluginBrowserComponent> pluginBrowser;
     std::unique_ptr<RoutingPanel> routingPanel;
