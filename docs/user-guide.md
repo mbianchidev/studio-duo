@@ -87,7 +87,10 @@ inspector identifies the saved filename and the status bar reports completion.
 Each completed pass creates grouped `v1`, `v2`, `v3`, and later child tracks
 below the recorded parent. The whole multitrack pass is one undoable command.
 Version tracks retain ordinary mute, solo, arm, split, trim, move, and delete
-behavior. Collapse or expand versions from the parent header.
+behavior. New take families stay collapsed by default: the parent row plays the
+active take. Expanding the parent makes every unmuted take lane audible so takes
+can be layered and compared. Parent inserts are inherited by every take and are
+shown as inherited in the take inspector and mixer insert list.
 
 Loop recording writes one continuous synchronized WAV per armed parent and
 creates one version lane per loop pass. Right-click a take clip to choose its
@@ -120,6 +123,12 @@ the beat grid or vertically to another audio track. Drag the left edge to change
 the timeline start and source offset. Drag the right edge to shorten or restore
 the available source range.
 
+Drag the selected clip's top edge vertically to change its gain. Drag either top
+corner horizontally to set fade length and vertically to shape the curve:
+centered is linear, upward is logarithmic, and downward is a sharper
+inverse-exponential shape. Right-click a clip to mute or unmute that individual
+piece without muting its take lane.
+
 Trimmed audio remains visible as a dashed waveform ghost and can be restored.
 After a split, each half keeps independent source boundaries and cannot expand
 through the split point.
@@ -147,7 +156,8 @@ curves remain visible on the clip.
 The inspector and lower mixer expose gain, pan, mute, and solo. Gain defaults to
 `0.0 dB`; pan defaults to `Center`. Drag mixer faders and pan knobs to edit them.
 Double-click a fader lane to return to `0.0 dB` or a pan knob to return to
-center.
+center. Solo is exclusive: selecting a new solo clears the previous solo, and
+clicking the active solo again restores normal playback.
 
 The mixer also contains a scrollable **INSERTS & SENDS** list across all root
 tracks. Click an insert to open its editor or use its **ON/OFF** control to
@@ -212,6 +222,9 @@ insert to open its plugin editor in the worker process; plugins without a native
 editor receive an isolated generic editor. Right-click an insert to open the
 generic parameter editor or choose sandboxed, trusted in-process, or advertised
 ARA 2 mode.
+
+Moving the playhead resets existing plugin processors and queued bridge audio
+in place. Sandboxed workers remain running and ready instead of being rebuilt.
 
 ARA activation requires a saved project, writes a recovery point, and warns
 about reduced crash isolation. Studio Duo registers the track's immutable audio

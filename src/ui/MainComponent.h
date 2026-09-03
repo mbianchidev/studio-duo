@@ -113,12 +113,19 @@ private:
     void setClipPlaybackRate(const juce::String& clipId, double rate);
     void warpClipTransient(const juce::String& clipId, double timelineSeconds);
     void setClipFade(const juce::String& clipId, double timelineSeconds, bool fadeIn);
+    void setClipGain(const juce::String& clipId, float gainDecibels);
+    void setClipFadeGesture(const juce::String& clipId,
+                            bool fadeIn,
+                            double durationSeconds,
+                            float curve);
+    void toggleClipMute(const juce::String& clipId);
     void createClipCrossfade(const juce::String& clipId);
     void toggleClipPolarity(const juce::String& clipId);
     void toggleClipReverse(const juce::String& clipId);
     void consolidateClip(const juce::String& clipId);
     void undo();
     void redo();
+    void toggleExclusiveSolo(const juce::String& trackId);
     void selectTrack(const juce::String& trackId);
     void selectClip(const juce::String& trackId, const juce::String& clipId);
     void updateInspector();

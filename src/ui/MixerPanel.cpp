@@ -195,19 +195,29 @@ std::vector<MixerPanel::Item> MixerPanel::items() const
 
     for (const auto& track : project->tracks)
     {
+        const auto* insertOwner = track.parentTrackId.isNotEmpty()
+            ? project->findTrack(track.parentTrackId)
+            : &track;
+        if (insertOwner != nullptr)
+        {
+            for (const auto& insert : insertOwner->inserts)
+            {
+                result.push_back({
+                    Item::Type::plugin,
+                    insertOwner->id,
+                    insert.id,
+                    track.name + " / " + insert.name,
+                    (track.parentTrackId.isNotEmpty()
+                         ? "INHERITED / "
+                         : "")
+                        + insert.format
+                        + " INSERT",
+                    !insert.bypassed
+                });
+            }
+        }
         if (track.parentTrackId.isNotEmpty())
             continue;
-        for (const auto& insert : track.inserts)
-        {
-            result.push_back({
-                Item::Type::plugin,
-                track.id,
-                insert.id,
-                track.name + " / " + insert.name,
-                insert.format + " INSERT",
-                !insert.bypassed
-            });
-        }
         for (const auto& route : project->routingConnections)
         {
             if (route.sourceTrackId != track.id

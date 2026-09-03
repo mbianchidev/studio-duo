@@ -432,7 +432,7 @@ MainComponent::MainComponent()
     };
     soloButton.onClick = [this]
     {
-        changeSelectedTrackState([](auto& state) { state.solo = !state.solo; });
+        toggleExclusiveSolo(selectedTrackId);
     };
     armButton.onClick = [this]
     {
@@ -735,7 +735,7 @@ MainComponent::MainComponent()
     timeline.onTrackSolo = [this](const auto& trackId)
     {
         selectTrack(trackId);
-        changeSelectedTrackState([](auto& state) { state.solo = !state.solo; });
+        toggleExclusiveSolo(trackId);
     };
     timeline.onTrackArm = [this](const auto& trackId)
     {
@@ -778,15 +778,25 @@ MainComponent::MainComponent()
     };
     timeline.onSeek = [this](double seconds)
     {
-        if (project.hasActivePluginInserts())
+        if (!activeRecordingTargets.empty() || audioEngine.isRecording())
         {
-            playAfterRuntimeTransition = audioEngine.isPlaying();
-            audioEngine.pause();
-            audioEngine.forcePluginRuntimeReload(project, pluginRuntimeRequests());
-            setStatus("Playhead moved. Resetting sandbox pipelines...");
+            setStatus("Stop recording before moving the playhead.", true);
+            return;
+        }
+        const auto resume = audioEngine.isPlaying();
+        audioEngine.pause();
+        if (!audioEngine.resetPluginProcessing())
+        {
+            if (resume)
+                audioEngine.play();
+            setStatus("Could not reset plugin pipelines before seeking.", true);
+            return;
         }
         audioEngine.seekSeconds(seconds);
         timeline.setPlayheadSeconds(seconds);
+        if (resume)
+            audioEngine.play();
+        setStatus("Playhead moved. Plugin pipelines reset.");
     };
     timeline.onZoomRequested = [this](double factor) { zoomTimeline(factor); };
     timeline.onSplitSelected = [this] { splitSelectedClip(); };
@@ -900,6 +910,28 @@ MainComponent::MainComponent()
     timeline.onSetFadeOut = [this](const auto& clipId, double seconds)
     {
         setClipFade(clipId, seconds, false);
+    };
+    timeline.onClipGainChanged = [this](
+                                     const auto& clipId,
+                                     float gainDecibels)
+    {
+        setClipGain(clipId, gainDecibels);
+    };
+    timeline.onClipFadeChanged = [this](
+                                     const auto& clipId,
+                                     bool fadeIn,
+                                     double durationSeconds,
+                                     float curve)
+    {
+        setClipFadeGesture(
+            clipId,
+            fadeIn,
+            durationSeconds,
+            curve);
+    };
+    timeline.onToggleClipMute = [this](const auto& clipId)
+    {
+        toggleClipMute(clipId);
     };
     timeline.onCreateCrossfade = [this](const auto& clipId)
     {
@@ -2327,16 +2359,18 @@ void MainComponent::togglePlayback()
 
     if (audioEngine.positionSeconds() >= project.lengthSeconds() - 0.001)
     {
+        if (!audioEngine.resetPluginProcessing())
+        {
+            setStatus("Could not reset plugin pipelines before rewinding.", true);
+            return;
+        }
         audioEngine.seekSeconds(0.0);
         timeline.setPlayheadSeconds(0.0);
         timelineViewport.setViewPosition(0, timelineViewport.getViewPositionY());
         timeline.setViewportPosition(0);
         if (project.hasActivePluginInserts())
         {
-            playAfterRuntimeTransition = true;
-            audioEngine.forcePluginRuntimeReload(project, pluginRuntimeRequests());
-            setStatus("Rewinding and resetting sandbox pipelines...");
-            return;
+            setStatus("Rewound to project start.");
         }
     }
 
@@ -2463,14 +2497,16 @@ void MainComponent::stopTransportAndRecording()
     if (!activeRecordingTargets.empty() || audioEngine.isRecording())
         finishRecording();
     else
+    {
         audioEngine.stop();
+        if (!audioEngine.resetPluginProcessing())
+            setStatus("Stopped, but plugin pipelines could not be reset.", true);
+    }
 
     recordButton.setButtonText("REC");
     recordButton.setColour(juce::TextButton::buttonColourId,
                            juce::Colour(StudioColours::raised));
     timeline.clearRecordingPreviews();
-    if (project.hasActivePluginInserts() && !recordingFinalizationInProgress)
-        audioEngine.forcePluginRuntimeReload(project, pluginRuntimeRequests());
 }
 
 void MainComponent::finishRecording()
@@ -2616,8 +2652,6 @@ void MainComponent::completeRecording(
                   ? savedMessage + " " + warning
                   : savedMessage,
               warning.isNotEmpty());
-    if (project.hasActivePluginInserts())
-        audioEngine.forcePluginRuntimeReload(project, pluginRuntimeRequests());
 }
 
 void MainComponent::addAudioTrack()
@@ -2791,7 +2825,11 @@ void MainComponent::deleteSelectedTrack()
 
 void MainComponent::addPluginToSelectedTrack(const PluginCatalogEntry& entry)
 {
-    const auto* track = project.findTrack(selectedTrackId);
+    const auto* selectedTrack = project.findTrack(selectedTrackId);
+    const auto* track = selectedTrack != nullptr
+            && selectedTrack->parentTrackId.isNotEmpty()
+        ? project.findTrack(selectedTrack->parentTrackId)
+        : selectedTrack;
     if (track == nullptr)
     {
         setStatus("Select a track before adding a plugin.", true);
@@ -3451,6 +3489,75 @@ void MainComponent::setClipFade(const juce::String& clipId,
         });
 }
 
+void MainComponent::setClipGain(
+    const juce::String& clipId,
+    float gainDecibels)
+{
+    const auto* clip = project.findClip(clipId);
+    const auto* track = project.findTrackContainingClip(clipId);
+    if (clip == nullptr || track == nullptr)
+        return;
+    auto after = *clip;
+    after.gainDecibels = juce::jlimit(
+        -60.0f,
+        24.0f,
+        gainDecibels);
+    perform(std::make_unique<SetClipStateCommand>(
+        track->id,
+        *clip,
+        after,
+        "Change clip gain"));
+}
+
+void MainComponent::setClipFadeGesture(
+    const juce::String& clipId,
+    bool fadeIn,
+    double durationSeconds,
+    float curve)
+{
+    const auto* clip = project.findClip(clipId);
+    const auto* track = project.findTrackContainingClip(clipId);
+    if (clip == nullptr || track == nullptr)
+        return;
+    auto after = *clip;
+    if (fadeIn)
+    {
+        after.fadeInSeconds = juce::jlimit(
+            0.0,
+            after.durationSeconds,
+            durationSeconds);
+        after.fadeInCurve = juce::jlimit(-1.0f, 1.0f, curve);
+    }
+    else
+    {
+        after.fadeOutSeconds = juce::jlimit(
+            0.0,
+            after.durationSeconds,
+            durationSeconds);
+        after.fadeOutCurve = juce::jlimit(-1.0f, 1.0f, curve);
+    }
+    perform(std::make_unique<SetClipStateCommand>(
+        track->id,
+        *clip,
+        after,
+        fadeIn ? "Change clip fade in" : "Change clip fade out"));
+}
+
+void MainComponent::toggleClipMute(const juce::String& clipId)
+{
+    const auto* clip = project.findClip(clipId);
+    const auto* track = project.findTrackContainingClip(clipId);
+    if (clip == nullptr || track == nullptr)
+        return;
+    auto after = *clip;
+    after.muted = !after.muted;
+    perform(std::make_unique<SetClipStateCommand>(
+        track->id,
+        *clip,
+        after,
+        after.muted ? "Mute clip" : "Unmute clip"));
+}
+
 void MainComponent::createClipCrossfade(const juce::String& clipId)
 {
     const auto* selected = project.findClip(clipId);
@@ -3645,6 +3752,37 @@ void MainComponent::redo()
 
     selectedClipId.clear();
     projectChanged();
+}
+
+void MainComponent::toggleExclusiveSolo(const juce::String& trackId)
+{
+    const auto* selected = project.findTrack(trackId);
+    if (selected == nullptr || selected->type == TrackType::master)
+        return;
+
+    const auto shouldSolo = !selected->solo;
+    std::vector<std::unique_ptr<ProjectCommand>> commands;
+    for (const auto& track : project.tracks)
+    {
+        if (track.type == TrackType::master)
+            continue;
+        const auto nextSolo = shouldSolo && track.id == trackId;
+        if (track.solo == nextSolo)
+            continue;
+        auto before = TrackMixState::fromTrack(track);
+        auto after = before;
+        after.solo = nextSolo;
+        commands.push_back(std::make_unique<SetTrackMixCommand>(
+            track.id,
+            before,
+            after));
+    }
+    if (!commands.empty())
+    {
+        perform(std::make_unique<BatchProjectCommand>(
+            shouldSolo ? "Solo track" : "Clear solo",
+            std::move(commands)));
+    }
 }
 
 void MainComponent::selectTrack(const juce::String& trackId)

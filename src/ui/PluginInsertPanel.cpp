@@ -6,6 +6,16 @@
 
 namespace studio
 {
+const Track* PluginInsertPanel::insertOwnerTrack() const
+{
+    const auto* track = project != nullptr
+        ? project->findTrack(trackId)
+        : nullptr;
+    if (track == nullptr || track->parentTrackId.isEmpty())
+        return track;
+    return project->findTrack(track->parentTrackId);
+}
+
 void PluginInsertPanel::setProject(const Project* value)
 {
     project = value;
@@ -39,7 +49,13 @@ void PluginInsertPanel::paint(juce::Graphics& graphics)
                       20,
                       juce::Justification::centredLeft);
 
-    const auto* track = project != nullptr ? project->findTrack(trackId) : nullptr;
+    const auto* selectedTrack = project != nullptr
+        ? project->findTrack(trackId)
+        : nullptr;
+    const auto* track = insertOwnerTrack();
+    const auto inherited = selectedTrack != nullptr
+        && track != nullptr
+        && selectedTrack->id != track->id;
     if (track == nullptr || track->inserts.empty())
     {
         graphics.setColour(juce::Colour(StudioColours::secondaryText));
@@ -128,7 +144,8 @@ void PluginInsertPanel::paint(juce::Graphics& graphics)
             stateText = "RECOVERY DISABLED";
             stateColour = juce::Colour(StudioColours::orange);
         }
-        const auto detail = modeText
+        const auto detail = (inherited ? "INHERITED  |  " : "")
+            + modeText
             + "  |  "
             + stateText
             + "  |  "
@@ -178,7 +195,7 @@ void PluginInsertPanel::paint(juce::Graphics& graphics)
 
 void PluginInsertPanel::mouseDown(const juce::MouseEvent& event)
 {
-    const auto* track = project != nullptr ? project->findTrack(trackId) : nullptr;
+    const auto* track = insertOwnerTrack();
     if (track == nullptr || event.position.y < 24.0f)
         return;
 
@@ -286,7 +303,7 @@ void PluginInsertPanel::mouseDown(const juce::MouseEvent& event)
 
 void PluginInsertPanel::mouseDoubleClick(const juce::MouseEvent& event)
 {
-    const auto* track = project != nullptr ? project->findTrack(trackId) : nullptr;
+    const auto* track = insertOwnerTrack();
     if (track == nullptr || event.position.y < 24.0f)
         return;
     const auto index = static_cast<int>((event.position.y - 24.0f) / 54.0f);

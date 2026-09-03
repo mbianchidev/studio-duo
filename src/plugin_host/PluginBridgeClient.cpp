@@ -283,6 +283,19 @@ bool PluginBridgeClient::setParameter(int parameterIndex,
     return sendMessageToWorker(request);
 }
 
+void PluginBridgeClient::resetProcessing()
+{
+    if (sharedState != nullptr)
+        sharedState->resetRequested.store(1, std::memory_order_release);
+    outputTimeline.clear();
+    pendingParameterEventCount = 0;
+    streamSamplePosition = 0;
+    completedSequence = -1;
+    completedOutputFlags = 0;
+    wetReplacementBlockedUntilSample = 0;
+    timelineResetPending = true;
+}
+
 juce::Result PluginBridgeClient::sendEditorCommand(
     const juce::String& command,
     int width,
@@ -678,6 +691,67 @@ bool PluginBridgeClient::recoversLateFirstOutputForTesting()
                std::memory_order_acquire)
             == 1
         && laterCallbackClient->lateBlockCount() > 0;
+}
+
+bool PluginBridgeClient::resetsProcessingTimelineForTesting()
+{
+    auto state = std::make_unique<PluginBridgeSharedState>();
+    auto client = std::make_unique<PluginBridgeClient>();
+    client->sharedState = state.get();
+    client->ready.store(true, std::memory_order_release);
+    client->processingBlockSize = 4;
+    client->prepareOutputTimeline(4);
+
+    juce::AudioBuffer<float> beforeReset(2, 4);
+    beforeReset.clear();
+    beforeReset.addSample(0, 0, 0.5f);
+    beforeReset.addSample(1, 0, 0.5f);
+    client->processBlock(beforeReset);
+    client->resetProcessing();
+
+    for (int channel = 0; channel < 2; ++channel)
+    {
+        std::fill_n(
+            state->output[static_cast<std::size_t>(channel)].begin(),
+            4,
+            0.75f);
+    }
+    state->numOutputChannels.store(2, std::memory_order_relaxed);
+    state->outputFlags.store(0, std::memory_order_relaxed);
+    state->workerSequence.store(
+        state->hostSequence.load(std::memory_order_relaxed),
+        std::memory_order_release);
+
+    juce::AudioBuffer<float> discardOldResult(2, 4);
+    discardOldResult.clear();
+    client->processBlock(discardOldResult);
+
+    for (int channel = 0; channel < 2; ++channel)
+    {
+        std::fill_n(
+            state->output[static_cast<std::size_t>(channel)].begin(),
+            4,
+            0.0f);
+    }
+    state->outputFlags.store(
+        PluginBridgeSharedState::resetAppliedFlag,
+        std::memory_order_relaxed);
+    state->workerSequence.store(
+        state->hostSequence.load(std::memory_order_relaxed),
+        std::memory_order_release);
+
+    juce::AudioBuffer<float> afterReset(2, 4);
+    afterReset.clear();
+    client->processBlock(afterReset);
+    const auto remainedReady = client->isReady();
+    const auto resetRequested =
+        state->resetRequested.load(std::memory_order_acquire) == 1;
+    client->sharedState = nullptr;
+
+    return remainedReady
+        && resetRequested
+        && afterReset.getMagnitude(0, afterReset.getNumSamples())
+            < 0.0001f;
 }
 #endif
 

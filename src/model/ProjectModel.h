@@ -192,6 +192,8 @@ struct AudioClip
     double playbackRate = 1.0;
     double fadeInSeconds = 0.0;
     double fadeOutSeconds = 0.0;
+    float fadeInCurve = 0.0f;
+    float fadeOutCurve = 0.0f;
     bool polarityInverted = false;
     bool reversed = false;
     std::vector<WarpMarker> warpMarkers;

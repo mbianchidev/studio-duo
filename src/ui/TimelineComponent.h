@@ -60,6 +60,10 @@ public:
     std::function<void(const juce::String&, double)> onWarpTransientToTimeline;
     std::function<void(const juce::String&, double)> onSetFadeIn;
     std::function<void(const juce::String&, double)> onSetFadeOut;
+    std::function<void(const juce::String&, float)> onClipGainChanged;
+    std::function<void(const juce::String&, bool, double, float)>
+        onClipFadeChanged;
+    std::function<void(const juce::String&)> onToggleClipMute;
     std::function<void(const juce::String&)> onCreateCrossfade;
     std::function<void(const juce::String&)> onToggleClipPolarity;
     std::function<void(const juce::String&)> onToggleClipReverse;
@@ -86,7 +90,10 @@ private:
         none,
         move,
         trimStart,
-        trimEnd
+        trimEnd,
+        gain,
+        fadeIn,
+        fadeOut
     };
 
     [[nodiscard]] std::vector<Hit> clipHits() const;
@@ -118,6 +125,13 @@ private:
     double dragPreviewSourceOffset = 0.0;
     double dragPreviewDuration = 0.0;
     float dragStartX = 0.0f;
+    float dragStartY = 0.0f;
+    float dragOriginalGainDecibels = 0.0f;
+    float dragPreviewGainDecibels = 0.0f;
+    double dragOriginalFadeSeconds = 0.0;
+    double dragPreviewFadeSeconds = 0.0;
+    float dragOriginalFadeCurve = 0.0f;
+    float dragPreviewFadeCurve = 0.0f;
     DragMode dragMode = DragMode::none;
 
     static constexpr int rulerHeight = 36;

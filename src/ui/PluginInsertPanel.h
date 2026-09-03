@@ -33,6 +33,8 @@ public:
     void mouseDoubleClick(const juce::MouseEvent& event) override;
 
 private:
+    [[nodiscard]] const Track* insertOwnerTrack() const;
+
     const Project* project = nullptr;
     juce::String trackId;
     std::vector<StudioAudioEngine::PluginRuntimeStatus> runtimeStatuses;

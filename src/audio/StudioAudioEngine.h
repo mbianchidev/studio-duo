@@ -126,6 +126,7 @@ public:
     void pause() noexcept;
     void stop() noexcept;
     void seekSeconds(double seconds) noexcept;
+    [[nodiscard]] bool resetPluginProcessing();
     void setMetronomeEnabled(bool enabled) noexcept;
     void setInputMonitoring(bool enabled, int firstInputChannel, int channels) noexcept;
 
@@ -524,6 +525,8 @@ private:
     void resolvePluginAutomationParameterIds(
         const RenderSnapshot& snapshot,
         const std::vector<PluginRuntimeStatus>& statuses) const;
+    [[nodiscard]] bool waitForPluginProcessingToStop(
+        int timeoutMilliseconds) const;
     void startPluginSnapshotRefreshLocked();
     static void mixSample(RenderSnapshot& snapshot,
                           std::int64_t timelineSample,
@@ -647,6 +650,7 @@ private:
     std::atomic<int> activePluginRuntime { 0 };
     std::atomic<int> readingPluginRuntime { -1 };
     std::atomic<int> audioCallbacksInFlight { 0 };
+    std::atomic<bool> pluginResetInProgress { false };
     juce::ThreadPool pluginRuntimeBuilder { 1 };
     mutable juce::CriticalSection pluginRequestLock;
     std::vector<PluginRuntimeRequest> pendingPluginRequests;

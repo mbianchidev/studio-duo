@@ -446,14 +446,30 @@ double AudioClip::timelineOffsetForSourceSeconds(double sourceSeconds) const noe
 
 float AudioClip::envelopeGainAt(double timelineOffsetSeconds) const noexcept
 {
+    const auto shaped = [](double progress, float curve)
+    {
+        progress = juce::jlimit(0.0, 1.0, progress);
+        if (curve > 0.001f)
+            return std::pow(progress, 1.0 + curve * 3.0);
+        if (curve < -0.001f)
+            return 1.0
+                - std::pow(1.0 - progress, 1.0 - curve * 3.0);
+        return progress;
+    };
     const auto position = juce::jlimit(0.0,
                                        durationSeconds,
                                        timelineOffsetSeconds);
     auto gain = 1.0;
     if (fadeInSeconds > 0.0)
-        gain = std::min(gain, position / fadeInSeconds);
+        gain = std::min(
+            gain,
+            shaped(position / fadeInSeconds, fadeInCurve));
     if (fadeOutSeconds > 0.0)
-        gain = std::min(gain, (durationSeconds - position) / fadeOutSeconds);
+        gain = std::min(
+            gain,
+            shaped(
+                (durationSeconds - position) / fadeOutSeconds,
+                fadeOutCurve));
     return static_cast<float>(juce::jlimit(0.0, 1.0, gain));
 }
 
@@ -473,6 +489,8 @@ juce::var AudioClip::toVar() const
     object->setProperty("playbackRate", playbackRate);
     object->setProperty("fadeInSeconds", fadeInSeconds);
     object->setProperty("fadeOutSeconds", fadeOutSeconds);
+    object->setProperty("fadeInCurve", fadeInCurve);
+    object->setProperty("fadeOutCurve", fadeOutCurve);
     object->setProperty("polarityInverted", polarityInverted);
     object->setProperty("reversed", reversed);
     juce::Array<juce::var> warpValues;
@@ -525,6 +543,16 @@ std::optional<AudioClip> AudioClip::fromVar(const juce::var& value, juce::String
                                   numberProperty(*object, "fadeInSeconds", 0.0));
     clip.fadeOutSeconds = std::max(0.0,
                                    numberProperty(*object, "fadeOutSeconds", 0.0));
+    clip.fadeInCurve = juce::jlimit(
+        -1.0f,
+        1.0f,
+        static_cast<float>(
+            numberProperty(*object, "fadeInCurve", 0.0)));
+    clip.fadeOutCurve = juce::jlimit(
+        -1.0f,
+        1.0f,
+        static_cast<float>(
+            numberProperty(*object, "fadeOutCurve", 0.0)));
     clip.polarityInverted = booleanProperty(*object, "polarityInverted", false);
     clip.reversed = booleanProperty(*object, "reversed", false);
     const auto warpValues = object->getProperty("warpMarkers");

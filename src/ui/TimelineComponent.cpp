@@ -545,6 +545,22 @@ void TimelineComponent::paint(juce::Graphics& graphics)
                                           3.0f,
                                           bounds.getHeight() - 16.0f,
                                           1.5f);
+            graphics.fillRoundedRectangle(
+                bounds.getX() + 8.0f,
+                bounds.getY() + 3.0f,
+                bounds.getWidth() - 16.0f,
+                3.0f,
+                1.5f);
+            graphics.fillEllipse(
+                bounds.getX() + 2.0f,
+                bounds.getY() + 2.0f,
+                8.0f,
+                8.0f);
+            graphics.fillEllipse(
+                bounds.getRight() - 10.0f,
+                bounds.getY() + 2.0f,
+                8.0f,
+                8.0f);
         }
 
         drawClipWaveform(graphics, *clip, bounds, 0.28f);
@@ -575,33 +591,93 @@ void TimelineComponent::paint(juce::Graphics& graphics)
                                     bounds.getBottom() - 10.0f);
             graphics.fillPath(markerShape);
         }
+        const auto fadeInSeconds = draggedClipId == hit.clipId
+                && dragMode == DragMode::fadeIn
+            ? dragPreviewFadeSeconds
+            : clip->fadeInSeconds;
+        const auto fadeOutSeconds = draggedClipId == hit.clipId
+                && dragMode == DragMode::fadeOut
+            ? dragPreviewFadeSeconds
+            : clip->fadeOutSeconds;
+        const auto fadeInCurve = draggedClipId == hit.clipId
+                && dragMode == DragMode::fadeIn
+            ? dragPreviewFadeCurve
+            : clip->fadeInCurve;
+        const auto fadeOutCurve = draggedClipId == hit.clipId
+                && dragMode == DragMode::fadeOut
+            ? dragPreviewFadeCurve
+            : clip->fadeOutCurve;
+        const auto curveValue = [](float progress, float curve)
+        {
+            progress = juce::jlimit(0.0f, 1.0f, progress);
+            if (curve > 0.001f)
+                return std::pow(progress, 1.0f + curve * 3.0f);
+            if (curve < -0.001f)
+                return 1.0f
+                    - std::pow(1.0f - progress,
+                               1.0f - curve * 3.0f);
+            return progress;
+        };
+        const auto drawFade = [&graphics,
+                               bounds,
+                               &curveValue,
+                               this](
+                                  bool fadeIn,
+                                  double fadeSeconds,
+                                  float curve)
+        {
+            if (fadeSeconds <= 0.0)
+                return;
+            const auto width = std::min(
+                bounds.getWidth(),
+                static_cast<float>(
+                    fadeSeconds * pixelsPerSecond));
+            juce::Path path;
+            constexpr auto steps = 24;
+            for (int step = 0; step <= steps; ++step)
+            {
+                const auto progress = static_cast<float>(step)
+                    / static_cast<float>(steps);
+                const auto x = fadeIn
+                    ? bounds.getX() + width * progress
+                    : bounds.getRight() - width
+                        + width * progress;
+                const auto amplitude = fadeIn
+                    ? curveValue(progress, curve)
+                    : curveValue(1.0f - progress, curve);
+                const auto y = bounds.getBottom() - 4.0f
+                    - amplitude * (bounds.getHeight() - 8.0f);
+                if (step == 0)
+                    path.startNewSubPath(x, y);
+                else
+                    path.lineTo(x, y);
+            }
+            graphics.strokePath(path, juce::PathStrokeType(1.0f));
+        };
         graphics.setColour(juce::Colours::white.withAlpha(0.52f));
-        if (clip->fadeInSeconds > 0.0)
+        if (fadeInSeconds > 0.0)
+            drawFade(true,
+                     fadeInSeconds,
+                     fadeInCurve);
+        if (fadeOutSeconds > 0.0)
         {
-            graphics.drawLine(bounds.getX(),
-                              bounds.getBottom() - 4.0f,
-                              bounds.getX()
-                                  + static_cast<float>(clip->fadeInSeconds
-                                                       * pixelsPerSecond),
-                              bounds.getY() + 4.0f,
-                              1.0f);
-        }
-        if (clip->fadeOutSeconds > 0.0)
-        {
-            graphics.drawLine(bounds.getRight()
-                                  - static_cast<float>(clip->fadeOutSeconds
-                                                       * pixelsPerSecond),
-                              bounds.getY() + 4.0f,
-                              bounds.getRight(),
-                              bounds.getBottom() - 4.0f,
-                              1.0f);
+            drawFade(false,
+                     fadeOutSeconds,
+                     fadeOutCurve);
         }
 
         graphics.setColour(juce::Colours::white);
         graphics.setFont(12.5f);
         const auto processingLabel = (clip->reversed ? " REV" : "")
             + juce::String(clip->polarityInverted ? " INV" : "");
-        graphics.drawText(clip->name + processingLabel,
+        const auto gainDecibels = draggedClipId == hit.clipId
+                && dragMode == DragMode::gain
+            ? dragPreviewGainDecibels
+            : clip->gainDecibels;
+        const auto gainLabel = std::abs(gainDecibels) >= 0.05f
+            ? "  " + juce::String(gainDecibels, 1) + " dB"
+            : juce::String();
+        graphics.drawText(clip->name + processingLabel + gainLabel,
                           bounds.toNearestInt().withHeight(24).reduced(8, 0),
                           juce::Justification::centredLeft);
     }
@@ -815,12 +891,14 @@ void TimelineComponent::mouseDown(const juce::MouseEvent& event)
         if (!hit.bounds.contains(event.position))
             continue;
 
+        const auto handlesActive = selectedClipId == hit.clipId;
         selectedTrackId = hit.trackId;
         selectedClipId = hit.clipId;
         draggedClipId = hit.clipId;
         dragOriginalTrackId = hit.trackId;
         dragPreviewTrackId = hit.trackId;
         dragStartX = event.position.x;
+        dragStartY = event.position.y;
         if (const auto* clip = project != nullptr ? project->findClip(hit.clipId) : nullptr)
         {
             dragOriginalStart = clip->startSeconds;
@@ -829,7 +907,39 @@ void TimelineComponent::mouseDown(const juce::MouseEvent& event)
             dragPreviewStart = dragOriginalStart;
             dragPreviewSourceOffset = dragOriginalSourceOffset;
             dragPreviewDuration = dragOriginalDuration;
-            if (event.position.x <= hit.bounds.getX() + 9.0f)
+            dragOriginalGainDecibels = clip->gainDecibels;
+            dragPreviewGainDecibels = clip->gainDecibels;
+            const auto localX = event.position.x - hit.bounds.getX();
+            const auto localY = event.position.y - hit.bounds.getY();
+            const auto fadeHandleWidth = std::min(
+                14.0f,
+                hit.bounds.getWidth() * 0.5f);
+            if (handlesActive
+                && localY <= 14.0f
+                && localX < fadeHandleWidth)
+            {
+                dragMode = DragMode::fadeIn;
+                dragOriginalFadeSeconds = clip->fadeInSeconds;
+                dragPreviewFadeSeconds = clip->fadeInSeconds;
+                dragOriginalFadeCurve = clip->fadeInCurve;
+                dragPreviewFadeCurve = clip->fadeInCurve;
+            }
+            else if (handlesActive
+                     && localY <= 14.0f
+                     && localX >= hit.bounds.getWidth()
+                         - fadeHandleWidth)
+            {
+                dragMode = DragMode::fadeOut;
+                dragOriginalFadeSeconds = clip->fadeOutSeconds;
+                dragPreviewFadeSeconds = clip->fadeOutSeconds;
+                dragOriginalFadeCurve = clip->fadeOutCurve;
+                dragPreviewFadeCurve = clip->fadeOutCurve;
+            }
+            else if (handlesActive && localY <= 10.0f)
+            {
+                dragMode = DragMode::gain;
+            }
+            else if (event.position.x <= hit.bounds.getX() + 9.0f)
                 dragMode = DragMode::trimStart;
             else if (event.position.x >= hit.bounds.getRight() - 9.0f)
                 dragMode = DragMode::trimEnd;
@@ -960,6 +1070,44 @@ void TimelineComponent::mouseDrag(const juce::MouseEvent& event)
                                            sourceRemaining,
                                            dragPreviewDuration);
     }
+    else if (dragMode == DragMode::gain)
+    {
+        dragPreviewGainDecibels = juce::jlimit(
+            -60.0f,
+            24.0f,
+            dragOriginalGainDecibels
+                + (dragStartY - event.position.y) * 0.25f);
+    }
+    else if (dragMode == DragMode::fadeIn
+             || dragMode == DragMode::fadeOut)
+    {
+        const auto hits = clipHits();
+        const auto hit = std::find_if(
+            hits.cbegin(),
+            hits.cend(),
+            [this](const auto& candidate)
+            {
+                return candidate.clipId == draggedClipId;
+            });
+        if (hit != hits.cend())
+        {
+            const auto horizontalDelta =
+                static_cast<double>(event.position.x - dragStartX)
+                / pixelsPerSecond;
+            const auto durationDelta = dragMode == DragMode::fadeIn
+                ? horizontalDelta
+                : -horizontalDelta;
+            dragPreviewFadeSeconds = juce::jlimit(
+                0.0,
+                dragOriginalDuration,
+                dragOriginalFadeSeconds + durationDelta);
+            dragPreviewFadeCurve = juce::jlimit(
+                -1.0f,
+                1.0f,
+                dragOriginalFadeCurve
+                    + (event.position.y - dragStartY) / 40.0f);
+        }
+    }
     repaint();
 }
 
@@ -983,6 +1131,31 @@ void TimelineComponent::mouseUp(const juce::MouseEvent&)
                           dragPreviewStart,
                           dragPreviewSourceOffset,
                           dragPreviewDuration);
+        else if (dragMode == DragMode::gain
+                 && std::abs(
+                        dragPreviewGainDecibels
+                        - dragOriginalGainDecibels)
+                     > 0.001f
+                 && onClipGainChanged)
+            onClipGainChanged(
+                draggedClipId,
+                dragPreviewGainDecibels);
+        else if ((dragMode == DragMode::fadeIn
+                  || dragMode == DragMode::fadeOut)
+                 && (std::abs(
+                         dragPreviewFadeSeconds
+                         - dragOriginalFadeSeconds)
+                         > 0.0001
+                     || std::abs(
+                            dragPreviewFadeCurve
+                            - dragOriginalFadeCurve)
+                         > 0.001f)
+                 && onClipFadeChanged)
+            onClipFadeChanged(
+                draggedClipId,
+                dragMode == DragMode::fadeIn,
+                dragPreviewFadeSeconds,
+                dragPreviewFadeCurve);
     }
 
     draggedClipId.clear();
@@ -1222,6 +1395,15 @@ void TimelineComponent::showContextMenu(const juce::MouseEvent& event)
         if (selectedClip != nullptr)
         {
             menu.addSectionHeader("Audio processing");
+            menu.addItem(
+                selectedClip->muted ? "Unmute clip" : "Mute clip",
+                true,
+                selectedClip->muted,
+                [this, clipId = selectedClipId]
+                {
+                    if (onToggleClipMute)
+                        onToggleClipMute(clipId);
+                });
             menu.addItem("Detect transients", [this, clipId = selectedClipId]
             {
                 if (onAnalyseTransients)

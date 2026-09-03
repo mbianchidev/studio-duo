@@ -36,6 +36,7 @@ public:
     juce::Result focusEditor();
     juce::Result resizeEditor(int width, int height);
     bool setParameter(int parameterIndex, float normalizedValue);
+    void resetProcessing();
     void processBlock(
         juce::AudioBuffer<float>& audio,
         const juce::AudioBuffer<float>* sidechain = nullptr,
@@ -50,6 +51,7 @@ public:
     [[nodiscard]] juce::String diagnosticState() const;
 #if STUDIO_DUO_TESTING
     static bool recoversLateFirstOutputForTesting();
+    static bool resetsProcessingTimelineForTesting();
 #endif
 
 private:

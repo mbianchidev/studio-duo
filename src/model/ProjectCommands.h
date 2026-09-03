@@ -108,6 +108,8 @@ public:
 private:
     std::vector<Track> tracks;
     std::vector<std::pair<juce::String, bool>> parentCollapseStates;
+    std::vector<std::pair<juce::String, juce::String>>
+        parentActiveTakeStates;
     bool capturedOriginal = false;
 };
 

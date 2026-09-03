@@ -391,6 +391,9 @@ bool AddRecordingTakeCommand::perform(Project& project, juce::String& error)
                 parentCollapseStates.emplace_back(
                     track.parentTrackId,
                     project.findTrack(track.parentTrackId)->versionsCollapsed);
+                parentActiveTakeStates.emplace_back(
+                    track.parentTrackId,
+                    project.findTrack(track.parentTrackId)->activeTakeTrackId);
             }
         }
         capturedOriginal = true;
@@ -413,7 +416,27 @@ bool AddRecordingTakeCommand::perform(Project& project, juce::String& error)
 
     for (const auto& [parentId, ignored] : parentCollapseStates)
         if (auto* parent = project.findTrack(parentId))
-            parent->versionsCollapsed = false;
+        {
+            parent->versionsCollapsed = true;
+            const auto newest = std::max_element(
+                tracks.cbegin(),
+                tracks.cend(),
+                [&parentId](const auto& left, const auto& right)
+                {
+                    const auto leftVersion =
+                        left.parentTrackId == parentId
+                        ? left.versionNumber
+                        : -1;
+                    const auto rightVersion =
+                        right.parentTrackId == parentId
+                        ? right.versionNumber
+                        : -1;
+                    return leftVersion < rightVersion;
+                });
+            if (newest != tracks.cend()
+                && newest->parentTrackId == parentId)
+                parent->activeTakeTrackId = newest->id;
+        }
 
     return true;
 }
@@ -437,6 +460,10 @@ void AddRecordingTakeCommand::undo(Project& project)
     for (const auto& [parentId, collapsed] : parentCollapseStates)
         if (auto* parent = project.findTrack(parentId))
             parent->versionsCollapsed = collapsed;
+    for (const auto& [parentId, activeTakeId] :
+         parentActiveTakeStates)
+        if (auto* parent = project.findTrack(parentId))
+            parent->activeTakeTrackId = activeTakeId;
 }
 
 MoveClipCommand::MoveClipCommand(juce::String clipToMove,

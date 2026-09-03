@@ -167,6 +167,50 @@ void routingEngineTests()
                "Routing test source WAV contains the expected signal.");
     }
 
+    auto takeProject = studio::Project::createDefault();
+    auto& takeParent = takeProject.tracks.front();
+    const auto takeParentId = takeParent.id;
+    takeParent.clips.clear();
+    takeParent.versionsCollapsed = true;
+    studio::Track firstTake;
+    firstTake.name = "v1";
+    firstTake.parentTrackId = takeParentId;
+    firstTake.versionNumber = 1;
+    studio::AudioClip firstTakeClip;
+    firstTakeClip.sourceFile = sourceFile;
+    firstTakeClip.durationSeconds = 0.01;
+    firstTakeClip.sourceLengthSeconds = 0.01;
+    firstTakeClip.sourceRangeEndSeconds = 0.01;
+    firstTake.clips.push_back(firstTakeClip);
+    studio::Track secondTake = firstTake;
+    secondTake.id = juce::Uuid().toString();
+    secondTake.name = "v2";
+    secondTake.versionNumber = 2;
+    secondTake.clips.front().id = juce::Uuid().toString();
+    takeParent.activeTakeTrackId = secondTake.id;
+    takeProject.tracks.insert(takeProject.tracks.begin() + 1, firstTake);
+    takeProject.tracks.insert(takeProject.tracks.begin() + 2, secondTake);
+    studio::StudioAudioEngine takeEngine;
+    juce::AudioBuffer<float> collapsedTakes;
+    expect(takeEngine.renderToBuffer(
+               takeProject,
+               collapsedTakes,
+               48000.0)
+               .wasOk(),
+           "Collapsed takes render through their parent.");
+    takeProject.findTrack(takeParentId)->versionsCollapsed = false;
+    juce::AudioBuffer<float> expandedTakes;
+    expect(takeEngine.renderToBuffer(
+               takeProject,
+               expandedTakes,
+               48000.0)
+               .wasOk(),
+           "Expanded takes render as audible layers.");
+    expect(collapsedTakes.getSample(0, 100) > 0.19f
+               && expandedTakes.getSample(0, 100)
+                      > collapsedTakes.getSample(0, 100) * 1.9f,
+           "Collapsed parents play the active take while expanded parents play every unmuted take.");
+
     auto renderProject = studio::Project::createDefault();
     auto* renderSource = renderProject.findTrack(
         renderProject.tracks.front().id);

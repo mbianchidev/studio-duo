@@ -30,6 +30,9 @@ void pluginFormatTests()
     expect(
         studio::PluginBridgeClient::recoversLateFirstOutputForTesting(),
         "Sandbox bridges recover the first valid result after a missed deadline.");
+    expect(
+        studio::PluginBridgeClient::resetsProcessingTimelineForTesting(),
+        "Sandbox bridge resets discard queued pre-seek audio without restarting the worker.");
     const auto increasedDelay =
         studio::StudioAudioEngine::delayTransitionForTesting(4, 8);
     const auto decreasedDelay =

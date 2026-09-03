@@ -71,6 +71,8 @@ void serializationRoundTrip()
     clip.playbackRate = 1.25;
     clip.fadeInSeconds = 0.25;
     clip.fadeOutSeconds = 0.5;
+    clip.fadeInCurve = -0.5f;
+    clip.fadeOutCurve = 0.75f;
     clip.polarityInverted = true;
     clip.reversed = true;
     clip.warpMarkers.push_back({ 1.0, 1.5 });
@@ -159,6 +161,14 @@ void serializationRoundTrip()
                && std::abs(decoded->tracks.front().clips.front().playbackRate - 1.25) < 0.0001
                && decoded->tracks.front().clips.front().warpMarkers.size() == 1
                && decoded->tracks.front().clips.front().transientSourceSeconds.size() == 2
+               && std::abs(
+                      decoded->tracks.front().clips.front().fadeInCurve
+                      + 0.5f)
+                      < 0.0001f
+               && std::abs(
+                      decoded->tracks.front().clips.front().fadeOutCurve
+                      - 0.75f)
+                      < 0.0001f
                && decoded->tracks.front().clips.front().polarityInverted
                && decoded->tracks.front().clips.front().reversed,
            "Clip stretch, warp, transient, fade, and polarity data survive serialization.");
@@ -879,6 +889,11 @@ void audioProcessingTools()
     expect(std::abs(clip.envelopeGainAt(0.5) - 0.5f) < 0.0001f
                && std::abs(clip.envelopeGainAt(3.5) - 0.5f) < 0.0001f,
            "Clip fades expose deterministic envelope gain.");
+    clip.fadeInCurve = -1.0f;
+    clip.fadeOutCurve = 1.0f;
+    expect(clip.envelopeGainAt(0.5) > 0.5f
+               && clip.envelopeGainAt(3.5) < 0.5f,
+           "Clip fade curves support logarithmic and sharp shapes.");
 
     juce::AudioBuffer<float> buffer(2, 48000);
     buffer.clear();
@@ -1251,9 +1266,14 @@ void multitrackRecordingCommand()
     expect(project.findTrack(firstTakeId) != nullptr
                && project.findTrack(secondTakeId) != nullptr,
            "A multitrack recording adds every captured take.");
-    expect(!project.findTrack(firstParentId)->versionsCollapsed
-               && !project.findTrack(secondParentId)->versionsCollapsed,
-           "Recording expands every captured parent track.");
+    expect(project.findTrack(firstParentId)->versionsCollapsed
+               && project.findTrack(secondParentId)->versionsCollapsed,
+           "Recording keeps every captured parent track collapsed.");
+    expect(project.findTrack(firstParentId)->activeTakeTrackId
+                   == firstTakeId
+               && project.findTrack(secondParentId)->activeTakeTrackId
+                   == secondTakeId,
+           "Recording makes each newest hidden take active.");
     expect(history.undo(project), "A multitrack recording can be undone in one step.");
     expect(project.findTrack(firstTakeId) == nullptr
                && project.findTrack(secondTakeId) == nullptr,
@@ -1261,6 +1281,9 @@ void multitrackRecordingCommand()
     expect(project.findTrack(firstParentId)->versionsCollapsed
                && project.findTrack(secondParentId)->versionsCollapsed,
            "Undo restores parent lane collapse states.");
+    expect(project.findTrack(firstParentId)->activeTakeTrackId.isEmpty()
+               && project.findTrack(secondParentId)->activeTakeTrackId.isEmpty(),
+           "Undo restores parent active take selections.");
     expect(history.redo(project, error), error.toRawUTF8());
     expect(project.findTrack(firstTakeId) != nullptr
                && project.findTrack(secondTakeId) != nullptr,

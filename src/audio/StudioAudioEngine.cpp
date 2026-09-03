@@ -623,6 +623,100 @@ void StudioAudioEngine::seekSeconds(double seconds) noexcept
     playheadSample.store(target, std::memory_order_release);
 }
 
+bool StudioAudioEngine::resetPluginProcessing()
+{
+    if (recordingAccepting.load(std::memory_order_acquire)
+        || activeRecorderCount.load(std::memory_order_acquire) > 0
+        || recordingFinalizing.load(std::memory_order_acquire)
+        || pluginStateOperationActive.load(std::memory_order_acquire))
+    {
+        return false;
+    }
+
+    auto expectedReset = false;
+    if (!pluginResetInProgress.compare_exchange_strong(
+            expectedReset,
+            true,
+            std::memory_order_acq_rel))
+    {
+        return false;
+    }
+    struct ResetScope
+    {
+        ~ResetScope()
+        {
+            active.store(false, std::memory_order_release);
+        }
+
+        std::atomic<bool>& active;
+    } resetScope { pluginResetInProgress };
+    if (!waitForPluginProcessingToStop(2000))
+        return false;
+
+    const auto resetDelay = [](auto& delay)
+    {
+        if (delay.state == nullptr)
+            return;
+        delay.state->buffer.clear();
+        delay.state->writePosition = 0;
+        delay.state->samplesWritten.store(
+            0,
+            std::memory_order_release);
+        for (auto& position : delay.state->transitionPositions)
+            position.store(0, std::memory_order_release);
+        for (auto& mask : delay.state->transitionHandoffMasks)
+            mask.store(0, std::memory_order_release);
+        delay.transition.reset();
+    };
+    const juce::ScopedLock lock(pluginRequestLock);
+    for (auto& graph : pluginRuntimeGraphs)
+    {
+        for (auto& track : graph.tracks)
+        {
+            for (auto& insert : track.inserts)
+            {
+                if (insert.bridge != nullptr)
+                    insert.bridge->resetProcessing();
+                if (insert.inProcess != nullptr)
+                    insert.inProcess->reset();
+                resetDelay(insert.failureDelay);
+            }
+        }
+    }
+    for (auto& snapshot : snapshots)
+    {
+        for (auto& track : snapshot.tracks)
+        {
+            for (auto& source : track.sources)
+                resetDelay(source.compensation);
+            for (auto& route : track.routes)
+                resetDelay(route.compensation);
+            resetDelay(track.compensation);
+        }
+        resetDelay(snapshot.clickCompensation);
+    }
+    return true;
+}
+
+bool StudioAudioEngine::waitForPluginProcessingToStop(
+    int timeoutMilliseconds) const
+{
+    for (auto waited = 0;
+         waited < std::max(1, timeoutMilliseconds)
+         && (audioCallbacksInFlight.load(std::memory_order_acquire) > 0
+             || pluginControlOperationsInFlight.load(
+                    std::memory_order_acquire)
+                 > 0);
+         ++waited)
+    {
+        juce::Thread::sleep(1);
+    }
+    return audioCallbacksInFlight.load(std::memory_order_acquire) == 0
+        && pluginControlOperationsInFlight.load(
+               std::memory_order_acquire)
+            == 0;
+}
+
 void StudioAudioEngine::setMetronomeEnabled(bool enabled) noexcept
 {
     if (renderInProgress.load(std::memory_order_acquire))
@@ -1389,20 +1483,7 @@ StudioAudioEngine::capturePluginStatesOnRuntimeThread(
     } stateOperationScope { pluginStateOperationActive };
 
     std::vector<PluginStateCapture> captures;
-    for (auto waited = 0;
-         waited < timeout
-         && (audioCallbacksInFlight.load(std::memory_order_acquire) > 0
-             || pluginControlOperationsInFlight.load(
-                    std::memory_order_acquire)
-                 > 0);
-         ++waited)
-    {
-        juce::Thread::sleep(1);
-    }
-    if (audioCallbacksInFlight.load(std::memory_order_acquire) > 0
-        || pluginControlOperationsInFlight.load(
-               std::memory_order_acquire)
-            > 0)
+    if (!waitForPluginProcessingToStop(timeout))
     {
         PluginStateCapture capture;
         capture.result = juce::Result::fail(
@@ -1540,20 +1621,7 @@ StudioAudioEngine::preserveLiveAraStates(
         std::atomic<bool>& active;
     } stateOperationScope { pluginStateOperationActive };
 
-    for (int waited = 0;
-         waited < 2000
-         && (audioCallbacksInFlight.load(std::memory_order_acquire) > 0
-             || pluginControlOperationsInFlight.load(
-                    std::memory_order_acquire)
-                 > 0);
-         ++waited)
-    {
-        juce::Thread::sleep(1);
-    }
-    if (audioCallbacksInFlight.load(std::memory_order_acquire) > 0
-        || pluginControlOperationsInFlight.load(
-               std::memory_order_acquire)
-            > 0)
+    if (!waitForPluginProcessingToStop(2000))
     {
         return {
             AraPreservationResult::Status::failed,
@@ -2799,6 +2867,14 @@ std::optional<StudioAudioEngine::RenderSnapshot> StudioAudioEngine::buildSnapsho
         renderTrack.audible = !parent.muted && trackSoloActive;
         renderTrack.processing = !parent.muted && wholeContentSoloActive;
         renderTrack.meterIndex = meterSlotFor(parent.id);
+        const auto anySoloedChild = std::any_of(
+            project.tracks.cbegin(),
+            project.tracks.cend(),
+            [&parent](const auto& child)
+            {
+                return child.parentTrackId == parent.id
+                    && child.solo;
+            });
 
         auto parentClips = buildClips(parent, nullptr);
         if (!parentClips.has_value())
@@ -2807,7 +2883,8 @@ std::optional<StudioAudioEngine::RenderSnapshot> StudioAudioEngine::buildSnapsho
         RenderSource parentSource;
         parentSource.trackId = parent.id;
         parentSource.isParentContent = true;
-        parentSource.audible = renderTrack.processing;
+        parentSource.audible = renderTrack.processing
+            && !anySoloedChild;
         parentSource.clips = std::move(*parentClips);
         renderTrack.sources.push_back(std::move(parentSource));
 
@@ -2827,12 +2904,20 @@ std::optional<StudioAudioEngine::RenderSnapshot> StudioAudioEngine::buildSnapsho
             const auto selectedByPlaylist = parent.compRegions.empty()
                 && child.id == activeTakeId;
             const auto selectedBySolo = child.solo;
-            if (!selectedByComp && !selectedByPlaylist && !selectedBySolo)
+            const auto selectedByExpanded = !parent.versionsCollapsed;
+            if (!selectedByExpanded
+                && !selectedByComp
+                && !selectedByPlaylist
+                && !selectedBySolo)
                 continue;
 
             auto childClips = buildClips(
                 child,
-                selectedByComp && !selectedBySolo ? &parent.compRegions : nullptr);
+                !selectedByExpanded
+                        && selectedByComp
+                        && !selectedBySolo
+                    ? &parent.compRegions
+                    : nullptr);
             if (!childClips.has_value())
                 return std::nullopt;
 
@@ -2843,7 +2928,9 @@ std::optional<StudioAudioEngine::RenderSnapshot> StudioAudioEngine::buildSnapsho
             source.pan = child.pan;
             source.audible = !parent.muted
                 && !child.muted
-                && (wholeContentSoloActive || child.solo);
+                && (anySoloedChild
+                        ? child.solo
+                        : wholeContentSoloActive || child.solo);
             source.clips = std::move(*childClips);
             renderTrack.sources.push_back(std::move(source));
         }
@@ -5745,6 +5832,13 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
     audioCallbacksInFlight.fetch_add(1, std::memory_order_acq_rel);
     AtomicCounterScope callbackScope { audioCallbacksInFlight };
 
+    for (int channel = 0; channel < numOutputChannels; ++channel)
+        if (outputChannelData[channel] != nullptr)
+            juce::FloatVectorOperations::clear(outputChannelData[channel], numSamples);
+
+    if (pluginResetInProgress.load(std::memory_order_acquire))
+        return;
+
     const auto calibrationBlockActive = calibrationActive.load(
         std::memory_order_acquire);
     const auto calibrationElapsed = calibrationBlockActive
@@ -5824,10 +5918,6 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
             }
         }
     }
-
-    for (int channel = 0; channel < numOutputChannels; ++channel)
-        if (outputChannelData[channel] != nullptr)
-            juce::FloatVectorOperations::clear(outputChannelData[channel], numSamples);
 
     if (pluginStateOperationActive.load(std::memory_order_acquire))
     {
