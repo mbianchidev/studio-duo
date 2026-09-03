@@ -142,6 +142,9 @@ private:
     void recallMixerSnapshot(const juce::String& snapshotId);
     void updateTimelineSize();
     void zoomTimeline(double factor, bool reset = false);
+    void setLeftPanelCollapsed(bool collapsed);
+    void setInspectorPanelVisible(bool visible);
+    void setMixerPanelVisible(bool visible);
     void projectChanged(bool writeRecovery = true, bool markDirty = true);
     void updateReducedIsolationMarker();
     [[nodiscard]] std::vector<StudioAudioEngine::PluginRuntimeRequest> pluginRuntimeRequests() const;
@@ -225,6 +228,9 @@ private:
     juce::TextButton deleteTrackButton { "DELETE TRACK" };
     juce::TextButton trackingButton { "TRACKING SETUP" };
     juce::TextButton automationButton { "AUTOMATION" };
+    juce::TextButton sessionPanelToggleButton { "<" };
+    juce::TextButton inspectorPanelToggleButton { "INSPECT" };
+    juce::TextButton mixerPanelToggleButton { "MIX" };
 
     juce::Component inspectorContent;
     juce::Viewport inspectorViewport;
@@ -262,8 +268,7 @@ private:
     int leftPanelWidth = 286;
     int inspectorPanelWidth = 250;
     int mixerPanelHeight = 220;
-    int lastInspectorPanelWidth = 250;
-    int lastMixerPanelHeight = 220;
+    bool leftPanelCollapsed = false;
     PluginCatalog pluginCatalog;
     std::unique_ptr<PluginBrowserComponent> pluginBrowser;
     std::unique_ptr<RoutingPanel> routingPanel;

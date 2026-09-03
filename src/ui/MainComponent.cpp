@@ -317,83 +317,33 @@ MainComponent::MainComponent()
     leftPanelResizer = std::make_unique<PanelResizer>(true);
     leftPanelResizer->onDrag = [this](int delta)
     {
-        const auto maximum = juce::jmax(
-            220,
-            getWidth() - inspectorPanelWidth - 480 - 12);
-        leftPanelWidth = juce::jlimit(
-            220,
-            maximum,
-            leftPanelWidth + delta);
-        resized();
-        repaint();
+        setLeftPanelCollapsed(delta < 0);
     };
     leftPanelResizer->onDoubleClick = [this]
     {
-        leftPanelWidth = 286;
-        resized();
-        repaint();
+        setLeftPanelCollapsed(!leftPanelCollapsed);
     };
     addAndMakeVisible(*leftPanelResizer);
 
     inspectorPanelResizer = std::make_unique<PanelResizer>(true);
     inspectorPanelResizer->onDrag = [this](int delta)
     {
-        const auto maximum = juce::jmax(
-            0,
-            getWidth() - leftPanelWidth - 480 - 12);
-        inspectorPanelWidth = juce::jlimit(
-            0,
-            maximum,
-            inspectorPanelWidth - delta);
-        if (inspectorPanelWidth >= 80)
-            lastInspectorPanelWidth = inspectorPanelWidth;
-        resized();
-        repaint();
+        setInspectorPanelVisible(delta < 0);
     };
     inspectorPanelResizer->onDoubleClick = [this]
     {
-        if (inspectorPanelWidth > 0)
-        {
-            lastInspectorPanelWidth = inspectorPanelWidth;
-            inspectorPanelWidth = 0;
-        }
-        else
-        {
-            inspectorPanelWidth = lastInspectorPanelWidth;
-        }
-        resized();
-        repaint();
+        setInspectorPanelVisible(inspectorPanelWidth == 0);
     };
     addAndMakeVisible(*inspectorPanelResizer);
 
     mixerPanelResizer = std::make_unique<PanelResizer>(false);
     mixerPanelResizer->onDrag = [this](int delta)
     {
-        const auto maximum = juce::jmax(
-            0,
-            getHeight() - 76 - 28 - 260 - 6);
-        mixerPanelHeight = juce::jlimit(
-            0,
-            maximum,
-            mixerPanelHeight - delta);
-        if (mixerPanelHeight >= 80)
-            lastMixerPanelHeight = mixerPanelHeight;
-        resized();
-        repaint();
+        setMixerPanelVisible(delta < 0);
     };
     mixerPanelResizer->onDoubleClick = [this]
     {
-        if (mixerPanelHeight > 0)
-        {
-            lastMixerPanelHeight = mixerPanelHeight;
-            mixerPanelHeight = 0;
-        }
-        else
-        {
-            mixerPanelHeight = lastMixerPanelHeight;
-        }
-        resized();
-        repaint();
+        setMixerPanelVisible(mixerPanelHeight == 0);
     };
     addAndMakeVisible(*mixerPanelResizer);
 
@@ -424,6 +374,9 @@ MainComponent::MainComponent()
     configureButton(deleteTrackButton, "Delete the selected track");
     configureButton(trackingButton, "Configure tempo, meter, punch, count-in, and click routing");
     configureButton(automationButton, "Edit and record mixer and plugin automation");
+    configureButton(sessionPanelToggleButton, "Collapse or expand the session sidebar");
+    configureButton(inspectorPanelToggleButton, "Show or hide the inspector");
+    configureButton(mixerPanelToggleButton, "Show or hide the mixer");
     configureButton(muteButton, "Mute selected track");
     configureButton(soloButton, "Solo selected track");
     configureButton(armButton, "Arm selected track for recording");
@@ -455,6 +408,24 @@ MainComponent::MainComponent()
     deleteTrackButton.onClick = [this] { deleteSelectedTrack(); };
     trackingButton.onClick = [this] { showTrackingMenu(); };
     automationButton.onClick = [this] { showAutomationPanel(); };
+    sessionPanelToggleButton.onClick = [this]
+    {
+        setLeftPanelCollapsed(!leftPanelCollapsed);
+    };
+    inspectorPanelToggleButton.onClick = [this]
+    {
+        setInspectorPanelVisible(inspectorPanelWidth == 0);
+    };
+    mixerPanelToggleButton.onClick = [this]
+    {
+        setMixerPanelVisible(mixerPanelHeight == 0);
+    };
+    inspectorPanelToggleButton.setToggleState(
+        true,
+        juce::dontSendNotification);
+    mixerPanelToggleButton.setToggleState(
+        true,
+        juce::dontSendNotification);
     muteButton.onClick = [this]
     {
         changeSelectedTrackState([](auto& state) { state.muted = !state.muted; });
@@ -1251,12 +1222,15 @@ void MainComponent::paint(juce::Graphics& graphics)
 
     graphics.setColour(juce::Colour(StudioColours::secondaryText));
     graphics.setFont(10.5f);
-    graphics.drawText("SESSION",
-                      16,
-                      bodyTop + 12,
-                      180,
-                      18,
-                      juce::Justification::centredLeft);
+    if (!leftPanelCollapsed)
+    {
+        graphics.drawText("SESSION",
+                          16,
+                          bodyTop + 12,
+                          100,
+                          18,
+                          juce::Justification::centredLeft);
+    }
     if (inspectorPanelWidth > 0)
     {
         graphics.drawText("INSPECTOR",
@@ -1289,31 +1263,12 @@ void MainComponent::resized()
     auto header = bounds.removeFromTop(76);
     auto status = bounds.removeFromBottom(28);
     constexpr auto resizerThickness = 6;
-    mixerPanelHeight = juce::jlimit(
-        0,
-        juce::jmax(0, bounds.getHeight() - 260 - resizerThickness),
-        mixerPanelHeight);
     auto mixerBounds = bounds.removeFromBottom(mixerPanelHeight);
     auto mixerResizerBounds = bounds.removeFromBottom(
         resizerThickness);
-    const auto maximumLeftWidth = juce::jmax(
-        220,
-        bounds.getWidth() - inspectorPanelWidth - 480
-            - resizerThickness * 2);
-    leftPanelWidth = juce::jlimit(
-        220,
-        maximumLeftWidth,
-        leftPanelWidth);
     auto left = bounds.removeFromLeft(leftPanelWidth);
     auto leftResizerBounds = bounds.removeFromLeft(
         resizerThickness);
-    const auto maximumInspectorWidth = juce::jmax(
-        0,
-        bounds.getWidth() - 480 - resizerThickness);
-    inspectorPanelWidth = juce::jlimit(
-        0,
-        maximumInspectorWidth,
-        inspectorPanelWidth);
     auto right = bounds.removeFromRight(inspectorPanelWidth);
     auto inspectorResizerBounds = bounds.removeFromRight(
         resizerThickness);
@@ -1367,7 +1322,43 @@ void MainComponent::resized()
     metronomeButton.setBounds(topRow.removeFromRight(78).reduced(3, 9));
     positionLabel.setBounds(topRow.reduced(6, 8));
 
-    auto sessionPanel = left.reduced(14, 42);
+    if (leftPanelCollapsed)
+    {
+        sessionPanelToggleButton.setBounds(
+            left.getX() + 4,
+            left.getY() + 7,
+            18,
+            26);
+        inspectorPanelToggleButton.setBounds(
+            left.getX() + 23,
+            left.getY() + 7,
+            18,
+            26);
+        mixerPanelToggleButton.setBounds(
+            left.getX() + 42,
+            left.getY() + 7,
+            18,
+            26);
+    }
+    else
+    {
+        sessionPanelToggleButton.setBounds(
+            left.getRight() - 40,
+            left.getY() + 7,
+            32,
+            26);
+        mixerPanelToggleButton.setBounds(
+            left.getRight() - 92,
+            left.getY() + 7,
+            44,
+            26);
+        inspectorPanelToggleButton.setBounds(
+            left.getRight() - 174,
+            left.getY() + 7,
+            74,
+            26);
+    }
+    auto sessionPanel = left.reduced(leftPanelCollapsed ? 8 : 14, 42);
     addTrackButton.setBounds(sessionPanel.removeFromTop(34));
     sessionPanel.removeFromTop(8);
     addBusButton.setBounds(sessionPanel.removeFromTop(34));
@@ -1383,6 +1374,7 @@ void MainComponent::resized()
     automationButton.setBounds(sessionPanel.removeFromTop(34));
     sessionPanel.removeFromTop(18);
     pluginBrowser->setBounds(sessionPanel);
+    pluginBrowser->setVisible(!leftPanelCollapsed);
 
     auto inspector = inspectorContent.getLocalBounds().reduced(16, 8);
     inspectorName.setBounds(inspector.removeFromTop(28));
@@ -5422,6 +5414,45 @@ void MainComponent::zoomTimeline(double factor, bool reset)
                                                playheadX - timelineViewport.getWidth() / 2),
                                      timelineViewport.getViewPositionY());
     timeline.setViewportPosition(timelineViewport.getViewPositionX());
+}
+
+void MainComponent::setLeftPanelCollapsed(bool collapsed)
+{
+    leftPanelCollapsed = collapsed;
+    leftPanelWidth = collapsed ? 64 : 286;
+    sessionPanelToggleButton.setButtonText(collapsed ? ">" : "<");
+    inspectorPanelToggleButton.setButtonText(
+        collapsed ? "I" : "INSPECT");
+    mixerPanelToggleButton.setButtonText(collapsed ? "M" : "MIX");
+    addTrackButton.setButtonText(collapsed ? "+" : "+ TRACK");
+    addBusButton.setButtonText(collapsed ? "B" : "+ BUS TRACK");
+    importButton.setButtonText(collapsed ? "I" : "IMPORT AUDIO");
+    duplicateTrackButton.setButtonText(collapsed ? "D" : "DUPLICATE TRACK");
+    deleteTrackButton.setButtonText(collapsed ? "X" : "DELETE TRACK");
+    trackingButton.setButtonText(collapsed ? "T" : "TRACKING SETUP");
+    automationButton.setButtonText(collapsed ? "A" : "AUTOMATION");
+    resized();
+    repaint();
+}
+
+void MainComponent::setInspectorPanelVisible(bool visible)
+{
+    inspectorPanelWidth = visible ? 250 : 0;
+    inspectorPanelToggleButton.setToggleState(
+        visible,
+        juce::dontSendNotification);
+    resized();
+    repaint();
+}
+
+void MainComponent::setMixerPanelVisible(bool visible)
+{
+    mixerPanelHeight = visible ? 220 : 0;
+    mixerPanelToggleButton.setToggleState(
+        visible,
+        juce::dontSendNotification);
+    resized();
+    repaint();
 }
 
 void MainComponent::projectChanged(bool writeRecovery, bool markDirty)

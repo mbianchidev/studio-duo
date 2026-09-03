@@ -88,6 +88,11 @@ void PluginBrowserComponent::resized()
 {
     auto bounds = getLocalBounds();
     bounds.removeFromTop(24);
+    if (getWidth() < 340)
+    {
+        search.setBounds(bounds.removeFromTop(30));
+        bounds.removeFromTop(6);
+    }
     auto controls = bounds.removeFromTop(30);
     scanButton.setBounds(controls.removeFromRight(64));
     controls.removeFromRight(6);
@@ -95,7 +100,8 @@ void PluginBrowserComponent::resized()
     controls.removeFromRight(6);
     addButton.setBounds(controls.removeFromRight(52));
     controls.removeFromRight(6);
-    search.setBounds(controls);
+    if (getWidth() >= 340)
+        search.setBounds(controls);
     bounds.removeFromTop(7);
     progressBar.setBounds(bounds.removeFromTop(3));
     bounds.removeFromTop(7);
