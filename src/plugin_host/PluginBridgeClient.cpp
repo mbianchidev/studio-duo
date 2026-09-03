@@ -481,26 +481,28 @@ bool PluginBridgeClient::recoversLateFirstOutputForTesting()
             && std::abs(audio.getSample(1, 0) - 0.25f) < 0.0001f;
     };
 
-    PluginBridgeSharedState sameCallbackState;
+    auto sameCallbackState =
+        std::make_unique<PluginBridgeSharedState>();
     PluginBridgeClient sameCallbackClient;
-    initialise(sameCallbackClient, sameCallbackState);
+    initialise(sameCallbackClient, *sameCallbackState);
     sameCallbackClient.beforeSecondFetchForTesting =
         [&sameCallbackState, &completeWorkerBlock]
         {
-            completeWorkerBlock(sameCallbackState);
+            completeWorkerBlock(*sameCallbackState);
         };
     juce::AudioBuffer<float> sameCallbackOutput(2, 4);
     sameCallbackOutput.clear();
     sameCallbackClient.processBlock(sameCallbackOutput);
     sameCallbackClient.sharedState = nullptr;
 
-    PluginBridgeSharedState laterCallbackState;
+    auto laterCallbackState =
+        std::make_unique<PluginBridgeSharedState>();
     PluginBridgeClient laterCallbackClient;
-    initialise(laterCallbackClient, laterCallbackState);
+    initialise(laterCallbackClient, *laterCallbackState);
     juce::AudioBuffer<float> missedDeadline(2, 4);
     missedDeadline.clear();
     laterCallbackClient.processBlock(missedDeadline);
-    completeWorkerBlock(laterCallbackState);
+    completeWorkerBlock(*laterCallbackState);
     juce::AudioBuffer<float> laterCallbackOutput(2, 4);
     laterCallbackOutput.clear();
     laterCallbackClient.processBlock(laterCallbackOutput);
