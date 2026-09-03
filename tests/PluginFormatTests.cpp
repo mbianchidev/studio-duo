@@ -137,7 +137,28 @@ void pluginFormatTests()
 
     expect(instance->getParameters().size() == 300,
            "CLAP parameters are exposed without truncation.");
-    juce::MessageManager::getInstance()->runDispatchLoopUntil(100);
+    const auto waitForInstance =
+        [](const auto& ready)
+    {
+        for (int attempt = 0; attempt < 500; ++attempt)
+        {
+            juce::MessageManager::getInstance()
+                ->runDispatchLoopUntil(10);
+            if (ready())
+                return true;
+        }
+        return false;
+    };
+    waitForInstance(
+        [&instance]
+        {
+            return instance->getLatencySamples() == 32
+                && instance->getParameters().size() == 301
+                && instance->getParameters()[0]->getName(128)
+                    == "Gain rescanned"
+                && instance->getParameters()[298]->getValue()
+                    > 0.0f;
+        });
     const auto parameterCount = instance->getParameters().size();
     const auto* removedParameter = dynamic_cast<
         juce::HostedAudioProcessorParameter*>(
@@ -337,7 +358,11 @@ void pluginFormatTests()
     instance->processBlock(audio, midi);
     instance->getParameters()[291]->setValueNotifyingHost(1.0f);
     instance->processBlock(audio, midi);
-    juce::MessageManager::getInstance()->runDispatchLoopUntil(100);
+    waitForInstance(
+        [&instance]
+        {
+            return instance->getParameters().size() == 302;
+        });
     juce::MemoryBlock currentFixtureState;
     if (instance->getParameters().size() > 301)
     {
