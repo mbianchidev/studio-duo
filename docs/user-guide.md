@@ -149,6 +149,11 @@ The inspector and lower mixer expose gain, pan, mute, and solo. Gain defaults to
 Double-click a fader lane to return to `0.0 dB` or a pan knob to return to
 center.
 
+The mixer also contains a scrollable **INSERTS & SENDS** list across all root
+tracks. Click an insert to open its editor or use its **ON/OFF** control to
+bypass and restore it while audio is playing. Click a send or sidechain to open
+its routing editor.
+
 Use the sidebar arrow to collapse Session controls to an icon rail. **INSPECT**
 and **MIX** show or hide the fixed-size inspector and mixer. Their dividers also
 collapse when dragged closed and restore when dragged open or double-clicked.

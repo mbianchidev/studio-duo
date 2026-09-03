@@ -87,6 +87,8 @@ private:
     void duplicateSelectedTrack();
     void deleteSelectedTrack();
     void addPluginToSelectedTrack(const PluginCatalogEntry& entry);
+    void openPluginEditor(const juce::String& trackId,
+                          const juce::String& insertId);
     void validatePlugin(const PluginCatalogEntry& entry);
     void validateScreamForge();
     void changePluginMode(const juce::String& trackId,

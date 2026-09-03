@@ -32,6 +32,21 @@ void RoutingPanel::setHardwareOutputs(juce::StringArray names)
     hardwareOutputs = std::move(names);
 }
 
+void RoutingPanel::editConnection(const juce::String& connectionId)
+{
+    if (project == nullptr)
+        return;
+    const auto route = std::find_if(
+        project->routingConnections.cbegin(),
+        project->routingConnections.cend(),
+        [&connectionId](const auto& candidate)
+        {
+            return candidate.id == connectionId;
+        });
+    if (route != project->routingConnections.cend())
+        showRouteMenu(*route);
+}
+
 std::vector<const RoutingConnection*> RoutingPanel::displayedRoutes() const
 {
     std::vector<const RoutingConnection*> result;

@@ -966,6 +966,29 @@ MainComponent::MainComponent()
                 (after.pan + 1.0) * 0.5);
         }
     };
+    mixer->onPluginOpen = [this](
+                              const auto& trackId,
+                              const auto& insertId)
+    {
+        openPluginEditor(trackId, insertId);
+    };
+    mixer->onPluginEnabledChanged = [this](
+                                        const auto& trackId,
+                                        const auto& insertId,
+                                        bool enabled)
+    {
+        perform(std::make_unique<SetPluginBypassCommand>(
+            trackId,
+            insertId,
+            !enabled));
+    };
+    mixer->onRouteOpen = [this](
+                             const auto& trackId,
+                             const auto& routeId)
+    {
+        selectTrack(trackId);
+        routingPanel->editConnection(routeId);
+    };
     mixer->addKeyListener(this);
     addAndMakeVisible(*mixer);
 
@@ -1045,16 +1068,7 @@ MainComponent::MainComponent()
                                     const auto& trackId,
                                     const auto& insertId)
     {
-        selectTrack(trackId);
-        if (const auto result = audioEngine.showPluginEditor(insertId);
-            result.failed())
-        {
-            setStatus(result.getErrorMessage(), true);
-        }
-        else
-        {
-            setStatus("Plugin editor opened.");
-        }
+        openPluginEditor(trackId, insertId);
     };
     insertPanel->onReload = [this](const auto& trackId, const auto& insertId)
     {
@@ -2821,6 +2835,22 @@ void MainComponent::addPluginToSelectedTrack(const PluginCatalogEntry& entry)
         inspectorViewport.setViewPosition(
             0,
             juce::jmax(0, insertPanel->getY() - 16));
+    }
+}
+
+void MainComponent::openPluginEditor(
+    const juce::String& trackId,
+    const juce::String& insertId)
+{
+    selectTrack(trackId);
+    if (const auto result = audioEngine.showPluginEditor(insertId);
+        result.failed())
+    {
+        setStatus(result.getErrorMessage(), true);
+    }
+    else
+    {
+        setStatus("Plugin editor opened.");
     }
 }
 

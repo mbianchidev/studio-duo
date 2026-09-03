@@ -17,6 +17,7 @@ public:
     void setProject(const Project* value);
     void setTrack(const juce::String& value);
     void setHardwareOutputs(juce::StringArray names);
+    void editConnection(const juce::String& connectionId);
 
     std::function<void(RoutingConnection)> onAddConnection;
     std::function<void(RoutingConnection, RoutingConnection)> onUpdateConnection;
