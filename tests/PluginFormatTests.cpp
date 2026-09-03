@@ -563,32 +563,56 @@ void pluginFormatTests()
               { monoRequest })
               .wasOk(),
            "PDC metadata-rescan project is accepted.");
-    for (int attempt = 0;
-         attempt < 100
-         && monoEngine.pluginRuntimeTransitionPending();
-         ++attempt)
+    const auto waitForRuntimeStatuses =
+        [&monoEngine](const auto& ready)
     {
-        juce::MessageManager::getInstance()
-           ->runDispatchLoopUntil(10);
-    }
+        std::vector<
+            studio::StudioAudioEngine::PluginRuntimeStatus>
+            statuses;
+        for (int attempt = 0; attempt < 500; ++attempt)
+        {
+            juce::MessageManager::getInstance()
+                ->runDispatchLoopUntil(10);
+            statuses = monoEngine.pluginRuntimeStatuses();
+            if (ready(statuses)
+                && !monoEngine.pluginRuntimeTransitionPending())
+                break;
+        }
+        return statuses;
+    };
     monoEngine.seekSeconds(0.0);
     monoEngine.play();
     monoEngine.processActiveBlockForTesting(64);
-    juce::MessageManager::getInstance()->runDispatchLoopUntil(100);
-    const auto monoStatuses = monoEngine.pluginRuntimeStatuses();
-    for (int attempt = 0;
-         attempt < 100
-         && monoEngine.pluginRuntimeTransitionPending();
-         ++attempt)
-    {
-        juce::MessageManager::getInstance()
-            ->runDispatchLoopUntil(10);
-    }
+    const auto monoStatuses = waitForRuntimeStatuses(
+        [](const auto& statuses)
+        {
+            return !statuses.empty()
+                && statuses.front().latencySamples == 32
+                && statuses.front().parameters.size() == 301
+                && statuses.front().parameters.front().name
+                    == "Gain rescanned";
+        });
     monoEngine.seekSeconds(0.0);
     monoEngine.play();
     monoEngine.processActiveBlockForTesting(64);
     const auto metadataRefreshedStatuses =
-        monoEngine.pluginRuntimeStatuses();
+        waitForRuntimeStatuses(
+            [](const auto& statuses)
+            {
+                if (statuses.empty())
+                    return false;
+                const auto parameter = std::find_if(
+                    statuses.front().parameters.cbegin(),
+                    statuses.front().parameters.cend(),
+                    [](const auto& candidate)
+                    {
+                        return candidate.id == "301";
+                    });
+                return parameter
+                        != statuses.front().parameters.cend()
+                    && std::abs(parameter->value - 0.75f)
+                        < 0.0001f;
+            });
     auto lateParameterValue = -1.0f;
     if (!metadataRefreshedStatuses.empty())
     {
@@ -613,7 +637,6 @@ void pluginFormatTests()
     monoEngine.seekSeconds(0.0);
     monoEngine.play();
     monoEngine.processActiveBlockForTesting(64);
-    juce::MessageManager::getInstance()->runDispatchLoopUntil(50);
 
     std::atomic<bool> runRealtimeStress { true };
     std::atomic<int> realtimeBlocks { 0 };
@@ -643,15 +666,12 @@ void pluginFormatTests()
             }
         });
     const auto timingRefreshedStatuses =
-        monoEngine.pluginRuntimeStatuses();
-    for (int attempt = 0;
-         attempt < 100
-         && monoEngine.pluginRuntimeTransitionPending();
-         ++attempt)
-    {
-        juce::MessageManager::getInstance()
-            ->runDispatchLoopUntil(10);
-    }
+        waitForRuntimeStatuses(
+            [](const auto& statuses)
+            {
+                return !statuses.empty()
+                    && statuses.front().latencySamples == 64;
+            });
     runRealtimeStress.store(false, std::memory_order_release);
     realtimeStressThread.join();
     expect(!monoStatuses.empty()
@@ -706,9 +726,14 @@ void pluginFormatTests()
     monoEngine.seekSeconds(0.0);
     monoEngine.play();
     monoEngine.processActiveBlockForTesting(64);
-    juce::MessageManager::getInstance()->runDispatchLoopUntil(50);
     const auto metadataOnlyStatuses =
-        monoEngine.pluginRuntimeStatuses();
+        waitForRuntimeStatuses(
+            [](const auto& statuses)
+            {
+                return !statuses.empty()
+                    && statuses.front().parameters.size() == 302
+                    && statuses.front().latencySamples == 64;
+            });
     monoEngine.seekSeconds(0.0);
     monoEngine.play();
     const auto alignedAfterMetadataRescan =
