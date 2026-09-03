@@ -5499,7 +5499,11 @@ void StudioAudioEngine::runPluginRuntimeBuilder()
             auto bridge = std::make_unique<PluginBridgeClient>();
             const auto result = bridge->startPlugin(*request.description,
                                                     currentSampleRate(),
-                                                    PluginBridgeSharedState::maxBlockSize,
+                                                    juce::jlimit(
+                                                        1,
+                                                        PluginBridgeSharedState::maxBlockSize,
+                                                        deviceBlockSize.load(
+                                                            std::memory_order_acquire)),
                                                     request.state,
                                                     request.sidechainChannels);
             if (result.failed())

@@ -35,20 +35,25 @@ struct PluginBridgeParameterEvent
 struct alignas(64) PluginBridgeSharedState
 {
     static constexpr std::uint32_t magicValue = 0x53444252;
-    static constexpr std::uint32_t protocolVersion = 3;
+    static constexpr std::uint32_t protocolVersion = 5;
+    static constexpr std::uint32_t bypassOutputFlag = 1u;
+    static constexpr std::uint32_t resetAppliedFlag = 1u << 1u;
     static constexpr int maxChannels = 8;
     static constexpr int maxBlockSize = 4096;
     static constexpr int maxParameterEvents = 16384;
+    static constexpr int maxSupportedLatencySamples = 65536;
 
     std::uint32_t magic = magicValue;
     std::uint32_t version = protocolVersion;
     std::atomic<std::uint32_t> hostSequence { 0 };
     std::atomic<std::uint32_t> workerSequence { 0 };
     std::atomic<std::uint32_t> shutdownRequested { 0 };
+    std::atomic<std::uint32_t> resetRequested { 0 };
     std::atomic<std::uint32_t> numChannels { 0 };
     std::atomic<std::uint32_t> numOutputChannels { 0 };
     std::atomic<std::uint32_t> sidechainChannels { 0 };
     std::atomic<std::uint32_t> numSamples { 0 };
+    std::atomic<std::uint32_t> outputFlags { 0 };
     std::atomic<std::uint32_t> parameterEventCount { 0 };
     std::atomic<std::uint32_t> parameterEventOverflowCount { 0 };
     std::atomic<std::uint32_t> heartbeat { 0 };
@@ -71,7 +76,9 @@ public:
             && state.version == PluginBridgeSharedState::protocolVersion;
     }
 
-    static bool processAvailableBlock(PluginBridgeSharedState& state) noexcept
+    static bool processAvailableBlock(
+        PluginBridgeSharedState& state,
+        std::uint32_t outputFlags = 0) noexcept
     {
         const auto hostSequence = state.hostSequence.load(std::memory_order_acquire);
         if (hostSequence == state.workerSequence.load(std::memory_order_relaxed))
@@ -99,6 +106,7 @@ public:
         state.numOutputChannels.store(
             static_cast<std::uint32_t>(channels),
             std::memory_order_relaxed);
+        state.outputFlags.store(outputFlags, std::memory_order_relaxed);
         state.workerSequence.store(hostSequence, std::memory_order_release);
         state.heartbeat.fetch_add(1, std::memory_order_relaxed);
         return true;

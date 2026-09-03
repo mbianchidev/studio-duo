@@ -295,7 +295,8 @@ void PluginBridgeWorker::run()
         if (!admitted)
         {
             PluginBridgeProtocol::processAvailableBlock(
-                *sharedState);
+                *sharedState,
+                PluginBridgeSharedState::bypassOutputFlag);
             wait(1);
             continue;
         }
@@ -309,6 +310,13 @@ void PluginBridgeWorker::run()
         } processingScope { pluginAccessState };
 
         const std::lock_guard pluginLock(pluginMutex);
+        const auto resetApplied =
+            sharedState->resetRequested.exchange(
+                0,
+                std::memory_order_acq_rel)
+            != 0;
+        if (resetApplied)
+            plugin->reset();
         const auto channels = std::min(
             static_cast<int>(sharedState->numChannels.load(std::memory_order_relaxed)),
             PluginBridgeSharedState::maxChannels);
@@ -484,6 +492,11 @@ void PluginBridgeWorker::run()
         }
         sharedState->numOutputChannels.store(
             static_cast<std::uint32_t>(mainOutputChannels),
+            std::memory_order_relaxed);
+        sharedState->outputFlags.store(
+            resetApplied
+                ? PluginBridgeSharedState::resetAppliedFlag
+                : 0,
             std::memory_order_relaxed);
         sharedState->workerSequence.store(hostSequence, std::memory_order_release);
     }

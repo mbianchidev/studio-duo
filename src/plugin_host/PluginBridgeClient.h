@@ -63,8 +63,10 @@ private:
                                int sidechainChannels);
     void fetchWorkerOutput() noexcept;
     void publishInputBlock(int samples) noexcept;
-    void writeOutputBlock(juce::AudioBuffer<float>& audio,
-                          std::int64_t expectedSequence) noexcept;
+    void prepareOutputTimeline(int blockSize);
+    void queueDryInput(int samples) noexcept;
+    void queueCompletedOutput() noexcept;
+    void readTimelineOutput(juce::AudioBuffer<float>& audio) noexcept;
     juce::Result sendEditorCommand(const juce::String& command,
                                   int width = 0,
                                   int height = 0);
@@ -75,13 +77,12 @@ private:
     std::unique_ptr<juce::MemoryMappedFile> mapping;
     PluginBridgeSharedState* sharedState = nullptr;
     std::array<std::array<float, PluginBridgeSharedState::maxBlockSize>,
-               PluginBridgeSharedState::maxChannels> lastValidOutput {};
-    std::array<std::array<float, PluginBridgeSharedState::maxBlockSize>,
                PluginBridgeSharedState::maxChannels> inputAccumulator {};
     std::array<std::array<float, PluginBridgeSharedState::maxBlockSize>,
                PluginBridgeSharedState::maxChannels> sidechainAccumulator {};
     std::array<std::array<float, PluginBridgeSharedState::maxBlockSize>,
                PluginBridgeSharedState::maxChannels> completedOutput {};
+    juce::AudioBuffer<float> outputTimeline;
     int processingBlockSize = 512;
     int inputChannels = 0;
     int sidechainChannels = 0;
@@ -91,10 +92,16 @@ private:
     int completedOutputSamples = 0;
     std::int64_t nextInputSequence = 0;
     std::int64_t inFlightSequence = -1;
+    std::int64_t inFlightStartSample = 0;
     std::int64_t completedSequence = -1;
+    std::int64_t completedStartSample = 0;
+    std::uint32_t completedOutputFlags = 0;
+    std::int64_t streamSamplePosition = 0;
+    std::int64_t wetReplacementBlockedUntilSample = 0;
     bool inFlightMissedDeadline = false;
-    int lastValidChannels = 0;
-    int lastValidSamples = 0;
+    bool timelineResetPending = false;
+    int bridgeQuantumSamples = 512;
+    int outputTimelineCapacity = 1;
     std::uint32_t lastOutputSequence = 0;
     std::atomic<bool> ready { false };
     std::atomic<bool> connectionLost { false };
