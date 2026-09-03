@@ -20,8 +20,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest]
+        include:
+          - os: macos-latest
+            build_parallel: 1
+          - os: windows-latest
+            build_parallel: 4
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
 
     steps:
       - name: Check out source
@@ -37,7 +42,7 @@ jobs:
         run: cmake -S . -B build -DSTUDIO_DUO_BUILD_TESTS=ON
 
       - name: Build
-        run: cmake --build build --config Release --parallel
+        run: cmake --build build --config Release --parallel ${{ matrix.build_parallel }}
 
       - name: Test
         run: ctest --test-dir build --build-config Release --output-on-failure
