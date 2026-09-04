@@ -2206,7 +2206,6 @@ std::vector<StudioAudioEngine::RecordingResult> StudioAudioEngine::stopRecording
     recordingAccepting.store(false, std::memory_order_release);
     playing.store(false, std::memory_order_release);
     waitForRecordingCallbacks();
-    playheadSample.store(0, std::memory_order_release);
     return finishRecordingSession();
 }
 
@@ -2231,7 +2230,6 @@ void StudioAudioEngine::stopRecordingAsync(
     recordingFinalizer.addJob([this, callback = std::move(completion)]() mutable
     {
         waitForRecordingCallbacks();
-        playheadSample.store(0, std::memory_order_release);
         auto recordingResults = finishRecordingSession();
         recordingFinalizing.store(false, std::memory_order_release);
         juce::MessageManager::callAsync(

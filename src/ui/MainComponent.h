@@ -16,6 +16,7 @@
 #include <juce_audio_utils/juce_audio_utils.h>
 
 #include <memory>
+#include <optional>
 #include <vector>
 
 namespace studio
@@ -142,6 +143,7 @@ private:
                               juce::Rectangle<int> targetScreenArea);
     void showTrackingMenu();
     void showAutomationPanel();
+    void promptSongSection(double position);
     void promptTempoChange();
     void promptMeterChange();
     void createPluginTonePath(const juce::String& sourceTrackId);
@@ -155,7 +157,9 @@ private:
     void captureMixerSnapshot();
     void recallMixerSnapshot(const juce::String& snapshotId);
     void updateTimelineSize();
-    void zoomTimeline(double factor, bool reset = false);
+    void zoomTimeline(double factor,
+                      bool reset = false,
+                      std::optional<double> focalSeconds = std::nullopt);
     void setLeftPanelCollapsed(bool collapsed);
     void setInspectorPanelVisible(bool visible);
     void setMixerPanelVisible(bool visible);

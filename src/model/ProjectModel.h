@@ -71,6 +71,17 @@ struct MeterChange
     static std::optional<MeterChange> fromVar(const juce::var& value, juce::String& error);
 };
 
+struct SongSection
+{
+    juce::String id { juce::Uuid().toString() };
+    juce::String name { "Section" };
+    double timeSeconds = 0.0;
+
+    [[nodiscard]] juce::var toVar() const;
+    static std::optional<SongSection> fromVar(const juce::var& value,
+                                              juce::String& error);
+};
+
 struct RecordingPlan
 {
     double transportStartSeconds = 0.0;
@@ -333,7 +344,7 @@ struct RenderReport
 class Project
 {
 public:
-    static constexpr int currentFormatVersion = 3;
+    static constexpr int currentFormatVersion = 4;
 
     juce::String id { juce::Uuid().toString() };
     juce::String name { "Untitled" };
@@ -342,6 +353,7 @@ public:
     int timeSignatureDenominator = 4;
     std::vector<TempoChange> tempoChanges;
     std::vector<MeterChange> meterChanges;
+    std::vector<SongSection> sections;
     bool metronomeEnabled = true;
     int metronomeSubdivision = 1;
     int metronomeOutputChannel = 0;

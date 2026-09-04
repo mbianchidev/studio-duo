@@ -157,6 +157,36 @@ std::optional<MeterChange> MeterChange::fromVar(const juce::var& value,
     return change;
 }
 
+juce::var SongSection::toVar() const
+{
+    auto object = std::make_unique<juce::DynamicObject>();
+    object->setProperty("id", id);
+    object->setProperty("name", name);
+    object->setProperty("timeSeconds", timeSeconds);
+    return juce::var(object.release());
+}
+
+std::optional<SongSection> SongSection::fromVar(const juce::var& value,
+                                                juce::String& error)
+{
+    const auto* object = requireObject(value, error, "Song section");
+    if (object == nullptr)
+        return std::nullopt;
+
+    SongSection section;
+    section.id = object->getProperty("id").toString();
+    section.name = object->getProperty("name").toString().trim();
+    section.timeSeconds = numberProperty(*object, "timeSeconds", 0.0);
+    if (section.id.isEmpty()
+        || section.name.isEmpty()
+        || section.timeSeconds < 0.0)
+    {
+        error = "Song sections require an ID, a name, and a non-negative position.";
+        return std::nullopt;
+    }
+    return section;
+}
+
 juce::var EditGroup::toVar() const
 {
     auto object = std::make_unique<juce::DynamicObject>();
@@ -1655,6 +1685,8 @@ RecordingPlan Project::recordingPlan(double cursorSeconds) const noexcept
 double Project::lengthSeconds() const noexcept
 {
     double length = 8.0;
+    for (const auto& section : sections)
+        length = std::max(length, section.timeSeconds);
     for (const auto& track : tracks)
         for (const auto& clip : track.clips)
             length = std::max(length, clip.endSeconds());
@@ -1690,6 +1722,10 @@ juce::var Project::toVar() const
     for (const auto& change : meterChanges)
         meterValues.add(change.toVar());
     object->setProperty("meterChanges", juce::var(meterValues));
+    juce::Array<juce::var> sectionValues;
+    for (const auto& section : sections)
+        sectionValues.add(section.toVar());
+    object->setProperty("sections", juce::var(sectionValues));
     object->setProperty("metronomeEnabled", metronomeEnabled);
     object->setProperty("metronomeSubdivision", metronomeSubdivision);
     object->setProperty("metronomeOutputChannel", metronomeOutputChannel);
@@ -1802,6 +1838,37 @@ std::optional<Project> Project::fromVar(const juce::var& value, juce::String& er
                          [](const auto& left, const auto& right)
                          {
                              return left.timeSeconds < right.timeSeconds;
+                         });
+    }
+    const auto sectionValues = object->getProperty("sections");
+    if (sectionValues.isArray())
+    {
+        for (const auto& sectionValue : *sectionValues.getArray())
+        {
+            auto section = SongSection::fromVar(sectionValue, error);
+            if (!section.has_value())
+                return std::nullopt;
+            const auto duplicate = std::find_if(
+                project.sections.cbegin(),
+                project.sections.cend(),
+                [&section](const auto& existing)
+                {
+                    return existing.id == section->id
+                        || std::abs(existing.timeSeconds - section->timeSeconds)
+                           < 0.0001;
+                });
+            if (duplicate != project.sections.cend())
+            {
+                error = "Song sections require unique IDs and timeline positions.";
+                return std::nullopt;
+            }
+            project.sections.push_back(std::move(*section));
+        }
+        std::stable_sort(project.sections.begin(),
+                         project.sections.end(),
+                         [](const auto& left, const auto& right)
+                         {
+                            return left.timeSeconds < right.timeSeconds;
                          });
     }
     project.metronomeEnabled = booleanProperty(*object, "metronomeEnabled", true);
