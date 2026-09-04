@@ -423,6 +423,35 @@ void commandHistory()
            error.toRawUTF8());
     expect(project.findClip(clipId) != nullptr, "Add clip command inserts a clip.");
 
+    auto duplicateClip =
+        std::make_unique<studio::DuplicateClipCommand>(clipId);
+    auto* duplicateClipPointer = duplicateClip.get();
+    expect(history.perform(std::move(duplicateClip), project, error),
+           error.toRawUTF8());
+    const auto duplicatedClipId =
+        duplicateClipPointer->duplicatedClipId();
+    const auto* duplicatedClip = project.findClip(duplicatedClipId);
+    expect(duplicatedClip != nullptr
+               && duplicatedClipId != clipId
+               && duplicatedClip->name == clip.name
+               && std::abs(duplicatedClip->startSeconds
+                           - clip.startSeconds) < 0.000001
+               && std::abs(duplicatedClip->durationSeconds
+                           - clip.durationSeconds) < 0.000001,
+           "Duplicate clip command copies clip content with a new ID.");
+    expect(duplicateClipPointer->duplicatedTrackId()
+               == project.tracks.front().id,
+           "Duplicate clip command keeps the copy on the source track.");
+    expect(history.undo(project),
+           "Duplicate clip command can be undone.");
+    expect(project.findClip(duplicatedClipId) == nullptr,
+           "Undo removes the duplicated clip.");
+    expect(history.redo(project, error), error.toRawUTF8());
+    expect(project.findClip(duplicatedClipId) != nullptr,
+           "Redo restores the same duplicated clip.");
+    expect(history.undo(project),
+           "Duplicate clip command can be undone after redo.");
+
     expect(history.perform(std::make_unique<studio::MoveClipCommand>(clipId, 2.0), project, error),
            error.toRawUTF8());
     expect(project.findClip(clipId)->startSeconds == 2.0, "Move clip command updates its start.");

@@ -306,6 +306,93 @@ void AddClipCommand::undo(Project& project)
         }), track->clips.end());
 }
 
+DuplicateClipCommand::DuplicateClipCommand(juce::String clipToDuplicate)
+    : sourceClipId(std::move(clipToDuplicate))
+{
+}
+
+juce::String DuplicateClipCommand::name() const
+{
+    return "Duplicate clip";
+}
+
+bool DuplicateClipCommand::perform(Project& project, juce::String& error)
+{
+    if (!createdDuplicate)
+    {
+        auto* track = project.findTrackContainingClip(sourceClipId);
+        if (track == nullptr || track->type == TrackType::master)
+        {
+            error = "The clip to duplicate no longer exists.";
+            return false;
+        }
+
+        const auto source = std::find_if(
+            track->clips.cbegin(),
+            track->clips.cend(),
+            [this](const auto& candidate)
+            {
+                return candidate.id == sourceClipId;
+            });
+        if (source == track->clips.cend())
+        {
+            error = "The clip to duplicate no longer exists.";
+            return false;
+        }
+
+        trackId = track->id;
+        duplicatedClip = *source;
+        duplicatedClip.id = juce::Uuid().toString();
+        insertionIndex = static_cast<std::size_t>(
+            std::distance(track->clips.cbegin(), source) + 1);
+        createdDuplicate = true;
+    }
+
+    auto* track = project.findTrack(trackId);
+    if (track == nullptr || track->type == TrackType::master)
+    {
+        error = "The destination audio track is unavailable.";
+        return false;
+    }
+    if (project.findClip(duplicatedClip.id) != nullptr)
+    {
+        error = "The duplicated clip already exists.";
+        return false;
+    }
+
+    const auto index = std::min(insertionIndex, track->clips.size());
+    track->clips.insert(
+        track->clips.begin() + static_cast<std::ptrdiff_t>(index),
+        duplicatedClip);
+    return true;
+}
+
+void DuplicateClipCommand::undo(Project& project)
+{
+    if (auto* track = project.findTrackContainingClip(duplicatedClip.id))
+    {
+        track->clips.erase(
+            std::remove_if(
+                track->clips.begin(),
+                track->clips.end(),
+                [this](const auto& candidate)
+                {
+                    return candidate.id == duplicatedClip.id;
+                }),
+            track->clips.end());
+    }
+}
+
+const juce::String& DuplicateClipCommand::duplicatedClipId() const noexcept
+{
+    return duplicatedClip.id;
+}
+
+const juce::String& DuplicateClipCommand::duplicatedTrackId() const noexcept
+{
+    return trackId;
+}
+
 AddRecordingTakeCommand::AddRecordingTakeCommand(std::vector<Track> tracksToAdd)
     : tracks(std::move(tracksToAdd))
 {

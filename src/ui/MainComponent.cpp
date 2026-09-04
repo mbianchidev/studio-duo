@@ -802,6 +802,7 @@ MainComponent::MainComponent()
     timeline.onSplitSelected = [this] { splitSelectedClip(); };
     timeline.onTrimStartSelected = [this] { trimSelectedClipStartToPlayhead(); };
     timeline.onTrimEndSelected = [this] { trimSelectedClipEndToPlayhead(); };
+    timeline.onDuplicateSelected = [this] { duplicateSelectedClip(); };
     timeline.onDeleteSelected = [this] { deleteSelectedClip(); };
     timeline.onUseTake = [this](const auto& takeTrackId)
     {
@@ -1737,6 +1738,18 @@ bool MainComponent::keyPressed(const juce::KeyPress& key)
         return true;
     }
 
+    if (command && key.getKeyCode() == 'C')
+    {
+        copySelectedClip();
+        return true;
+    }
+
+    if (command && key.getKeyCode() == 'V')
+    {
+        pasteCopiedClip();
+        return true;
+    }
+
     if (command && key.getKeyCode() == '-')
     {
         zoomTimeline(1.0 / 1.25);
@@ -1802,6 +1815,7 @@ void MainComponent::createNewProject()
     reducedIsolationMarkerSignature.clear();
     commandStack.clear();
     selectedClipId.clear();
+    copiedClipId.clear();
     selectedTrackId = project.tracks.front().id;
     tempoSlider.setValue(project.tempo, juce::dontSendNotification);
     loopButton.setToggleState(project.loopEnabled, juce::dontSendNotification);
@@ -2265,6 +2279,7 @@ void MainComponent::openProjectFrom(const juce::File& package)
     project = std::move(*loaded);
     commandStack.clear();
     selectedClipId.clear();
+    copiedClipId.clear();
     selectedTrackId = project.tracks.empty() ? juce::String() : project.tracks.front().id;
     tempoSlider.setValue(project.tempo, juce::dontSendNotification);
     loopButton.setToggleState(project.loopEnabled, juce::dontSendNotification);
@@ -3209,6 +3224,52 @@ void MainComponent::trimSelectedClipEndToPlayhead()
              clip->startSeconds,
              clip->sourceOffsetSeconds,
              cursor - clip->startSeconds);
+}
+
+void MainComponent::copySelectedClip()
+{
+    if (project.findClip(selectedClipId) == nullptr)
+    {
+        setStatus("Select a clip before copying.", true);
+        return;
+    }
+
+    copiedClipId = selectedClipId;
+    setStatus("Clip copied. Press Command/Ctrl+V to duplicate it.");
+}
+
+void MainComponent::pasteCopiedClip()
+{
+    if (copiedClipId.isEmpty())
+    {
+        setStatus("Copy a clip before pasting.", true);
+        return;
+    }
+
+    duplicateClip(copiedClipId);
+}
+
+void MainComponent::duplicateSelectedClip()
+{
+    if (selectedClipId.isEmpty())
+    {
+        setStatus("Select a clip before duplicating.", true);
+        return;
+    }
+
+    duplicateClip(selectedClipId);
+}
+
+void MainComponent::duplicateClip(const juce::String& clipId)
+{
+    auto command = std::make_unique<DuplicateClipCommand>(clipId);
+    auto* commandPointer = command.get();
+    if (!perform(std::move(command)))
+        return;
+
+    selectClip(commandPointer->duplicatedTrackId(),
+               commandPointer->duplicatedClipId());
+    setStatus("Clip duplicated and selected. Drag it to reposition.");
 }
 
 void MainComponent::deleteSelectedClip()

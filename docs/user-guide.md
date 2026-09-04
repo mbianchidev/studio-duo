@@ -43,6 +43,7 @@ exchange, and mastering remain later roadmap phases.
 | Import audio | `Command/Ctrl+I` |
 | Undo | `Command/Ctrl+Z` |
 | Redo | `Command/Ctrl+Shift+Z` |
+| Copy and duplicate selected clip | `Command/Ctrl+C`, then `Command/Ctrl+V` |
 | Split selected clip at playhead | `S` |
 | Trim selected clip start to playhead | `[` |
 | Trim selected clip end to playhead | `]` |

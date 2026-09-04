@@ -96,6 +96,25 @@ private:
     std::size_t insertionIndex = 0;
 };
 
+class DuplicateClipCommand final : public ProjectCommand
+{
+public:
+    explicit DuplicateClipCommand(juce::String clipToDuplicate);
+
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+    [[nodiscard]] const juce::String& duplicatedClipId() const noexcept;
+    [[nodiscard]] const juce::String& duplicatedTrackId() const noexcept;
+
+private:
+    juce::String sourceClipId;
+    juce::String trackId;
+    AudioClip duplicatedClip;
+    std::size_t insertionIndex = 0;
+    bool createdDuplicate = false;
+};
+
 class AddRecordingTakeCommand final : public ProjectCommand
 {
 public:

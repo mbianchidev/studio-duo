@@ -100,6 +100,10 @@ private:
     void splitSelectedClip();
     void trimSelectedClipStartToPlayhead();
     void trimSelectedClipEndToPlayhead();
+    void copySelectedClip();
+    void pasteCopiedClip();
+    void duplicateSelectedClip();
+    void duplicateClip(const juce::String& clipId);
     void deleteSelectedClip();
     void moveClip(const juce::String& clipId,
                   const juce::String& destinationTrackId,
@@ -194,6 +198,7 @@ private:
     double recordingStartSeconds = 0.0;
     juce::String selectedTrackId;
     juce::String selectedClipId;
+    juce::String copiedClipId;
     juce::String replacementInsertId;
     bool dirty = false;
     bool appShutdownPrepared = false;

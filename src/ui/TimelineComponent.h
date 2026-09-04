@@ -50,6 +50,7 @@ public:
     std::function<void()> onSplitSelected;
     std::function<void()> onTrimStartSelected;
     std::function<void()> onTrimEndSelected;
+    std::function<void()> onDuplicateSelected;
     std::function<void()> onDeleteSelected;
     std::function<void(const juce::String&)> onUseTake;
     std::function<void(const juce::String&)> onUseClipForComp;
