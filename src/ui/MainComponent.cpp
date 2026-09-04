@@ -1171,7 +1171,8 @@ MainComponent::MainComponent()
     projectChanged(false);
     startTimerHz(30);
     setSize(1480, 900);
-    juce::MessageManager::callAsync(
+    juce::Timer::callAfterDelay(
+        250,
         [safe = juce::Component::SafePointer<MainComponent>(this)]
         {
             if (safe != nullptr)
@@ -1201,7 +1202,7 @@ void MainComponent::initialiseAudio()
     }
 
     refreshInputControls();
-    setStatus("Ready. Use I/O to enable recording inputs.");
+    setStatus("Ready. Import audio or arm a track and record.");
 }
 
 MainComponent::~MainComponent()

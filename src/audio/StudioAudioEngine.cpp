@@ -395,9 +395,9 @@ juce::Result StudioAudioEngine::initialise(juce::AudioDeviceManager& manager)
     shutdown();
     shuttingDown.store(false, std::memory_order_release);
 
-    // Recording inputs are enabled explicitly from I/O after the app is visible,
-    // avoiding a microphone permission request during the startup message loop.
-    const auto error = manager.initialiseWithDefaultDevices(0, 2);
+    // Audio starts after the window's first paint, so microphone permission and
+    // device discovery cannot prevent the initial UI from appearing.
+    const auto error = manager.initialiseWithDefaultDevices(1, 2);
     if (error.isNotEmpty())
         return juce::Result::fail("Audio device setup failed: " + error);
 
