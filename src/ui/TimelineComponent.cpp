@@ -1431,6 +1431,16 @@ void TimelineComponent::showContextMenu(const juce::MouseEvent& event)
         };
         menu.addItem(std::move(trimEnd));
 
+        juce::PopupMenu::Item duplicate("Duplicate clip");
+        duplicate.shortcutKeyDescription = "Command/Ctrl+C, Command/Ctrl+V";
+        duplicate.isEnabled = hasClip;
+        duplicate.action = [this]
+        {
+            if (onDuplicateSelected)
+                onDuplicateSelected();
+        };
+        menu.addItem(std::move(duplicate));
+
         menu.addSeparator();
         const auto* selectedTrack = project->findTrack(selectedTrackId);
         if (hasClip

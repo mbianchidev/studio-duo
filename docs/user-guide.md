@@ -43,6 +43,7 @@ exchange, and mastering remain later roadmap phases.
 | Import audio | `Command/Ctrl+I` |
 | Undo | `Command/Ctrl+Z` |
 | Redo | `Command/Ctrl+Shift+Z` |
+| Copy and duplicate selected clip | `Command/Ctrl+C`, then `Command/Ctrl+V` |
 | Split selected clip at playhead | `S` |
 | Trim selected clip start to playhead | `[` |
 | Trim selected clip end to playhead | `]` |
@@ -59,6 +60,10 @@ exchange, and mastering remain later roadmap phases.
    volume, pan, color, inserts, and output.
 4. Save the project as a `.studioduo` directory package before recording so new
    media is written below its `media/` directory.
+
+Studio Duo enables the first recording input shortly after its window appears.
+On macOS, the system may request microphone access at that point. Use **I/O**
+to enable more inputs or change the active device.
 
 Monitoring is off by default to avoid accidental feedback. Stereo capture uses
 the selected hardware input and the adjacent channel.

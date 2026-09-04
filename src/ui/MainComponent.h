@@ -55,6 +55,7 @@ private:
     bool keyPressed(const juce::KeyPress& key) override;
     bool keyPressed(const juce::KeyPress& key, juce::Component*) override;
 
+    void initialiseAudio();
     void createNewProject();
     void beginOpenProject();
     void beginSaveProject();
@@ -99,6 +100,10 @@ private:
     void splitSelectedClip();
     void trimSelectedClipStartToPlayhead();
     void trimSelectedClipEndToPlayhead();
+    void copySelectedClip();
+    void pasteCopiedClip();
+    void duplicateSelectedClip();
+    void duplicateClip(const juce::String& clipId);
     void deleteSelectedClip();
     void moveClip(const juce::String& clipId,
                   const juce::String& destinationTrackId,
@@ -193,6 +198,7 @@ private:
     double recordingStartSeconds = 0.0;
     juce::String selectedTrackId;
     juce::String selectedClipId;
+    juce::String copiedClipId;
     juce::String replacementInsertId;
     bool dirty = false;
     bool appShutdownPrepared = false;
