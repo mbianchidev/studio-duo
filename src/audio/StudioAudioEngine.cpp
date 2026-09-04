@@ -5094,10 +5094,14 @@ void StudioAudioEngine::requestPluginRuntime(
     auto closeEditors = false;
     {
         const juce::ScopedLock lock(pluginRequestLock);
-        if (fingerprint == activePluginFingerprint
-            && fingerprint == desiredPluginFingerprint
-            && !pluginBuilderRunning
-            && !hasPendingPluginRequest)
+        const auto snapshotOnlyUpdate =
+            !pluginBuilderRunning
+            && !hasPendingPluginRequest
+            && ((fingerprint == activePluginFingerprint
+                 && fingerprint == desiredPluginFingerprint)
+                || (requests.empty()
+                    && activePluginRequests.empty()));
+        if (snapshotOnlyUpdate)
         {
             const auto runtime =
                 activePluginRuntime.load(std::memory_order_acquire);
@@ -5128,6 +5132,9 @@ void StudioAudioEngine::requestPluginRuntime(
                                               destination,
                                               runtime),
                                    std::memory_order_release);
+            activePluginFingerprint = fingerprint;
+            desiredPluginFingerprint = fingerprint;
+            activePluginRequests = std::move(requests);
             return;
         }
 

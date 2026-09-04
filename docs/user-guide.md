@@ -123,11 +123,12 @@ the beat grid or vertically to another audio track. Drag the left edge to change
 the timeline start and source offset. Drag the right edge to shorten or restore
 the available source range.
 
-Drag the selected clip's top edge vertically to change its gain. Drag either top
-corner horizontally to set fade length and vertically to shape the curve:
-centered is linear, upward is logarithmic, and downward is a sharper
-inverse-exponential shape. Right-click a clip to mute or unmute that individual
-piece without muting its take lane.
+Hover a clip to reveal its gain and fade controls. Drag the top gain handle
+vertically to change clip gain. Drag a fade endpoint horizontally to set a
+linear fade length, then drag the point in the middle of the fade vertically to
+shape it: upward is logarithmic and downward is a sharper inverse-exponential
+curve. Right-click a clip to mute or unmute that individual piece without
+muting its take lane.
 
 Trimmed audio remains visible as a dashed waveform ghost and can be restored.
 After a split, each half keeps independent source boundaries and cannot expand

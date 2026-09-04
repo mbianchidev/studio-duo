@@ -168,6 +168,7 @@ void routingEngineTests()
     }
 
     auto takeProject = studio::Project::createDefault();
+    takeProject.metronomeEnabled = false;
     auto& takeParent = takeProject.tracks.front();
     const auto takeParentId = takeParent.id;
     takeParent.clips.clear();
@@ -187,9 +188,17 @@ void routingEngineTests()
     secondTake.name = "v2";
     secondTake.versionNumber = 2;
     secondTake.clips.front().id = juce::Uuid().toString();
-    takeParent.activeTakeTrackId = secondTake.id;
+    secondTake.clips.front().startSeconds = 0.02;
+    studio::Track thirdTake = secondTake;
+    thirdTake.id = juce::Uuid().toString();
+    thirdTake.name = "v3";
+    thirdTake.versionNumber = 3;
+    thirdTake.clips.front().id = juce::Uuid().toString();
+    thirdTake.clips.front().startSeconds = 0.04;
+    takeParent.activeTakeTrackId = thirdTake.id;
     takeProject.tracks.insert(takeProject.tracks.begin() + 1, firstTake);
     takeProject.tracks.insert(takeProject.tracks.begin() + 2, secondTake);
+    takeProject.tracks.insert(takeProject.tracks.begin() + 3, thirdTake);
     studio::StudioAudioEngine takeEngine;
     juce::AudioBuffer<float> collapsedTakes;
     expect(takeEngine.renderToBuffer(
@@ -206,10 +215,25 @@ void routingEngineTests()
                48000.0)
                .wasOk(),
            "Expanded takes render as audible layers.");
-    expect(collapsedTakes.getSample(0, 100) > 0.19f
-               && expandedTakes.getSample(0, 100)
-                      > collapsedTakes.getSample(0, 100) * 1.9f,
-           "Collapsed parents play the active take while expanded parents play every unmuted take.");
+    expect(collapsedTakes.getSample(0, 100) < 0.001f
+               && collapsedTakes.getSample(0, 2020) > 0.19f,
+           "Collapsed parents play only the active take at its timeline position.");
+    expect(expandedTakes.getSample(0, 100) > 0.19f
+               && expandedTakes.getSample(0, 1060) > 0.19f
+               && expandedTakes.getSample(0, 2020) > 0.19f,
+           "Expanded parents play the first and every subsequent unmuted take clip.");
+
+    expect(takeEngine.updateProject(takeProject).wasOk(),
+           "Expanded take projects publish for real-time playback.");
+    takeEngine.seekSeconds(0.0);
+    takeEngine.play();
+    const auto liveTakes = takeEngine.renderActiveBlockForTesting(2600);
+    expect(liveTakes.getSample(0, 100) > 0.19f,
+           "Real-time playback includes the first expanded take clip.");
+    expect(liveTakes.getSample(0, 1060) > 0.19f,
+           "Real-time playback includes the second expanded take clip.");
+    expect(liveTakes.getSample(0, 2020) > 0.19f,
+           "Real-time playback includes the third expanded take clip.");
 
     auto renderProject = studio::Project::createDefault();
     auto* renderSource = renderProject.findTrack(

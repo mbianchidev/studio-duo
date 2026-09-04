@@ -74,6 +74,8 @@ public:
     void mouseDoubleClick(const juce::MouseEvent& event) override;
     void mouseDrag(const juce::MouseEvent& event) override;
     void mouseUp(const juce::MouseEvent& event) override;
+    void mouseMove(const juce::MouseEvent& event) override;
+    void mouseExit(const juce::MouseEvent& event) override;
     void mouseWheelMove(const juce::MouseEvent& event,
                         const juce::MouseWheelDetails& wheel) override;
 
@@ -93,7 +95,9 @@ private:
         trimEnd,
         gain,
         fadeIn,
-        fadeOut
+        fadeOut,
+        fadeInCurve,
+        fadeOutCurve
     };
 
     [[nodiscard]] std::vector<Hit> clipHits() const;
@@ -106,12 +110,28 @@ private:
                                  const AudioClip& clip,
                                  juce::Rectangle<float> bounds,
                                  float alpha);
+    [[nodiscard]] static float fadeCurveValue(float progress,
+                                              float curve) noexcept;
+    [[nodiscard]] juce::Point<float> fadeLengthHandle(
+        juce::Rectangle<float> bounds,
+        bool fadeIn,
+        double fadeSeconds) const noexcept;
+    [[nodiscard]] juce::Point<float> fadeCurveHandle(
+        juce::Rectangle<float> bounds,
+        bool fadeIn,
+        double fadeSeconds,
+        float curve) const noexcept;
+    [[nodiscard]] DragMode dragModeAt(const Hit& hit,
+                                     const AudioClip& clip,
+                                     juce::Point<float> position) const noexcept;
+    void updateHoverState(juce::Point<float> position);
     void showContextMenu(const juce::MouseEvent& event);
 
     const Project* project = nullptr;
     juce::String selectedTrackId;
     juce::String selectedClipId;
     juce::String draggedClipId;
+    juce::String hoveredClipId;
     juce::String dragOriginalTrackId;
     juce::String dragPreviewTrackId;
     double playheadSeconds = 0.0;
@@ -130,9 +150,11 @@ private:
     float dragPreviewGainDecibels = 0.0f;
     double dragOriginalFadeSeconds = 0.0;
     double dragPreviewFadeSeconds = 0.0;
+    double dragMaximumFadeSeconds = 0.0;
     float dragOriginalFadeCurve = 0.0f;
     float dragPreviewFadeCurve = 0.0f;
     DragMode dragMode = DragMode::none;
+    DragMode hoveredDragMode = DragMode::none;
 
     static constexpr int rulerHeight = 36;
     static constexpr int trackHeaderWidth = 176;
