@@ -1167,14 +1167,41 @@ MainComponent::MainComponent()
     selectedTrackId = project.tracks.front().id;
     selectTrack(selectedTrackId);
 
-    if (const auto result = audioEngine.initialise(deviceManager); result.failed())
-        setStatus(result.getErrorMessage(), true);
-    else
-        setStatus("Ready. Import audio or arm a track and record.");
-
+    setStatus("Starting audio...");
     projectChanged(false);
     startTimerHz(30);
     setSize(1480, 900);
+    juce::MessageManager::callAsync(
+        [safe = juce::Component::SafePointer<MainComponent>(this)]
+        {
+            if (safe != nullptr)
+                safe->initialiseAudio();
+        });
+}
+
+void MainComponent::initialiseAudio()
+{
+    if (appShutdownPrepared)
+        return;
+
+    if (const auto result = audioEngine.initialise(deviceManager);
+        result.failed())
+    {
+        setStatus(result.getErrorMessage(), true);
+        return;
+    }
+
+    if (const auto result = audioEngine.updateProject(
+            project,
+            pluginRuntimeRequests());
+        result.failed())
+    {
+        setStatus(result.getErrorMessage(), true);
+        return;
+    }
+
+    refreshInputControls();
+    setStatus("Ready. Use I/O to enable recording inputs.");
 }
 
 MainComponent::~MainComponent()

@@ -55,6 +55,7 @@ private:
     bool keyPressed(const juce::KeyPress& key) override;
     bool keyPressed(const juce::KeyPress& key, juce::Component*) override;
 
+    void initialiseAudio();
     void createNewProject();
     void beginOpenProject();
     void beginSaveProject();

@@ -60,6 +60,10 @@ exchange, and mastering remain later roadmap phases.
 4. Save the project as a `.studioduo` directory package before recording so new
    media is written below its `media/` directory.
 
+Studio Duo opens the output device at launch but leaves recording inputs
+disabled. Enabling an input from **I/O** is the point where macOS may request
+microphone access.
+
 Monitoring is off by default to avoid accidental feedback. Stereo capture uses
 the selected hardware input and the adjacent channel.
 
