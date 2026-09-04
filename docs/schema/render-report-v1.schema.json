@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://studioduo.dev/schema/render-report-v1.schema.json",
+  "title": "Studio Duo render report v1",
+  "type": "object",
+  "required": [
+    "id",
+    "scope",
+    "mode",
+    "status",
+    "createdAt"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "scope": {
+      "type": "string",
+      "minLength": 1
+    },
+    "mode": {
+      "enum": [
+        "offline",
+        "real-time"
+      ]
+    },
+    "status": {
+      "enum": [
+        "success",
+        "failed",
+        "cancelled"
+      ]
+    },
+    "outputFile": {
+      "type": "string"
+    },
+    "sourceHash": {
+      "type": "string"
+    },
+    "chainHash": {
+      "type": "string"
+    },
+    "outputHash": {
+      "type": "string"
+    },
+    "warning": {
+      "type": "string"
+    },
+    "error": {
+      "type": "string"
+    },
+    "durationSeconds": {
+      "type": "number",
+      "minimum": 0
+    },
+    "createdAt": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

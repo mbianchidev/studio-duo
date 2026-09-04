@@ -1,6 +1,8 @@
 #include "PluginCatalog.h"
 
+#include "PluginFormats.h"
 #include "PluginScanWorker.h"
+#include "devices/DeviceRegistry.h"
 
 #include <algorithm>
 #include <chrono>
@@ -11,6 +13,46 @@ namespace studio
 {
 namespace
 {
+juce::String currentArchitecture()
+{
+#if JUCE_ARM
+    return JUCE_64BIT ? "arm64" : "arm";
+#elif JUCE_64BIT
+    return "x86_64";
+#else
+    return "x86";
+#endif
+}
+
+PluginCompatibilityRecord compatibilityIdentity(
+    const PluginInsert& insert)
+{
+    PluginCompatibilityRecord record;
+    record.pluginIdentifier = insert.pluginIdentifier;
+    record.name = insert.name;
+    record.format = insert.format;
+    record.vendor = insert.manufacturer;
+    record.version = insert.version;
+    record.architecture = insert.architecture;
+    record.preferredMode = insert.bridgeMode;
+    record.araCapable = insert.araCapable;
+    return record;
+}
+
+PluginCompatibilityRecord compatibilityIdentity(
+    const PluginCatalogEntry& entry)
+{
+    PluginCompatibilityRecord record;
+    record.pluginIdentifier = entry.identifier;
+    record.name = entry.name;
+    record.format = entry.format;
+    record.vendor = entry.manufacturer;
+    record.version = entry.version;
+    record.architecture = entry.architecture;
+    record.araCapable = entry.araCapable;
+    return record;
+}
+
 class ScanCoordinator final : private juce::ChildProcessCoordinator
 {
 public:
@@ -190,18 +232,24 @@ PluginCatalog::PluginCatalog()
                            .getChildFile("Plugin Catalog")),
       catalogFile(catalogDirectory.getChildFile("plugins.xml")),
       deadMansPedalFile(catalogDirectory.getChildFile("scan-deadman.txt")),
+      compatibilityDatabase(
+          catalogDirectory.getChildFile("compatibility.json")),
       cancelRequested(std::make_shared<std::atomic<bool>>(false))
 {
     catalogDirectory.createDirectory();
-    juce::addDefaultFormatsToManager(formatManager);
+    PluginFormats::addSupportedFormats(formatManager);
     knownPlugins.setCustomScanner(std::make_unique<OutOfProcessPluginScanner>(cancelRequested));
     load();
+    juce::String compatibilityError;
+    compatibilityDatabase.load(compatibilityError);
     juce::PluginDirectoryScanner::applyBlacklistingsFromDeadMansPedal(knownPlugins,
                                                                       deadMansPedalFile);
 
     const auto count = knownPlugins.getNumTypes();
     statusMessage = count == 0 ? "No plugins scanned yet."
                                : juce::String(count) + " plugins loaded from catalog.";
+    if (compatibilityError.isNotEmpty())
+        statusMessage << " " << compatibilityError;
 }
 
 PluginCatalog::~PluginCatalog()
@@ -258,11 +306,32 @@ std::vector<PluginCatalogEntry> PluginCatalog::entries() const
             description.category,
             description.pluginFormatName,
             description.version,
+            currentArchitecture(),
             description.fileOrIdentifier,
             description.createIdentifierString(),
             description.numInputChannels,
             description.numOutputChannels,
-            description.isInstrument
+            description.isInstrument,
+            description.hasARAExtension,
+            false
+        });
+    }
+    for (const auto& device : DeviceRegistry::descriptors())
+    {
+        result.push_back({
+            device.name,
+            "Studio Duo",
+            "Utility",
+            "Studio Duo",
+            STUDIO_DUO_VERSION,
+            currentArchitecture(),
+            device.identifier,
+            device.identifier,
+            2,
+            2,
+            false,
+            false,
+            true
         });
     }
 
@@ -296,6 +365,87 @@ juce::StringArray PluginCatalog::availableFormats() const
 juce::File PluginCatalog::dataDirectory() const
 {
     return catalogDirectory;
+}
+
+void PluginCatalog::recordRuntimeReady(const PluginInsert& insert)
+{
+    const juce::ScopedLock compatibilityGuard(compatibilityLock);
+    const auto signature = "ready:"
+        + pluginBridgeModeToString(insert.bridgeMode);
+    const auto existing = std::find_if(
+        recordedRuntimeStates.begin(),
+        recordedRuntimeStates.end(),
+        [&insert](const auto& value)
+        {
+            return value.first == insert.id;
+        });
+    if (existing != recordedRuntimeStates.end()
+        && existing->second == signature)
+        return;
+    if (existing != recordedRuntimeStates.end())
+        existing->second = signature;
+    else
+        recordedRuntimeStates.emplace_back(insert.id, signature);
+
+    compatibilityDatabase.noteReady(
+        compatibilityIdentity(insert),
+        insert.bridgeMode);
+    juce::String error;
+    if (!compatibilityDatabase.save(error))
+        updateState(error, scanProgress.load(std::memory_order_relaxed));
+}
+
+void PluginCatalog::recordRuntimeFailure(
+    const PluginInsert& insert,
+    PluginFailureKind failure,
+    const juce::String& message)
+{
+    const juce::ScopedLock compatibilityGuard(compatibilityLock);
+    const auto signature = pluginFailureKindToString(failure)
+        + ":"
+        + message;
+    const auto existing = std::find_if(
+        recordedRuntimeStates.begin(),
+        recordedRuntimeStates.end(),
+        [&insert](const auto& value)
+        {
+            return value.first == insert.id;
+        });
+    if (existing != recordedRuntimeStates.end()
+        && existing->second == signature)
+        return;
+    if (existing != recordedRuntimeStates.end())
+        existing->second = signature;
+    else
+        recordedRuntimeStates.emplace_back(insert.id, signature);
+
+    compatibilityDatabase.noteFailure(
+        compatibilityIdentity(insert),
+        failure,
+        message);
+    juce::String error;
+    if (!compatibilityDatabase.save(error))
+        updateState(error, scanProgress.load(std::memory_order_relaxed));
+}
+
+void PluginCatalog::recordValidation(
+    const PluginCatalogEntry& entry,
+    const juce::String& status)
+{
+    const juce::ScopedLock compatibilityGuard(compatibilityLock);
+    compatibilityDatabase.noteValidation(
+        compatibilityIdentity(entry),
+        status);
+    juce::String error;
+    if (!compatibilityDatabase.save(error))
+        updateState(error, scanProgress.load(std::memory_order_relaxed));
+}
+
+std::vector<PluginCompatibilityRecord>
+PluginCatalog::compatibilityRecords() const
+{
+    const juce::ScopedLock compatibilityGuard(compatibilityLock);
+    return compatibilityDatabase.records();
 }
 
 std::optional<juce::PluginDescription> PluginCatalog::descriptionForIdentifier(
@@ -387,6 +537,26 @@ void PluginCatalog::run()
                         + juce::String(blockedCount)
                         + " blocked after worker failures.",
                     1.0f);
+    }
+    {
+        const juce::ScopedLock compatibilityGuard(compatibilityLock);
+        for (const auto& failedFile : failedFiles)
+        {
+            PluginCompatibilityRecord record;
+            record.pluginIdentifier = "scan:" + failedFile;
+            record.name = juce::File(failedFile).getFileName();
+            record.architecture = currentArchitecture();
+            compatibilityDatabase.noteFailure(
+                record,
+                PluginFailureKind::scanCrash,
+                "Plugin scan worker failed or timed out.");
+        }
+        if (!failedFiles.isEmpty())
+        {
+            juce::String compatibilityError;
+            if (!compatibilityDatabase.save(compatibilityError))
+                updateState(compatibilityError, 1.0f);
+        }
     }
 
     scanning.store(false, std::memory_order_release);

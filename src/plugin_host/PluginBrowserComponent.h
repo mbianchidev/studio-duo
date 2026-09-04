@@ -17,6 +17,7 @@ public:
     ~PluginBrowserComponent() override;
 
     std::function<void(const PluginCatalogEntry&)> onPluginActivated;
+    std::function<void(const PluginCatalogEntry&)> onPluginValidate;
 
     void paint(juce::Graphics& graphics) override;
     void resized() override;
@@ -37,6 +38,7 @@ private:
     juce::TextEditor search;
     juce::TextButton scanButton { "SCAN" };
     juce::TextButton addButton { "ADD" };
+    juce::TextButton validateButton { "TEST" };
     juce::Label statusLabel;
     juce::ListBox list { "Plugin catalog", this };
     double progressValue = 0.0;

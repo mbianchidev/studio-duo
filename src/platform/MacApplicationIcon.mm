@@ -19,4 +19,12 @@ void applyPlatformApplicationIcon()
         [image release];
     }
 }
+
+void setPlatformAccessoryApplication()
+{
+    @autoreleasepool
+    {
+        [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
+    }
+}
 }

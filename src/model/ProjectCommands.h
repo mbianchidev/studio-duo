@@ -61,6 +61,7 @@ public:
 
 private:
     Track track;
+    std::optional<RoutingConnection> outputRoute;
     std::size_t insertionIndex = 0;
 };
 
@@ -107,6 +108,8 @@ public:
 private:
     std::vector<Track> tracks;
     std::vector<std::pair<juce::String, bool>> parentCollapseStates;
+    std::vector<std::pair<juce::String, juce::String>>
+        parentActiveTakeStates;
     bool capturedOriginal = false;
 };
 
@@ -282,6 +285,8 @@ private:
 
     std::vector<ReampRoute> oldRoutes;
     std::vector<ReampRoute> newRoutes;
+    std::vector<ToneSnapshot> oldToneSnapshots;
+    bool capturedOldSnapshots = false;
 };
 
 struct ProjectTransportState
@@ -342,6 +347,105 @@ struct TrackMixState
     static TrackMixState fromTrack(const Track& track);
 };
 
+struct TrackRoutingState
+{
+    juce::String folderTrackId;
+    std::vector<juce::String> controlledTrackIds;
+    ChannelLayout channelLayout = ChannelLayout::stereo;
+    bool polarityInverted = false;
+    bool soloSafe = false;
+    int hardwareOutputChannel = 0;
+    float controlRoomDimDecibels = -20.0f;
+    bool controlRoomDimmed = false;
+    bool controlRoomMono = false;
+
+    static TrackRoutingState fromTrack(const Track& track);
+};
+
+class SetTrackRoutingStateCommand final : public ProjectCommand
+{
+public:
+    SetTrackRoutingStateCommand(juce::String trackToChange,
+                                TrackRoutingState before,
+                                TrackRoutingState after);
+
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    static void apply(Track& track, const TrackRoutingState& state);
+
+    juce::String trackId;
+    TrackRoutingState oldState;
+    TrackRoutingState newState;
+};
+
+class SetAutomationLaneCommand final : public ProjectCommand
+{
+public:
+    SetAutomationLaneCommand(AutomationLane before,
+                             AutomationLane after);
+
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    AutomationLane oldLane;
+    AutomationLane newLane;
+};
+
+class AddAutomationLaneCommand final : public ProjectCommand
+{
+public:
+    explicit AddAutomationLaneCommand(AutomationLane laneToAdd);
+
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    AutomationLane lane;
+    std::size_t insertionIndex = 0;
+};
+
+class RemoveAutomationLaneCommand final : public ProjectCommand
+{
+public:
+    explicit RemoveAutomationLaneCommand(juce::String laneToRemove);
+
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    juce::String laneId;
+    AutomationLane removedLane;
+    std::size_t removalIndex = 0;
+    bool capturedOriginal = false;
+};
+
+class SetTrackAutomationModeCommand final : public ProjectCommand
+{
+public:
+    SetTrackAutomationModeCommand(juce::String trackToChange,
+                                  AutomationMode mode,
+                                  bool armed);
+
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    juce::String trackId;
+    AutomationMode newMode = AutomationMode::read;
+    AutomationMode oldMode = AutomationMode::read;
+    bool newArmed = false;
+    bool oldArmed = false;
+    bool capturedOriginal = false;
+};
+
 class SetTrackMixCommand final : public ProjectCommand
 {
 public:
@@ -357,6 +461,73 @@ private:
     juce::String trackId;
     TrackMixState oldState;
     TrackMixState newState;
+};
+
+class SetTrackOutputCommand final : public ProjectCommand
+{
+public:
+    SetTrackOutputCommand(juce::String sourceTrackId,
+                          juce::String destinationTrackId);
+
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    juce::String trackId;
+    juce::String newOutputTrackId;
+    juce::String oldOutputTrackId;
+    std::optional<RoutingConnection> oldRoute;
+    RoutingConnection newRoute;
+    bool capturedOriginal = false;
+};
+
+class AddRoutingConnectionCommand final : public ProjectCommand
+{
+public:
+    explicit AddRoutingConnectionCommand(RoutingConnection connectionToAdd);
+
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    RoutingConnection connection;
+    std::size_t insertionIndex = 0;
+    bool capturedIndex = false;
+};
+
+class UpdateRoutingConnectionCommand final : public ProjectCommand
+{
+public:
+    UpdateRoutingConnectionCommand(RoutingConnection before,
+                                   RoutingConnection after);
+
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    RoutingConnection oldConnection;
+    RoutingConnection newConnection;
+};
+
+class RemoveRoutingConnectionCommand final : public ProjectCommand
+{
+public:
+    explicit RemoveRoutingConnectionCommand(juce::String connectionToRemove);
+
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    juce::String connectionId;
+    RoutingConnection removedConnection;
+    std::vector<std::pair<std::size_t, AutomationLane>>
+        removedAutomationLanes;
+    std::size_t removalIndex = 0;
+    bool capturedOriginal = false;
 };
 
 class AddPluginInsertCommand final : public ProjectCommand
@@ -388,7 +559,30 @@ private:
     juce::String trackId;
     juce::String insertId;
     PluginInsert removedInsert;
+    std::vector<std::pair<std::size_t, AutomationLane>>
+        removedAutomationLanes;
     std::size_t removalIndex = 0;
+    bool capturedOriginal = false;
+};
+
+class ReplacePluginInsertCommand final : public ProjectCommand
+{
+public:
+    ReplacePluginInsertCommand(juce::String sourceTrackId,
+                               juce::String insertToReplace,
+                               PluginInsert replacement);
+
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    PluginInsert* find(Project& project) const;
+
+    juce::String trackId;
+    juce::String insertId;
+    PluginInsert oldInsert;
+    PluginInsert newInsert;
     bool capturedOriginal = false;
 };
 
@@ -413,6 +607,28 @@ private:
     bool capturedOriginal = false;
 };
 
+class SetPluginBridgeModeCommand final : public ProjectCommand
+{
+public:
+    SetPluginBridgeModeCommand(juce::String sourceTrackId,
+                               juce::String insertToChange,
+                               PluginBridgeMode mode);
+
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    PluginInsert* find(Project& project) const;
+
+    juce::String trackId;
+    juce::String insertId;
+    PluginBridgeMode newMode = PluginBridgeMode::sandboxed;
+    PluginBridgeMode oldMode = PluginBridgeMode::sandboxed;
+    bool oldRecoveryDisabled = false;
+    bool capturedOriginal = false;
+};
+
 class RemoveTrackCommand final : public ProjectCommand
 {
 public:
@@ -430,6 +646,12 @@ private:
     std::vector<CompRegion> oldCompRegions;
     std::vector<EditGroup> oldEditGroups;
     std::vector<ReampRoute> oldReampRoutes;
+    std::vector<RoutingConnection> oldRoutingConnections;
+    std::vector<AutomationLane> oldAutomationLanes;
+    std::vector<ToneSnapshot> oldToneSnapshots;
+    std::vector<MixerSnapshot> oldMixerSnapshots;
+    std::vector<std::pair<juce::String, TrackRoutingState>> oldTrackRoutingStates;
+    std::vector<std::pair<juce::String, juce::String>> oldTrackOutputs;
     bool capturedOriginal = false;
 };
 
@@ -448,7 +670,93 @@ private:
     juce::String duplicatedRootTrackId;
     std::vector<Track> duplicatedTracks;
     std::vector<ReampRoute> duplicatedRoutes;
+    std::vector<RoutingConnection> duplicatedConnections;
+    std::vector<AutomationLane> duplicatedAutomationLanes;
+    std::vector<ToneSnapshot> duplicatedToneSnapshots;
     std::size_t insertionIndex = 0;
     bool createdDuplicate = false;
+};
+
+class AddToneSnapshotCommand final : public ProjectCommand
+{
+public:
+    explicit AddToneSnapshotCommand(ToneSnapshot snapshotToAdd);
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    ToneSnapshot snapshot;
+};
+
+class SetToneSnapshotsCommand final : public ProjectCommand
+{
+public:
+    SetToneSnapshotsCommand(std::vector<ToneSnapshot> before,
+                            std::vector<ToneSnapshot> after);
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    std::vector<ToneSnapshot> oldSnapshots;
+    std::vector<ToneSnapshot> newSnapshots;
+};
+
+class RecallToneSnapshotCommand final : public ProjectCommand
+{
+public:
+    explicit RecallToneSnapshotCommand(ToneSnapshot snapshotToRecall);
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    ToneSnapshot snapshot;
+    Track oldReturnTrack;
+    std::vector<RoutingConnection> oldRoutes;
+    std::vector<AutomationLane> oldAutomation;
+    juce::String oldActiveSnapshotId;
+    bool capturedOriginal = false;
+};
+
+class AddMixerSnapshotCommand final : public ProjectCommand
+{
+public:
+    explicit AddMixerSnapshotCommand(MixerSnapshot snapshotToAdd);
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    MixerSnapshot snapshot;
+};
+
+class AddRenderReportsCommand final : public ProjectCommand
+{
+public:
+    explicit AddRenderReportsCommand(std::vector<RenderReport> reportsToAdd);
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    std::vector<RenderReport> reports;
+};
+
+class RecallMixerSnapshotCommand final : public ProjectCommand
+{
+public:
+    explicit RecallMixerSnapshotCommand(MixerSnapshot snapshotToRecall);
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    MixerSnapshot snapshot;
+    std::vector<Track> oldTracks;
+    std::vector<RoutingConnection> oldRoutes;
+    std::vector<AutomationLane> oldAutomation;
+    bool capturedOriginal = false;
 };
 }

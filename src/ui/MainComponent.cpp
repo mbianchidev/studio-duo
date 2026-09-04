@@ -1,15 +1,117 @@
 #include "MainComponent.h"
 
+#include "automation/AutomationRecorder.h"
+#include "plugin_host/PluginStateStore.h"
+#include "reamp/ReampSnapshotService.h"
+#include "render/RenderEngine.h"
+
 #include <StudioDuoBrandData.h>
 
 #include <algorithm>
 #include <cmath>
+#include <map>
 #include <numeric>
 
 namespace studio
 {
 namespace
 {
+void copyPluginStateReference(const PluginInsert& source,
+                              PluginInsert& destination)
+{
+    destination.stateFile = source.stateFile;
+    destination.stateHash = source.stateHash;
+}
+
+void applyPluginStateReferences(const Project& source,
+                                Project& destination)
+{
+    for (const auto& sourceTrack : source.tracks)
+    {
+        auto* destinationTrack = destination.findTrack(sourceTrack.id);
+        if (destinationTrack == nullptr)
+            continue;
+        for (const auto& sourceInsert : sourceTrack.inserts)
+        {
+            const auto destinationInsert = std::find_if(
+                destinationTrack->inserts.begin(),
+                destinationTrack->inserts.end(),
+                [&sourceInsert](const auto& candidate)
+                {
+                    return candidate.id == sourceInsert.id;
+                });
+            if (destinationInsert != destinationTrack->inserts.end())
+                copyPluginStateReference(
+                    sourceInsert,
+                    *destinationInsert);
+        }
+    }
+    for (const auto& sourceSnapshot : source.toneSnapshots)
+    {
+        const auto destinationSnapshot = std::find_if(
+            destination.toneSnapshots.begin(),
+            destination.toneSnapshots.end(),
+            [&sourceSnapshot](const auto& candidate)
+            {
+                return candidate.id == sourceSnapshot.id;
+            });
+        if (destinationSnapshot == destination.toneSnapshots.end())
+            continue;
+        for (const auto& sourceInsert : sourceSnapshot.inserts)
+        {
+            const auto destinationInsert = std::find_if(
+                destinationSnapshot->inserts.begin(),
+                destinationSnapshot->inserts.end(),
+                [&sourceInsert](const auto& candidate)
+                {
+                    return candidate.id == sourceInsert.id;
+                });
+            if (destinationInsert != destinationSnapshot->inserts.end())
+                copyPluginStateReference(
+                    sourceInsert,
+                    *destinationInsert);
+        }
+    }
+    for (const auto& sourceSnapshot : source.mixerSnapshots)
+    {
+        const auto destinationSnapshot = std::find_if(
+            destination.mixerSnapshots.begin(),
+            destination.mixerSnapshots.end(),
+            [&sourceSnapshot](const auto& candidate)
+            {
+                return candidate.id == sourceSnapshot.id;
+            });
+        if (destinationSnapshot == destination.mixerSnapshots.end())
+            continue;
+        for (const auto& sourceTrack : sourceSnapshot.tracks)
+        {
+            const auto destinationTrack = std::find_if(
+                destinationSnapshot->tracks.begin(),
+                destinationSnapshot->tracks.end(),
+                [&sourceTrack](const auto& candidate)
+                {
+                    return candidate.trackId == sourceTrack.trackId;
+                });
+            if (destinationTrack == destinationSnapshot->tracks.end())
+                continue;
+            for (const auto& sourceInsert : sourceTrack.inserts)
+            {
+                const auto destinationInsert = std::find_if(
+                    destinationTrack->inserts.begin(),
+                    destinationTrack->inserts.end(),
+                    [&sourceInsert](const auto& candidate)
+                    {
+                        return candidate.id == sourceInsert.id;
+                    });
+                if (destinationInsert != destinationTrack->inserts.end())
+                    copyPluginStateReference(
+                        sourceInsert,
+                        *destinationInsert);
+            }
+        }
+    }
+}
+
 class TrackColourSelector final : public juce::ColourSelector,
                                   private juce::ChangeListener
 {
@@ -134,541 +236,68 @@ private:
 };
 }
 
-class MainComponent::MixerPanel final : public juce::Component
+class MainComponent::PanelResizer final : public juce::Component
 {
 public:
-    void setProject(const Project* value)
+    explicit PanelResizer(bool verticalToUse)
+        : vertical(verticalToUse)
     {
-        project = value;
-        repaint();
+        setMouseCursor(vertical
+                           ? juce::MouseCursor::LeftRightResizeCursor
+                           : juce::MouseCursor::UpDownResizeCursor);
     }
 
-    void setSelection(const juce::String& value)
-    {
-        selectedTrack = value;
-        repaint();
-    }
-
-    void setPeaks(float left, float right)
-    {
-        leftPeak = left;
-        rightPeak = right;
-        repaint();
-    }
-
-    std::function<void(const juce::String&)> onTrackSelected;
-    std::function<void(const juce::String&, juce::Rectangle<int>)> onEditTrack;
-    std::function<void(const juce::String&, float)> onVolumeChanged;
-    std::function<void(const juce::String&, float)> onPanChanged;
+    std::function<void(int)> onDrag;
+    std::function<void()> onDoubleClick;
 
     void paint(juce::Graphics& graphics) override
     {
-        graphics.fillAll(juce::Colour(StudioColours::panel));
-        if (project == nullptr || project->tracks.empty())
-            return;
-
-        constexpr auto stripWidth = 112;
-        constexpr auto gap = 8;
-        auto x = 14;
-
-        for (const auto& track : project->tracks)
-        {
-            if (track.parentTrackId.isNotEmpty())
-                continue;
-
-            const juce::Rectangle<int> strip(x, 34, stripWidth, getHeight() - 44);
-            const auto selected = track.id == selectedTrack;
-            graphics.setColour(juce::Colour(selected ? 0xff292e32 : StudioColours::raised));
-            graphics.fillRoundedRectangle(strip.toFloat(), 5.0f);
-            graphics.setColour(selected ? track.colour : juce::Colour(StudioColours::border));
-            graphics.drawRoundedRectangle(strip.toFloat(), 5.0f, selected ? 1.5f : 1.0f);
-
-            graphics.setColour(track.colour);
-            graphics.fillRect(strip.getX(), strip.getY(), strip.getWidth(), 4);
-            graphics.setColour(juce::Colour(StudioColours::text));
-            graphics.setFont(12.0f);
-            graphics.drawFittedText(track.name,
-                                    strip.reduced(8).withHeight(24),
-                                    juce::Justification::centred,
-                                    1);
-
-            const auto faderTop = strip.getY() + 46;
-            const auto faderHeight = strip.getHeight() - 112;
-            graphics.setColour(juce::Colour(StudioColours::window));
-            graphics.fillRoundedRectangle(static_cast<float>(strip.getCentreX() - 3),
-                                          static_cast<float>(faderTop),
-                                          6.0f,
-                                          static_cast<float>(faderHeight),
-                                          3.0f);
-
-            const auto volumeValue = track.id == draggingVolumeTrack
-                ? dragPreviewVolume
-                : track.volumeDecibels;
-            const auto normalised = juce::jmap(juce::jlimit(-60.0f, 12.0f, volumeValue),
-                                               -60.0f,
-                                               12.0f,
-                                               1.0f,
-                                               0.0f);
-            const auto knobY = faderTop + static_cast<int>(normalised * static_cast<float>(faderHeight));
-            graphics.setColour(juce::Colour(StudioColours::text));
-            graphics.fillRoundedRectangle(static_cast<float>(strip.getCentreX() - 12),
-                                          static_cast<float>(knobY - 3),
-                                          24.0f,
-                                          7.0f,
-                                          3.5f);
-
-            juce::String state;
-            if (track.muted) state << "M ";
-            if (track.solo) state << "S ";
-            if (track.armed) state << "R";
-            graphics.setColour(track.armed ? juce::Colour(StudioColours::orange)
-                                           : juce::Colour(StudioColours::secondaryText));
-            graphics.setFont(10.5f);
-            graphics.drawText(state.trimEnd(),
-                              strip.getX() + 8,
-                              strip.getY() + 25,
-                              strip.getWidth() - 16,
-                              18,
-                              juce::Justification::centred);
-
-            const auto panValue = track.id == draggingPanTrack
-                ? dragPreviewPan
-                : track.pan;
-            const auto panText = std::abs(panValue) < 0.005f
-                ? juce::String("C")
-                : juce::String(static_cast<int>(std::round(std::abs(panValue) * 100.0f)))
-                    + (panValue < 0.0f ? "% L" : "% R");
-            graphics.setColour(juce::Colour(StudioColours::secondaryText));
-            graphics.setFont(juce::Font(juce::FontOptions(9.0f)));
-            graphics.drawText(juce::String(volumeValue, 1) + " dB",
-                              strip.getX() + 6,
-                              faderTop + faderHeight + 2,
-                              strip.getWidth() - 12,
-                              16,
-                              juce::Justification::centred);
-
-            const juce::Point<float> panCentre(static_cast<float>(strip.getCentreX()),
-                                               static_cast<float>(strip.getBottom() - 35));
-            constexpr auto panRadius = 12.0f;
-            graphics.setColour(juce::Colour(StudioColours::window));
-            graphics.fillEllipse(panCentre.x - panRadius,
-                                 panCentre.y - panRadius,
-                                 panRadius * 2.0f,
-                                 panRadius * 2.0f);
-            graphics.setColour(std::abs(panValue) < 0.005f
-                                   ? juce::Colour(StudioColours::secondaryText)
-                                   : track.colour);
-            graphics.drawEllipse(panCentre.x - panRadius,
-                                 panCentre.y - panRadius,
-                                 panRadius * 2.0f,
-                                 panRadius * 2.0f,
-                                 1.5f);
-            const auto angle = juce::jmap(panValue,
-                                          -1.0f,
-                                          1.0f,
-                                          -juce::MathConstants<float>::pi * 0.75f,
-                                          juce::MathConstants<float>::pi * 0.75f);
-            const juce::Point<float> marker(
-                panCentre.x + std::sin(angle) * 8.0f,
-                panCentre.y - std::cos(angle) * 8.0f);
-            graphics.drawLine(panCentre.x, panCentre.y, marker.x, marker.y, 2.0f);
-            graphics.setFont(juce::Font(juce::FontOptions(8.0f, juce::Font::bold)));
-            graphics.drawText("L",
-                              static_cast<int>(panCentre.x - 30.0f),
-                              static_cast<int>(panCentre.y - 8.0f),
-                              12,
-                              16,
-                              juce::Justification::centred);
-            graphics.drawText("R",
-                              static_cast<int>(panCentre.x + 18.0f),
-                              static_cast<int>(panCentre.y - 8.0f),
-                              12,
-                              16,
-                              juce::Justification::centred);
-            graphics.setColour(juce::Colour(StudioColours::secondaryText));
-            graphics.drawText(panText,
-                              strip.getX() + 6,
-                              strip.getBottom() - 18,
-                              strip.getWidth() - 12,
-                              14,
-                              juce::Justification::centred);
-
-            x += stripWidth + gap;
-        }
-
-        const auto meterX = getWidth() - 32;
-        const auto meterHeight = getHeight() - 58;
-        graphics.setColour(juce::Colour(StudioColours::window));
-        graphics.fillRoundedRectangle(static_cast<float>(meterX),
-                                      38.0f,
-                                      7.0f,
-                                      static_cast<float>(meterHeight),
-                                      3.5f);
-        graphics.fillRoundedRectangle(static_cast<float>(meterX + 11),
-                                      38.0f,
-                                      7.0f,
-                                      static_cast<float>(meterHeight),
-                                      3.5f);
-        graphics.setColour(juce::Colour(StudioColours::green));
-        graphics.fillRect(meterX,
-                          38 + static_cast<int>((1.0f - leftPeak) * static_cast<float>(meterHeight)),
-                          7,
-                          static_cast<int>(leftPeak * static_cast<float>(meterHeight)));
-        graphics.fillRect(meterX + 11,
-                          38 + static_cast<int>((1.0f - rightPeak) * static_cast<float>(meterHeight)),
-                          7,
-                          static_cast<int>(rightPeak * static_cast<float>(meterHeight)));
+        graphics.fillAll(juce::Colour(StudioColours::window));
+        graphics.setColour(juce::Colour(
+            isMouseOverOrDragging()
+                ? StudioColours::orange
+                : StudioColours::border));
+        if (vertical)
+            graphics.fillRect(getWidth() / 2, 0, 1, getHeight());
+        else
+            graphics.fillRect(0, getHeight() / 2, getWidth(), 1);
     }
 
     void mouseDown(const juce::MouseEvent& event) override
     {
-        if (project == nullptr || event.position.y < 34.0f)
-            return;
-
-        constexpr auto stripWidth = 112;
-        constexpr auto gap = 8;
-        const auto index = static_cast<int>((event.position.x - 14.0f) / (stripWidth + gap));
-        std::vector<const Track*> mixerTracks;
-        for (const auto& track : project->tracks)
-            if (track.parentTrackId.isEmpty())
-                mixerTracks.push_back(&track);
-
-        if (index < 0 || index >= static_cast<int>(mixerTracks.size()))
-            return;
-
-        const auto* track = mixerTracks[static_cast<std::size_t>(index)];
-        if (onTrackSelected)
-            onTrackSelected(track->id);
-
-        const juce::Rectangle<int> strip(14 + index * (stripWidth + gap),
-                                         34,
-                                         stripWidth,
-                                         getHeight() - 44);
-        draggingVolumeTrack.clear();
-        draggingPanTrack.clear();
-        if (event.position.y >= static_cast<float>(strip.getBottom() - 60))
-        {
-            draggingPanTrack = track->id;
-            dragStartY = event.position.y;
-            dragStartPan = track->pan;
-            dragPreviewPan = track->pan;
-            return;
-        }
-
-        const auto faderTop = strip.getY() + 46;
-        const auto faderHeight = strip.getHeight() - 112;
-        if (event.position.y >= static_cast<float>(faderTop - 8)
-            && event.position.y <= static_cast<float>(faderTop + faderHeight + 8))
-        {
-            draggingVolumeTrack = track->id;
-            dragStartY = event.position.y;
-            dragStartVolume = track->volumeDecibels;
-            dragPreviewVolume = track->volumeDecibels;
-            dragFaderHeight = std::max(1, faderHeight);
-        }
+        lastScreenPosition = event.getScreenPosition();
     }
 
     void mouseDrag(const juce::MouseEvent& event) override
     {
-        if (draggingVolumeTrack.isNotEmpty())
-        {
-            dragPreviewVolume = juce::jlimit(
-                -60.0f,
-                12.0f,
-                dragStartVolume
-                    + (dragStartY - event.position.y)
-                        * 72.0f
-                        / static_cast<float>(dragFaderHeight));
-            repaint();
-            return;
-        }
-        if (draggingPanTrack.isEmpty())
-            return;
+        const auto current = event.getScreenPosition();
+        const auto delta = vertical
+            ? current.x - lastScreenPosition.x
+            : current.y - lastScreenPosition.y;
+        lastScreenPosition = current;
+        if (delta != 0 && onDrag)
+            onDrag(delta);
+    }
 
-        dragPreviewPan = juce::jlimit(-1.0f,
-                                      1.0f,
-                                      dragStartPan + (dragStartY - event.position.y) / 80.0f);
+    void mouseDoubleClick(const juce::MouseEvent&) override
+    {
+        if (onDoubleClick)
+            onDoubleClick();
+    }
+
+    void mouseEnter(const juce::MouseEvent&) override
+    {
         repaint();
     }
 
-    void mouseUp(const juce::MouseEvent&) override
+    void mouseExit(const juce::MouseEvent&) override
     {
-        if (draggingVolumeTrack.isNotEmpty())
-        {
-            const auto trackId = draggingVolumeTrack;
-            const auto value = dragPreviewVolume;
-            draggingVolumeTrack.clear();
-            if (onVolumeChanged)
-                onVolumeChanged(trackId, value);
-            repaint();
-            return;
-        }
-        if (draggingPanTrack.isNotEmpty())
-        {
-            const auto trackId = draggingPanTrack;
-            const auto value = dragPreviewPan;
-            draggingPanTrack.clear();
-            if (onPanChanged)
-                onPanChanged(trackId, value);
-            repaint();
-        }
-    }
-
-    void mouseDoubleClick(const juce::MouseEvent& event) override
-    {
-        if (project == nullptr || event.position.y < 34.0f)
-            return;
-
-        constexpr auto stripWidth = 112;
-        constexpr auto gap = 8;
-        const auto index = static_cast<int>((event.position.x - 14.0f) / (stripWidth + gap));
-        std::vector<const Track*> mixerTracks;
-        for (const auto& track : project->tracks)
-            if (track.parentTrackId.isEmpty())
-                mixerTracks.push_back(&track);
-        if (index < 0 || index >= static_cast<int>(mixerTracks.size()))
-            return;
-
-        const juce::Rectangle<int> strip(14 + index * (stripWidth + gap),
-                                         34,
-                                         stripWidth,
-                                         getHeight() - 44);
-        const auto* track = mixerTracks[static_cast<std::size_t>(index)];
-        const auto titleBounds = strip.withHeight(42);
-        if (titleBounds.contains(event.getPosition()))
-        {
-            if (onEditTrack)
-            {
-                const auto nameBounds = strip.reduced(8).withHeight(28);
-                onEditTrack(track->id, localAreaToGlobal(nameBounds));
-            }
-            return;
-        }
-
-        if (event.position.y >= static_cast<float>(strip.getBottom() - 60)
-            && onPanChanged)
-        {
-            onPanChanged(track->id, 0.0f);
-            return;
-        }
-
-        const auto faderTop = strip.getY() + 46;
-        const auto faderHeight = strip.getHeight() - 112;
-        if (event.position.y >= static_cast<float>(faderTop - 8)
-            && event.position.y <= static_cast<float>(faderTop + faderHeight + 8)
-            && onVolumeChanged)
-        {
-            onVolumeChanged(track->id, 0.0f);
-        }
+        repaint();
     }
 
 private:
-    const Project* project = nullptr;
-    juce::String selectedTrack;
-    float leftPeak = 0.0f;
-    float rightPeak = 0.0f;
-    juce::String draggingVolumeTrack;
-    juce::String draggingPanTrack;
-    float dragStartY = 0.0f;
-    float dragStartVolume = 0.0f;
-    float dragPreviewVolume = 0.0f;
-    float dragStartPan = 0.0f;
-    float dragPreviewPan = 0.0f;
-    int dragFaderHeight = 1;
-};
-
-class MainComponent::InsertPanel final : public juce::Component
-{
-public:
-    void setProject(const Project* value)
-    {
-        project = value;
-        repaint();
-    }
-
-    void setTrack(const juce::String& value)
-    {
-        trackId = value;
-        repaint();
-    }
-
-    void setRuntimeStatuses(std::vector<StudioAudioEngine::PluginRuntimeStatus> value,
-                            std::uint64_t lateBlocks)
-    {
-        runtimeStatuses = std::move(value);
-        lateBlockCount = lateBlocks;
-        repaint();
-    }
-
-    std::function<void(const juce::String&, const juce::String&, bool)> onBypass;
-    std::function<void(const juce::String&, const juce::String&)> onRemove;
-    std::function<void()> onReload;
-
-    void paint(juce::Graphics& graphics) override
-    {
-        graphics.fillAll(juce::Colour(StudioColours::panel));
-        graphics.setColour(juce::Colour(StudioColours::secondaryText));
-        graphics.setFont(juce::Font(juce::FontOptions(10.5f, juce::Font::bold)));
-        graphics.drawText("INSERTS",
-                          0,
-                          0,
-                          getWidth(),
-                          20,
-                          juce::Justification::centredLeft);
-
-        const auto* track = project != nullptr ? project->findTrack(trackId) : nullptr;
-        if (track == nullptr || track->inserts.empty())
-        {
-            graphics.setColour(juce::Colour(StudioColours::secondaryText));
-            graphics.setFont(juce::Font(juce::FontOptions(11.0f)));
-            graphics.drawFittedText("Double-click a catalog plugin to add a sandboxed insert.",
-                                    0,
-                                    26,
-                                    getWidth(),
-                                    42,
-                                    juce::Justification::topLeft,
-                                    2);
-            return;
-        }
-
-        auto y = 24;
-        for (std::size_t index = 0; index < track->inserts.size(); ++index)
-        {
-            const auto& insert = track->inserts[index];
-            const juce::Rectangle<int> row(0, y, getWidth(), 48);
-            graphics.setColour(juce::Colour(insert.bypassed ? 0xff191c1f : StudioColours::raised));
-            graphics.fillRoundedRectangle(row.toFloat(), 4.0f);
-            graphics.setColour(juce::Colour(insert.missing ? StudioColours::orange
-                                                           : StudioColours::border));
-            graphics.drawRoundedRectangle(row.toFloat(), 4.0f, 1.0f);
-
-            graphics.setColour(juce::Colour(insert.bypassed ? StudioColours::secondaryText
-                                                            : StudioColours::text));
-            graphics.setFont(juce::Font(juce::FontOptions(11.5f, juce::Font::bold)));
-            graphics.drawFittedText(juce::String(static_cast<int>(index + 1)) + "  " + insert.name,
-                                    8,
-                                    y + 4,
-                                    getWidth() - 76,
-                                    18,
-                                    juce::Justification::centredLeft,
-                                    1);
-
-            const auto status = std::find_if(runtimeStatuses.cbegin(),
-                                             runtimeStatuses.cend(),
-                                             [&insert](const auto& candidate)
-            {
-                return candidate.insertId == insert.id;
-            });
-            auto stateText = juce::String("SANDBOX");
-            auto stateColour = juce::Colour(StudioColours::green);
-            if (status != runtimeStatuses.cend())
-            {
-                switch (status->state)
-                {
-                    case StudioAudioEngine::PluginRuntimeStatus::State::bypassed:
-                        stateText = "BYPASSED";
-                        stateColour = juce::Colour(StudioColours::amber);
-                        break;
-                    case StudioAudioEngine::PluginRuntimeStatus::State::missing:
-                        stateText = "MISSING";
-                        stateColour = juce::Colour(StudioColours::orange);
-                        break;
-                    case StudioAudioEngine::PluginRuntimeStatus::State::loading:
-                        stateText = "LOADING";
-                        stateColour = juce::Colour(StudioColours::amber);
-                        break;
-                    case StudioAudioEngine::PluginRuntimeStatus::State::ready:
-                        stateText = "READY";
-                        break;
-                    case StudioAudioEngine::PluginRuntimeStatus::State::failed:
-                        stateText = "CRASHED - CLICK TO RELOAD";
-                        stateColour = juce::Colour(StudioColours::orange);
-                        break;
-                }
-            }
-
-            const auto detail = stateText + "  |  " + insert.format;
-            graphics.setColour(stateColour);
-            graphics.setFont(juce::Font(juce::FontOptions(9.0f)));
-            graphics.drawFittedText(detail,
-                                    8,
-                                    y + 24,
-                                    getWidth() - 76,
-                                    15,
-                                    juce::Justification::centredLeft,
-                                    1);
-
-            graphics.setColour(juce::Colour(insert.bypassed ? StudioColours::amber
-                                                            : StudioColours::secondaryText));
-            graphics.setFont(juce::Font(juce::FontOptions(9.0f, juce::Font::bold)));
-            graphics.drawText("BYP",
-                              getWidth() - 64,
-                              y,
-                              32,
-                              48,
-                              juce::Justification::centred);
-            graphics.setColour(juce::Colour(StudioColours::orange));
-            graphics.drawText("X",
-                              getWidth() - 30,
-                              y,
-                              30,
-                              48,
-                              juce::Justification::centred);
-            y += 54;
-        }
-
-        if (lateBlockCount > 0)
-        {
-            graphics.setColour(juce::Colour(StudioColours::amber));
-            graphics.setFont(juce::Font(juce::FontOptions(9.0f)));
-            graphics.drawText(juce::String(lateBlockCount) + " late sandbox blocks",
-                              0,
-                              getHeight() - 18,
-                              getWidth(),
-                              18,
-                              juce::Justification::centredLeft);
-        }
-    }
-
-    void mouseDown(const juce::MouseEvent& event) override
-    {
-        const auto* track = project != nullptr ? project->findTrack(trackId) : nullptr;
-        if (track == nullptr || event.position.y < 24.0f)
-            return;
-
-        const auto index = static_cast<int>((event.position.y - 24.0f) / 54.0f);
-        if (index < 0 || index >= static_cast<int>(track->inserts.size()))
-            return;
-
-        const auto& insert = track->inserts[static_cast<std::size_t>(index)];
-        const auto failed = std::any_of(runtimeStatuses.cbegin(),
-                                        runtimeStatuses.cend(),
-                                        [&insert](const auto& status)
-        {
-            return status.insertId == insert.id
-                && status.state == StudioAudioEngine::PluginRuntimeStatus::State::failed;
-        });
-        if (event.position.x >= static_cast<float>(getWidth() - 30))
-        {
-            if (onRemove)
-                onRemove(track->id, insert.id);
-        }
-        else if (event.position.x >= static_cast<float>(getWidth() - 64))
-        {
-            if (onBypass)
-                onBypass(track->id, insert.id, !insert.bypassed);
-        }
-        else if (failed && onReload)
-        {
-            onReload();
-        }
-    }
-
-private:
-    const Project* project = nullptr;
-    juce::String trackId;
-    std::vector<StudioAudioEngine::PluginRuntimeStatus> runtimeStatuses;
-    std::uint64_t lateBlockCount = 0;
+    bool vertical = true;
+    juce::Point<int> lastScreenPosition;
 };
 
 MainComponent::MainComponent()
@@ -681,6 +310,42 @@ MainComponent::MainComponent()
     brandLogo = juce::Drawable::createFromImageData(
         studio_brand::studioduoicon_svg,
         static_cast<std::size_t>(studio_brand::studioduoicon_svgSize));
+    exportInputBlocker.setInterceptsMouseClicks(true, true);
+    exportInputBlocker.setWantsKeyboardFocus(true);
+    addChildComponent(exportInputBlocker);
+
+    leftPanelResizer = std::make_unique<PanelResizer>(true);
+    leftPanelResizer->onDrag = [this](int delta)
+    {
+        setLeftPanelCollapsed(delta < 0);
+    };
+    leftPanelResizer->onDoubleClick = [this]
+    {
+        setLeftPanelCollapsed(!leftPanelCollapsed);
+    };
+    addAndMakeVisible(*leftPanelResizer);
+
+    inspectorPanelResizer = std::make_unique<PanelResizer>(true);
+    inspectorPanelResizer->onDrag = [this](int delta)
+    {
+        setInspectorPanelVisible(delta < 0);
+    };
+    inspectorPanelResizer->onDoubleClick = [this]
+    {
+        setInspectorPanelVisible(inspectorPanelWidth == 0);
+    };
+    addAndMakeVisible(*inspectorPanelResizer);
+
+    mixerPanelResizer = std::make_unique<PanelResizer>(false);
+    mixerPanelResizer->onDrag = [this](int delta)
+    {
+        setMixerPanelVisible(delta < 0);
+    };
+    mixerPanelResizer->onDoubleClick = [this]
+    {
+        setMixerPanelVisible(mixerPanelHeight == 0);
+    };
+    addAndMakeVisible(*mixerPanelResizer);
 
     const auto configureButton = [this](juce::Button& button, const juce::String& tooltip)
     {
@@ -702,11 +367,16 @@ MainComponent::MainComponent()
     configureButton(recordButton, "Record the selected audio track");
     configureButton(loopButton, "Loop the project range");
     configureButton(metronomeButton, "Toggle the metronome");
-    configureButton(addTrackButton, "Add an audio track");
+    configureButton(addTrackButton, "Add an audio, aux, bus, folder, VCA, or control-room track");
+    configureButton(addBusButton, "Add a stereo bus track");
     configureButton(importButton, "Import WAV, AIFF, FLAC, or MP3 audio");
     configureButton(duplicateTrackButton, "Duplicate the selected track and its edits");
     configureButton(deleteTrackButton, "Delete the selected track");
     configureButton(trackingButton, "Configure tempo, meter, punch, count-in, and click routing");
+    configureButton(automationButton, "Edit and record mixer and plugin automation");
+    configureButton(sessionPanelToggleButton, "Collapse or expand the session sidebar");
+    configureButton(inspectorPanelToggleButton, "Show or hide the inspector");
+    configureButton(mixerPanelToggleButton, "Show or hide the mixer");
     configureButton(muteButton, "Mute selected track");
     configureButton(soloButton, "Solo selected track");
     configureButton(armButton, "Arm selected track for recording");
@@ -731,18 +401,38 @@ MainComponent::MainComponent()
     playButton.onClick = [this] { togglePlayback(); };
     stopButton.onClick = [this] { stopTransportAndRecording(); };
     recordButton.onClick = [this] { toggleRecording(); };
-    addTrackButton.onClick = [this] { addAudioTrack(); };
+    addTrackButton.onClick = [this] { showAddTrackMenu(); };
+    addBusButton.onClick = [this] { addBusTrack(); };
     importButton.onClick = [this] { beginImportAudio(); };
     duplicateTrackButton.onClick = [this] { duplicateSelectedTrack(); };
     deleteTrackButton.onClick = [this] { deleteSelectedTrack(); };
     trackingButton.onClick = [this] { showTrackingMenu(); };
+    automationButton.onClick = [this] { showAutomationPanel(); };
+    sessionPanelToggleButton.onClick = [this]
+    {
+        setLeftPanelCollapsed(!leftPanelCollapsed);
+    };
+    inspectorPanelToggleButton.onClick = [this]
+    {
+        setInspectorPanelVisible(inspectorPanelWidth == 0);
+    };
+    mixerPanelToggleButton.onClick = [this]
+    {
+        setMixerPanelVisible(mixerPanelHeight == 0);
+    };
+    inspectorPanelToggleButton.setToggleState(
+        true,
+        juce::dontSendNotification);
+    mixerPanelToggleButton.setToggleState(
+        true,
+        juce::dontSendNotification);
     muteButton.onClick = [this]
     {
         changeSelectedTrackState([](auto& state) { state.muted = !state.muted; });
     };
     soloButton.onClick = [this]
     {
-        changeSelectedTrackState([](auto& state) { state.solo = !state.solo; });
+        toggleExclusiveSolo(selectedTrackId);
     };
     armButton.onClick = [this]
     {
@@ -849,7 +539,7 @@ MainComponent::MainComponent()
             return;
 
         const auto* track = project.findTrack(selectedTrackId);
-        if (track == nullptr || track->type != TrackType::audio)
+        if (track == nullptr || track->type == TrackType::master)
             return;
 
         const auto replacement = inspectorName.getText().trim();
@@ -886,7 +576,35 @@ MainComponent::MainComponent()
         const auto before = TrackMixState::fromTrack(*track);
         auto after = before;
         after.inputChannel = inputSelector.getSelectedItemIndex();
-        perform(std::make_unique<SetTrackMixCommand>(track->id, before, after));
+        perform(std::make_unique<SetTrackMixCommand>(
+            track->id,
+            before,
+            after));
+    };
+
+    addAndMakeVisible(outputLabel);
+    outputLabel.setText("OUTPUT", juce::dontSendNotification);
+    outputLabel.setColour(juce::Label::textColourId,
+                          juce::Colour(StudioColours::secondaryText));
+    addAndMakeVisible(outputSelector);
+    outputSelector.setTooltip("Route this track through a bus or directly to the master");
+    outputSelector.onChange = [this]
+    {
+        const auto index = outputSelector.getSelectedItemIndex();
+        if (updatingOutputControls
+            || index < 0
+            || index >= static_cast<int>(outputTrackIds.size()))
+            return;
+
+        const auto* track = project.findTrack(selectedTrackId);
+        if (track == nullptr
+            || track->type == TrackType::master
+            || track->parentTrackId.isNotEmpty())
+            return;
+        const auto& destinationId = outputTrackIds[static_cast<std::size_t>(index)];
+        if (track->outputTrackId == destinationId)
+            return;
+        perform(std::make_unique<SetTrackOutputCommand>(track->id, destinationId));
     };
 
     addAndMakeVisible(volumeLabel);
@@ -955,7 +673,13 @@ MainComponent::MainComponent()
             static_cast<double>(volumeSlider.getProperties().getWithDefault("start",
                                                                             track->volumeDecibels)));
         const auto after = TrackMixState::fromTrack(*track);
-        perform(std::make_unique<SetTrackMixCommand>(track->id, before, after));
+        if (perform(std::make_unique<SetTrackMixCommand>(
+                track->id,
+                before,
+                after)))
+            recordTrackAutomation(
+                AutomationTargetType::trackVolume,
+                (after.volumeDecibels + 60.0) / 72.0);
     };
 
     panSlider.onDragStart = [this]
@@ -981,7 +705,13 @@ MainComponent::MainComponent()
         before.pan = static_cast<float>(
             static_cast<double>(panSlider.getProperties().getWithDefault("start", track->pan)));
         const auto after = TrackMixState::fromTrack(*track);
-        perform(std::make_unique<SetTrackMixCommand>(track->id, before, after));
+        if (perform(std::make_unique<SetTrackMixCommand>(
+                track->id,
+                before,
+                after)))
+            recordTrackAutomation(
+                AutomationTargetType::trackPan,
+                (after.pan + 1.0) * 0.5);
     };
 
     timelineViewport.setViewedComponent(&timeline, false);
@@ -1005,7 +735,7 @@ MainComponent::MainComponent()
     timeline.onTrackSolo = [this](const auto& trackId)
     {
         selectTrack(trackId);
-        changeSelectedTrackState([](auto& state) { state.solo = !state.solo; });
+        toggleExclusiveSolo(trackId);
     };
     timeline.onTrackArm = [this](const auto& trackId)
     {
@@ -1048,15 +778,25 @@ MainComponent::MainComponent()
     };
     timeline.onSeek = [this](double seconds)
     {
-        if (project.hasActivePluginInserts())
+        if (!activeRecordingTargets.empty() || audioEngine.isRecording())
         {
-            playAfterRuntimeTransition = audioEngine.isPlaying();
-            audioEngine.pause();
-            audioEngine.forcePluginRuntimeReload(project, pluginRuntimeRequests());
-            setStatus("Playhead moved. Resetting sandbox pipelines...");
+            setStatus("Stop recording before moving the playhead.", true);
+            return;
+        }
+        const auto resume = audioEngine.isPlaying();
+        audioEngine.pause();
+        if (!audioEngine.resetPluginProcessing())
+        {
+            if (resume)
+                audioEngine.play();
+            setStatus("Could not reset plugin pipelines before seeking.", true);
+            return;
         }
         audioEngine.seekSeconds(seconds);
         timeline.setPlayheadSeconds(seconds);
+        if (resume)
+            audioEngine.play();
+        setStatus("Playhead moved. Plugin pipelines reset.");
     };
     timeline.onZoomRequested = [this](double factor) { zoomTimeline(factor); };
     timeline.onSplitSelected = [this] { splitSelectedClip(); };
@@ -1171,6 +911,28 @@ MainComponent::MainComponent()
     {
         setClipFade(clipId, seconds, false);
     };
+    timeline.onClipGainChanged = [this](
+                                     const auto& clipId,
+                                     float gainDecibels)
+    {
+        setClipGain(clipId, gainDecibels);
+    };
+    timeline.onClipFadeChanged = [this](
+                                     const auto& clipId,
+                                     bool fadeIn,
+                                     double durationSeconds,
+                                     float curve)
+    {
+        setClipFadeGesture(
+            clipId,
+            fadeIn,
+            durationSeconds,
+            curve);
+    };
+    timeline.onToggleClipMute = [this](const auto& clipId)
+    {
+        toggleClipMute(clipId);
+    };
     timeline.onCreateCrossfade = [this](const auto& clipId)
     {
         createClipCrossfade(clipId);
@@ -1205,7 +967,16 @@ MainComponent::MainComponent()
         const auto before = TrackMixState::fromTrack(*track);
         auto after = before;
         after.volumeDecibels = juce::jlimit(-60.0f, 12.0f, volume);
-        perform(std::make_unique<SetTrackMixCommand>(trackId, before, after));
+        if (perform(std::make_unique<SetTrackMixCommand>(
+                trackId,
+                before,
+                after)))
+        {
+            selectTrack(trackId);
+            recordTrackAutomation(
+                AutomationTargetType::trackVolume,
+                (after.volumeDecibels + 60.0) / 72.0);
+        }
     };
     mixer->onPanChanged = [this](const auto& trackId, float pan)
     {
@@ -1216,7 +987,39 @@ MainComponent::MainComponent()
         const auto before = TrackMixState::fromTrack(*track);
         auto after = before;
         after.pan = juce::jlimit(-1.0f, 1.0f, pan);
-        perform(std::make_unique<SetTrackMixCommand>(trackId, before, after));
+        if (perform(std::make_unique<SetTrackMixCommand>(
+                trackId,
+                before,
+                after)))
+        {
+            selectTrack(trackId);
+            recordTrackAutomation(
+                AutomationTargetType::trackPan,
+                (after.pan + 1.0) * 0.5);
+        }
+    };
+    mixer->onPluginOpen = [this](
+                              const auto& trackId,
+                              const auto& insertId)
+    {
+        openPluginEditor(trackId, insertId);
+    };
+    mixer->onPluginEnabledChanged = [this](
+                                        const auto& trackId,
+                                        const auto& insertId,
+                                        bool enabled)
+    {
+        perform(std::make_unique<SetPluginBypassCommand>(
+            trackId,
+            insertId,
+            !enabled));
+    };
+    mixer->onRouteOpen = [this](
+                             const auto& trackId,
+                             const auto& routeId)
+    {
+        selectTrack(trackId);
+        routingPanel->editConnection(routeId);
     };
     mixer->addKeyListener(this);
     addAndMakeVisible(*mixer);
@@ -1227,9 +1030,44 @@ MainComponent::MainComponent()
     {
         addPluginToSelectedTrack(entry);
     };
+    pluginBrowser->onPluginValidate = [this](const auto& entry)
+    {
+        validatePlugin(entry);
+    };
     addAndMakeVisible(*pluginBrowser);
 
-    insertPanel = std::make_unique<InsertPanel>();
+    routingPanel = std::make_unique<RoutingPanel>();
+    routingPanel->setProject(&project);
+    routingPanel->onAddConnection = [this](auto connection)
+    {
+        perform(std::make_unique<AddRoutingConnectionCommand>(
+            std::move(connection)));
+    };
+    routingPanel->onUpdateConnection = [this](auto before, auto after)
+    {
+        perform(std::make_unique<UpdateRoutingConnectionCommand>(
+            std::move(before),
+            std::move(after)));
+    };
+    routingPanel->onRemoveConnection = [this](const auto& connectionId)
+    {
+        perform(std::make_unique<RemoveRoutingConnectionCommand>(
+            connectionId));
+    };
+    routingPanel->onTrackRoutingChanged = [this](
+                                              const auto& trackId,
+                                              auto before,
+                                              auto after)
+    {
+        perform(std::make_unique<SetTrackRoutingStateCommand>(
+            trackId,
+            std::move(before),
+            std::move(after)));
+    };
+    routingPanel->addKeyListener(this);
+    addAndMakeVisible(*routingPanel);
+
+    insertPanel = std::make_unique<PluginInsertPanel>();
     insertPanel->setProject(&project);
     insertPanel->onBypass = [this](const auto& trackId, const auto& insertId, bool bypassed)
     {
@@ -1239,13 +1077,88 @@ MainComponent::MainComponent()
     {
         perform(std::make_unique<RemovePluginInsertCommand>(trackId, insertId));
     };
-    insertPanel->onReload = [this]
+    insertPanel->onModeChange = [this](
+                                    const auto& trackId,
+                                    const auto& insertId,
+                                    auto mode)
     {
-        audioEngine.forcePluginRuntimeReload(project, pluginRuntimeRequests());
-        setStatus("Reloading sandboxed plugin workers...");
+        changePluginMode(trackId, insertId, mode);
+    };
+    insertPanel->onReplace = [this](
+                                  const auto& trackId,
+                                  const auto& insertId)
+    {
+        selectTrack(trackId);
+        replacementInsertId = insertId;
+        setStatus("Choose a catalog plugin to replace the missing insert.");
+    };
+    insertPanel->onEdit = [this](const auto& trackId, const auto& insertId)
+    {
+        showPluginParameters(trackId, insertId);
+    };
+    insertPanel->onOpenEditor = [this](
+                                    const auto& trackId,
+                                    const auto& insertId)
+    {
+        openPluginEditor(trackId, insertId);
+    };
+    insertPanel->onReload = [this](const auto& trackId, const auto& insertId)
+    {
+        if (const auto* track = project.findTrack(trackId))
+        {
+            const auto insert = std::find_if(
+                track->inserts.cbegin(),
+                track->inserts.cend(),
+                [&insertId](const auto& candidate)
+                {
+                    return candidate.id == insertId;
+                });
+            if (insert != track->inserts.cend()
+                && insert->recoveryDisabled)
+            {
+                perform(std::make_unique<SetPluginBridgeModeCommand>(
+                    trackId,
+                    insertId,
+                    insert->bridgeMode));
+            }
+        }
+        audioEngine.forcePluginRuntimeReload(
+            project,
+            pluginRuntimeRequests(),
+            insertId);
+        setStatus("Reloading selected plugin runtime...");
     };
     insertPanel->addKeyListener(this);
     addAndMakeVisible(*insertPanel);
+
+    inspectorViewport.setViewedComponent(&inspectorContent, false);
+    inspectorViewport.setScrollBarsShown(true, false);
+    inspectorViewport.setScrollBarThickness(8);
+    inspectorViewport.setWantsKeyboardFocus(false);
+    addAndMakeVisible(inspectorViewport);
+    for (auto* component : std::array<juce::Component*, 18> {
+             &inspectorName,
+             &inspectorDetails,
+             &inputLabel,
+             &inputSelector,
+             &stereoInputButton,
+             &monitorButton,
+             &outputLabel,
+             &outputSelector,
+             &volumeLabel,
+             &panLabel,
+             &volumeSlider,
+             &panSlider,
+             &muteButton,
+             &soloButton,
+             &armButton,
+             &trackColourButton,
+             routingPanel.get(),
+             insertPanel.get()
+         })
+    {
+        inspectorContent.addAndMakeVisible(*component);
+    }
 
     addAndMakeVisible(statusLabel);
     statusLabel.setColour(juce::Label::textColourId, juce::Colour(StudioColours::secondaryText));
@@ -1266,12 +1179,41 @@ MainComponent::MainComponent()
 
 MainComponent::~MainComponent()
 {
+    prepareForShutdown();
+    const auto recoveryPending = std::any_of(
+        project.tracks.cbegin(),
+        project.tracks.cend(),
+        [](const auto& track)
+        {
+            return std::any_of(
+                track.inserts.cbegin(),
+                track.inserts.cend(),
+                [](const auto& insert)
+                {
+                    return !insert.bundledDevice
+                        && insert.recoveryDisabled;
+                });
+        });
+    if (projectPackage.exists() && !recoveryPending)
+        ProjectFile::clearReducedIsolationMarker(projectPackage);
+}
+
+bool MainComponent::prepareForShutdown()
+{
+    if (exportInProgress)
+        return false;
+    if (appShutdownPrepared)
+        return true;
+    appShutdownPrepared = true;
     stopTimer();
+    compatibilityValidator.removeAllJobs(true, 2000);
     if (audioEngine.isRecording())
         audioEngine.stopRecording();
     audioEngine.shutdown();
     timelineViewport.setViewedComponent(nullptr, false);
+    inspectorViewport.setViewedComponent(nullptr, false);
     setLookAndFeel(nullptr);
+    return true;
 }
 
 void MainComponent::paint(juce::Graphics& graphics)
@@ -1293,42 +1235,66 @@ void MainComponent::paint(juce::Graphics& graphics)
     }
 
     const auto bodyTop = 76;
-    const auto mixerTop = getHeight() - 248;
+    constexpr auto resizerThickness = 6;
+    const auto mixerTop = getHeight() - 28 - mixerPanelHeight;
+    const auto bodyBottom = mixerTop - resizerThickness;
+    const auto inspectorLeft = getWidth() - inspectorPanelWidth;
     graphics.setColour(juce::Colour(StudioColours::panel));
-    graphics.fillRect(0, bodyTop, 286, mixerTop - bodyTop);
-    graphics.fillRect(getWidth() - 250, bodyTop, 250, mixerTop - bodyTop);
-    graphics.setColour(juce::Colour(StudioColours::border));
-    graphics.drawVerticalLine(285, static_cast<float>(bodyTop), static_cast<float>(mixerTop));
-    graphics.drawVerticalLine(getWidth() - 251,
-                              static_cast<float>(bodyTop),
-                              static_cast<float>(mixerTop));
+    graphics.fillRect(0,
+                      bodyTop,
+                      leftPanelWidth,
+                      bodyBottom - bodyTop);
+    if (inspectorPanelWidth > 0)
+    {
+        graphics.fillRect(inspectorLeft,
+                          bodyTop,
+                          inspectorPanelWidth,
+                          bodyBottom - bodyTop);
+    }
     graphics.setColour(juce::Colour(StudioColours::panel));
-    graphics.fillRect(286, bodyTop, getWidth() - 536, 38);
+    graphics.fillRect(leftPanelWidth + resizerThickness,
+                      bodyTop,
+                      getWidth()
+                          - leftPanelWidth
+                          - inspectorPanelWidth
+                          - resizerThickness * 2,
+                      38);
     graphics.setColour(juce::Colour(StudioColours::border));
     graphics.drawHorizontalLine(bodyTop + 37,
-                                286.0f,
-                                static_cast<float>(getWidth() - 250));
+                                static_cast<float>(
+                                    leftPanelWidth + resizerThickness),
+                                static_cast<float>(
+                                    inspectorLeft - resizerThickness));
 
     graphics.setColour(juce::Colour(StudioColours::secondaryText));
     graphics.setFont(10.5f);
-    graphics.drawText("SESSION",
-                      16,
-                      bodyTop + 12,
-                      180,
-                      18,
-                      juce::Justification::centredLeft);
-    graphics.drawText("INSPECTOR",
-                      getWidth() - 234,
-                      bodyTop + 12,
-                      200,
-                      18,
-                      juce::Justification::centredLeft);
-    graphics.drawText("MIXER",
-                      14,
-                      mixerTop + 8,
-                      120,
-                      18,
-                      juce::Justification::centredLeft);
+    if (!leftPanelCollapsed)
+    {
+        graphics.drawText("SESSION",
+                          16,
+                          bodyTop + 12,
+                          100,
+                          18,
+                          juce::Justification::centredLeft);
+    }
+    if (inspectorPanelWidth > 0)
+    {
+        graphics.drawText("INSPECTOR",
+                          inspectorLeft + 16,
+                          bodyTop + 12,
+                          inspectorPanelWidth - 32,
+                          18,
+                          juce::Justification::centredLeft);
+    }
+    if (mixerPanelHeight > 0)
+    {
+        graphics.drawText("MIXER",
+                          14,
+                          mixerTop + 8,
+                          120,
+                          18,
+                          juce::Justification::centredLeft);
+    }
 
     graphics.setColour(juce::Colour(StudioColours::text));
     graphics.setFont(juce::Font(juce::FontOptions(12.0f, juce::Font::bold)));
@@ -1342,12 +1308,28 @@ void MainComponent::resized()
     auto bounds = getLocalBounds();
     auto header = bounds.removeFromTop(76);
     auto status = bounds.removeFromBottom(28);
-    auto mixerBounds = bounds.removeFromBottom(220);
-    auto left = bounds.removeFromLeft(286);
-    auto right = bounds.removeFromRight(250);
+    constexpr auto resizerThickness = 6;
+    auto mixerBounds = bounds.removeFromBottom(mixerPanelHeight);
+    auto mixerResizerBounds = bounds.removeFromBottom(
+        resizerThickness);
+    auto left = bounds.removeFromLeft(leftPanelWidth);
+    auto leftResizerBounds = bounds.removeFromLeft(
+        resizerThickness);
+    auto right = bounds.removeFromRight(inspectorPanelWidth);
+    auto inspectorResizerBounds = bounds.removeFromRight(
+        resizerThickness);
 
     statusLabel.setBounds(status.reduced(10, 0));
     mixer->setBounds(mixerBounds);
+    mixer->setVisible(mixerPanelHeight > 0);
+    mixerPanelResizer->setBounds(mixerResizerBounds);
+    leftPanelResizer->setBounds(leftResizerBounds);
+    inspectorPanelResizer->setBounds(inspectorResizerBounds);
+    inspectorViewport.setBounds(right.withTrimmedTop(34));
+    inspectorViewport.setVisible(inspectorPanelWidth > 0);
+    inspectorContent.setSize(
+        juce::jmax(1, inspectorViewport.getWidth() - 8),
+        juce::jmax(900, inspectorViewport.getHeight()));
     auto editToolbar = bounds.removeFromTop(38).reduced(7, 4);
     auto zoomControls = editToolbar.removeFromRight(132);
     zoomOutButton.setBounds(zoomControls.removeFromLeft(36).reduced(2));
@@ -1386,8 +1368,46 @@ void MainComponent::resized()
     metronomeButton.setBounds(topRow.removeFromRight(78).reduced(3, 9));
     positionLabel.setBounds(topRow.reduced(6, 8));
 
-    auto sessionPanel = left.reduced(14, 42);
+    if (leftPanelCollapsed)
+    {
+        sessionPanelToggleButton.setBounds(
+            left.getX() + 4,
+            left.getY() + 7,
+            18,
+            26);
+        inspectorPanelToggleButton.setBounds(
+            left.getX() + 23,
+            left.getY() + 7,
+            18,
+            26);
+        mixerPanelToggleButton.setBounds(
+            left.getX() + 42,
+            left.getY() + 7,
+            18,
+            26);
+    }
+    else
+    {
+        sessionPanelToggleButton.setBounds(
+            left.getRight() - 40,
+            left.getY() + 7,
+            32,
+            26);
+        mixerPanelToggleButton.setBounds(
+            left.getRight() - 92,
+            left.getY() + 7,
+            44,
+            26);
+        inspectorPanelToggleButton.setBounds(
+            left.getRight() - 174,
+            left.getY() + 7,
+            74,
+            26);
+    }
+    auto sessionPanel = left.reduced(leftPanelCollapsed ? 8 : 14, 42);
     addTrackButton.setBounds(sessionPanel.removeFromTop(34));
+    sessionPanel.removeFromTop(8);
+    addBusButton.setBounds(sessionPanel.removeFromTop(34));
     sessionPanel.removeFromTop(8);
     importButton.setBounds(sessionPanel.removeFromTop(34));
     sessionPanel.removeFromTop(8);
@@ -1396,10 +1416,13 @@ void MainComponent::resized()
     deleteTrackButton.setBounds(sessionPanel.removeFromTop(34));
     sessionPanel.removeFromTop(8);
     trackingButton.setBounds(sessionPanel.removeFromTop(34));
+    sessionPanel.removeFromTop(8);
+    automationButton.setBounds(sessionPanel.removeFromTop(34));
     sessionPanel.removeFromTop(18);
     pluginBrowser->setBounds(sessionPanel);
+    pluginBrowser->setVisible(!leftPanelCollapsed);
 
-    auto inspector = right.reduced(16, 42);
+    auto inspector = inspectorContent.getLocalBounds().reduced(16, 8);
     inspectorName.setBounds(inspector.removeFromTop(28));
     inspectorDetails.setBounds(inspector.removeFromTop(24));
     inspector.removeFromTop(12);
@@ -1409,7 +1432,10 @@ void MainComponent::resized()
     auto inputToggles = inspector.removeFromTop(28);
     stereoInputButton.setBounds(inputToggles.removeFromLeft(94).reduced(2));
     monitorButton.setBounds(inputToggles.removeFromLeft(100).reduced(2));
-    inspector.removeFromTop(12);
+    inspector.removeFromTop(8);
+    outputLabel.setBounds(inspector.removeFromTop(20));
+    outputSelector.setBounds(inspector.removeFromTop(30));
+    inspector.removeFromTop(8);
     auto mixLabels = inspector.removeFromTop(20);
     volumeLabel.setBounds(mixLabels.removeFromLeft(109));
     panLabel.setBounds(mixLabels);
@@ -1422,11 +1448,16 @@ void MainComponent::resized()
     soloButton.setBounds(toggles.removeFromLeft(52).reduced(2));
     armButton.setBounds(toggles.removeFromLeft(52).reduced(2));
     trackColourButton.setBounds(toggles.removeFromLeft(52).reduced(2));
-    inspector.removeFromTop(20);
+    inspector.removeFromTop(10);
+    routingPanel->setBounds(inspector.removeFromTop(154));
+    inspector.removeFromTop(10);
     insertPanel->setBounds(inspector);
 
     updateTimelineSize();
     timeline.setViewportPosition(timelineViewport.getViewPositionX());
+    exportInputBlocker.setBounds(getLocalBounds());
+    if (exportInputBlocker.isVisible())
+        exportInputBlocker.toFront(false);
 }
 
 void MainComponent::timerCallback()
@@ -1481,13 +1512,11 @@ void MainComponent::timerCallback()
                            juce::Colour(recording ? StudioColours::orange
                                                  : StudioColours::raised));
     mixer->setPeaks(audioEngine.leftPeak(), audioEngine.rightPeak());
+    mixer->setMeters(audioEngine.trackMeterSnapshots());
     auto runtimeStatuses = audioEngine.pluginRuntimeStatuses();
     auto runtimeMetadataChanged = false;
     for (const auto& status : runtimeStatuses)
     {
-        if (status.state != StudioAudioEngine::PluginRuntimeStatus::State::ready)
-            continue;
-
         for (auto& track : project.tracks)
         {
             const auto insert = std::find_if(track.inserts.begin(),
@@ -1499,12 +1528,41 @@ void MainComponent::timerCallback()
             if (insert == track.inserts.end())
                 continue;
 
-            if (insert->latencySamples != status.latencySamples
-                || std::abs(insert->tailSeconds - status.tailSeconds) > 0.000001)
+            if (status.state
+                    == StudioAudioEngine::PluginRuntimeStatus::State::ready
+                && (insert->latencySamples != status.latencySamples
+                    || std::abs(insert->tailSeconds - status.tailSeconds)
+                        > 0.000001))
             {
                 insert->latencySamples = status.latencySamples;
                 insert->tailSeconds = status.tailSeconds;
                 runtimeMetadataChanged = true;
+            }
+            if (status.state
+                == StudioAudioEngine::PluginRuntimeStatus::State::ready)
+            {
+                pluginCatalog.recordRuntimeReady(*insert);
+            }
+            else if (status.state
+                     == StudioAudioEngine::PluginRuntimeStatus::State::missing)
+            {
+                pluginCatalog.recordRuntimeFailure(
+                    *insert,
+                    PluginFailureKind::missing,
+                    status.message);
+            }
+            else if (status.state
+                     == StudioAudioEngine::PluginRuntimeStatus::State::failed)
+            {
+                const auto failure =
+                    status.message.containsIgnoreCase("timeout")
+                        || status.message.containsIgnoreCase("respond")
+                    ? PluginFailureKind::timeout
+                    : PluginFailureKind::runtimeCrash;
+                pluginCatalog.recordRuntimeFailure(
+                    *insert,
+                    failure,
+                    status.message);
             }
             break;
         }
@@ -1568,27 +1626,37 @@ void MainComponent::timerCallback()
         audioEngine.play();
     }
 
-    auto* device = deviceManager.getCurrentAudioDevice();
-    juce::AudioDeviceManager::AudioDeviceSetup audioSetup;
-    deviceManager.getAudioDeviceSetup(audioSetup);
-    const auto signature = device != nullptr
-        ? audioSetup.inputDeviceName
-            + ":"
-            + device->getInputChannelNames().joinIntoString("|")
-            + ":"
-            + device->getActiveInputChannels().toString(16)
-            + ":"
-            + juce::String(device->getCurrentSampleRate(), 1)
-            + ":"
-            + juce::String(device->getCurrentBufferSizeSamples())
-        : juce::String();
-    if (signature != inputConfigurationSignature)
+    if (++inputConfigurationPollTicks >= 30)
     {
-        inputConfigurationSignature = signature;
-        refreshInputControls();
-        if (const auto result = audioEngine.updateProject(project,
-                                                          pluginRuntimeRequests()); result.failed())
-            setStatus(result.getErrorMessage(), true);
+        inputConfigurationPollTicks = 0;
+        auto* device = deviceManager.getCurrentAudioDevice();
+        juce::AudioDeviceManager::AudioDeviceSetup audioSetup;
+        deviceManager.getAudioDeviceSetup(audioSetup);
+        const auto signature = device != nullptr
+            ? audioSetup.inputDeviceName
+                + ":"
+                + audioSetup.outputDeviceName
+                + ":"
+                + device->getActiveInputChannels().toString(16)
+                + ":"
+                + device->getActiveOutputChannels().toString(16)
+                + ":"
+                + juce::String(device->getCurrentSampleRate(), 1)
+                + ":"
+                + juce::String(device->getCurrentBufferSizeSamples())
+            : juce::String();
+        if (signature != inputConfigurationSignature)
+        {
+            inputConfigurationSignature = signature;
+            refreshInputControls();
+            if (const auto result = audioEngine.updateProject(
+                    project,
+                    pluginRuntimeRequests());
+                result.failed())
+            {
+                setStatus(result.getErrorMessage(), true);
+            }
+        }
     }
 
     const auto catalogRevision = pluginCatalog.revision();
@@ -1699,8 +1767,11 @@ void MainComponent::createNewProject()
     }
 
     audioEngine.stop();
+    if (projectPackage.exists())
+        ProjectFile::clearReducedIsolationMarker(projectPackage);
     project = Project::createDefault();
     projectPackage = juce::File();
+    reducedIsolationMarkerSignature.clear();
     commandStack.clear();
     selectedClipId.clear();
     selectedTrackId = project.tracks.front().id;
@@ -1843,21 +1914,288 @@ void MainComponent::showAudioSettings()
 
 void MainComponent::saveProjectTo(const juce::File& package)
 {
-    const auto normalised = ProjectFile::normalisePackagePath(package);
-    if (project.name == "Untitled")
-        project.name = normalised.getFileNameWithoutExtension();
-
-    const auto result = ProjectFile::save(project, normalised);
-    if (result.failed())
+    if (exportInProgress)
     {
-        showError("Project save failed", result.getErrorMessage());
+        setStatus("Another save or render is already in progress.", true);
+        return;
+    }
+    exportInProgress = true;
+    stopTimer();
+    exportInputBlocker.setVisible(true);
+    exportInputBlocker.toFront(false);
+    exportInputBlocker.grabKeyboardFocus();
+    const auto finishSave = [this]
+    {
+        exportInputBlocker.setVisible(false);
+        startTimerHz(30);
+        exportInProgress = false;
+    };
+
+    const auto normalised = ProjectFile::normalisePackagePath(package);
+    auto projectToSave = project;
+    if (projectToSave.name == "Untitled")
+        projectToSave.name =
+            normalised.getFileNameWithoutExtension();
+
+    const auto resumePlayback = audioEngine.isPlaying();
+    if (resumePlayback)
+        audioEngine.pause();
+    auto stateWarning = juce::String();
+    for (auto& capture : audioEngine.capturePluginStates(2000))
+    {
+        if (capture.insertId.isEmpty())
+        {
+            if (resumePlayback)
+                audioEngine.play();
+            finishSave();
+            showError("Project save failed",
+                      capture.result.getErrorMessage());
+            return;
+        }
+        auto* track = projectToSave.findTrack(capture.trackId);
+        if (track == nullptr)
+            continue;
+        const auto insert = std::find_if(
+            track->inserts.begin(),
+            track->inserts.end(),
+            [&capture](const auto& candidate)
+            {
+                return candidate.id == capture.insertId;
+            });
+        if (insert == track->inserts.end())
+            continue;
+        if (capture.result.failed())
+        {
+            if (capture.preservePreviousState)
+            {
+                stateWarning = capture.name
+                    + ": "
+                    + capture.result.getErrorMessage();
+                continue;
+            }
+            if (resumePlayback)
+                audioEngine.play();
+            finishSave();
+            showError(
+                "Project save failed",
+                capture.name
+                    + ": "
+                    + capture.result.getErrorMessage());
+            return;
+        }
+        if (capture.state.isEmpty())
+            continue;
+
+        juce::String stateError;
+        const auto reference = PluginStateStore::store(
+            normalised,
+            capture.state,
+            stateError);
+        if (!reference.has_value())
+        {
+            if (resumePlayback)
+                audioEngine.play();
+            finishSave();
+            showError("Project save failed", stateError);
+            return;
+        }
+        insert->stateFile = reference->relativePath;
+        insert->stateHash = reference->hash;
+    }
+
+    juce::String materializeError;
+    if (!materializePluginStateReferences(
+            projectToSave,
+            projectPackage,
+            normalised,
+            stateWarning,
+            materializeError))
+    {
+        if (resumePlayback)
+            audioEngine.play();
+        finishSave();
+        showError("Project save failed", materializeError);
         return;
     }
 
+    const auto result = ProjectFile::save(projectToSave, normalised);
+    if (result.failed())
+    {
+        if (resumePlayback)
+            audioEngine.play();
+        finishSave();
+        showError("Project save failed", result.getErrorMessage());
+        return;
+    }
+    juce::String verificationError;
+    const auto verified = ProjectFile::load(
+        normalised,
+        verificationError);
+    if (!verified.has_value()
+        || verified->id != projectToSave.id)
+    {
+        if (resumePlayback)
+            audioEngine.play();
+        finishSave();
+        showError(
+            "Project save failed",
+            verificationError.isNotEmpty()
+                ? verificationError
+                : juce::String(
+                      "The saved project did not pass revalidation."));
+        return;
+    }
+
+    applyPluginStateReferences(projectToSave, project);
+    project.name = projectToSave.name;
     projectPackage = normalised;
+    reducedIsolationMarkerSignature.clear();
+    updateReducedIsolationMarker();
     dirty = false;
     projectLabel.setText(project.name, juce::dontSendNotification);
-    setStatus("Saved " + projectPackage.getFullPathName());
+    if (resumePlayback)
+        audioEngine.play();
+    finishSave();
+    setStatus(
+        "Saved "
+            + projectPackage.getFullPathName()
+            + (stateWarning.isNotEmpty()
+                   ? " (preserved prior state: " + stateWarning + ")"
+                   : juce::String()));
+}
+
+bool MainComponent::captureCurrentPluginStates(
+    const std::vector<juce::String>& trackIds,
+    juce::String& error)
+{
+    const auto needsProcessorState = std::any_of(
+        trackIds.cbegin(),
+        trackIds.cend(),
+        [this](const auto& trackId)
+        {
+            const auto* track = project.findTrack(trackId);
+            return track != nullptr && !track->inserts.empty();
+        });
+    if (!needsProcessorState)
+        return true;
+    if (!projectPackage.exists())
+    {
+        error = "Save the project before capturing processor state.";
+        return false;
+    }
+    for (auto& capture : audioEngine.capturePluginStates(2000))
+    {
+        if (capture.insertId.isEmpty())
+        {
+            error = capture.result.getErrorMessage();
+            return false;
+        }
+        if (std::find(trackIds.cbegin(),
+                      trackIds.cend(),
+                      capture.trackId) == trackIds.cend())
+            continue;
+        if (capture.result.failed())
+        {
+            error = capture.name
+                + ": "
+                + capture.result.getErrorMessage();
+            return false;
+        }
+        if (capture.state.isEmpty())
+            continue;
+
+        auto* track = project.findTrack(capture.trackId);
+        if (track == nullptr)
+            continue;
+        const auto insert = std::find_if(
+            track->inserts.begin(),
+            track->inserts.end(),
+            [&capture](const auto& candidate)
+            {
+                return candidate.id == capture.insertId;
+            });
+        if (insert == track->inserts.end())
+            continue;
+
+        const auto reference = PluginStateStore::store(
+            projectPackage,
+            capture.state,
+            error);
+        if (!reference.has_value())
+            return false;
+        insert->stateFile = reference->relativePath;
+        insert->stateHash = reference->hash;
+    }
+    return true;
+}
+
+bool MainComponent::materializePluginStateReferences(
+    Project& projectToSave,
+    const juce::File& sourcePackage,
+    const juce::File& destinationPackage,
+    juce::String& warning,
+    juce::String& error) const
+{
+    const auto appendWarning = [&warning](const juce::String& value)
+    {
+        if (value.isEmpty())
+            return;
+        if (warning.isNotEmpty())
+            warning << "; ";
+        warning << value;
+    };
+    const auto materializeInsert = [&](PluginInsert& insert)
+    {
+        if (insert.stateFile.isEmpty() && insert.stateHash.isEmpty())
+            return true;
+        juce::String stateError;
+        if (PluginStateStore::materialize(
+                sourcePackage,
+                destinationPackage,
+                { insert.stateFile, insert.stateHash },
+                stateError))
+            return true;
+
+        juce::MemoryBlock sourceState;
+        juce::String sourceError;
+        if (PluginStateStore::load(
+                sourcePackage,
+                { insert.stateFile, insert.stateHash },
+                sourceState,
+                sourceError))
+        {
+            error = (insert.name.isNotEmpty()
+                         ? insert.name
+                         : juce::String("Plugin"))
+                + ": "
+                + stateError;
+            return false;
+        }
+
+        appendWarning(
+            (insert.name.isNotEmpty()
+                 ? insert.name
+                 : juce::String("Plugin"))
+            + ": discarded unavailable prior state");
+        insert.stateFile.clear();
+        insert.stateHash.clear();
+        return true;
+    };
+
+    for (auto& track : projectToSave.tracks)
+        for (auto& insert : track.inserts)
+            if (!materializeInsert(insert))
+                return false;
+    for (auto& snapshot : projectToSave.toneSnapshots)
+        for (auto& insert : snapshot.inserts)
+            if (!materializeInsert(insert))
+                return false;
+    for (auto& snapshot : projectToSave.mixerSnapshots)
+        for (auto& track : snapshot.tracks)
+            for (auto& insert : track.inserts)
+                if (!materializeInsert(insert))
+                    return false;
+    return true;
 }
 
 void MainComponent::openProjectFrom(const juce::File& package)
@@ -1876,8 +2214,27 @@ void MainComponent::openProjectFrom(const juce::File& package)
         return;
     }
     audioEngine.stop();
-    project = std::move(*loaded);
     projectPackage = ProjectFile::normalisePackagePath(package);
+    reducedIsolationMarkerSignature.clear();
+    const auto recoveryInsertIds =
+        ProjectFile::reducedIsolationMarker(projectPackage);
+    auto recoveredInProcess = false;
+    for (auto& track : loaded->tracks)
+    {
+        for (auto& insert : track.inserts)
+        {
+            if (!insert.bundledDevice
+                && insert.bridgeMode != PluginBridgeMode::sandboxed
+                && std::find(recoveryInsertIds.cbegin(),
+                             recoveryInsertIds.cend(),
+                             insert.id) != recoveryInsertIds.cend())
+            {
+                insert.recoveryDisabled = true;
+                recoveredInProcess = true;
+            }
+        }
+    }
+    project = std::move(*loaded);
     commandStack.clear();
     selectedClipId.clear();
     selectedTrackId = project.tracks.empty() ? juce::String() : project.tracks.front().id;
@@ -1886,7 +2243,11 @@ void MainComponent::openProjectFrom(const juce::File& package)
     dirty = false;
     selectTrack(selectedTrackId);
     projectChanged(false, false);
-    setStatus("Opened " + projectPackage.getFullPathName());
+    setStatus(
+        recoveredInProcess
+            ? "Opened recovery-safe: in-process plugins are disabled until explicitly reloaded."
+            : "Opened " + projectPackage.getFullPathName(),
+        recoveredInProcess);
 }
 
 void MainComponent::importAudioFile(const juce::File& source)
@@ -1900,7 +2261,7 @@ void MainComponent::importAudioFile(const juce::File& source)
     }
 
     auto* destination = project.findTrack(selectedTrackId);
-    if (destination == nullptr || destination->type == TrackType::master)
+    if (destination == nullptr || destination->type != TrackType::audio)
         destination = recordingTrack();
     if (destination == nullptr)
     {
@@ -1924,28 +2285,55 @@ void MainComponent::importAudioFile(const juce::File& source)
 
 void MainComponent::exportMixTo(const juce::File& destination)
 {
+    if (exportInProgress)
+    {
+        setStatus("A render is already in progress.", true);
+        return;
+    }
+    exportInProgress = true;
+    stopTimer();
+    exportInputBlocker.setVisible(true);
+    exportInputBlocker.toFront(false);
+    exportInputBlocker.grabKeyboardFocus();
     setStatus("Rendering " + destination.getFileName() + "...");
     auto exportProject = project;
     for (auto& track : exportProject.tracks)
         for (auto& insert : track.inserts)
         {
-            insert.missing = !pluginCatalog.descriptionForIdentifier(insert.pluginIdentifier).has_value();
+            insert.missing = !insert.bundledDevice
+                && !pluginCatalog.descriptionForIdentifier(
+                        insert.pluginIdentifier)
+                        .has_value();
             if (!insert.missing && insert.stateFile.isNotEmpty())
             {
-                const auto stateFile = projectPackage.getChildFile(insert.stateFile);
+                juce::MemoryBlock state;
+                juce::String stateError;
                 insert.missing = !projectPackage.exists()
-                    || !stateFile.isAChildOf(projectPackage)
-                    || !stateFile.existsAsFile();
+                    || !PluginStateStore::load(
+                        projectPackage,
+                        { insert.stateFile, insert.stateHash },
+                        state,
+                        stateError);
             }
         }
 
-    const auto result = audioEngine.renderToWav(exportProject, destination, 48000.0);
+    const auto result = audioEngine.renderToWav(
+        exportProject,
+        destination,
+        48000.0,
+        pluginRuntimeRequests());
     if (result.failed())
     {
+        exportInputBlocker.setVisible(false);
+        startTimerHz(30);
+        exportInProgress = false;
         showError("Export failed", result.getErrorMessage());
         return;
     }
 
+    exportInputBlocker.setVisible(false);
+    startTimerHz(30);
+    exportInProgress = false;
     setStatus("Exported 48 kHz / 24-bit WAV to " + destination.getFullPathName());
 }
 
@@ -1971,16 +2359,18 @@ void MainComponent::togglePlayback()
 
     if (audioEngine.positionSeconds() >= project.lengthSeconds() - 0.001)
     {
+        if (!audioEngine.resetPluginProcessing())
+        {
+            setStatus("Could not reset plugin pipelines before rewinding.", true);
+            return;
+        }
         audioEngine.seekSeconds(0.0);
         timeline.setPlayheadSeconds(0.0);
         timelineViewport.setViewPosition(0, timelineViewport.getViewPositionY());
         timeline.setViewportPosition(0);
         if (project.hasActivePluginInserts())
         {
-            playAfterRuntimeTransition = true;
-            audioEngine.forcePluginRuntimeReload(project, pluginRuntimeRequests());
-            setStatus("Rewinding and resetting sandbox pipelines...");
-            return;
+            setStatus("Rewound to project start.");
         }
     }
 
@@ -2107,14 +2497,16 @@ void MainComponent::stopTransportAndRecording()
     if (!activeRecordingTargets.empty() || audioEngine.isRecording())
         finishRecording();
     else
+    {
         audioEngine.stop();
+        if (!audioEngine.resetPluginProcessing())
+            setStatus("Stopped, but plugin pipelines could not be reset.", true);
+    }
 
     recordButton.setButtonText("REC");
     recordButton.setColour(juce::TextButton::buttonColourId,
                            juce::Colour(StudioColours::raised));
     timeline.clearRecordingPreviews();
-    if (project.hasActivePluginInserts() && !recordingFinalizationInProgress)
-        audioEngine.forcePluginRuntimeReload(project, pluginRuntimeRequests());
 }
 
 void MainComponent::finishRecording()
@@ -2260,21 +2652,62 @@ void MainComponent::completeRecording(
                   ? savedMessage + " " + warning
                   : savedMessage,
               warning.isNotEmpty());
-    if (project.hasActivePluginInserts())
-        audioEngine.forcePluginRuntimeReload(project, pluginRuntimeRequests());
 }
 
 void MainComponent::addAudioTrack()
 {
-    Track track;
-    const auto audioTrackCount = static_cast<int>(std::count_if(project.tracks.cbegin(),
-                                                                project.tracks.cend(),
-                                                                [](const auto& candidate)
+    addTrack(TrackType::audio);
+}
+
+void MainComponent::addBusTrack()
+{
+    addTrack(TrackType::bus);
+}
+
+void MainComponent::addTrack(TrackType type)
+{
+    if (type == TrackType::controlRoom
+        && std::any_of(
+            project.tracks.cbegin(),
+            project.tracks.cend(),
+            [](const auto& track)
+            {
+                return track.type == TrackType::controlRoom;
+            }))
     {
-        return candidate.type == TrackType::audio;
+        setStatus("The project already has a control-room track.", true);
+        return;
+    }
+
+    Track track;
+    track.type = type;
+    const auto trackCount = static_cast<int>(std::count_if(
+        project.tracks.cbegin(),
+        project.tracks.cend(),
+        [type](const auto& candidate)
+    {
+        return candidate.type == type;
     }));
-    track.name = "Audio " + juce::String(audioTrackCount + 1);
-    track.armed = true;
+    const auto typeName = [&]
+    {
+        switch (type)
+        {
+            case TrackType::audio: return juce::String("Audio");
+            case TrackType::instrument: return juce::String("Instrument");
+            case TrackType::midi: return juce::String("MIDI");
+            case TrackType::aux: return juce::String("Aux");
+            case TrackType::bus: return juce::String("Bus");
+            case TrackType::folder: return juce::String("Folder");
+            case TrackType::vca: return juce::String("VCA");
+            case TrackType::controlRoom: return juce::String("Control Room");
+            case TrackType::master: return juce::String("Master");
+        }
+        return juce::String("Track");
+    }();
+    track.name = type == TrackType::controlRoom
+        ? typeName
+        : typeName + " " + juce::String(trackCount + 1);
+    track.armed = type == TrackType::audio;
     const std::array colours {
         juce::Colour(0xffdd5b3f),
         juce::Colour(0xffd99a42),
@@ -2282,10 +2715,58 @@ void MainComponent::addAudioTrack()
         juce::Colour(0xff7da9d9),
         juce::Colour(0xffb47ac4)
     };
-    track.colour = colours[static_cast<std::size_t>(audioTrackCount) % colours.size()];
+    track.colour = colours[static_cast<std::size_t>(trackCount)
+                           % colours.size()];
     const auto trackId = track.id;
+    if (type == TrackType::controlRoom)
+    {
+        RoutingConnection monitorRoute;
+        monitorRoute.name = "Master monitor";
+        monitorRoute.kind = RouteKind::controlRoom;
+        monitorRoute.sourceTrackId = project.masterTrackId();
+        monitorRoute.destination.type = RouteEndpointType::track;
+        monitorRoute.destination.trackId = trackId;
+        std::vector<std::unique_ptr<ProjectCommand>> commands;
+        commands.push_back(std::make_unique<AddTrackCommand>(track));
+        commands.push_back(std::make_unique<AddRoutingConnectionCommand>(
+            std::move(monitorRoute)));
+        if (perform(std::make_unique<BatchProjectCommand>(
+                "Add control room",
+                std::move(commands))))
+            selectTrack(trackId);
+        return;
+    }
+
     if (perform(std::make_unique<AddTrackCommand>(track)))
         selectTrack(trackId);
+}
+
+void MainComponent::showAddTrackMenu()
+{
+    juce::PopupMenu menu;
+    const auto add = [this](TrackType type)
+    {
+        return [this, type] { addTrack(type); };
+    };
+    menu.addItem("Audio track", add(TrackType::audio));
+    menu.addItem("Aux track", add(TrackType::aux));
+    menu.addItem("Bus track", add(TrackType::bus));
+    menu.addSeparator();
+    menu.addItem("Folder track", add(TrackType::folder));
+    menu.addItem("VCA track", add(TrackType::vca));
+    const auto hasControlRoom = std::any_of(
+        project.tracks.cbegin(),
+        project.tracks.cend(),
+        [](const auto& track)
+        {
+            return track.type == TrackType::controlRoom;
+        });
+    menu.addItem("Control-room track",
+                 !hasControlRoom,
+                 false,
+                 add(TrackType::controlRoom));
+    menu.showMenuAsync(
+        juce::PopupMenu::Options().withTargetComponent(addTrackButton));
 }
 
 void MainComponent::duplicateSelectedTrack()
@@ -2344,7 +2825,11 @@ void MainComponent::deleteSelectedTrack()
 
 void MainComponent::addPluginToSelectedTrack(const PluginCatalogEntry& entry)
 {
-    const auto* track = project.findTrack(selectedTrackId);
+    const auto* selectedTrack = project.findTrack(selectedTrackId);
+    const auto* track = selectedTrack != nullptr
+            && selectedTrack->parentTrackId.isNotEmpty()
+        ? project.findTrack(selectedTrack->parentTrackId)
+        : selectedTrack;
     if (track == nullptr)
     {
         setStatus("Select a track before adding a plugin.", true);
@@ -2357,11 +2842,273 @@ void MainComponent::addPluginToSelectedTrack(const PluginCatalogEntry& entry)
     insert.manufacturer = entry.manufacturer;
     insert.format = entry.format;
     insert.version = entry.version;
+    insert.architecture = entry.architecture;
     insert.fileOrIdentifier = entry.fileOrIdentifier;
-    insert.bridgeMode = PluginBridgeMode::sandboxed;
+    insert.bundledDevice = entry.bundledDevice;
+    insert.araCapable = entry.araCapable;
+    insert.bridgeMode = entry.bundledDevice
+        ? PluginBridgeMode::trustedInProcess
+        : PluginBridgeMode::sandboxed;
+
+    if (replacementInsertId.isNotEmpty())
+    {
+        const auto replacing = replacementInsertId;
+        replacementInsertId.clear();
+        if (perform(std::make_unique<ReplacePluginInsertCommand>(
+                track->id,
+                replacing,
+                insert)))
+        {
+            setStatus(entry.name + " replaced the missing insert.");
+            inspectorViewport.setViewPosition(
+                0,
+                juce::jmax(0, insertPanel->getY() - 16));
+        }
+        return;
+    }
 
     if (perform(std::make_unique<AddPluginInsertCommand>(track->id, insert)))
+    {
         setStatus(entry.name + " added as a sandboxed insert model.");
+        inspectorViewport.setViewPosition(
+            0,
+            juce::jmax(0, insertPanel->getY() - 16));
+    }
+}
+
+void MainComponent::openPluginEditor(
+    const juce::String& trackId,
+    const juce::String& insertId)
+{
+    selectTrack(trackId);
+    if (const auto result = audioEngine.showPluginEditor(insertId);
+        result.failed())
+    {
+        setStatus(result.getErrorMessage(), true);
+    }
+    else
+    {
+        setStatus("Plugin editor opened.");
+    }
+}
+
+void MainComponent::validatePlugin(const PluginCatalogEntry& entry)
+{
+    if (entry.bundledDevice)
+    {
+        setStatus("Bundled devices are covered by the Studio Duo DSP tests.");
+        return;
+    }
+    setStatus("Validating " + entry.name + " in a separate process...");
+    const juce::Component::SafePointer<MainComponent> safe(this);
+    compatibilityValidator.addJob([safe, entry]
+    {
+        juce::ChildProcess process;
+        juce::StringArray arguments;
+        arguments.add(
+            juce::File::getSpecialLocation(
+                juce::File::currentExecutableFile)
+                .getFullPathName());
+        arguments.add("--validate-plugin");
+        arguments.add(entry.identifier);
+        auto output = juce::String();
+        auto result = 1;
+        if (!process.start(arguments))
+        {
+            output = "Could not launch the compatibility validator.";
+        }
+        else if (!process.waitForProcessToFinish(60000))
+        {
+            process.kill();
+            output = "Compatibility validation timed out.";
+        }
+        else
+        {
+            output = process.readAllProcessOutput();
+            result = static_cast<int>(process.getExitCode());
+        }
+        juce::MessageManager::callAsync(
+            [safe, entry, output, result]
+            {
+                if (safe == nullptr)
+                    return;
+                safe->pluginCatalog.recordValidation(
+                    entry,
+                    result == 0 ? "pass" : "fail");
+                safe->setStatus(
+                    result == 0
+                        ? entry.name + " passed compatibility validation."
+                        : entry.name + " failed compatibility validation.",
+                    result != 0);
+                juce::AlertWindow::showMessageBoxAsync(
+                    result == 0
+                        ? juce::MessageBoxIconType::InfoIcon
+                        : juce::MessageBoxIconType::WarningIcon,
+                    entry.name + " compatibility",
+                    output.substring(0, 8000));
+            });
+    });
+}
+
+void MainComponent::validateScreamForge()
+{
+    setStatus("Validating installed Scream Forge formats...");
+    const juce::Component::SafePointer<MainComponent> safe(this);
+    compatibilityValidator.addJob([safe]
+    {
+        juce::ChildProcess process;
+        juce::StringArray arguments;
+        arguments.add(
+            juce::File::getSpecialLocation(
+                juce::File::currentExecutableFile)
+                .getFullPathName());
+        arguments.add("--validate-scream-forge");
+        auto output = juce::String();
+        auto result = 1;
+        if (!process.start(arguments))
+        {
+            output = "Could not launch the Scream Forge validator.";
+        }
+        else if (!process.waitForProcessToFinish(120000))
+        {
+            process.kill();
+            output = "Scream Forge validation timed out.";
+        }
+        else
+        {
+            output = process.readAllProcessOutput();
+            result = static_cast<int>(process.getExitCode());
+        }
+        juce::MessageManager::callAsync(
+            [safe, output, result]
+            {
+                if (safe == nullptr)
+                    return;
+                const auto unavailable = result == 2;
+                safe->setStatus(
+                    unavailable
+                        ? "Scream Forge is not installed."
+                        : result == 0
+                            ? "Installed Scream Forge formats passed validation."
+                            : "Scream Forge compatibility validation failed.",
+                    result == 1);
+                juce::AlertWindow::showMessageBoxAsync(
+                    result == 0
+                        ? juce::MessageBoxIconType::InfoIcon
+                        : juce::MessageBoxIconType::WarningIcon,
+                    "Scream Forge compatibility",
+                    output.substring(0, 8000));
+            });
+    });
+}
+
+void MainComponent::changePluginMode(const juce::String& trackId,
+                                     const juce::String& insertId,
+                                     PluginBridgeMode mode)
+{
+    if (mode != PluginBridgeMode::araCompatibility)
+    {
+        perform(std::make_unique<SetPluginBridgeModeCommand>(
+            trackId,
+            insertId,
+            mode));
+        return;
+    }
+
+    if (!projectPackage.exists())
+    {
+        showError(
+            "Save required",
+            "Save the project before enabling ARA 2 compatibility mode so Studio Duo can create a recovery point.");
+        return;
+    }
+    if (const auto result = ProjectFile::writeRecoveryPoint(
+            project,
+            projectPackage);
+        result.failed())
+    {
+        showError("ARA recovery point failed", result.getErrorMessage());
+        return;
+    }
+
+    auto* dialog = new juce::AlertWindow(
+        "Enable ARA 2 compatibility mode?",
+        "ARA 2 needs synchronous access to the project document and runs this plugin in the Studio Duo process. Crash isolation is reduced. A recovery point has been written.",
+        juce::MessageBoxIconType::WarningIcon);
+    dialog->addButton(
+        "Enable ARA 2",
+        1,
+        juce::KeyPress(juce::KeyPress::returnKey));
+    dialog->addButton(
+        "Cancel",
+        0,
+        juce::KeyPress(juce::KeyPress::escapeKey));
+    dialog->centreAroundComponent(insertPanel.get(), 520, 230);
+    const juce::Component::SafePointer<MainComponent> safe(this);
+    dialog->enterModalState(
+        true,
+        juce::ModalCallbackFunction::create(
+            [safe, trackId, insertId](int result)
+            {
+                if (safe == nullptr || result != 1)
+                    return;
+                safe->perform(std::make_unique<SetPluginBridgeModeCommand>(
+                    trackId,
+                    insertId,
+                    PluginBridgeMode::araCompatibility));
+            }),
+        true);
+}
+
+void MainComponent::showPluginParameters(const juce::String& trackId,
+                                         const juce::String& insertId)
+{
+    const auto statuses = audioEngine.pluginRuntimeStatuses();
+    const auto status = std::find_if(
+        statuses.cbegin(),
+        statuses.cend(),
+        [&insertId](const auto& candidate)
+        {
+            return candidate.insertId == insertId;
+        });
+    if (status == statuses.cend()
+        || status->state
+            != StudioAudioEngine::PluginRuntimeStatus::State::ready)
+    {
+        setStatus("The processor must be ready before editing parameters.", true);
+        return;
+    }
+    if (status->parameters.empty())
+    {
+        setStatus("This processor exposes no editable parameters.", true);
+        return;
+    }
+
+    auto panel = std::make_unique<PluginParameterPanel>(
+        status->name,
+        insertId,
+        status->parameters);
+    const juce::Component::SafePointer<MainComponent> safe(this);
+    panel->onValueChanged = [safe](
+                                const auto& changedInsertId,
+                                int parameterIndex,
+                                float value)
+    {
+        if (safe == nullptr)
+            return;
+        juce::String error;
+        if (!safe->audioEngine.setPluginParameter(
+                changedInsertId,
+                parameterIndex,
+                value,
+                error))
+            safe->setStatus(error, true);
+    };
+    juce::CallOutBox::launchAsynchronously(
+        std::move(panel),
+        insertPanel->getScreenBounds(),
+        nullptr);
+    selectTrack(trackId);
 }
 
 void MainComponent::splitSelectedClip()
@@ -2742,6 +3489,75 @@ void MainComponent::setClipFade(const juce::String& clipId,
         });
 }
 
+void MainComponent::setClipGain(
+    const juce::String& clipId,
+    float gainDecibels)
+{
+    const auto* clip = project.findClip(clipId);
+    const auto* track = project.findTrackContainingClip(clipId);
+    if (clip == nullptr || track == nullptr)
+        return;
+    auto after = *clip;
+    after.gainDecibels = juce::jlimit(
+        -60.0f,
+        24.0f,
+        gainDecibels);
+    perform(std::make_unique<SetClipStateCommand>(
+        track->id,
+        *clip,
+        after,
+        "Change clip gain"));
+}
+
+void MainComponent::setClipFadeGesture(
+    const juce::String& clipId,
+    bool fadeIn,
+    double durationSeconds,
+    float curve)
+{
+    const auto* clip = project.findClip(clipId);
+    const auto* track = project.findTrackContainingClip(clipId);
+    if (clip == nullptr || track == nullptr)
+        return;
+    auto after = *clip;
+    if (fadeIn)
+    {
+        after.fadeInSeconds = juce::jlimit(
+            0.0,
+            after.durationSeconds,
+            durationSeconds);
+        after.fadeInCurve = juce::jlimit(-1.0f, 1.0f, curve);
+    }
+    else
+    {
+        after.fadeOutSeconds = juce::jlimit(
+            0.0,
+            after.durationSeconds,
+            durationSeconds);
+        after.fadeOutCurve = juce::jlimit(-1.0f, 1.0f, curve);
+    }
+    perform(std::make_unique<SetClipStateCommand>(
+        track->id,
+        *clip,
+        after,
+        fadeIn ? "Change clip fade in" : "Change clip fade out"));
+}
+
+void MainComponent::toggleClipMute(const juce::String& clipId)
+{
+    const auto* clip = project.findClip(clipId);
+    const auto* track = project.findTrackContainingClip(clipId);
+    if (clip == nullptr || track == nullptr)
+        return;
+    auto after = *clip;
+    after.muted = !after.muted;
+    perform(std::make_unique<SetClipStateCommand>(
+        track->id,
+        *clip,
+        after,
+        after.muted ? "Mute clip" : "Unmute clip"));
+}
+
 void MainComponent::createClipCrossfade(const juce::String& clipId)
 {
     const auto* selected = project.findClip(clipId);
@@ -2938,12 +3754,46 @@ void MainComponent::redo()
     projectChanged();
 }
 
+void MainComponent::toggleExclusiveSolo(const juce::String& trackId)
+{
+    const auto* selected = project.findTrack(trackId);
+    if (selected == nullptr || selected->type == TrackType::master)
+        return;
+
+    const auto shouldSolo = !selected->solo;
+    std::vector<std::unique_ptr<ProjectCommand>> commands;
+    for (const auto& track : project.tracks)
+    {
+        if (track.type == TrackType::master)
+            continue;
+        const auto nextSolo = shouldSolo && track.id == trackId;
+        if (track.solo == nextSolo)
+            continue;
+        auto before = TrackMixState::fromTrack(track);
+        auto after = before;
+        after.solo = nextSolo;
+        commands.push_back(std::make_unique<SetTrackMixCommand>(
+            track.id,
+            before,
+            after));
+    }
+    if (!commands.empty())
+    {
+        perform(std::make_unique<BatchProjectCommand>(
+            shouldSolo ? "Solo track" : "Clear solo",
+            std::move(commands)));
+    }
+}
+
 void MainComponent::selectTrack(const juce::String& trackId)
 {
+    if (trackId != selectedTrackId)
+        replacementInsertId.clear();
     selectedTrackId = trackId;
     selectedClipId.clear();
     timeline.setSelection(selectedTrackId, selectedClipId);
     mixer->setSelection(selectedTrackId);
+    routingPanel->setTrack(selectedTrackId);
     insertPanel->setTrack(selectedTrackId);
     updateInspector();
 }
@@ -2954,6 +3804,7 @@ void MainComponent::selectClip(const juce::String& trackId, const juce::String& 
     selectedClipId = clipId;
     timeline.setSelection(selectedTrackId, selectedClipId);
     mixer->setSelection(selectedTrackId);
+    routingPanel->setTrack(selectedTrackId);
     insertPanel->setTrack(selectedTrackId);
     updateInspector();
 }
@@ -2984,16 +3835,18 @@ void MainComponent::updateInspector()
         inputSelector.setEnabled(false);
         stereoInputButton.setEnabled(false);
         monitorButton.setEnabled(false);
+        outputSelector.setEnabled(false);
+        refreshOutputControls();
         return;
     }
 
-    const auto canRenameTrack = clip == nullptr && track->type == TrackType::audio;
+    const auto canRenameTrack = clip == nullptr && track->type != TrackType::master;
     updatingTrackName = true;
     inspectorName.setText(clip != nullptr ? clip->name : track->name, juce::dontSendNotification);
     updatingTrackName = false;
     inspectorName.setEditable(false, canRenameTrack, false);
     inspectorName.setTooltip(canRenameTrack
-                                 ? "Double-click to rename this audio track"
+                                 ? "Double-click to rename this track"
                                  : juce::String());
     auto details = clip != nullptr
         ? juce::String(clip->durationSeconds, 2)
@@ -3028,7 +3881,7 @@ void MainComponent::updateInspector()
     muteButton.setEnabled(track->type != TrackType::master || !track->muted);
     soloButton.setEnabled(track->type != TrackType::master);
     armButton.setEnabled(track->type == TrackType::audio);
-    trackColourButton.setEnabled(track->type == TrackType::audio);
+    trackColourButton.setEnabled(track->type != TrackType::master);
     splitClipButton.setEnabled(clip != nullptr);
     deleteClipButton.setEnabled(clip != nullptr);
     trimClipStartButton.setEnabled(clip != nullptr);
@@ -3037,6 +3890,7 @@ void MainComponent::updateInspector()
     stereoInputButton.setEnabled(track->type == TrackType::audio
                                  && track->inputChannel + 1 < inputSelector.getNumItems());
     monitorButton.setEnabled(track->type == TrackType::audio);
+    refreshOutputControls();
     volumeSlider.setValue(track->volumeDecibels, juce::dontSendNotification);
     panSlider.setValue(track->pan, juce::dontSendNotification);
     muteButton.setColour(juce::TextButton::buttonColourId,
@@ -3046,7 +3900,7 @@ void MainComponent::updateInspector()
     armButton.setColour(juce::TextButton::buttonColourId,
                         juce::Colour(track->armed ? StudioColours::orange : StudioColours::raised));
     armButton.setButtonText(track->armed ? "ARMED" : "ARM");
-    const auto colourButtonBackground = track->type == TrackType::audio
+    const auto colourButtonBackground = track->type != TrackType::master
         ? track->colour
         : juce::Colour(StudioColours::raised);
     trackColourButton.setColour(juce::TextButton::buttonColourId,
@@ -3061,11 +3915,97 @@ void MainComponent::updateInspector()
     updatingInputControls = false;
 }
 
+void MainComponent::refreshOutputControls()
+{
+    updatingOutputControls = true;
+    outputSelector.clear(juce::dontSendNotification);
+    outputTrackIds.clear();
+
+    const auto* track = project.findTrack(selectedTrackId);
+    if (track == nullptr)
+    {
+        outputSelector.addItem("No track selected", 1);
+        outputSelector.setSelectedItemIndex(0, juce::dontSendNotification);
+        outputSelector.setEnabled(false);
+        updatingOutputControls = false;
+        return;
+    }
+    if (track->type == TrackType::master)
+    {
+        outputSelector.addItem("Hardware output 1-2", 1);
+        outputSelector.setSelectedItemIndex(0, juce::dontSendNotification);
+        outputSelector.setEnabled(false);
+        updatingOutputControls = false;
+        return;
+    }
+    if (track->type == TrackType::controlRoom)
+    {
+        outputSelector.addItem(
+            "Monitor hardware "
+                + juce::String(track->hardwareOutputChannel + 1)
+                + "-"
+                + juce::String(track->hardwareOutputChannel + 2),
+            1);
+        outputSelector.setSelectedItemIndex(0, juce::dontSendNotification);
+        outputSelector.setEnabled(false);
+        updatingOutputControls = false;
+        return;
+    }
+    if (track->type == TrackType::folder
+        || track->type == TrackType::vca
+        || track->type == TrackType::midi)
+    {
+        outputSelector.addItem("No audio output", 1);
+        outputSelector.setSelectedItemIndex(0, juce::dontSendNotification);
+        outputSelector.setEnabled(false);
+        updatingOutputControls = false;
+        return;
+    }
+    if (track->parentTrackId.isNotEmpty())
+    {
+        const auto* parent = project.findTrack(track->parentTrackId);
+        outputSelector.addItem("Follows "
+                                   + (parent != nullptr ? parent->name
+                                                        : juce::String("parent")),
+                               1);
+        outputSelector.setSelectedItemIndex(0, juce::dontSendNotification);
+        outputSelector.setEnabled(false);
+        updatingOutputControls = false;
+        return;
+    }
+
+    outputSelector.addItem("Master", 1);
+    outputTrackIds.emplace_back();
+    auto selectedIndex = 0;
+    for (const auto& candidate : project.tracks)
+    {
+        if (candidate.type != TrackType::bus
+            || candidate.parentTrackId.isNotEmpty()
+            || candidate.id == track->id)
+            continue;
+
+        juce::String error;
+        if (!project.validateTrackOutput(track->id, candidate.id, error))
+            continue;
+        outputSelector.addItem("Bus: " + candidate.name,
+                               outputSelector.getNumItems() + 1);
+        outputTrackIds.push_back(candidate.id);
+        if (project.resolvedOutputTrackId(*track) == candidate.id)
+            selectedIndex = static_cast<int>(outputTrackIds.size()) - 1;
+    }
+
+    outputSelector.setSelectedItemIndex(selectedIndex,
+                                        juce::dontSendNotification);
+    outputSelector.setEnabled(true);
+    updatingOutputControls = false;
+}
+
 void MainComponent::refreshInputControls()
 {
     const auto selectedIndex = inputSelector.getSelectedItemIndex();
     updatingInputControls = true;
     inputSelector.clear(juce::dontSendNotification);
+    juce::StringArray outputNames;
 
     if (auto* device = deviceManager.getCurrentAudioDevice())
     {
@@ -3088,7 +4028,17 @@ void MainComponent::refreshInputControls()
                 : channelName;
             inputSelector.addItem(displayName, index + 1);
         }
+        outputNames = device->getOutputChannelNames();
+        for (int index = 0; index < outputNames.size(); ++index)
+        {
+            outputNames.set(
+                index,
+                outputNames[index].trim().isNotEmpty()
+                    ? outputNames[index].trim()
+                    : "Output " + juce::String(index + 1));
+        }
     }
+    routingPanel->setHardwareOutputs(std::move(outputNames));
 
     if (inputSelector.getNumItems() == 0)
         inputSelector.addItem("No active input", 1);
@@ -3106,7 +4056,7 @@ void MainComponent::refreshInputControls()
 void MainComponent::showTrackColourMenu()
 {
     const auto* track = project.findTrack(selectedTrackId);
-    if (track == nullptr || track->type != TrackType::audio)
+    if (track == nullptr || track->type == TrackType::master)
         return;
 
     struct ColourChoice
@@ -3833,6 +4783,79 @@ void MainComponent::showTrackingMenu()
                 setStatus("Sending reamp calibration pulse...");
             });
         }
+        menu.addSeparator();
+        menu.addItem("Capture tone snapshot",
+                     [this, routeId]
+                     {
+                         captureToneSnapshot(routeId);
+                     });
+        juce::PopupMenu snapshotMenu;
+        std::vector<const ToneSnapshot*> routeSnapshots;
+        for (const auto& snapshot : project.toneSnapshots)
+        {
+            if (snapshot.reampRouteId != routeId)
+                continue;
+            routeSnapshots.push_back(&snapshot);
+            auto label = snapshot.name;
+            const auto stale =
+                ReampSnapshotService::staleReason(project, snapshot);
+            if (stale.isNotEmpty())
+                label << " [STALE: " << stale << "]";
+            if (snapshot.id == route->activeSnapshotId)
+                label << " [ACTIVE]";
+            snapshotMenu.addItem(
+                label,
+                [this, snapshotId = snapshot.id]
+                {
+                    recallToneSnapshot(snapshotId);
+                });
+        }
+        if (routeSnapshots.empty())
+            snapshotMenu.addItem("No snapshots", false, false, [] {});
+        menu.addSubMenu("Recall tone snapshot", snapshotMenu);
+        if (!routeSnapshots.empty() && route->type == TonePathType::plugin)
+        {
+            const auto* active = std::find_if(
+                                     routeSnapshots.cbegin(),
+                                     routeSnapshots.cend(),
+                                     [route](const auto* snapshot)
+                                     {
+                                         return snapshot->id
+                                             == route->activeSnapshotId;
+                                     })
+                    != routeSnapshots.cend()
+                ? *std::find_if(
+                      routeSnapshots.cbegin(),
+                      routeSnapshots.cend(),
+                      [route](const auto* snapshot)
+                      {
+                          return snapshot->id == route->activeSnapshotId;
+                      })
+                : routeSnapshots.back();
+            menu.addItem("Freeze active tone",
+                         [this, routeId]
+                         {
+                             renderToneSnapshots(routeId, false, true, false);
+                         });
+            menu.addItem("Print active tone",
+                         [this, routeId]
+                         {
+                             renderToneSnapshots(routeId, false, false, true);
+                         });
+            menu.addItem("Batch render all tones",
+                         [this, routeId]
+                         {
+                             renderToneSnapshots(routeId, true, false, false);
+                         });
+            if (active != nullptr && active->frozen)
+            {
+                menu.addItem("Unfreeze active tone",
+                             [this, snapshotId = active->id]
+                             {
+                                 unfreezeToneSnapshot(snapshotId);
+                             });
+            }
+        }
         menu.addItem("Remove tone path", [this, routeId]
         {
             changeReampRoutes([routeId](auto& routes)
@@ -3848,7 +4871,85 @@ void MainComponent::showTrackingMenu()
         });
     }
 
+    menu.addSeparator();
+    menu.addSectionHeader("Mixer snapshots");
+    menu.addItem("Capture selected track snapshot",
+                 [this] { captureMixerSnapshot(); });
+    juce::PopupMenu mixerSnapshots;
+    for (const auto& snapshot : project.mixerSnapshots)
+        mixerSnapshots.addItem(
+            snapshot.name,
+            [this, snapshotId = snapshot.id]
+            {
+                recallMixerSnapshot(snapshotId);
+            });
+    if (project.mixerSnapshots.empty())
+        mixerSnapshots.addItem("No mixer snapshots", false, false, [] {});
+    menu.addSubMenu("Recall mixer snapshot", mixerSnapshots);
+    menu.addSeparator();
+    menu.addItem("Validate installed Scream Forge",
+                 [this] { validateScreamForge(); });
+
     menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(trackingButton));
+}
+
+void MainComponent::showAutomationPanel()
+{
+    auto panel = std::make_unique<AutomationPanel>();
+    auto* panelPointer = panel.get();
+    panel->setProject(&project);
+    panel->setTrack(selectedTrackId);
+    panel->setPositionSeconds(audioEngine.positionSeconds());
+    panel->setRuntimeStatuses(audioEngine.pluginRuntimeStatuses());
+    const juce::Component::SafePointer<MainComponent> safe(this);
+    const juce::Component::SafePointer<AutomationPanel> panelSafe(
+        panelPointer);
+    panel->onModeChanged = [safe, panelSafe](
+                               const auto& trackId,
+                               auto mode,
+                               bool armed)
+    {
+        if (safe == nullptr)
+            return;
+        safe->perform(std::make_unique<SetTrackAutomationModeCommand>(
+            trackId,
+            mode,
+            armed));
+        if (panelSafe != nullptr)
+            panelSafe->refresh();
+    };
+    panel->onAddLane = [safe, panelSafe](auto lane)
+    {
+        if (safe == nullptr)
+            return;
+        safe->perform(std::make_unique<AddAutomationLaneCommand>(
+            std::move(lane)));
+        if (panelSafe != nullptr)
+            panelSafe->refresh();
+    };
+    panel->onUpdateLane = [safe, panelSafe](auto before, auto after)
+    {
+        if (safe == nullptr)
+            return;
+        safe->perform(std::make_unique<SetAutomationLaneCommand>(
+            std::move(before),
+            std::move(after)));
+        if (panelSafe != nullptr)
+            panelSafe->refresh();
+    };
+    panel->onRemoveLane = [safe, panelSafe](const auto& laneId)
+    {
+        if (safe == nullptr)
+            return;
+        safe->perform(std::make_unique<RemoveAutomationLaneCommand>(
+            laneId));
+        if (panelSafe != nullptr)
+            panelSafe->refresh();
+    };
+    juce::CallOutBox::launchAsynchronously(
+        std::move(panel),
+        automationButton.getScreenBounds(),
+        nullptr);
 }
 
 void MainComponent::promptTempoChange()
@@ -4082,6 +5183,359 @@ void MainComponent::createPluginTonePath(const juce::String& sourceTrackId)
     }
 }
 
+void MainComponent::captureToneSnapshot(const juce::String& routeId)
+{
+    juce::String error;
+    const auto route = std::find_if(
+        project.reampRoutes.cbegin(),
+        project.reampRoutes.cend(),
+        [&routeId](const auto& candidate)
+        {
+            return candidate.id == routeId;
+        });
+    if (route == project.reampRoutes.cend()
+        || !captureCurrentPluginStates(
+            { route->returnTrackId },
+            error))
+    {
+        showError("Tone snapshot failed",
+                  error.isNotEmpty()
+                      ? error
+                      : juce::String("The reamp route no longer exists."));
+        return;
+    }
+    const auto snapshot = ReampSnapshotService::capture(
+        project,
+        routeId,
+        "Tone "
+            + juce::String(
+                static_cast<int>(project.toneSnapshots.size() + 1)),
+        error);
+    if (!snapshot.has_value())
+    {
+        showError("Tone snapshot failed", error);
+        return;
+    }
+    if (perform(std::make_unique<AddToneSnapshotCommand>(*snapshot)))
+        recallToneSnapshot(snapshot->id);
+}
+
+void MainComponent::recallToneSnapshot(const juce::String& snapshotId)
+{
+    const auto snapshot = std::find_if(
+        project.toneSnapshots.cbegin(),
+        project.toneSnapshots.cend(),
+        [&snapshotId](const auto& candidate)
+        {
+            return candidate.id == snapshotId;
+        });
+    if (snapshot == project.toneSnapshots.cend())
+    {
+        setStatus("The tone snapshot no longer exists.", true);
+        return;
+    }
+    const auto stale = ReampSnapshotService::staleReason(project, *snapshot);
+    if (perform(std::make_unique<RecallToneSnapshotCommand>(*snapshot)))
+        setStatus(
+            "Recalled "
+                + snapshot->name
+                + (stale.isNotEmpty() ? " (stale: " + stale + ")"
+                                      : juce::String()));
+}
+
+void MainComponent::renderToneSnapshots(const juce::String& routeId,
+                                        bool allSnapshots,
+                                        bool freeze,
+                                        bool print)
+{
+    if (!projectPackage.exists())
+    {
+        showError("Save required",
+                  "Save the project before rendering tone snapshots.");
+        return;
+    }
+    const auto route = std::find_if(
+        project.reampRoutes.cbegin(),
+        project.reampRoutes.cend(),
+        [&routeId](const auto& candidate)
+        {
+            return candidate.id == routeId;
+        });
+    if (route == project.reampRoutes.cend()
+        || route->type != TonePathType::plugin)
+    {
+        setStatus(
+            "Plugin tone snapshots can render offline; hardware paths require a recorded return.",
+            true);
+        return;
+    }
+
+    std::vector<ToneSnapshot> snapshots;
+    for (const auto& snapshot : project.toneSnapshots)
+        if (snapshot.reampRouteId == routeId)
+            snapshots.push_back(snapshot);
+    if (snapshots.empty())
+    {
+        setStatus("Capture a tone snapshot before rendering.", true);
+        return;
+    }
+    if (!allSnapshots)
+    {
+        const auto active = std::find_if(
+            snapshots.cbegin(),
+            snapshots.cend(),
+            [route](const auto& snapshot)
+            {
+                return snapshot.id == route->activeSnapshotId;
+            });
+        const auto selected = active != snapshots.cend()
+            ? *active
+            : snapshots.back();
+        snapshots = { selected };
+    }
+    if (exportInProgress)
+    {
+        setStatus("A render is already in progress.", true);
+        return;
+    }
+    exportInProgress = true;
+    stopTimer();
+    exportInputBlocker.setVisible(true);
+    exportInputBlocker.toFront(false);
+    exportInputBlocker.grabKeyboardFocus();
+
+    const auto outputDirectory =
+        projectPackage.getChildFile("renders").getChildFile("tones");
+    setStatus("Rendering "
+              + juce::String(static_cast<int>(snapshots.size()))
+              + (snapshots.size() == 1 ? " tone..." : " tones..."));
+    auto reports = RenderEngine::batchToneSnapshots(
+        audioEngine,
+        project,
+        snapshots,
+        outputDirectory,
+        [this](const auto& renderProject)
+        {
+            return pluginRuntimeRequests(renderProject);
+        });
+    exportInputBlocker.setVisible(false);
+    startTimerHz(30);
+    exportInProgress = false;
+    auto updatedSnapshots = project.toneSnapshots;
+    juce::File referenceFile;
+    for (const auto& report : reports)
+    {
+        if (report.status != "success")
+            continue;
+        const auto snapshotId =
+            report.scope.fromFirstOccurrenceOf("reamp:", false, false);
+        const auto snapshot = std::find_if(
+            updatedSnapshots.begin(),
+            updatedSnapshots.end(),
+            [&snapshotId](const auto& candidate)
+            {
+                return candidate.id == snapshotId;
+            });
+        if (snapshot == updatedSnapshots.end())
+            continue;
+        const juce::File output(report.outputFile);
+        snapshot->renderFile = output.isAChildOf(projectPackage)
+            ? output.getRelativePathFrom(projectPackage)
+            : output.getFullPathName();
+        snapshot->renderHash = report.outputHash;
+        if (!referenceFile.existsAsFile())
+        {
+            referenceFile = output;
+            snapshot->comparisonGainDecibels = 0.0f;
+        }
+        else
+        {
+            juce::String matchError;
+            if (const auto gain = RenderEngine::levelMatchGainDecibels(
+                    referenceFile,
+                    output,
+                    matchError);
+                gain.has_value())
+                snapshot->comparisonGainDecibels =
+                    static_cast<float>(*gain);
+        }
+    }
+
+    std::vector<std::unique_ptr<ProjectCommand>> commands;
+    commands.push_back(std::make_unique<AddRenderReportsCommand>(reports));
+    const auto success = std::find_if(
+        reports.cbegin(),
+        reports.cend(),
+        [](const auto& report)
+        {
+            return report.status == "success";
+        });
+    if ((freeze || print) && success != reports.cend())
+    {
+        const auto snapshotId =
+            success->scope.fromFirstOccurrenceOf("reamp:", false, false);
+        const auto snapshot = std::find_if(
+            updatedSnapshots.begin(),
+            updatedSnapshots.end(),
+            [&snapshotId](const auto& candidate)
+            {
+                return candidate.id == snapshotId;
+            });
+        const auto* returnTrack = snapshot != updatedSnapshots.end()
+            ? project.findTrack(snapshot->returnTrackId)
+            : nullptr;
+        juce::String durationError;
+        const auto duration = audioEngine.audioFileDuration(
+            juce::File(success->outputFile),
+            durationError);
+        if (snapshot != updatedSnapshots.end()
+            && returnTrack != nullptr
+            && duration.has_value())
+        {
+            Track renderedTrack;
+            renderedTrack.name = snapshot->name
+                + (freeze ? " Freeze" : " Print");
+            renderedTrack.type = TrackType::audio;
+            renderedTrack.colour = returnTrack->colour.brighter(0.15f);
+            renderedTrack.outputTrackId = returnTrack->outputTrackId;
+            AudioClip clip;
+            clip.name = renderedTrack.name;
+            clip.sourceFile = juce::File(success->outputFile);
+            clip.durationSeconds = *duration;
+            clip.sourceLengthSeconds = *duration;
+            clip.sourceRangeEndSeconds = *duration;
+            clip.colour = renderedTrack.colour;
+            renderedTrack.clips.push_back(std::move(clip));
+            const auto renderedTrackId = renderedTrack.id;
+            commands.push_back(std::make_unique<AddTrackCommand>(
+                std::move(renderedTrack)));
+            if (freeze)
+            {
+                const auto before = TrackMixState::fromTrack(*returnTrack);
+                auto after = before;
+                after.muted = true;
+                commands.push_back(std::make_unique<SetTrackMixCommand>(
+                    returnTrack->id,
+                    before,
+                    after));
+                snapshot->frozen = true;
+                snapshot->frozenTrackId = renderedTrackId;
+            }
+        }
+    }
+    commands.push_back(std::make_unique<SetToneSnapshotsCommand>(
+        project.toneSnapshots,
+        std::move(updatedSnapshots)));
+    if (perform(std::make_unique<BatchProjectCommand>(
+            allSnapshots ? "Batch render tone snapshots"
+                         : freeze ? "Freeze tone snapshot"
+                                  : print ? "Print tone snapshot"
+                                          : "Render tone snapshot",
+            std::move(commands))))
+    {
+        const auto failures = static_cast<int>(std::count_if(
+            reports.cbegin(),
+            reports.cend(),
+            [](const auto& report)
+            {
+                return report.status != "success";
+            }));
+        setStatus(
+            "Rendered "
+                + juce::String(
+                    static_cast<int>(reports.size()) - failures)
+                + " tone(s); "
+                + juce::String(failures)
+                + " failed.");
+    }
+}
+
+void MainComponent::unfreezeToneSnapshot(const juce::String& snapshotId)
+{
+    const auto snapshot = std::find_if(
+        project.toneSnapshots.cbegin(),
+        project.toneSnapshots.cend(),
+        [&snapshotId](const auto& candidate)
+        {
+            return candidate.id == snapshotId;
+        });
+    if (snapshot == project.toneSnapshots.cend()
+        || !snapshot->frozen
+        || snapshot->frozenTrackId.isEmpty())
+        return;
+    const auto* returnTrack = project.findTrack(snapshot->returnTrackId);
+    if (returnTrack == nullptr)
+        return;
+
+    auto updated = project.toneSnapshots;
+    const auto updatedSnapshot = std::find_if(
+        updated.begin(),
+        updated.end(),
+        [&snapshotId](const auto& candidate)
+        {
+            return candidate.id == snapshotId;
+        });
+    updatedSnapshot->frozen = false;
+    updatedSnapshot->frozenTrackId.clear();
+    const auto before = TrackMixState::fromTrack(*returnTrack);
+    auto after = before;
+    after.muted = false;
+    std::vector<std::unique_ptr<ProjectCommand>> commands;
+    commands.push_back(std::make_unique<RemoveTrackCommand>(
+        snapshot->frozenTrackId));
+    commands.push_back(std::make_unique<SetTrackMixCommand>(
+        returnTrack->id,
+        before,
+        after));
+    commands.push_back(std::make_unique<SetToneSnapshotsCommand>(
+        project.toneSnapshots,
+        std::move(updated)));
+    perform(std::make_unique<BatchProjectCommand>(
+        "Unfreeze tone snapshot",
+        std::move(commands)));
+}
+
+void MainComponent::captureMixerSnapshot()
+{
+    const auto rootId = project.rootTrackId(selectedTrackId);
+    juce::String error;
+    if (!captureCurrentPluginStates({ rootId }, error))
+    {
+        showError("Mixer snapshot failed", error);
+        return;
+    }
+    const auto snapshot = MixerSnapshotService::capture(
+        project,
+        { rootId },
+        "Mixer "
+            + juce::String(
+                static_cast<int>(project.mixerSnapshots.size() + 1)),
+        error);
+    if (!snapshot.has_value())
+    {
+        showError("Mixer snapshot failed", error);
+        return;
+    }
+    perform(std::make_unique<AddMixerSnapshotCommand>(*snapshot));
+}
+
+void MainComponent::recallMixerSnapshot(const juce::String& snapshotId)
+{
+    const auto snapshot = std::find_if(
+        project.mixerSnapshots.cbegin(),
+        project.mixerSnapshots.cend(),
+        [&snapshotId](const auto& candidate)
+        {
+            return candidate.id == snapshotId;
+        });
+    if (snapshot == project.mixerSnapshots.cend())
+    {
+        setStatus("The mixer snapshot no longer exists.", true);
+        return;
+    }
+    perform(std::make_unique<RecallMixerSnapshotCommand>(*snapshot));
+}
+
 void MainComponent::updateInputMonitoring()
 {
     const Track* monitored = nullptr;
@@ -4130,6 +5584,45 @@ void MainComponent::zoomTimeline(double factor, bool reset)
     timeline.setViewportPosition(timelineViewport.getViewPositionX());
 }
 
+void MainComponent::setLeftPanelCollapsed(bool collapsed)
+{
+    leftPanelCollapsed = collapsed;
+    leftPanelWidth = collapsed ? 64 : 286;
+    sessionPanelToggleButton.setButtonText(collapsed ? ">" : "<");
+    inspectorPanelToggleButton.setButtonText(
+        collapsed ? "I" : "INSPECT");
+    mixerPanelToggleButton.setButtonText(collapsed ? "M" : "MIX");
+    addTrackButton.setButtonText(collapsed ? "+" : "+ TRACK");
+    addBusButton.setButtonText(collapsed ? "B" : "+ BUS TRACK");
+    importButton.setButtonText(collapsed ? "I" : "IMPORT AUDIO");
+    duplicateTrackButton.setButtonText(collapsed ? "D" : "DUPLICATE TRACK");
+    deleteTrackButton.setButtonText(collapsed ? "X" : "DELETE TRACK");
+    trackingButton.setButtonText(collapsed ? "T" : "TRACKING SETUP");
+    automationButton.setButtonText(collapsed ? "A" : "AUTOMATION");
+    resized();
+    repaint();
+}
+
+void MainComponent::setInspectorPanelVisible(bool visible)
+{
+    inspectorPanelWidth = visible ? 250 : 0;
+    inspectorPanelToggleButton.setToggleState(
+        visible,
+        juce::dontSendNotification);
+    resized();
+    repaint();
+}
+
+void MainComponent::setMixerPanelVisible(bool visible)
+{
+    mixerPanelHeight = visible ? 220 : 0;
+    mixerPanelToggleButton.setToggleState(
+        visible,
+        juce::dontSendNotification);
+    resized();
+    repaint();
+}
+
 void MainComponent::projectChanged(bool writeRecovery, bool markDirty)
 {
     if (markDirty)
@@ -4137,6 +5630,7 @@ void MainComponent::projectChanged(bool writeRecovery, bool markDirty)
 
     timeline.setProject(&project);
     mixer->setProject(&project);
+    routingPanel->setProject(&project);
     insertPanel->setProject(&project);
     projectLabel.setText(project.name + (dirty ? " *" : ""), juce::dontSendNotification);
     loopButton.setToggleState(project.loopEnabled, juce::dontSendNotification);
@@ -4145,6 +5639,7 @@ void MainComponent::projectChanged(bool writeRecovery, bool markDirty)
     redoButton.setEnabled(commandStack.canRedo());
     updateInspector();
     updateTimelineSize();
+    updateReducedIsolationMarker();
 
     if (const auto result = audioEngine.updateProject(project,
                                                       pluginRuntimeRequests()); result.failed())
@@ -4156,10 +5651,46 @@ void MainComponent::projectChanged(bool writeRecovery, bool markDirty)
             setStatus(result.getErrorMessage(), true);
 }
 
+void MainComponent::updateReducedIsolationMarker()
+{
+    if (!projectPackage.exists())
+        return;
+    std::vector<juce::String> insertIds;
+    for (const auto& track : project.tracks)
+        for (const auto& insert : track.inserts)
+            if (!insert.bundledDevice
+                && insert.bridgeMode != PluginBridgeMode::sandboxed)
+                insertIds.push_back(insert.id);
+    std::sort(insertIds.begin(), insertIds.end());
+    juce::StringArray signatureParts;
+    for (const auto& insertId : insertIds)
+        signatureParts.add(insertId);
+    const auto signature = signatureParts.joinIntoString("|");
+    if (signature == reducedIsolationMarkerSignature)
+        return;
+    reducedIsolationMarkerSignature = signature;
+    const auto result = insertIds.empty()
+        ? ProjectFile::clearReducedIsolationMarker(projectPackage)
+        : ProjectFile::writeReducedIsolationMarker(
+              projectPackage,
+              insertIds);
+    if (result.failed())
+        setStatus(result.getErrorMessage(), true);
+}
+
 std::vector<StudioAudioEngine::PluginRuntimeRequest> MainComponent::pluginRuntimeRequests() const
 {
+    return pluginRuntimeRequests(project);
+}
+
+std::vector<StudioAudioEngine::PluginRuntimeRequest>
+MainComponent::pluginRuntimeRequests(const Project& sourceProject) const
+{
     std::vector<StudioAudioEngine::PluginRuntimeRequest> requests;
-    for (const auto& track : project.tracks)
+    std::map<
+        juce::String,
+        std::shared_ptr<const AraDocumentDescriptor>> araDocuments;
+    for (const auto& track : sourceProject.tracks)
     {
         for (const auto& insert : track.inserts)
         {
@@ -4169,20 +5700,52 @@ std::vector<StudioAudioEngine::PluginRuntimeRequest> MainComponent::pluginRuntim
             request.name = insert.name;
             request.bypassed = insert.bypassed;
             request.missing = false;
+            request.bridgeMode = insert.bridgeMode;
+            request.recoveryDisabled = insert.recoveryDisabled;
+            request.deviceIdentifier = insert.bundledDevice
+                ? insert.pluginIdentifier
+                : juce::String();
+            if (insert.bridgeMode == PluginBridgeMode::araCompatibility)
+            {
+                auto& document = araDocuments[track.id];
+                if (document == nullptr)
+                {
+                    document = AraDocumentHost::describeProject(
+                        sourceProject,
+                        track.id);
+                }
+                request.araDocument = document;
+            }
+            request.sidechainChannels = std::any_of(
+                sourceProject.routingConnections.cbegin(),
+                sourceProject.routingConnections.cend(),
+                [&insert](const auto& route)
+                {
+                    return route.enabled
+                        && route.kind == RouteKind::sidechain
+                        && route.destination.insertId == insert.id;
+                })
+                ? 2
+                : 0;
             request.latencySamples = insert.latencySamples;
             request.tailSeconds = insert.tailSeconds;
             request.catalogRevision = pluginCatalog.revision();
-            request.description = pluginCatalog.descriptionForIdentifier(insert.pluginIdentifier);
-            if (!request.description.has_value())
+            request.description = insert.bundledDevice
+                ? std::optional<juce::PluginDescription> {}
+                : pluginCatalog.descriptionForIdentifier(
+                      insert.pluginIdentifier);
+            if (!insert.bundledDevice && !request.description.has_value())
                 request.missing = true;
 
             if (insert.stateFile.isNotEmpty())
             {
-                const auto stateFile = projectPackage.getChildFile(insert.stateFile);
+                juce::String stateError;
                 if (!projectPackage.exists()
-                    || !stateFile.isAChildOf(projectPackage)
-                    || !stateFile.existsAsFile()
-                    || !stateFile.loadFileAsData(request.state))
+                    || !PluginStateStore::load(
+                        projectPackage,
+                        { insert.stateFile, insert.stateHash },
+                        request.state,
+                        stateError))
                     request.missing = true;
             }
 
@@ -4266,6 +5829,75 @@ void MainComponent::changeReampRoutes(
     change(updated);
     perform(std::make_unique<SetReampRoutesCommand>(project.reampRoutes,
                                                     std::move(updated)));
+}
+
+void MainComponent::recordTrackAutomation(
+    AutomationTargetType type,
+    double normalizedValue)
+{
+    const auto* track = project.findTrack(selectedTrackId);
+    if (track == nullptr
+        || !track->automationArmed
+        || track->automationMode == AutomationMode::read
+        || track->automationMode == AutomationMode::preview)
+        return;
+
+    const auto lane = std::find_if(
+        project.automationLanes.cbegin(),
+        project.automationLanes.cend(),
+        [this, type](const auto& candidate)
+        {
+            return candidate.target.trackId == selectedTrackId
+                && candidate.target.type == type
+                && candidate.target.routeId.isEmpty()
+                && candidate.target.insertId.isEmpty();
+        });
+    const auto positionSeconds = audioEngine.positionSeconds();
+    if (lane == project.automationLanes.cend())
+    {
+        AutomationLane created;
+        created.name = type == AutomationTargetType::trackPan
+            ? "Track pan"
+            : "Track volume";
+        created.target.type = type;
+        created.target.trackId = selectedTrackId;
+        created.points.push_back({
+            juce::Uuid().toString(),
+            positionSeconds,
+            juce::jlimit(0.0, 1.0, normalizedValue)
+        });
+        perform(std::make_unique<AddAutomationLaneCommand>(
+            std::move(created)));
+        return;
+    }
+
+    auto before = *lane;
+    auto after = before;
+    const auto position = after.timebase == AutomationTimebase::beats
+        ? project.beatsAt(positionSeconds)
+        : positionSeconds;
+    if (track->automationMode == AutomationMode::trim)
+    {
+        const auto reference = after.points.empty()
+            ? 0.5
+            : after.points.back().value;
+        after.trimOffset += normalizedValue - reference;
+    }
+    else
+    {
+        after = AutomationRecorder::applyGesture(
+            before,
+            track->automationMode,
+            {
+                position,
+                position,
+                juce::jlimit(0.0, 1.0, normalizedValue),
+                juce::jlimit(0.0, 1.0, normalizedValue)
+            });
+    }
+    perform(std::make_unique<SetAutomationLaneCommand>(
+        std::move(before),
+        std::move(after)));
 }
 
 const AudioClip* MainComponent::activeClipAt(const juce::String& parentTrackId,

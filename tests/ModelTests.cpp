@@ -3,7 +3,10 @@
 #include "audio/RecordingWaveform.h"
 #include "plugin_host/PluginCatalog.h"
 #include "plugin_host/PluginBridgeProtocol.h"
+#include "plugin_host/PluginStateStore.h"
 #include "project_io/ProjectFile.h"
+#include "TestHarness.h"
+#include "TestSuites.h"
 
 #include <array>
 #include <cmath>
@@ -11,17 +14,6 @@
 
 namespace
 {
-int failures = 0;
-
-void expect(bool condition, const char* message)
-{
-    if (!condition)
-    {
-        ++failures;
-        std::cerr << "FAIL: " << message << '\n';
-    }
-}
-
 void serializationRoundTrip()
 {
     auto project = studio::Project::createDefault();
@@ -79,6 +71,8 @@ void serializationRoundTrip()
     clip.playbackRate = 1.25;
     clip.fadeInSeconds = 0.25;
     clip.fadeOutSeconds = 0.5;
+    clip.fadeInCurve = -0.5f;
+    clip.fadeOutCurve = 0.75f;
     clip.polarityInverted = true;
     clip.reversed = true;
     clip.warpMarkers.push_back({ 1.0, 1.5 });
@@ -107,6 +101,12 @@ void serializationRoundTrip()
         1.5,
         1.0
     });
+    studio::Track bus;
+    bus.name = "Guitar Bus";
+    bus.type = studio::TrackType::bus;
+    const auto busId = bus.id;
+    project.tracks.insert(project.tracks.end() - 1, bus);
+    project.tracks.front().outputTrackId = busId;
 
     juce::String error;
     const auto decoded = studio::Project::fromVar(project.toVar(), error);
@@ -161,6 +161,14 @@ void serializationRoundTrip()
                && std::abs(decoded->tracks.front().clips.front().playbackRate - 1.25) < 0.0001
                && decoded->tracks.front().clips.front().warpMarkers.size() == 1
                && decoded->tracks.front().clips.front().transientSourceSeconds.size() == 2
+               && std::abs(
+                      decoded->tracks.front().clips.front().fadeInCurve
+                      + 0.5f)
+                      < 0.0001f
+               && std::abs(
+                      decoded->tracks.front().clips.front().fadeOutCurve
+                      - 0.75f)
+                      < 0.0001f
                && decoded->tracks.front().clips.front().polarityInverted
                && decoded->tracks.front().clips.front().reversed,
            "Clip stretch, warp, transient, fade, and polarity data survive serialization.");
@@ -189,6 +197,34 @@ void serializationRoundTrip()
                && decoded->tracks.front().inserts.front().latencySamples == 128
                && std::abs(decoded->tracks.front().inserts.front().tailSeconds - 1.5) < 0.0001,
            "Plugin latency and tail metadata survive serialization.");
+    expect(decoded.has_value()
+               && decoded->tracks.front().outputTrackId == busId
+               && decoded->findTrack(busId) != nullptr
+               && decoded->findTrack(busId)->type == studio::TrackType::bus,
+           "Bus output routing survives serialization.");
+}
+
+void legacyProjectMigration()
+{
+    auto legacy = studio::Project::createDefault().toVar();
+    auto* object = legacy.getDynamicObject();
+    object->setProperty("formatVersion", 1);
+    object->removeProperty("reampRoutes");
+    object->removeProperty("routingConnections");
+    if (auto* tracks = object->getProperty("tracks").getArray())
+        for (auto& track : *tracks)
+            if (auto* trackObject = track.getDynamicObject())
+                trackObject->removeProperty("outputTrackId");
+
+    juce::String error;
+    const auto migrated = studio::Project::fromVar(legacy, error);
+    expect(migrated.has_value(), error.toRawUTF8());
+    expect(migrated.has_value()
+               && migrated->tracks.front().outputTrackId.isEmpty()
+               && migrated->resolvedOutputTrackId(migrated->tracks.front())
+                      == migrated->masterTrackId()
+               && !migrated->routingConnections.empty(),
+           "Version 1 projects migrate to direct master outputs.");
 }
 
 void commandHistory()
@@ -555,6 +591,99 @@ void splitClipBoundaries()
            "Both split halves can expand back to their shared boundary.");
 }
 
+void busRouting()
+{
+    auto project = studio::Project::createDefault();
+    studio::CommandStack history;
+    juce::String error;
+
+    studio::Track guitarBus;
+    guitarBus.name = "Guitars";
+    guitarBus.type = studio::TrackType::bus;
+    const auto guitarBusId = guitarBus.id;
+    expect(history.perform(std::make_unique<studio::AddTrackCommand>(guitarBus),
+                           project,
+                           error),
+           error.toRawUTF8());
+
+    studio::Track mixBus;
+    mixBus.name = "Mix Bus";
+    mixBus.type = studio::TrackType::bus;
+    const auto mixBusId = mixBus.id;
+    expect(history.perform(std::make_unique<studio::AddTrackCommand>(mixBus),
+                           project,
+                           error),
+           error.toRawUTF8());
+
+    const auto audioTrackId = project.tracks.front().id;
+    expect(history.perform(std::make_unique<studio::SetTrackOutputCommand>(
+                               audioTrackId,
+                               guitarBusId),
+                           project,
+                           error),
+           error.toRawUTF8());
+    expect(history.perform(std::make_unique<studio::SetTrackOutputCommand>(
+                               guitarBusId,
+                               mixBusId),
+                           project,
+                           error),
+           error.toRawUTF8());
+    expect(project.findTrack(audioTrackId)->outputTrackId == guitarBusId
+               && project.findTrack(guitarBusId)->outputTrackId == mixBusId,
+           "Tracks can route through nested buses.");
+
+    const auto order = project.routingOrder(error);
+    const auto audioPosition = order.has_value()
+        ? std::find(order->cbegin(), order->cend(), audioTrackId)
+        : std::vector<juce::String>::const_iterator {};
+    const auto guitarPosition = order.has_value()
+        ? std::find(order->cbegin(), order->cend(), guitarBusId)
+        : std::vector<juce::String>::const_iterator {};
+    const auto mixPosition = order.has_value()
+        ? std::find(order->cbegin(), order->cend(), mixBusId)
+        : std::vector<juce::String>::const_iterator {};
+    expect(order.has_value()
+               && audioPosition < guitarPosition
+               && guitarPosition < mixPosition,
+           "Routing order processes sources before destination buses.");
+
+    error.clear();
+    expect(!history.perform(std::make_unique<studio::SetTrackOutputCommand>(
+                                mixBusId,
+                                guitarBusId),
+                            project,
+                            error)
+               && error.containsIgnoreCase("cycle"),
+           "Routing rejects cycles.");
+
+    const auto unrelatedAudioId = project.tracks[1].id;
+    error.clear();
+    expect(!history.perform(std::make_unique<studio::SetTrackOutputCommand>(
+                                guitarBusId,
+                                unrelatedAudioId),
+                            project,
+                            error),
+           "Routing rejects audio-track destinations.");
+
+    expect(history.undo(project), "Track output changes can be undone.");
+    expect(project.findTrack(guitarBusId)->outputTrackId.isEmpty(),
+           "Undo restores the prior master output.");
+    expect(history.redo(project, error), error.toRawUTF8());
+    expect(project.findTrack(guitarBusId)->outputTrackId == mixBusId,
+           "Redo restores a bus output.");
+
+    expect(history.perform(std::make_unique<studio::RemoveTrackCommand>(guitarBusId),
+                           project,
+                           error),
+           error.toRawUTF8());
+    expect(project.findTrack(audioTrackId)->outputTrackId.isEmpty(),
+           "Deleting a bus reroutes its sources to the master.");
+    expect(history.undo(project), "Bus deletion can be undone.");
+    expect(project.findTrack(guitarBusId) != nullptr
+               && project.findTrack(audioTrackId)->outputTrackId == guitarBusId,
+           "Undo restores a deleted bus and its incoming routes.");
+}
+
 void transportMaps()
 {
     auto project = studio::Project::createDefault();
@@ -760,6 +889,11 @@ void audioProcessingTools()
     expect(std::abs(clip.envelopeGainAt(0.5) - 0.5f) < 0.0001f
                && std::abs(clip.envelopeGainAt(3.5) - 0.5f) < 0.0001f,
            "Clip fades expose deterministic envelope gain.");
+    clip.fadeInCurve = -1.0f;
+    clip.fadeOutCurve = 1.0f;
+    expect(clip.envelopeGainAt(0.5) > 0.5f
+               && clip.envelopeGainAt(3.5) < 0.5f,
+           "Clip fade curves support logarithmic and sharp shapes.");
 
     juce::AudioBuffer<float> buffer(2, 48000);
     buffer.clear();
@@ -820,8 +954,37 @@ void reampWorkflow()
                && stored->sourceTrackId == project.tracks[0].id
                && stored->outputChannel == 2,
            "A hardware tone path links DI, send, and return tracks.");
+    studio::ToneSnapshot snapshot;
+    snapshot.name = "Bass tone";
+    snapshot.reampRouteId = route.id;
+    snapshot.sourceTrackId = route.sourceTrackId;
+    snapshot.returnTrackId = route.returnTrackId;
+    snapshot.sourceFingerprint = "source";
+    snapshot.chainFingerprint = "chain";
+    project.toneSnapshots.push_back(snapshot);
+    project.reampRoutes.front().activeSnapshotId = snapshot.id;
+    studio::CommandStack pruneHistory;
+    expect(pruneHistory.perform(
+               std::make_unique<studio::SetReampRoutesCommand>(
+                   project.reampRoutes,
+                   std::vector<studio::ReampRoute> {}),
+               project,
+               error)
+               && project.reampRoutes.empty()
+               && project.toneSnapshots.empty()
+               && studio::Project::fromVar(project.toVar(), error)
+                      .has_value(),
+           "Removing a reamp route atomically prunes dependent snapshots.");
+    expect(pruneHistory.undo(project)
+               && project.reampRoutes.size() == 1
+               && project.toneSnapshots.size() == 1
+               && project.reampRoutes.front().activeSnapshotId
+                      == snapshot.id,
+           "Undo restores reamp routes and their active snapshots together.");
     expect(history.undo(project), "Reamp route creation can be undone.");
-    expect(project.reampRoutes.empty(), "Undo removes the reamp relationship.");
+    expect(project.reampRoutes.empty()
+               && project.toneSnapshots.empty(),
+           "Undo removes the reamp relationship and dependent snapshots.");
 }
 
 void packagePersistence()
@@ -840,9 +1003,81 @@ void packagePersistence()
     expect(loaded.has_value(), error.toRawUTF8());
     expect(loaded.has_value() && loaded->id == project.id, "Saved package restores the project ID.");
     expect(package.getChildFile("manifest.json").existsAsFile(), "Package contains a manifest.");
+    expect(package.getChildFile("automation/generation-00000001.json").existsAsFile(),
+           "Package stores automation in its own generation document.");
     expect(package.getChildFile("recovery/latest.json").existsAsFile(), "Package contains a recovery point.");
 
+    const auto state = juce::MemoryBlock("snapshot-state", 14);
+    const auto stateReference = studio::PluginStateStore::store(
+        package,
+        state,
+        error);
+    const auto saveAsPackage = package.getSiblingFile(
+        package.getFileNameWithoutExtension() + "-copy.studioduo");
+    const auto truncatedPackage = package.getSiblingFile(
+        package.getFileNameWithoutExtension() + "-truncated.studioduo");
+    if (stateReference.has_value())
+    {
+        juce::MemoryBlock encoded;
+        package.getChildFile(stateReference->relativePath)
+            .loadFileAsData(encoded);
+        const auto truncatedState = truncatedPackage.getChildFile(
+            stateReference->relativePath);
+        truncatedState.getParentDirectory().createDirectory();
+        truncatedState.replaceWithData(
+            encoded.getData(),
+            encoded.getSize() / 2);
+        juce::MemoryBlock rejectedState;
+        expect(!studio::PluginStateStore::load(
+                   truncatedPackage,
+                   *stateReference,
+                   rejectedState,
+                   error),
+               "Truncated plugin-state envelopes are rejected.");
+
+        const auto corruptDestination =
+            saveAsPackage.getChildFile(
+                stateReference->relativePath);
+        corruptDestination.getParentDirectory().createDirectory();
+        corruptDestination.replaceWithText("corrupt");
+    }
+    expect(stateReference.has_value()
+               && studio::PluginStateStore::materialize(
+                   package,
+                   saveAsPackage,
+                   *stateReference,
+                   error),
+           error.toRawUTF8());
+    juce::MemoryBlock copiedState;
+    expect(stateReference.has_value()
+               && studio::PluginStateStore::load(
+                   saveAsPackage,
+                   *stateReference,
+                   copiedState,
+                   error)
+               && copiedState == state,
+           "Save As atomically replaces corrupt destination state blobs.");
+
+    auto invalid = project;
+    studio::ToneSnapshot orphan;
+    orphan.name = "Orphan";
+    orphan.reampRouteId = "missing-route";
+    orphan.sourceTrackId = project.tracks.front().id;
+    orphan.returnTrackId = project.tracks[1].id;
+    orphan.sourceFingerprint = "source";
+    orphan.chainFingerprint = "chain";
+    invalid.toneSnapshots.push_back(orphan);
+    const auto invalidPackage = package.getSiblingFile(
+        package.getFileNameWithoutExtension() + "-invalid.studioduo");
+    expect(studio::ProjectFile::save(invalid, invalidPackage).failed()
+               && !invalidPackage.getChildFile("manifest.json")
+                       .existsAsFile(),
+           "Project save rejects dangling reamp snapshot references.");
+
     package.deleteRecursively();
+    saveAsPackage.deleteRecursively();
+    truncatedPackage.deleteRecursively();
+    invalidPackage.deleteRecursively();
 }
 
 void rejectsInvalidBaseMeter()
@@ -894,6 +1129,12 @@ void pluginBridgeProtocol()
     state.input[0][1] = -0.5f;
     state.input[1][0] = 0.75f;
     state.input[1][1] = -1.0f;
+    state.sidechainChannels.store(2);
+    state.sidechain[0][0] = 0.5f;
+    state.parameterEventCount.store(1);
+    state.parameterEvents[0].parameterIndex = 7;
+    state.parameterEvents[0].sampleOffset = 2;
+    state.parameterEvents[0].value = 0.75f;
     state.hostSequence.store(1, std::memory_order_release);
 
     expect(studio::PluginBridgeProtocol::isValid(state), "Bridge protocol header is valid.");
@@ -906,6 +1147,19 @@ void pluginBridgeProtocol()
            "Bridge transport preserves stereo samples.");
     expect(!studio::PluginBridgeProtocol::processAvailableBlock(state),
            "Bridge worker does not process the same block twice.");
+    expect(studio::PluginBridgeProtocol::outputSourceChannel(1, 0) == 0
+               && studio::PluginBridgeProtocol::outputSourceChannel(1, 1)
+                      == 0
+               && studio::PluginBridgeProtocol::outputSourceChannel(2, 1)
+                      == 1
+               && studio::PluginBridgeProtocol::outputSourceChannel(2, 2)
+                      == -1,
+           "Bridge output mapping duplicates mono and never leaks stale channels.");
+    expect(studio::PluginBridgeProtocol::parameterEventCount(state) == 1
+               && state.parameterEvents[0].parameterIndex == 7
+               && state.parameterEvents[0].sampleOffset == 2
+               && std::abs(state.sidechain[0][0] - 0.5f) < 0.0001f,
+           "Bridge audio, sidechain, and parameter events share one block record.");
 }
 
 void liveRecordingWaveform()
@@ -1012,9 +1266,14 @@ void multitrackRecordingCommand()
     expect(project.findTrack(firstTakeId) != nullptr
                && project.findTrack(secondTakeId) != nullptr,
            "A multitrack recording adds every captured take.");
-    expect(!project.findTrack(firstParentId)->versionsCollapsed
-               && !project.findTrack(secondParentId)->versionsCollapsed,
-           "Recording expands every captured parent track.");
+    expect(project.findTrack(firstParentId)->versionsCollapsed
+               && project.findTrack(secondParentId)->versionsCollapsed,
+           "Recording keeps every captured parent track collapsed.");
+    expect(project.findTrack(firstParentId)->activeTakeTrackId
+                   == firstTakeId
+               && project.findTrack(secondParentId)->activeTakeTrackId
+                   == secondTakeId,
+           "Recording makes each newest hidden take active.");
     expect(history.undo(project), "A multitrack recording can be undone in one step.");
     expect(project.findTrack(firstTakeId) == nullptr
                && project.findTrack(secondTakeId) == nullptr,
@@ -1022,6 +1281,9 @@ void multitrackRecordingCommand()
     expect(project.findTrack(firstParentId)->versionsCollapsed
                && project.findTrack(secondParentId)->versionsCollapsed,
            "Undo restores parent lane collapse states.");
+    expect(project.findTrack(firstParentId)->activeTakeTrackId.isEmpty()
+               && project.findTrack(secondParentId)->activeTakeTrackId.isEmpty(),
+           "Undo restores parent active take selections.");
     expect(history.redo(project, error), error.toRawUTF8());
     expect(project.findTrack(firstTakeId) != nullptr
                && project.findTrack(secondTakeId) != nullptr,
@@ -1031,9 +1293,12 @@ void multitrackRecordingCommand()
 
 int main()
 {
+    juce::ScopedJuceInitialiser_GUI juceInitialiser;
     serializationRoundTrip();
+    legacyProjectMigration();
     commandHistory();
     splitClipBoundaries();
+    busRouting();
     transportMaps();
     playlistsAndComping();
     linkedMultitrackEditing();
@@ -1048,6 +1313,17 @@ int main()
     synchronizedRecordingCapture();
     multitrackRecordingTargets();
     multitrackRecordingCommand();
+    routingModelTests();
+    routingEngineTests();
+    routingUiModelTests();
+    pluginFormatTests();
+    pluginRecoveryTests();
+    automationTests();
+    deviceTests();
+    reampSnapshotTests();
+    renderEngineTests();
+    pluginCompatibilityTests();
+    projectMigrationTests();
 
     if (failures == 0)
     {

@@ -1,35 +1,122 @@
 #include "PluginBridgeWorker.h"
 
+#include "PluginFormats.h"
+#include "PluginEditorWindow.h"
+#include "SampleAccurateAutomationTarget.h"
+#include "ValidatedPluginStateTarget.h"
+#include <algorithm>
+#include <cmath>
+#include <span>
+#if JUCE_MAC
+#include "platform/ApplicationIcon.h"
+#endif
+
 namespace studio
 {
 PluginBridgeWorker::PluginBridgeWorker()
     : juce::Thread("Studio Duo plugin bridge")
 {
-    juce::addDefaultFormatsToManager(formatManager);
+    PluginFormats::addSupportedFormats(formatManager);
+    automationBoundaries.reserve(
+        static_cast<std::size_t>(
+            PluginBridgeSharedState::maxParameterEvents * 2)
+        + static_cast<std::size_t>(
+            PluginBridgeSharedState::maxBlockSize / 8 + 2));
 }
 
 PluginBridgeWorker::~PluginBridgeWorker()
 {
+    stopTimer();
     signalThreadShouldExit();
     stopThread(2000);
+    if (plugin != nullptr)
+        plugin->removeListener(this);
 }
 
 bool PluginBridgeWorker::initialise(const juce::String& commandLine)
 {
-    return initialiseFromCommandLine(commandLine, pluginBridgeProcessId, 5000);
+    const auto worker = initialiseFromCommandLine(
+        commandLine,
+        pluginBridgeProcessId,
+        5000);
+#if JUCE_MAC
+    if (worker)
+        setPlatformAccessoryApplication();
+#endif
+    if (worker)
+        startTimerHz(50);
+    return worker;
 }
 
 void PluginBridgeWorker::handleMessageFromCoordinator(const juce::MemoryBlock& message)
 {
-    if (mapping != nullptr || message.isEmpty())
+    if (message.isEmpty())
         return;
 
     juce::MemoryInputStream stream(message, false);
+    if (mapping != nullptr)
+    {
+        const auto command = stream.readString();
+        if (command == "get-state")
+        {
+            juce::MessageManager::callAsync(
+                [this]
+                {
+                    captureStateOnMessageThread();
+                });
+        }
+        else if (command == "set-parameter")
+        {
+            const auto parameterIndex = stream.readInt();
+            const auto value = stream.readFloat();
+            juce::MessageManager::callAsync(
+                [this, parameterIndex, value]
+                {
+                    const std::lock_guard lock(pluginMutex);
+                    if (plugin != nullptr
+                        && parameterIndex >= 0
+                        && parameterIndex
+                            < plugin->getParameters().size())
+                    {
+                        plugin->getParameters()[
+                            parameterIndex]->setValue(value);
+                    }
+                });
+        }
+        else if (command == "show-editor")
+        {
+            juce::MessageManager::callAsync(
+                [this] { showEditor(); });
+        }
+        else if (command == "hide-editor")
+        {
+            juce::MessageManager::callAsync(
+                [this] { hideEditor(); });
+        }
+        else if (command == "focus-editor")
+        {
+            juce::MessageManager::callAsync(
+                [this] { focusEditor(); });
+        }
+        else if (command == "resize-editor")
+        {
+            const auto width = stream.readInt();
+            const auto height = stream.readInt();
+            juce::MessageManager::callAsync(
+                [this, width, height]
+                {
+                    resizeEditor(width, height);
+                });
+        }
+        return;
+    }
+
     const juce::File sharedFile(stream.readString());
     const auto pluginXml = stream.readString();
     const auto stateBase64 = stream.readString();
     const auto sampleRate = stream.readDouble();
     const auto blockSize = stream.readInt();
+    const auto requestedSidechainChannels = stream.readInt();
     auto newMapping = std::make_unique<juce::MemoryMappedFile>(
         sharedFile,
         juce::MemoryMappedFile::readWrite,
@@ -61,7 +148,11 @@ void PluginBridgeWorker::handleMessageFromCoordinator(const juce::MemoryBlock& m
 
     if (pluginXml.isEmpty())
     {
-        startProcessing(nullptr, pluginState, sampleRate, blockSize);
+        startProcessing(nullptr,
+                        pluginState,
+                        sampleRate,
+                        blockSize,
+                        requestedSidechainChannels);
         return;
     }
 
@@ -77,8 +168,13 @@ void PluginBridgeWorker::handleMessageFromCoordinator(const juce::MemoryBlock& m
         description,
         sampleRate,
         blockSize,
-        [this, pluginState, sampleRate, blockSize](std::unique_ptr<juce::AudioPluginInstance> instance,
-                                                   const juce::String& error)
+        [this,
+         pluginState,
+         sampleRate,
+         blockSize,
+         requestedSidechainChannels](
+            std::unique_ptr<juce::AudioPluginInstance> instance,
+            const juce::String& error)
         {
             if (instance == nullptr)
             {
@@ -86,8 +182,71 @@ void PluginBridgeWorker::handleMessageFromCoordinator(const juce::MemoryBlock& m
                 return;
             }
 
-            startProcessing(std::move(instance), pluginState, sampleRate, blockSize);
+            startProcessing(std::move(instance),
+                            pluginState,
+                            sampleRate,
+                            blockSize,
+                            requestedSidechainChannels);
         });
+}
+
+void PluginBridgeWorker::captureStateOnMessageThread()
+{
+    pluginAccessState.fetch_or(
+        stateCaptureBit,
+        std::memory_order_seq_cst);
+    struct CaptureScope
+    {
+        ~CaptureScope()
+        {
+           state.fetch_and(
+               PluginBridgeWorker::processingCountMask,
+               std::memory_order_seq_cst);
+        }
+        std::atomic<std::uint32_t>& state;
+    } captureScope { pluginAccessState };
+
+    const auto deadline =
+        juce::Time::getMillisecondCounterHiRes() + 2000.0;
+    while ((pluginAccessState.load(std::memory_order_seq_cst)
+               & processingCountMask)
+           != 0
+          && juce::Time::getMillisecondCounterHiRes() < deadline)
+    {
+        juce::Thread::sleep(1);
+    }
+
+    juce::MemoryBlock state;
+    auto stateResult = juce::Result::ok();
+    if ((pluginAccessState.load(std::memory_order_seq_cst)
+           & processingCountMask)
+        != 0)
+    {
+        stateResult = juce::Result::fail(
+           "Timed out waiting for sandbox processing to pause before state capture.");
+    }
+    else if (plugin != nullptr)
+    {
+        if (auto* validated =
+               dynamic_cast<ValidatedPluginStateTarget*>(
+                   plugin.get()))
+        {
+           stateResult =
+               validated->saveValidatedState(state);
+        }
+        else
+        {
+           plugin->getStateInformation(state);
+        }
+    }
+    if (stateResult.failed())
+        sendStatus(
+           "state|error|"
+           + stateResult.getErrorMessage());
+    else if (state.isEmpty())
+        sendStatus("state|none");
+    else
+        sendStatus("state|data|" + state.toBase64Encoding());
 }
 
 void PluginBridgeWorker::handleConnectionLost()
@@ -115,29 +274,230 @@ void PluginBridgeWorker::run()
             continue;
         }
 
+        auto accessState =
+            pluginAccessState.load(std::memory_order_seq_cst);
+        auto admitted = false;
+        while ((accessState & stateCaptureBit) == 0)
+        {
+            if ((accessState & processingCountMask)
+                == processingCountMask)
+                break;
+            if (pluginAccessState.compare_exchange_weak(
+                    accessState,
+                    accessState + 1,
+                    std::memory_order_seq_cst,
+                    std::memory_order_seq_cst))
+            {
+                admitted = true;
+                break;
+            }
+        }
+        if (!admitted)
+        {
+            PluginBridgeProtocol::processAvailableBlock(
+                *sharedState,
+                PluginBridgeSharedState::bypassOutputFlag);
+            wait(1);
+            continue;
+        }
+        struct ProcessingScope
+        {
+            ~ProcessingScope()
+            {
+                state.fetch_sub(1, std::memory_order_seq_cst);
+            }
+            std::atomic<std::uint32_t>& state;
+        } processingScope { pluginAccessState };
+
+        const std::lock_guard pluginLock(pluginMutex);
+        const auto resetApplied =
+            sharedState->resetRequested.exchange(
+                0,
+                std::memory_order_acq_rel)
+            != 0;
+        if (resetApplied)
+            plugin->reset();
         const auto channels = std::min(
             static_cast<int>(sharedState->numChannels.load(std::memory_order_relaxed)),
+            PluginBridgeSharedState::maxChannels);
+        const auto sidechainChannels = std::min(
+            static_cast<int>(
+                sharedState->sidechainChannels.load(std::memory_order_relaxed)),
             PluginBridgeSharedState::maxChannels);
         const auto samples = std::min(
             static_cast<int>(sharedState->numSamples.load(std::memory_order_relaxed)),
             PluginBridgeSharedState::maxBlockSize);
-        processBuffer.clear();
+        processBuffer.clear(0, samples);
         for (int channel = 0; channel < channels; ++channel)
             processBuffer.copyFrom(channel,
                                    0,
                                    sharedState->input[static_cast<std::size_t>(channel)].data(),
                                    samples);
+        for (int channel = 0;
+             channel < std::min(sidechainChannels, sidechainInputChannels);
+             ++channel)
+        {
+            processBuffer.copyFrom(
+                mainInputChannels + channel,
+                0,
+                sharedState->sidechain[static_cast<std::size_t>(channel)].data(),
+                samples);
+        }
 
         midiBuffer.clear();
-        plugin->processBlock(processBuffer, midiBuffer);
+        const auto eventCount =
+            PluginBridgeProtocol::parameterEventCount(*sharedState);
+        const auto events =
+            std::span<const PluginBridgeParameterEvent>(
+                sharedState->parameterEvents.data(),
+                static_cast<std::size_t>(eventCount));
+        auto* automationTarget =
+            dynamic_cast<SampleAccurateAutomationTarget*>(
+                plugin.get());
+        if (automationTarget != nullptr)
+        {
+            juce::AudioBuffer<float> view(
+                processBuffer.getArrayOfWritePointers(),
+                processingChannels,
+                samples);
+            if (!automationTarget
+                     ->processBlockWithAutomationOrFallback(
+                         view,
+                         midiBuffer,
+                         events))
+                automationTarget = nullptr;
+        }
+        if (automationTarget == nullptr)
+        {
+            automationBoundaries.clear();
+            automationBoundaries.push_back(0);
+            automationBoundaries.push_back(samples);
+            auto automationStride = samples;
+            for (int eventIndex = 0;
+                 eventIndex < eventCount;
+                 ++eventIndex)
+            {
+                const auto& event =
+                    sharedState->parameterEvents[
+                        static_cast<std::size_t>(eventIndex)];
+                const auto start = std::min(
+                    samples,
+                    static_cast<int>(event.sampleOffset));
+                automationBoundaries.push_back(start);
+                if ((event.flags
+                     & PluginBridgeParameterEvent::rampFlag)
+                    != 0)
+                {
+                    const auto end = std::min(
+                        samples,
+                        static_cast<int>(event.rampEndOffset));
+                    automationBoundaries.push_back(end);
+                    const auto span = std::max(1, end - start);
+                    const auto delta = std::abs(
+                        event.rampEndValue - event.value);
+                    const auto toleranceStride = delta > 0.0f
+                        ? static_cast<int>(std::floor(
+                              0.002f
+                              * static_cast<float>(span)
+                              / delta))
+                        : span;
+                    if (span >= 8)
+                    {
+                        automationStride = std::min(
+                            automationStride,
+                            std::clamp(
+                                std::max(1, toleranceStride),
+                                8,
+                                span));
+                    }
+                }
+
+            }
+            if (automationStride < samples)
+            {
+                for (auto offset = automationStride;
+                     offset < samples;
+                     offset += automationStride)
+                    automationBoundaries.push_back(offset);
+            }
+            std::sort(
+                automationBoundaries.begin(),
+                automationBoundaries.end());
+            automationBoundaries.erase(
+                std::unique(
+                    automationBoundaries.begin(),
+                    automationBoundaries.end()),
+                automationBoundaries.end());
+            for (std::size_t boundary = 0;
+                 boundary + 1 < automationBoundaries.size();
+                 ++boundary)
+            {
+                const auto offset = automationBoundaries[boundary];
+                const auto next = automationBoundaries[boundary + 1];
+                auto& parameters = plugin->getParameters();
+                for (int eventIndex = 0;
+                     eventIndex < eventCount;
+                     ++eventIndex)
+                {
+                    const auto& event =
+                        sharedState->parameterEvents[
+                            static_cast<std::size_t>(eventIndex)];
+                    if (event.parameterIndex
+                        >= static_cast<std::uint32_t>(
+                            parameters.size()))
+                        continue;
+                    const auto start = static_cast<int>(
+                        event.sampleOffset);
+                    const auto end = static_cast<int>(
+                        event.rampEndOffset);
+                    if ((event.flags
+                         & PluginBridgeParameterEvent::rampFlag)
+                        != 0
+                        && offset >= start
+                        && offset <= end
+                        && end > start)
+                    {
+                        const auto progress = static_cast<float>(
+                            offset - start)
+                            / static_cast<float>(end - start);
+                        parameters[static_cast<int>(
+                            event.parameterIndex)]
+                            ->setValue(
+                                event.value
+                                + (event.rampEndValue - event.value)
+                                    * progress);
+                    }
+                    else if (offset == start)
+                    {
+                        parameters[static_cast<int>(
+                            event.parameterIndex)]
+                            ->setValue(event.value);
+                    }
+                }
+                juce::AudioBuffer<float> view(
+                    processBuffer.getArrayOfWritePointers(),
+                    processingChannels,
+                    offset,
+                    next - offset);
+                plugin->processBlock(view, midiBuffer);
+            }
+        }
         for (int channel = 0; channel < PluginBridgeSharedState::maxChannels; ++channel)
         {
             auto& destination = sharedState->output[static_cast<std::size_t>(channel)];
-            if (channel < processBuffer.getNumChannels())
+            if (channel < mainOutputChannels)
                 std::copy_n(processBuffer.getReadPointer(channel), samples, destination.begin());
             else
                 std::fill_n(destination.begin(), samples, 0.0f);
         }
+        sharedState->numOutputChannels.store(
+            static_cast<std::uint32_t>(mainOutputChannels),
+            std::memory_order_relaxed);
+        sharedState->outputFlags.store(
+            resetApplied
+                ? PluginBridgeSharedState::resetAppliedFlag
+                : 0,
+            std::memory_order_relaxed);
         sharedState->workerSequence.store(hostSequence, std::memory_order_release);
     }
 }
@@ -145,13 +505,41 @@ void PluginBridgeWorker::run()
 void PluginBridgeWorker::startProcessing(std::unique_ptr<juce::AudioPluginInstance> newPlugin,
                                          const juce::MemoryBlock& state,
                                          double sampleRate,
-                                         int blockSize)
+                                         int blockSize,
+                                         int requestedSidechainChannels)
 {
+    editorWindow.reset();
     if (newPlugin != nullptr)
     {
+        if (requestedSidechainChannels > 0
+            && newPlugin->getBusCount(true) > 1)
+        {
+            auto layout = newPlugin->getBusesLayout();
+            layout.inputBuses.set(
+                1,
+                requestedSidechainChannels == 1
+                    ? juce::AudioChannelSet::mono()
+                    : juce::AudioChannelSet::stereo());
+            if (!newPlugin->setBusesLayout(layout))
+            {
+                sendStatus("error:unsupported-sidechain-layout");
+                return;
+            }
+        }
         const auto inputChannels = newPlugin->getTotalNumInputChannels();
         const auto outputChannels = newPlugin->getTotalNumOutputChannels();
-        if (inputChannels > PluginBridgeSharedState::maxChannels
+        mainInputChannels = newPlugin->getBusCount(true) > 0
+            ? newPlugin->getChannelCountOfBus(true, 0)
+            : inputChannels;
+        sidechainInputChannels = newPlugin->getBusCount(true) > 1
+            ? newPlugin->getChannelCountOfBus(true, 1)
+            : 0;
+        mainOutputChannels = newPlugin->getBusCount(false) > 0
+            ? newPlugin->getChannelCountOfBus(false, 0)
+            : outputChannels;
+        processingChannels = std::max({ 2, inputChannels, outputChannels });
+        if (mainInputChannels > PluginBridgeSharedState::maxChannels
+            || sidechainInputChannels > PluginBridgeSharedState::maxChannels
             || outputChannels > PluginBridgeSharedState::maxChannels)
         {
             sendStatus("error:unsupported-channel-layout");
@@ -160,12 +548,39 @@ void PluginBridgeWorker::startProcessing(std::unique_ptr<juce::AudioPluginInstan
 
         newPlugin->setRateAndBufferSizeDetails(sampleRate, blockSize);
         if (!state.isEmpty())
-            newPlugin->setStateInformation(state.getData(), static_cast<int>(state.getSize()));
+        {
+            if (auto* validated =
+                    dynamic_cast<ValidatedPluginStateTarget*>(
+                        newPlugin.get()))
+            {
+                if (const auto result =
+                        validated->restoreValidatedState(
+                            state.getData(),
+                            static_cast<int>(state.getSize()));
+                    result.failed())
+                {
+                    sendStatus(
+                        "error:state-restore:"
+                        + result.getErrorMessage());
+                    return;
+                }
+            }
+            else
+            {
+                newPlugin->setStateInformation(
+                    state.getData(),
+                    static_cast<int>(state.getSize()));
+            }
+        }
         newPlugin->prepareToPlay(sampleRate, blockSize);
     }
 
+    if (plugin != nullptr)
+        plugin->removeListener(this);
     plugin = std::move(newPlugin);
-    processBuffer.setSize(PluginBridgeSharedState::maxChannels,
+    if (plugin != nullptr)
+        plugin->addListener(this);
+    processBuffer.setSize(processingChannels,
                           PluginBridgeSharedState::maxBlockSize,
                           false,
                           true,
@@ -174,8 +589,167 @@ void PluginBridgeWorker::startProcessing(std::unique_ptr<juce::AudioPluginInstan
     sendStatus("ready|"
                + juce::String(plugin != nullptr ? plugin->getLatencySamples() : 0)
                + "|"
-               + juce::String(plugin != nullptr ? plugin->getTailLengthSeconds() : 0.0, 6));
+               + juce::String(plugin != nullptr ? plugin->getTailLengthSeconds() : 0.0, 6)
+               + "|"
+               + parameterMetadata());
     startThread(juce::Thread::Priority::high);
+}
+
+juce::String PluginBridgeWorker::parameterMetadata() const
+{
+    juce::Array<juce::var> parameterValues;
+    if (plugin != nullptr)
+    {
+        const auto& parameters = plugin->getParameters();
+        for (int index = 0; index < parameters.size(); ++index)
+        {
+            const auto* parameter = parameters[index];
+            auto object = std::make_unique<juce::DynamicObject>();
+            object->setProperty("index", index);
+            const auto* identified = dynamic_cast<
+                const juce::HostedAudioProcessorParameter*>(
+                parameter);
+            object->setProperty(
+                "id",
+                identified != nullptr
+                    ? identified->getParameterID()
+                    : juce::String(index));
+            object->setProperty("name", parameter->getName(128));
+            object->setProperty("value", parameter->getValue());
+            object->setProperty(
+                "automatable",
+                parameter->isAutomatable());
+            parameterValues.add(juce::var(object.release()));
+        }
+    }
+    const auto json = juce::JSON::toString(
+        juce::var(parameterValues),
+        false);
+    return juce::MemoryBlock(
+               json.toRawUTF8(),
+               json.getNumBytesAsUTF8())
+        .toBase64Encoding();
+}
+
+void PluginBridgeWorker::audioProcessorParameterChanged(
+    juce::AudioProcessor*,
+    int,
+    float)
+{
+}
+
+void PluginBridgeWorker::audioProcessorChanged(
+    juce::AudioProcessor*,
+    const ChangeDetails& details)
+{
+    if (plugin == nullptr)
+        return;
+    if (details.latencyChanged)
+        latencyReportPending.store(true, std::memory_order_release);
+    if (details.parameterInfoChanged)
+        metadataReportPending.store(true, std::memory_order_release);
+}
+
+void PluginBridgeWorker::timerCallback()
+{
+    if (plugin == nullptr)
+        return;
+    if (latencyReportPending.exchange(
+            false,
+            std::memory_order_acq_rel))
+    {
+        auto message = juce::String();
+        {
+            const std::lock_guard lock(pluginMutex);
+            if (plugin == nullptr)
+                return;
+            message = "latency|"
+                + juce::String(plugin->getLatencySamples())
+                + "|"
+                + juce::String(
+                    plugin->getTailLengthSeconds(),
+                    6);
+        }
+        sendStatus(message);
+    }
+    if (metadataReportPending.exchange(
+            false,
+            std::memory_order_acq_rel))
+    {
+        auto metadata = juce::String();
+        {
+            const std::lock_guard lock(pluginMutex);
+            if (plugin == nullptr)
+                return;
+            metadata = parameterMetadata();
+        }
+        sendStatus("metadata|" + metadata);
+    }
+}
+
+void PluginBridgeWorker::showEditor()
+{
+    if (plugin == nullptr)
+    {
+        sendStatus("editor|error|Plugin runtime is unavailable");
+        return;
+    }
+    if (editorWindow == nullptr)
+    {
+        juce::String error;
+        editorWindow = PluginEditorWindow::create(
+            *plugin,
+            plugin->getName(),
+            error);
+        if (editorWindow == nullptr)
+        {
+            sendStatus("editor|error|" + error);
+            return;
+        }
+    }
+    editorWindow->showEditor();
+    sendStatus(
+        "editor|shown|"
+        + juce::String(editorWindow->getWidth())
+        + "|"
+        + juce::String(editorWindow->getHeight()));
+}
+
+void PluginBridgeWorker::hideEditor()
+{
+    if (editorWindow != nullptr)
+        editorWindow->hideEditor();
+    sendStatus("editor|hidden");
+}
+
+void PluginBridgeWorker::focusEditor()
+{
+    if (editorWindow == nullptr)
+    {
+        showEditor();
+        return;
+    }
+    editorWindow->focusEditor();
+    sendStatus("editor|focused");
+}
+
+void PluginBridgeWorker::resizeEditor(int width, int height)
+{
+    if (editorWindow == nullptr)
+    {
+        sendStatus("editor|error|Plugin editor is not open");
+        return;
+    }
+    if (!editorWindow->resizeEditor(width, height))
+    {
+        sendStatus("editor|error|Plugin editor size is invalid");
+        return;
+    }
+    sendStatus(
+        "editor|resized|"
+        + juce::String(editorWindow->getWidth())
+        + "|"
+        + juce::String(editorWindow->getHeight()));
 }
 
 void PluginBridgeWorker::sendStatus(const juce::String& status)

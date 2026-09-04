@@ -2,12 +2,15 @@
 #include "plugin_host/PluginBridgeClient.h"
 #include "plugin_host/PluginBridgeWorker.h"
 #include "plugin_host/PluginScanWorker.h"
+#include "plugin_host/PluginCompatibilityValidator.h"
+#include "plugin_host/ScreamForgeValidation.h"
 #include "platform/ApplicationIcon.h"
 
 #include <juce_gui_extra/juce_gui_extra.h>
 
 #include <algorithm>
 #include <cmath>
+#include <iostream>
 
 namespace studio
 {
@@ -56,7 +59,32 @@ public:
         {
             bridgeSelfTest = std::make_unique<PluginBridgeClient>();
             pluginActivationCatalog = std::make_unique<PluginCatalog>();
+            validationIdentifier = commandLine
+                .fromFirstOccurrenceOf(
+                    "--bridge-plugin-self-test",
+                    false,
+                    false)
+                .trim()
+                .unquoted();
             juce::MessageManager::callAsync([this] { runPluginActivationSelfTest(); });
+            return;
+        }
+        if (commandLine.contains("--validate-scream-forge"))
+        {
+            pluginActivationCatalog = std::make_unique<PluginCatalog>();
+            juce::MessageManager::callAsync(
+                [this] { runScreamForgeValidation(); });
+            return;
+        }
+        if (commandLine.contains("--validate-plugin"))
+        {
+            validationIdentifier = commandLine
+                .fromFirstOccurrenceOf("--validate-plugin", false, false)
+                .trim()
+                .unquoted();
+            pluginActivationCatalog = std::make_unique<PluginCatalog>();
+            juce::MessageManager::callAsync(
+                [this] { runPluginValidation(); });
             return;
         }
 
@@ -77,6 +105,9 @@ public:
 
     void systemRequestedQuit() override
     {
+        if (mainWindow != nullptr
+            && !mainWindow->prepareForShutdown())
+            return;
         quit();
     }
 
@@ -133,9 +164,12 @@ private:
         }
 
         const auto entries = pluginActivationCatalog->entries();
-        const auto candidate = std::find_if(entries.cbegin(), entries.cend(), [](const auto& entry)
+        const auto candidate = std::find_if(entries.cbegin(), entries.cend(), [this](const auto& entry)
         {
-            return !entry.instrument
+            return (validationIdentifier.isEmpty()
+                    || entry.identifier == validationIdentifier
+                    || entry.name.containsIgnoreCase(validationIdentifier))
+                && !entry.instrument
                 && entry.inputChannels > 0
                 && entry.inputChannels <= PluginBridgeSharedState::maxChannels
                 && entry.outputChannels > 0
@@ -167,13 +201,129 @@ private:
         }
 
         juce::AudioBuffer<float> block(2, 512);
-        block.clear();
-        bridgeSelfTest->processBlock(block);
-        juce::Thread::sleep(10);
-        bridgeSelfTest->processBlock(block);
-        const auto passed = bridgeSelfTest->isReady();
+        auto audioPassed = false;
+        auto phase = 0.0;
+        for (int blockIndex = 0; blockIndex < 32 && !audioPassed; ++blockIndex)
+        {
+            for (int sample = 0; sample < block.getNumSamples(); ++sample)
+            {
+                const auto value = static_cast<float>(
+                    std::sin(phase) * 0.1);
+                phase += juce::MathConstants<double>::twoPi
+                    * 220.0
+                    / 48000.0;
+                for (int channel = 0; channel < block.getNumChannels(); ++channel)
+                    block.setSample(channel, sample, value);
+            }
+            bridgeSelfTest->processBlock(block);
+            for (int channel = 0; channel < block.getNumChannels(); ++channel)
+            {
+                for (int sample = 0; sample < block.getNumSamples(); ++sample)
+                {
+                    const auto value = block.getSample(channel, sample);
+                    audioPassed = audioPassed
+                        || (std::isfinite(value)
+                            && std::abs(value) > 0.000001f);
+                }
+            }
+            juce::Thread::sleep(2);
+        }
+        const auto editorResult = bridgeSelfTest->showEditor();
+        if (editorResult.wasOk())
+            juce::Thread::sleep(50);
+        const auto hideResult = editorResult.wasOk()
+            ? bridgeSelfTest->hideEditor()
+            : editorResult;
+        const auto passed = bridgeSelfTest->isReady()
+            && audioPassed
+            && editorResult.wasOk()
+            && hideResult.wasOk();
+        if (!passed)
+        {
+            juce::Logger::writeToLog(
+                "plugin.bridge.activation-test: "
+                + (editorResult.failed()
+                       ? editorResult.getErrorMessage()
+                       : hideResult.failed()
+                           ? hideResult.getErrorMessage()
+                           : juce::String(
+                               "Sandbox produced no audio.")));
+        }
         bridgeSelfTest->stop();
         setApplicationReturnValue(passed ? 0 : 1);
+        quit();
+    }
+
+    void runPluginValidation()
+    {
+        if (pluginActivationCatalog == nullptr
+            || validationIdentifier.isEmpty())
+        {
+            setApplicationReturnValue(2);
+            quit();
+            return;
+        }
+        const auto entries = pluginActivationCatalog->entries();
+        const auto entry = std::find_if(
+            entries.cbegin(),
+            entries.cend(),
+            [this](const auto& candidate)
+            {
+                return !candidate.bundledDevice
+                    && (candidate.identifier == validationIdentifier
+                        || candidate.name.equalsIgnoreCase(
+                            validationIdentifier));
+            });
+        if (entry == entries.cend())
+        {
+            std::cout << "{\"status\":\"not-installed\"}\n";
+            setApplicationReturnValue(2);
+            quit();
+            return;
+        }
+        const auto description =
+            pluginActivationCatalog->descriptionForIdentifier(
+                entry->identifier);
+        if (!description.has_value())
+        {
+            setApplicationReturnValue(1);
+            quit();
+            return;
+        }
+        const auto report =
+            PluginCompatibilityValidator::validate(*description);
+        std::cout << juce::JSON::toString(report.toVar(), true) << '\n';
+        setApplicationReturnValue(report.status == "pass" ? 0 : 1);
+        quit();
+    }
+
+    void runScreamForgeValidation()
+    {
+        if (pluginActivationCatalog == nullptr)
+        {
+            setApplicationReturnValue(1);
+            quit();
+            return;
+        }
+        std::vector<juce::PluginDescription> descriptions;
+        for (const auto& entry : pluginActivationCatalog->entries())
+        {
+            if (entry.bundledDevice)
+                continue;
+            const auto description =
+                pluginActivationCatalog->descriptionForIdentifier(
+                    entry.identifier);
+            if (description.has_value()
+                && ScreamForgeValidation::matches(*description))
+                descriptions.push_back(*description);
+        }
+        const auto result =
+            ScreamForgeValidation::validateInstalled(descriptions);
+        std::cout << juce::JSON::toString(result.toVar(), true) << '\n';
+        setApplicationReturnValue(
+            result.status == "pass"
+                ? 0
+                : result.status == "not-installed" ? 2 : 1);
         quit();
     }
 
@@ -197,6 +347,16 @@ private:
         {
             juce::JUCEApplication::getInstance()->systemRequestedQuit();
         }
+
+        bool prepareForShutdown()
+        {
+            if (auto* content =
+                    dynamic_cast<MainComponent*>(getContentComponent()))
+            {
+                return content->prepareForShutdown();
+            }
+            return true;
+        }
     };
 
     std::unique_ptr<MainWindow> mainWindow;
@@ -204,6 +364,7 @@ private:
     std::unique_ptr<PluginBridgeWorker> pluginBridgeWorker;
     std::unique_ptr<PluginBridgeClient> bridgeSelfTest;
     std::unique_ptr<PluginCatalog> pluginActivationCatalog;
+    juce::String validationIdentifier;
 };
 }
 START_JUCE_APPLICATION(studio::StudioDuoApplication)

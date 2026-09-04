@@ -1,5 +1,8 @@
 #pragma once
 
+#include "mix/RoutingTypes.h"
+#include "automation/AutomationTypes.h"
+
 #include <juce_data_structures/juce_data_structures.h>
 #include <juce_graphics/juce_graphics.h>
 
@@ -12,8 +15,12 @@ enum class TrackType
 {
     audio,
     instrument,
+    midi,
     aux,
     bus,
+    folder,
+    vca,
+    controlRoom,
     master
 };
 
@@ -138,6 +145,7 @@ struct ReampRoute
     bool polarityInverted = false;
     bool enabled = true;
     bool ownsReturnTrack = false;
+    juce::String activeSnapshotId;
 
     [[nodiscard]] juce::var toVar() const;
     static std::optional<ReampRoute> fromVar(const juce::var& value,
@@ -152,6 +160,7 @@ struct PluginInsert
     juce::String manufacturer;
     juce::String format;
     juce::String version;
+    juce::String architecture;
     juce::String fileOrIdentifier;
     juce::String stateFile;
     juce::String stateHash;
@@ -160,6 +169,9 @@ struct PluginInsert
     double tailSeconds = 0.0;
     bool bypassed = false;
     bool missing = false;
+    bool bundledDevice = false;
+    bool araCapable = false;
+    bool recoveryDisabled = false;
 
     [[nodiscard]] juce::var toVar() const;
     static std::optional<PluginInsert> fromVar(const juce::var& value, juce::String& error);
@@ -180,6 +192,8 @@ struct AudioClip
     double playbackRate = 1.0;
     double fadeInSeconds = 0.0;
     double fadeOutSeconds = 0.0;
+    float fadeInCurve = 0.0f;
+    float fadeOutCurve = 0.0f;
     bool polarityInverted = false;
     bool reversed = false;
     std::vector<WarpMarker> warpMarkers;
@@ -208,15 +222,27 @@ struct Track
     bool versionsCollapsed = false;
     juce::String activeTakeTrackId;
     std::vector<CompRegion> compRegions;
+    AutomationMode automationMode = AutomationMode::read;
+    bool automationArmed = false;
     TrackType type = TrackType::audio;
+    juce::String outputTrackId;
+    juce::String folderTrackId;
+    std::vector<juce::String> controlledTrackIds;
+    ChannelLayout channelLayout = ChannelLayout::stereo;
     float volumeDecibels = 0.0f;
     float pan = 0.0f;
+    bool polarityInverted = false;
     bool muted = false;
     bool solo = false;
+    bool soloSafe = false;
     bool armed = false;
     int inputChannel = 0;
     bool stereoInput = false;
     bool inputMonitoring = false;
+    int hardwareOutputChannel = 0;
+    float controlRoomDimDecibels = -20.0f;
+    bool controlRoomDimmed = false;
+    bool controlRoomMono = false;
     juce::Colour colour { 0xffdd5b3f };
     std::vector<PluginInsert> inserts;
     std::vector<AudioClip> clips;
@@ -225,10 +251,89 @@ struct Track
     static std::optional<Track> fromVar(const juce::var& value, juce::String& error);
 };
 
+struct ToneSnapshot
+{
+    juce::String id { juce::Uuid().toString() };
+    juce::String name { "Tone snapshot" };
+    juce::String reampRouteId;
+    juce::String sourceTrackId;
+    juce::String returnTrackId;
+    float returnVolumeDecibels = 0.0f;
+    float returnPan = 0.0f;
+    bool returnPolarityInverted = false;
+    std::vector<PluginInsert> inserts;
+    std::vector<RoutingConnection> routes;
+    std::vector<AutomationLane> automation;
+    juce::String sourceFingerprint;
+    juce::String chainFingerprint;
+    juce::String renderFile;
+    juce::String renderHash;
+    juce::String frozenTrackId;
+    float comparisonGainDecibels = 0.0f;
+    bool frozen = false;
+
+    [[nodiscard]] juce::var toVar() const;
+    static std::optional<ToneSnapshot> fromVar(const juce::var& value,
+                                               juce::String& error);
+};
+
+struct MixerTrackSnapshot
+{
+    juce::String trackId;
+    float volumeDecibels = 0.0f;
+    float pan = 0.0f;
+    bool muted = false;
+    bool solo = false;
+    bool soloSafe = false;
+    bool polarityInverted = false;
+    ChannelLayout channelLayout = ChannelLayout::stereo;
+    juce::String folderTrackId;
+    std::vector<juce::String> controlledTrackIds;
+    std::vector<PluginInsert> inserts;
+
+    [[nodiscard]] juce::var toVar() const;
+    static std::optional<MixerTrackSnapshot> fromVar(
+        const juce::var& value,
+        juce::String& error);
+};
+
+struct MixerSnapshot
+{
+    juce::String id { juce::Uuid().toString() };
+    juce::String name { "Mixer snapshot" };
+    std::vector<MixerTrackSnapshot> tracks;
+    std::vector<RoutingConnection> routes;
+    std::vector<AutomationLane> automation;
+
+    [[nodiscard]] juce::var toVar() const;
+    static std::optional<MixerSnapshot> fromVar(const juce::var& value,
+                                                juce::String& error);
+};
+
+struct RenderReport
+{
+    juce::String id { juce::Uuid().toString() };
+    juce::String scope;
+    juce::String outputFile;
+    juce::String sourceHash;
+    juce::String chainHash;
+    juce::String outputHash;
+    juce::String mode;
+    juce::String status;
+    juce::String warning;
+    juce::String error;
+    double durationSeconds = 0.0;
+    juce::String createdAt;
+
+    [[nodiscard]] juce::var toVar() const;
+    static std::optional<RenderReport> fromVar(const juce::var& value,
+                                               juce::String& error);
+};
+
 class Project
 {
 public:
-    static constexpr int currentFormatVersion = 1;
+    static constexpr int currentFormatVersion = 3;
 
     juce::String id { juce::Uuid().toString() };
     juce::String name { "Untitled" };
@@ -253,12 +358,21 @@ public:
     double loopEndSeconds = 8.0;
     std::vector<EditGroup> editGroups;
     std::vector<ReampRoute> reampRoutes;
+    std::vector<RoutingConnection> routingConnections;
+    std::vector<AutomationLane> automationLanes;
+    std::vector<ToneSnapshot> toneSnapshots;
+    std::vector<MixerSnapshot> mixerSnapshots;
+    std::vector<RenderReport> renderReports;
     std::vector<Track> tracks;
 
     static Project createDefault();
 
     [[nodiscard]] Track* findTrack(const juce::String& trackId);
     [[nodiscard]] const Track* findTrack(const juce::String& trackId) const;
+    [[nodiscard]] RoutingConnection* findRoutingConnection(
+        const juce::String& connectionId);
+    [[nodiscard]] const RoutingConnection* findRoutingConnection(
+        const juce::String& connectionId) const;
     [[nodiscard]] AudioClip* findClip(const juce::String& clipId);
     [[nodiscard]] const AudioClip* findClip(const juce::String& clipId) const;
     [[nodiscard]] Track* findTrackContainingClip(const juce::String& clipId);
@@ -269,6 +383,16 @@ public:
     [[nodiscard]] const EditGroup* editGroupForTrack(const juce::String& trackId) const;
     [[nodiscard]] const ReampRoute* reampRouteForReturn(
         const juce::String& trackId) const;
+    [[nodiscard]] juce::String masterTrackId() const;
+    [[nodiscard]] juce::String resolvedOutputTrackId(const Track& track) const;
+    [[nodiscard]] bool validateTrackOutput(const juce::String& sourceTrackId,
+                                           const juce::String& destinationTrackId,
+                                           juce::String& error) const;
+    [[nodiscard]] bool validateRoutingGraph(juce::String& error) const;
+    [[nodiscard]] std::optional<std::vector<juce::String>> routingGraphOrder(
+        juce::String& error) const;
+    [[nodiscard]] std::optional<std::vector<juce::String>> routingOrder(
+        juce::String& error) const;
     [[nodiscard]] double tempoAt(double seconds) const noexcept;
     [[nodiscard]] MeterChange meterAt(double seconds) const noexcept;
     [[nodiscard]] double beatsAt(double seconds) const noexcept;

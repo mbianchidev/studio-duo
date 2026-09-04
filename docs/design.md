@@ -1,6 +1,6 @@
 # Studio Duo product and technical design
 
-Status: accepted product direction
+Status: accepted product direction; Phases 1-3 implemented
 
 Date: 2026-08-30
 
@@ -231,7 +231,10 @@ standard block bridge without a much larger proxy implementation. Version 1.0
 therefore provides a clearly marked ARA compatibility mode that runs the ARA
 plugin instance in the main process after a sandboxed scan. Studio Duo saves a
 recovery point before activation and warns that the instance has reduced crash
-isolation. A future out-of-process ARA proxy can remove this exception.
+isolation. The compatibility host provides immutable source readers,
+modifications, region sequences, playback regions, tempo/meter content, and
+document archive restore. A future out-of-process ARA proxy can remove the
+isolation exception.
 
 Users may also opt a trusted standard plugin into in-process low-latency mode
 for monitored recording. Sandboxed mode remains the default.
@@ -490,13 +493,21 @@ format before feature breadth grows.
 
 ### Phase 3: mixer and plugin platform
 
-- Full routing graph, buses, sends, sidechains, VCAs, and control room
-- Automation and plugin delay compensation
-- VST3, AU, CLAP, and ARA 2 support
-- Plugin crash recovery and compatibility database
-- Bundled utility devices
-- Complete plugin-backed reamp snapshots and batch rendering
-- Scream Forge VST3, AU, and ARA 2 compatibility validation
+Completed in the working application:
+
+- Full routing graph, buses, sends, sidechains, VCAs, folders, control room,
+  flexible hardware outputs, solo-safe behavior, and latency compensation
+- Sample-accurate read, touch, latch, write, trim, and preview automation
+- Sandboxed VST3, Audio Unit, and CLAP hosting with worker-owned native/generic
+  editors, plus a source-aware, archive-backed reduced-isolation ARA 2 mode
+- Plugin state capture, crash/timeout records, explicit reload, safe-disabled
+  recovery, and missing-plugin replacement
+- Parametric EQ, compressor, true-peak limiter, algorithmic reverb, noise gate,
+  gain, polarity, delay, tuner, and signal generator devices
+- Plugin-backed tone snapshots, scoped mixer snapshots, level-matched A/B,
+  stale detection, freeze, print, batch rendering, and render reports
+- Public-standard Scream Forge VST3, Audio Unit, and ARA-capability validation
+  without proprietary source or license-service integration
 
 ### Phase 4: MIDI and composition
 

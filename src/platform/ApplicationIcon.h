@@ -3,4 +3,5 @@
 namespace studio
 {
 void applyPlatformApplicationIcon();
+void setPlatformAccessoryApplication();
 }

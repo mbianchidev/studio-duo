@@ -15,7 +15,7 @@ PluginBrowserComponent::PluginBrowserComponent(PluginCatalog& catalogToDisplay)
     search.onTextChange = [this] { rebuildFilter(); };
 
     addAndMakeVisible(scanButton);
-    scanButton.setTooltip("Scan default VST3 and Audio Unit locations in a worker process");
+    scanButton.setTooltip("Scan default VST3, Audio Unit, and CLAP locations in a worker process");
     scanButton.onClick = [this]
     {
         if (catalog.isScanning())
@@ -33,6 +33,17 @@ PluginBrowserComponent::PluginBrowserComponent(PluginCatalog& catalogToDisplay)
             && selectedRow < static_cast<int>(filteredEntries.size())
             && onPluginActivated)
             onPluginActivated(filteredEntries[static_cast<std::size_t>(selectedRow)]);
+    };
+    addAndMakeVisible(validateButton);
+    validateButton.setTooltip("Run public-standard compatibility checks in a separate process");
+    validateButton.setEnabled(false);
+    validateButton.onClick = [this]
+    {
+        if (selectedRow >= 0
+            && selectedRow < static_cast<int>(filteredEntries.size())
+            && onPluginValidate)
+            onPluginValidate(
+                filteredEntries[static_cast<std::size_t>(selectedRow)]);
     };
 
     addAndMakeVisible(statusLabel);
@@ -65,7 +76,7 @@ void PluginBrowserComponent::paint(juce::Graphics& graphics)
     graphics.fillAll(juce::Colour(StudioColours::panel));
     graphics.setColour(juce::Colour(StudioColours::secondaryText));
     graphics.setFont(juce::Font(juce::FontOptions(10.5f, juce::Font::bold)));
-    graphics.drawText("PLUGIN CATALOG",
+    graphics.drawText("PROCESSOR CATALOG",
                       0,
                       0,
                       getWidth(),
@@ -77,12 +88,20 @@ void PluginBrowserComponent::resized()
 {
     auto bounds = getLocalBounds();
     bounds.removeFromTop(24);
+    if (getWidth() < 340)
+    {
+        search.setBounds(bounds.removeFromTop(30));
+        bounds.removeFromTop(6);
+    }
     auto controls = bounds.removeFromTop(30);
     scanButton.setBounds(controls.removeFromRight(64));
     controls.removeFromRight(6);
+    validateButton.setBounds(controls.removeFromRight(52));
+    controls.removeFromRight(6);
     addButton.setBounds(controls.removeFromRight(52));
     controls.removeFromRight(6);
-    search.setBounds(controls);
+    if (getWidth() >= 340)
+        search.setBounds(controls);
     bounds.removeFromTop(7);
     progressBar.setBounds(bounds.removeFromTop(3));
     bounds.removeFromTop(7);
@@ -126,6 +145,8 @@ void PluginBrowserComponent::paintListBoxItem(int row,
     if (detail.isNotEmpty())
         detail << "  |  ";
     detail << entry.format;
+    if (entry.bundledDevice)
+        detail << "  |  BUNDLED";
     if (entry.instrument)
         detail << "  |  INSTRUMENT";
 
@@ -149,6 +170,11 @@ void PluginBrowserComponent::selectedRowsChanged(int lastRowSelected)
     selectedRow = lastRowSelected;
     addButton.setEnabled(selectedRow >= 0
                          && selectedRow < static_cast<int>(filteredEntries.size()));
+    validateButton.setEnabled(
+        selectedRow >= 0
+        && selectedRow < static_cast<int>(filteredEntries.size())
+        && !filteredEntries[static_cast<std::size_t>(selectedRow)]
+                .bundledDevice);
 
     if (lastRowSelected < 0 || lastRowSelected >= static_cast<int>(filteredEntries.size()))
         return;
@@ -197,6 +223,7 @@ void PluginBrowserComponent::rebuildFilter()
     list.updateContent();
     selectedRow = -1;
     addButton.setEnabled(false);
+    validateButton.setEnabled(false);
     list.repaint();
 }
 }

@@ -11,22 +11,57 @@ namespace studio
 {
 inline constexpr auto pluginBridgeProcessId = "studioduopluginbridge";
 
+struct PluginParameterDescriptor
+{
+    int index = -1;
+    juce::String id;
+    juce::String name;
+    float value = 0.0f;
+    bool automatable = false;
+};
+
+struct PluginBridgeParameterEvent
+{
+    static constexpr std::uint32_t rampFlag = 1u;
+
+    std::uint32_t parameterIndex = 0;
+    std::uint32_t sampleOffset = 0;
+    float value = 0.0f;
+    std::uint32_t flags = 0;
+    std::uint32_t rampEndOffset = 0;
+    float rampEndValue = 0.0f;
+};
+
 struct alignas(64) PluginBridgeSharedState
 {
     static constexpr std::uint32_t magicValue = 0x53444252;
-    static constexpr std::uint32_t protocolVersion = 1;
-    static constexpr int maxChannels = 2;
+    static constexpr std::uint32_t protocolVersion = 5;
+    static constexpr std::uint32_t bypassOutputFlag = 1u;
+    static constexpr std::uint32_t resetAppliedFlag = 1u << 1u;
+    static constexpr int maxChannels = 8;
     static constexpr int maxBlockSize = 4096;
+    static constexpr int maxParameterEvents = 16384;
+    static constexpr int maxSupportedLatencySamples = 65536;
 
     std::uint32_t magic = magicValue;
     std::uint32_t version = protocolVersion;
     std::atomic<std::uint32_t> hostSequence { 0 };
     std::atomic<std::uint32_t> workerSequence { 0 };
     std::atomic<std::uint32_t> shutdownRequested { 0 };
+    std::atomic<std::uint32_t> resetRequested { 0 };
     std::atomic<std::uint32_t> numChannels { 0 };
+    std::atomic<std::uint32_t> numOutputChannels { 0 };
+    std::atomic<std::uint32_t> sidechainChannels { 0 };
     std::atomic<std::uint32_t> numSamples { 0 };
+    std::atomic<std::uint32_t> outputFlags { 0 };
+    std::atomic<std::uint32_t> parameterEventCount { 0 };
+    std::atomic<std::uint32_t> parameterEventOverflowCount { 0 };
+    std::atomic<std::uint32_t> heartbeat { 0 };
     alignas(64) std::array<std::array<float, maxBlockSize>, maxChannels> input {};
+    alignas(64) std::array<std::array<float, maxBlockSize>, maxChannels> sidechain {};
     alignas(64) std::array<std::array<float, maxBlockSize>, maxChannels> output {};
+    alignas(64) std::array<PluginBridgeParameterEvent, maxParameterEvents>
+        parameterEvents {};
 };
 
 static_assert(std::atomic<std::uint32_t>::is_always_lock_free,
@@ -41,7 +76,9 @@ public:
             && state.version == PluginBridgeSharedState::protocolVersion;
     }
 
-    static bool processAvailableBlock(PluginBridgeSharedState& state) noexcept
+    static bool processAvailableBlock(
+        PluginBridgeSharedState& state,
+        std::uint32_t outputFlags = 0) noexcept
     {
         const auto hostSequence = state.hostSequence.load(std::memory_order_acquire);
         if (hostSequence == state.workerSequence.load(std::memory_order_relaxed))
@@ -66,8 +103,34 @@ public:
             }
         }
 
+        state.numOutputChannels.store(
+            static_cast<std::uint32_t>(channels),
+            std::memory_order_relaxed);
+        state.outputFlags.store(outputFlags, std::memory_order_relaxed);
         state.workerSequence.store(hostSequence, std::memory_order_release);
+        state.heartbeat.fetch_add(1, std::memory_order_relaxed);
         return true;
+    }
+
+    static int outputSourceChannel(int pluginOutputChannels,
+                                   int destinationChannel) noexcept
+    {
+        if (pluginOutputChannels <= 0 || destinationChannel < 0)
+            return -1;
+        if (pluginOutputChannels == 1)
+            return 0;
+        return destinationChannel < pluginOutputChannels
+            ? destinationChannel
+            : -1;
+    }
+
+    static int parameterEventCount(
+        const PluginBridgeSharedState& state) noexcept
+    {
+        return std::min(
+            static_cast<int>(
+                state.parameterEventCount.load(std::memory_order_relaxed)),
+            PluginBridgeSharedState::maxParameterEvents);
     }
 };
 }

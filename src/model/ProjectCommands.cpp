@@ -1,10 +1,23 @@
 #include "ProjectCommands.h"
 
+#include "reamp/ReampSnapshotService.h"
+
 #include <algorithm>
 #include <numeric>
 
 namespace studio
 {
+namespace
+{
+bool hasMainAudioOutput(TrackType type)
+{
+    return type == TrackType::audio
+        || type == TrackType::instrument
+        || type == TrackType::aux
+        || type == TrackType::bus;
+}
+}
+
 bool CommandStack::perform(std::unique_ptr<ProjectCommand> command,
                            Project& project,
                            juce::String& error)
@@ -120,6 +133,11 @@ bool AddTrackCommand::perform(Project& project, juce::String& error)
 
     if (track.parentTrackId.isNotEmpty())
     {
+        if (track.outputTrackId.isNotEmpty())
+        {
+            error = "Version lanes follow their parent track output.";
+            return false;
+        }
         const auto parent = std::find_if(project.tracks.begin(),
                                          project.tracks.end(),
                                          [this](const auto& candidate)
@@ -148,6 +166,42 @@ bool AddTrackCommand::perform(Project& project, juce::String& error)
 
     insertionIndex = static_cast<std::size_t>(std::distance(project.tracks.begin(), master));
     project.tracks.insert(project.tracks.begin() + static_cast<std::ptrdiff_t>(insertionIndex), track);
+    if (hasMainAudioOutput(track.type))
+    {
+        if (!project.validateTrackOutput(track.id, track.outputTrackId, error))
+        {
+            project.tracks.erase(project.tracks.begin()
+                                 + static_cast<std::ptrdiff_t>(insertionIndex));
+            return false;
+        }
+        if (!outputRoute.has_value())
+        {
+            RoutingConnection route;
+            route.name = "Main output";
+            route.kind = RouteKind::mainOutput;
+            route.sourceTrackId = track.id;
+            route.destination.type = RouteEndpointType::track;
+            route.destination.trackId = project.resolvedOutputTrackId(track);
+            outputRoute = std::move(route);
+        }
+        project.routingConnections.push_back(*outputRoute);
+    }
+    if (!project.validateRoutingGraph(error))
+    {
+        project.routingConnections.erase(
+            std::remove_if(
+                project.routingConnections.begin(),
+                project.routingConnections.end(),
+                [this](const auto& connection)
+                {
+                    return outputRoute.has_value()
+                        && connection.id == outputRoute->id;
+                }),
+            project.routingConnections.end());
+        project.tracks.erase(project.tracks.begin()
+                             + static_cast<std::ptrdiff_t>(insertionIndex));
+        return false;
+    }
     return true;
 }
 
@@ -157,6 +211,18 @@ void AddTrackCommand::undo(Project& project)
     {
         return candidate.id == track.id;
     }), project.tracks.end());
+    if (outputRoute.has_value())
+    {
+        project.routingConnections.erase(
+            std::remove_if(
+                project.routingConnections.begin(),
+                project.routingConnections.end(),
+                [this](const auto& connection)
+                {
+                    return connection.id == outputRoute->id;
+                }),
+            project.routingConnections.end());
+    }
 }
 
 RenameTrackCommand::RenameTrackCommand(juce::String trackToRename,
@@ -325,6 +391,9 @@ bool AddRecordingTakeCommand::perform(Project& project, juce::String& error)
                 parentCollapseStates.emplace_back(
                     track.parentTrackId,
                     project.findTrack(track.parentTrackId)->versionsCollapsed);
+                parentActiveTakeStates.emplace_back(
+                    track.parentTrackId,
+                    project.findTrack(track.parentTrackId)->activeTakeTrackId);
             }
         }
         capturedOriginal = true;
@@ -347,7 +416,27 @@ bool AddRecordingTakeCommand::perform(Project& project, juce::String& error)
 
     for (const auto& [parentId, ignored] : parentCollapseStates)
         if (auto* parent = project.findTrack(parentId))
-            parent->versionsCollapsed = false;
+        {
+            parent->versionsCollapsed = true;
+            const auto newest = std::max_element(
+                tracks.cbegin(),
+                tracks.cend(),
+                [&parentId](const auto& left, const auto& right)
+                {
+                    const auto leftVersion =
+                        left.parentTrackId == parentId
+                        ? left.versionNumber
+                        : -1;
+                    const auto rightVersion =
+                        right.parentTrackId == parentId
+                        ? right.versionNumber
+                        : -1;
+                    return leftVersion < rightVersion;
+                });
+            if (newest != tracks.cend()
+                && newest->parentTrackId == parentId)
+                parent->activeTakeTrackId = newest->id;
+        }
 
     return true;
 }
@@ -371,6 +460,10 @@ void AddRecordingTakeCommand::undo(Project& project)
     for (const auto& [parentId, collapsed] : parentCollapseStates)
         if (auto* parent = project.findTrack(parentId))
             parent->versionsCollapsed = collapsed;
+    for (const auto& [parentId, activeTakeId] :
+         parentActiveTakeStates)
+        if (auto* parent = project.findTrack(parentId))
+            parent->activeTakeTrackId = activeTakeId;
 }
 
 MoveClipCommand::MoveClipCommand(juce::String clipToMove,
@@ -959,13 +1052,59 @@ bool SetReampRoutesCommand::perform(Project& project, juce::String& error)
 {
     if (!validate(project, newRoutes, error))
         return false;
-    project.reampRoutes = newRoutes;
+
+    auto candidate = project;
+    candidate.reampRoutes = newRoutes;
+    candidate.toneSnapshots.erase(
+        std::remove_if(
+            candidate.toneSnapshots.begin(),
+            candidate.toneSnapshots.end(),
+            [&candidate](const auto& snapshot)
+            {
+                return std::none_of(
+                    candidate.reampRoutes.cbegin(),
+                    candidate.reampRoutes.cend(),
+                    [&snapshot](const auto& route)
+                    {
+                        return route.id == snapshot.reampRouteId;
+                    });
+            }),
+        candidate.toneSnapshots.end());
+    for (auto& route : candidate.reampRoutes)
+    {
+        const auto active = std::find_if(
+            candidate.toneSnapshots.cbegin(),
+            candidate.toneSnapshots.cend(),
+            [&route](const auto& snapshot)
+            {
+                return snapshot.id == route.activeSnapshotId
+                    && snapshot.reampRouteId == route.id;
+            });
+        if (active == candidate.toneSnapshots.cend())
+            route.activeSnapshotId.clear();
+    }
+
+    juce::String validationError;
+    if (!Project::fromVar(candidate.toVar(), validationError).has_value())
+    {
+        error = "Reamp route edit would invalidate the project: "
+            + validationError;
+        return false;
+    }
+    if (!capturedOldSnapshots)
+    {
+        oldToneSnapshots = project.toneSnapshots;
+        capturedOldSnapshots = true;
+    }
+    project.reampRoutes = std::move(candidate.reampRoutes);
+    project.toneSnapshots = std::move(candidate.toneSnapshots);
     return true;
 }
 
 void SetReampRoutesCommand::undo(Project& project)
 {
     project.reampRoutes = oldRoutes;
+    project.toneSnapshots = oldToneSnapshots;
 }
 
 bool SetReampRoutesCommand::validate(const Project& project,
@@ -1111,6 +1250,286 @@ TrackMixState TrackMixState::fromTrack(const Track& track)
     };
 }
 
+TrackRoutingState TrackRoutingState::fromTrack(const Track& track)
+{
+    return {
+        track.folderTrackId,
+        track.controlledTrackIds,
+        track.channelLayout,
+        track.polarityInverted,
+        track.soloSafe,
+        track.hardwareOutputChannel,
+        track.controlRoomDimDecibels,
+        track.controlRoomDimmed,
+        track.controlRoomMono
+    };
+}
+
+SetTrackRoutingStateCommand::SetTrackRoutingStateCommand(
+    juce::String trackToChange,
+    TrackRoutingState before,
+    TrackRoutingState after)
+    : trackId(std::move(trackToChange)),
+      oldState(std::move(before)),
+      newState(std::move(after))
+{
+}
+
+juce::String SetTrackRoutingStateCommand::name() const
+{
+    return "Change track routing settings";
+}
+
+bool SetTrackRoutingStateCommand::perform(Project& project,
+                                          juce::String& error)
+{
+    auto* track = project.findTrack(trackId);
+    if (track == nullptr)
+    {
+        error = "The track to change no longer exists.";
+        return false;
+    }
+
+    apply(*track, newState);
+    if (!project.validateRoutingGraph(error))
+    {
+        apply(*track, oldState);
+        return false;
+    }
+    return true;
+}
+
+void SetTrackRoutingStateCommand::undo(Project& project)
+{
+    if (auto* track = project.findTrack(trackId))
+        apply(*track, oldState);
+}
+
+void SetTrackRoutingStateCommand::apply(
+    Track& track,
+    const TrackRoutingState& state)
+{
+    track.folderTrackId = state.folderTrackId;
+    track.controlledTrackIds = state.controlledTrackIds;
+    track.channelLayout = state.channelLayout;
+    track.polarityInverted = state.polarityInverted;
+    track.soloSafe = state.soloSafe;
+    track.hardwareOutputChannel = state.hardwareOutputChannel;
+    track.controlRoomDimDecibels = state.controlRoomDimDecibels;
+    track.controlRoomDimmed = state.controlRoomDimmed;
+    track.controlRoomMono = state.controlRoomMono;
+}
+
+SetAutomationLaneCommand::SetAutomationLaneCommand(
+    AutomationLane before,
+    AutomationLane after)
+    : oldLane(std::move(before)),
+      newLane(std::move(after))
+{
+}
+
+juce::String SetAutomationLaneCommand::name() const
+{
+    return "Change automation lane";
+}
+
+bool SetAutomationLaneCommand::perform(Project& project,
+                                       juce::String& error)
+{
+    if (oldLane.id != newLane.id)
+    {
+        error = "Automation lane updates cannot change IDs.";
+        return false;
+    }
+    juce::String validationError;
+    if (!AutomationLane::fromVar(
+            newLane.toVar(),
+            validationError)
+             .has_value())
+    {
+        error = validationError;
+        return false;
+    }
+    const auto lane = std::find_if(
+        project.automationLanes.begin(),
+        project.automationLanes.end(),
+        [this](const auto& candidate)
+        {
+            return candidate.id == newLane.id;
+        });
+    if (lane == project.automationLanes.end())
+    {
+        error = "The automation lane no longer exists.";
+        return false;
+    }
+    *lane = newLane;
+    return true;
+}
+
+void SetAutomationLaneCommand::undo(Project& project)
+{
+    const auto lane = std::find_if(
+        project.automationLanes.begin(),
+        project.automationLanes.end(),
+        [this](const auto& candidate)
+        {
+            return candidate.id == oldLane.id;
+        });
+    if (lane != project.automationLanes.end())
+        *lane = oldLane;
+}
+
+AddAutomationLaneCommand::AddAutomationLaneCommand(
+    AutomationLane laneToAdd)
+    : lane(std::move(laneToAdd))
+{
+}
+
+juce::String AddAutomationLaneCommand::name() const
+{
+    return "Add automation lane";
+}
+
+bool AddAutomationLaneCommand::perform(Project& project,
+                                       juce::String& error)
+{
+    if (std::any_of(
+            project.automationLanes.cbegin(),
+            project.automationLanes.cend(),
+            [this](const auto& candidate)
+            {
+                return candidate.id == lane.id;
+            }))
+    {
+        error = "An automation lane with the same ID already exists.";
+        return false;
+    }
+    juce::String validationError;
+    if (!AutomationLane::fromVar(lane.toVar(), validationError).has_value()
+        || project.findTrack(lane.target.trackId) == nullptr)
+    {
+        error = validationError.isNotEmpty()
+            ? validationError
+            : "The automation target track is unavailable.";
+        return false;
+    }
+    insertionIndex = std::min(
+        insertionIndex,
+        project.automationLanes.size());
+    if (insertionIndex == 0 && !project.automationLanes.empty())
+        insertionIndex = project.automationLanes.size();
+    project.automationLanes.insert(
+        project.automationLanes.begin()
+            + static_cast<std::ptrdiff_t>(insertionIndex),
+        lane);
+    return true;
+}
+
+void AddAutomationLaneCommand::undo(Project& project)
+{
+    project.automationLanes.erase(
+        std::remove_if(
+            project.automationLanes.begin(),
+            project.automationLanes.end(),
+            [this](const auto& candidate)
+            {
+                return candidate.id == lane.id;
+            }),
+        project.automationLanes.end());
+}
+
+RemoveAutomationLaneCommand::RemoveAutomationLaneCommand(
+    juce::String laneToRemove)
+    : laneId(std::move(laneToRemove))
+{
+}
+
+juce::String RemoveAutomationLaneCommand::name() const
+{
+    return "Remove automation lane";
+}
+
+bool RemoveAutomationLaneCommand::perform(Project& project,
+                                          juce::String& error)
+{
+    const auto lane = std::find_if(
+        project.automationLanes.begin(),
+        project.automationLanes.end(),
+        [this](const auto& candidate)
+        {
+            return candidate.id == laneId;
+        });
+    if (lane == project.automationLanes.end())
+    {
+        error = "The automation lane no longer exists.";
+        return false;
+    }
+    if (!capturedOriginal)
+    {
+        removalIndex = static_cast<std::size_t>(
+            std::distance(project.automationLanes.begin(), lane));
+        removedLane = *lane;
+        capturedOriginal = true;
+    }
+    project.automationLanes.erase(lane);
+    return true;
+}
+
+void RemoveAutomationLaneCommand::undo(Project& project)
+{
+    const auto index = std::min(
+        removalIndex,
+        project.automationLanes.size());
+    project.automationLanes.insert(
+        project.automationLanes.begin()
+            + static_cast<std::ptrdiff_t>(index),
+        removedLane);
+}
+
+SetTrackAutomationModeCommand::SetTrackAutomationModeCommand(
+    juce::String trackToChange,
+    AutomationMode mode,
+    bool armed)
+    : trackId(std::move(trackToChange)),
+      newMode(mode),
+      newArmed(armed)
+{
+}
+
+juce::String SetTrackAutomationModeCommand::name() const
+{
+    return "Change automation mode";
+}
+
+bool SetTrackAutomationModeCommand::perform(Project& project,
+                                            juce::String& error)
+{
+    auto* track = project.findTrack(trackId);
+    if (track == nullptr)
+    {
+        error = "The automation track no longer exists.";
+        return false;
+    }
+    if (!capturedOriginal)
+    {
+        oldMode = track->automationMode;
+        oldArmed = track->automationArmed;
+        capturedOriginal = true;
+    }
+    track->automationMode = newMode;
+    track->automationArmed = newArmed;
+    return true;
+}
+
+void SetTrackAutomationModeCommand::undo(Project& project)
+{
+    if (auto* track = project.findTrack(trackId))
+    {
+        track->automationMode = oldMode;
+        track->automationArmed = oldArmed;
+    }
+}
+
 SetTrackMixCommand::SetTrackMixCommand(juce::String trackToChange,
                                        TrackMixState before,
                                        TrackMixState after)
@@ -1156,6 +1575,267 @@ void SetTrackMixCommand::apply(Track& track, const TrackMixState& state)
     track.inputMonitoring = state.inputMonitoring;
     track.versionsCollapsed = state.versionsCollapsed;
     track.colour = state.colour;
+}
+
+SetTrackOutputCommand::SetTrackOutputCommand(juce::String sourceTrackId,
+                                             juce::String destinationTrackId)
+    : trackId(std::move(sourceTrackId)),
+      newOutputTrackId(std::move(destinationTrackId))
+{
+}
+
+juce::String SetTrackOutputCommand::name() const
+{
+    return "Change track output";
+}
+
+bool SetTrackOutputCommand::perform(Project& project, juce::String& error)
+{
+    auto* track = project.findTrack(trackId);
+    if (track == nullptr)
+    {
+        error = "The track to route no longer exists.";
+        return false;
+    }
+    if (!project.validateTrackOutput(trackId, newOutputTrackId, error))
+        return false;
+
+    if (!capturedOriginal)
+    {
+        oldOutputTrackId = track->outputTrackId;
+        const auto route = std::find_if(
+            project.routingConnections.cbegin(),
+            project.routingConnections.cend(),
+            [this](const auto& connection)
+            {
+                return connection.kind == RouteKind::mainOutput
+                    && connection.sourceTrackId == trackId;
+            });
+        if (route != project.routingConnections.cend())
+            oldRoute = *route;
+        newRoute = oldRoute.value_or(RoutingConnection {});
+        newRoute.name = "Main output";
+        newRoute.kind = RouteKind::mainOutput;
+        newRoute.tap = RouteTap::postFader;
+        newRoute.sourceTrackId = trackId;
+        newRoute.destination.type = RouteEndpointType::track;
+        capturedOriginal = true;
+    }
+
+    newRoute.destination.trackId = newOutputTrackId.isNotEmpty()
+        ? newOutputTrackId
+        : project.masterTrackId();
+    auto* route = project.findRoutingConnection(newRoute.id);
+    if (route != nullptr)
+        *route = newRoute;
+    else
+        project.routingConnections.push_back(newRoute);
+    track->outputTrackId = newOutputTrackId;
+    if (!project.validateRoutingGraph(error))
+    {
+        track->outputTrackId = oldOutputTrackId;
+        project.routingConnections.erase(
+            std::remove_if(
+                project.routingConnections.begin(),
+                project.routingConnections.end(),
+                [this](const auto& connection)
+                {
+                    return connection.id == newRoute.id;
+                }),
+            project.routingConnections.end());
+        if (oldRoute.has_value())
+            project.routingConnections.push_back(*oldRoute);
+        return false;
+    }
+    return true;
+}
+
+void SetTrackOutputCommand::undo(Project& project)
+{
+    if (auto* track = project.findTrack(trackId))
+        track->outputTrackId = oldOutputTrackId;
+    project.routingConnections.erase(
+        std::remove_if(
+            project.routingConnections.begin(),
+            project.routingConnections.end(),
+            [this](const auto& connection)
+            {
+                return connection.id == newRoute.id;
+            }),
+        project.routingConnections.end());
+    if (oldRoute.has_value())
+        project.routingConnections.push_back(*oldRoute);
+}
+
+AddRoutingConnectionCommand::AddRoutingConnectionCommand(
+    RoutingConnection connectionToAdd)
+    : connection(std::move(connectionToAdd))
+{
+}
+
+juce::String AddRoutingConnectionCommand::name() const
+{
+    return "Add routing connection";
+}
+
+bool AddRoutingConnectionCommand::perform(Project& project, juce::String& error)
+{
+    if (project.findRoutingConnection(connection.id) != nullptr)
+    {
+        error = "A routing connection with the same ID already exists.";
+        return false;
+    }
+
+    if (!capturedIndex)
+    {
+        insertionIndex = project.routingConnections.size();
+        capturedIndex = true;
+    }
+    const auto index = std::min(insertionIndex,
+                                project.routingConnections.size());
+    project.routingConnections.insert(
+        project.routingConnections.begin() + static_cast<std::ptrdiff_t>(index),
+        connection);
+    if (!project.validateRoutingGraph(error))
+    {
+        project.routingConnections.erase(
+            project.routingConnections.begin() + static_cast<std::ptrdiff_t>(index));
+        return false;
+    }
+    return true;
+}
+
+void AddRoutingConnectionCommand::undo(Project& project)
+{
+    project.routingConnections.erase(
+        std::remove_if(
+            project.routingConnections.begin(),
+            project.routingConnections.end(),
+            [this](const auto& candidate)
+            {
+                return candidate.id == connection.id;
+            }),
+        project.routingConnections.end());
+}
+
+UpdateRoutingConnectionCommand::UpdateRoutingConnectionCommand(
+    RoutingConnection before,
+    RoutingConnection after)
+    : oldConnection(std::move(before)),
+      newConnection(std::move(after))
+{
+}
+
+juce::String UpdateRoutingConnectionCommand::name() const
+{
+    return "Change routing connection";
+}
+
+bool UpdateRoutingConnectionCommand::perform(Project& project,
+                                             juce::String& error)
+{
+    if (oldConnection.id != newConnection.id)
+    {
+        error = "A routing connection update cannot change its ID.";
+        return false;
+    }
+
+    auto* connection = project.findRoutingConnection(newConnection.id);
+    if (connection == nullptr)
+    {
+        error = "The routing connection no longer exists.";
+        return false;
+    }
+
+    const auto current = *connection;
+    *connection = newConnection;
+    if (!project.validateRoutingGraph(error))
+    {
+        *connection = current;
+        return false;
+    }
+    return true;
+}
+
+void UpdateRoutingConnectionCommand::undo(Project& project)
+{
+    if (auto* connection = project.findRoutingConnection(oldConnection.id))
+        *connection = oldConnection;
+}
+
+RemoveRoutingConnectionCommand::RemoveRoutingConnectionCommand(
+    juce::String connectionToRemove)
+    : connectionId(std::move(connectionToRemove))
+{
+}
+
+juce::String RemoveRoutingConnectionCommand::name() const
+{
+    return "Remove routing connection";
+}
+
+bool RemoveRoutingConnectionCommand::perform(Project& project,
+                                             juce::String& error)
+{
+    const auto iterator = std::find_if(
+        project.routingConnections.begin(),
+        project.routingConnections.end(),
+        [this](const auto& connection)
+        {
+            return connection.id == connectionId;
+        });
+    if (iterator == project.routingConnections.end())
+    {
+        error = "The routing connection no longer exists.";
+        return false;
+    }
+
+    if (!capturedOriginal)
+    {
+        removalIndex = static_cast<std::size_t>(
+            std::distance(project.routingConnections.begin(), iterator));
+        removedConnection = *iterator;
+        for (std::size_t index = 0;
+             index < project.automationLanes.size();
+             ++index)
+        {
+            if (project.automationLanes[index].target.routeId == connectionId)
+                removedAutomationLanes.emplace_back(
+                    index,
+                    project.automationLanes[index]);
+        }
+        capturedOriginal = true;
+    }
+    project.routingConnections.erase(iterator);
+    project.automationLanes.erase(
+        std::remove_if(
+            project.automationLanes.begin(),
+            project.automationLanes.end(),
+            [this](const auto& lane)
+            {
+                return lane.target.routeId == connectionId;
+            }),
+        project.automationLanes.end());
+    return true;
+}
+
+void RemoveRoutingConnectionCommand::undo(Project& project)
+{
+    const auto index = std::min(removalIndex,
+                                project.routingConnections.size());
+    project.routingConnections.insert(
+        project.routingConnections.begin() + static_cast<std::ptrdiff_t>(index),
+        removedConnection);
+    for (const auto& [originalIndex, lane] : removedAutomationLanes)
+    {
+        const auto laneIndex = std::min(
+            originalIndex,
+            project.automationLanes.size());
+        project.automationLanes.insert(
+            project.automationLanes.begin()
+                + static_cast<std::ptrdiff_t>(laneIndex),
+            lane);
+    }
 }
 
 AddPluginInsertCommand::AddPluginInsertCommand(juce::String destinationTrackId,
@@ -1243,9 +1923,27 @@ bool RemovePluginInsertCommand::perform(Project& project, juce::String& error)
     {
         removedInsert = *iterator;
         removalIndex = static_cast<std::size_t>(std::distance(track->inserts.begin(), iterator));
+        for (std::size_t index = 0;
+             index < project.automationLanes.size();
+             ++index)
+        {
+            if (project.automationLanes[index].target.insertId == insertId)
+                removedAutomationLanes.emplace_back(
+                    index,
+                    project.automationLanes[index]);
+        }
         capturedOriginal = true;
     }
     track->inserts.erase(iterator);
+    project.automationLanes.erase(
+        std::remove_if(
+            project.automationLanes.begin(),
+            project.automationLanes.end(),
+            [this](const auto& lane)
+            {
+                return lane.target.insertId == insertId;
+            }),
+        project.automationLanes.end());
     return true;
 }
 
@@ -1256,6 +1954,84 @@ void RemovePluginInsertCommand::undo(Project& project)
         const auto index = std::min(removalIndex, track->inserts.size());
         track->inserts.insert(track->inserts.begin() + static_cast<std::ptrdiff_t>(index), removedInsert);
     }
+    for (const auto& [originalIndex, lane] : removedAutomationLanes)
+    {
+        const auto index = std::min(
+            originalIndex,
+            project.automationLanes.size());
+        project.automationLanes.insert(
+            project.automationLanes.begin()
+                + static_cast<std::ptrdiff_t>(index),
+            lane);
+    }
+}
+
+ReplacePluginInsertCommand::ReplacePluginInsertCommand(
+    juce::String sourceTrackId,
+    juce::String insertToReplace,
+    PluginInsert replacement)
+    : trackId(std::move(sourceTrackId)),
+      insertId(std::move(insertToReplace)),
+      newInsert(std::move(replacement))
+{
+}
+
+juce::String ReplacePluginInsertCommand::name() const
+{
+    return "Replace plugin insert";
+}
+
+bool ReplacePluginInsertCommand::perform(Project& project,
+                                         juce::String& error)
+{
+    auto* insert = find(project);
+    if (insert == nullptr)
+    {
+        error = "The plugin insert to replace no longer exists.";
+        return false;
+    }
+    if (newInsert.pluginIdentifier.isEmpty()
+        || newInsert.name.trim().isEmpty())
+    {
+        error = "The replacement plugin is invalid.";
+        return false;
+    }
+
+    if (!capturedOriginal)
+    {
+        oldInsert = *insert;
+        newInsert.id = oldInsert.id;
+        newInsert.stateFile = oldInsert.stateFile;
+        newInsert.stateHash = oldInsert.stateHash;
+        newInsert.bypassed = oldInsert.bypassed;
+        newInsert.bridgeMode = oldInsert.bridgeMode;
+        newInsert.recoveryDisabled = false;
+        newInsert.missing = false;
+        capturedOriginal = true;
+    }
+    *insert = newInsert;
+    return true;
+}
+
+void ReplacePluginInsertCommand::undo(Project& project)
+{
+    if (auto* insert = find(project))
+        *insert = oldInsert;
+}
+
+PluginInsert* ReplacePluginInsertCommand::find(Project& project) const
+{
+    auto* track = project.findTrack(trackId);
+    if (track == nullptr)
+        return nullptr;
+    const auto iterator = std::find_if(
+        track->inserts.begin(),
+        track->inserts.end(),
+        [this](const auto& candidate)
+        {
+            return candidate.id == insertId;
+        });
+    return iterator == track->inserts.end() ? nullptr : &*iterator;
 }
 
 SetPluginBypassCommand::SetPluginBypassCommand(juce::String sourceTrackId,
@@ -1309,6 +2085,78 @@ PluginInsert* SetPluginBypassCommand::find(Project& project) const
     return iterator == track->inserts.end() ? nullptr : &*iterator;
 }
 
+SetPluginBridgeModeCommand::SetPluginBridgeModeCommand(
+    juce::String sourceTrackId,
+    juce::String insertToChange,
+    PluginBridgeMode mode)
+    : trackId(std::move(sourceTrackId)),
+      insertId(std::move(insertToChange)),
+      newMode(mode)
+{
+}
+
+juce::String SetPluginBridgeModeCommand::name() const
+{
+    return "Change plugin isolation mode";
+}
+
+bool SetPluginBridgeModeCommand::perform(Project& project,
+                                         juce::String& error)
+{
+    auto* insert = find(project);
+    if (insert == nullptr)
+    {
+        error = "The plugin insert no longer exists.";
+        return false;
+    }
+    if (newMode == PluginBridgeMode::araCompatibility
+        && !insert->araCapable)
+    {
+        error = "This plugin does not advertise an ARA extension.";
+        return false;
+    }
+    if (insert->bundledDevice
+        && newMode != PluginBridgeMode::trustedInProcess)
+    {
+        error = "Bundled devices run in the trusted Studio Duo DSP process.";
+        return false;
+    }
+
+    if (!capturedOriginal)
+    {
+        oldMode = insert->bridgeMode;
+        oldRecoveryDisabled = insert->recoveryDisabled;
+        capturedOriginal = true;
+    }
+    insert->bridgeMode = newMode;
+    insert->recoveryDisabled = false;
+    return true;
+}
+
+void SetPluginBridgeModeCommand::undo(Project& project)
+{
+    if (auto* insert = find(project))
+    {
+        insert->bridgeMode = oldMode;
+        insert->recoveryDisabled = oldRecoveryDisabled;
+    }
+}
+
+PluginInsert* SetPluginBridgeModeCommand::find(Project& project) const
+{
+    auto* track = project.findTrack(trackId);
+    if (track == nullptr)
+        return nullptr;
+    const auto iterator = std::find_if(
+        track->inserts.begin(),
+        track->inserts.end(),
+        [this](const auto& candidate)
+        {
+            return candidate.id == insertId;
+        });
+    return iterator == track->inserts.end() ? nullptr : &*iterator;
+}
+
 RemoveTrackCommand::RemoveTrackCommand(juce::String trackToRemove)
     : trackId(std::move(trackToRemove))
 {
@@ -1350,6 +2198,17 @@ bool RemoveTrackCommand::perform(Project& project, juce::String& error)
         }
         oldEditGroups = project.editGroups;
         oldReampRoutes = project.reampRoutes;
+        oldRoutingConnections = project.routingConnections;
+        oldAutomationLanes = project.automationLanes;
+        oldToneSnapshots = project.toneSnapshots;
+        oldMixerSnapshots = project.mixerSnapshots;
+        for (const auto& candidate : project.tracks)
+        {
+            oldTrackOutputs.emplace_back(candidate.id, candidate.outputTrackId);
+            oldTrackRoutingStates.emplace_back(
+                candidate.id,
+                TrackRoutingState::fromTrack(candidate));
+        }
 
         std::vector<juce::String> rootIdsToRemove;
         if (iterator->parentTrackId.isEmpty())
@@ -1466,6 +2325,134 @@ bool RemoveTrackCommand::perform(Project& project, juce::String& error)
                                });
                        }),
         project.reampRoutes.end());
+    for (auto& candidate : project.tracks)
+    {
+        if (std::any_of(removedTracks.cbegin(),
+                        removedTracks.cend(),
+                        [&candidate](const auto& removed)
+                        {
+                            return removed.second.id == candidate.outputTrackId;
+                        }))
+            candidate.outputTrackId.clear();
+        if (std::any_of(
+                removedTracks.cbegin(),
+                removedTracks.cend(),
+                [&candidate](const auto& removed)
+                {
+                    return removed.second.id == candidate.folderTrackId;
+                }))
+            candidate.folderTrackId.clear();
+        candidate.controlledTrackIds.erase(
+            std::remove_if(
+                candidate.controlledTrackIds.begin(),
+                candidate.controlledTrackIds.end(),
+                [this](const auto& controlledId)
+                {
+                    return std::any_of(
+                        removedTracks.cbegin(),
+                        removedTracks.cend(),
+                        [&controlledId](const auto& removed)
+                        {
+                            return removed.second.id == controlledId;
+                        });
+                }),
+            candidate.controlledTrackIds.end());
+    }
+    const auto removedTrack = [this](const juce::String& candidateId)
+    {
+        return std::any_of(
+            removedTracks.cbegin(),
+            removedTracks.cend(),
+            [&candidateId](const auto& removed)
+            {
+                return removed.second.id == candidateId;
+            });
+    };
+    const auto masterId = project.masterTrackId();
+    for (auto iterator = project.routingConnections.begin();
+         iterator != project.routingConnections.end();)
+    {
+        if (removedTrack(iterator->sourceTrackId))
+        {
+            iterator = project.routingConnections.erase(iterator);
+            continue;
+        }
+
+        const auto destinationRemoved =
+            (iterator->destination.type == RouteEndpointType::track
+             || iterator->destination.type
+                    == RouteEndpointType::pluginSidechain)
+            && removedTrack(iterator->destination.trackId);
+        if (!destinationRemoved)
+        {
+            ++iterator;
+            continue;
+        }
+
+        if (iterator->kind == RouteKind::mainOutput)
+        {
+            iterator->destination.type = RouteEndpointType::track;
+            iterator->destination.trackId = masterId;
+            iterator->destination.insertId.clear();
+            ++iterator;
+        }
+        else
+        {
+            iterator = project.routingConnections.erase(iterator);
+        }
+    }
+    if (!project.validateRoutingGraph(error))
+        return false;
+    project.automationLanes.erase(
+        std::remove_if(
+            project.automationLanes.begin(),
+            project.automationLanes.end(),
+            [&project, &removedTrack](const auto& lane)
+            {
+                return removedTrack(lane.target.trackId)
+                    || (lane.target.routeId.isNotEmpty()
+                        && project.findRoutingConnection(
+                               lane.target.routeId) == nullptr);
+            }),
+        project.automationLanes.end());
+    project.toneSnapshots.erase(
+        std::remove_if(
+            project.toneSnapshots.begin(),
+            project.toneSnapshots.end(),
+            [&project, &removedTrack](const auto& snapshot)
+            {
+                return removedTrack(snapshot.sourceTrackId)
+                    || removedTrack(snapshot.returnTrackId)
+                    || std::none_of(
+                        project.reampRoutes.cbegin(),
+                        project.reampRoutes.cend(),
+                        [&snapshot](const auto& route)
+                        {
+                            return route.id == snapshot.reampRouteId;
+                        });
+            }),
+        project.toneSnapshots.end());
+    for (auto& snapshot : project.mixerSnapshots)
+    {
+        snapshot.tracks.erase(
+            std::remove_if(
+                snapshot.tracks.begin(),
+                snapshot.tracks.end(),
+                [&removedTrack](const auto& track)
+                {
+                    return removedTrack(track.trackId);
+                }),
+            snapshot.tracks.end());
+    }
+    project.mixerSnapshots.erase(
+        std::remove_if(
+            project.mixerSnapshots.begin(),
+            project.mixerSnapshots.end(),
+            [](const auto& snapshot)
+            {
+                return snapshot.tracks.empty();
+            }),
+        project.mixerSnapshots.end());
     return true;
 }
 
@@ -1483,6 +2470,26 @@ void RemoveTrackCommand::undo(Project& project)
     }
     project.editGroups = oldEditGroups;
     project.reampRoutes = oldReampRoutes;
+    project.routingConnections = oldRoutingConnections;
+    project.automationLanes = oldAutomationLanes;
+    project.toneSnapshots = oldToneSnapshots;
+    project.mixerSnapshots = oldMixerSnapshots;
+    for (const auto& [restoredTrackId, outputTrackId] : oldTrackOutputs)
+        if (auto* track = project.findTrack(restoredTrackId))
+            track->outputTrackId = outputTrackId;
+    for (const auto& [restoredTrackId, state] : oldTrackRoutingStates)
+        if (auto* track = project.findTrack(restoredTrackId))
+        {
+            track->folderTrackId = state.folderTrackId;
+            track->controlledTrackIds = state.controlledTrackIds;
+            track->channelLayout = state.channelLayout;
+            track->polarityInverted = state.polarityInverted;
+            track->soloSafe = state.soloSafe;
+            track->hardwareOutputChannel = state.hardwareOutputChannel;
+            track->controlRoomDimDecibels = state.controlRoomDimDecibels;
+            track->controlRoomDimmed = state.controlRoomDimmed;
+            track->controlRoomMono = state.controlRoomMono;
+        }
 }
 
 DuplicateTrackCommand::DuplicateTrackCommand(juce::String trackToDuplicate)
@@ -1541,6 +2548,9 @@ bool DuplicateTrackCommand::perform(Project& project, juce::String& error)
 
         std::vector<Track> sourceTracks;
         std::vector<std::pair<juce::String, juce::String>> idMap;
+        std::vector<std::pair<juce::String, juce::String>> insertIdMap;
+        std::vector<std::pair<juce::String, juce::String>> routeIdMap;
+        std::vector<std::pair<juce::String, juce::String>> reampRouteIdMap;
         std::vector<juce::String> sendReturnTemplateIds;
         auto maximumSourceIndex = std::size_t { 0 };
         for (std::size_t index = 0; index < project.tracks.size(); ++index)
@@ -1632,6 +2642,10 @@ bool DuplicateTrackCommand::perform(Project& project, juce::String& error)
                     + (sendReturnTemplate ? " Send Return" : " Copy");
             else
                 duplicate.parentTrackId = mappedId(original.parentTrackId);
+            duplicate.outputTrackId = mappedId(original.outputTrackId);
+            duplicate.folderTrackId = mappedId(original.folderTrackId);
+            for (auto& controlledId : duplicate.controlledTrackIds)
+                controlledId = mappedId(controlledId);
             if (sendReturnTemplate)
             {
                 duplicate.clips.clear();
@@ -1641,7 +2655,11 @@ bool DuplicateTrackCommand::perform(Project& project, juce::String& error)
             for (auto& clip : duplicate.clips)
                 clip.id = juce::Uuid().toString();
             for (auto& insert : duplicate.inserts)
+            {
+                const auto originalInsertId = insert.id;
                 insert.id = juce::Uuid().toString();
+                insertIdMap.emplace_back(originalInsertId, insert.id);
+            }
 
             if (original.parentTrackId.isEmpty())
             {
@@ -1705,7 +2723,87 @@ bool DuplicateTrackCommand::perform(Project& project, juce::String& error)
             duplicate.sourceTrackId = mappedId(route.sourceTrackId);
             duplicate.returnTrackId = mappedId(route.returnTrackId);
             duplicate.ownsReturnTrack = true;
+            reampRouteIdMap.emplace_back(route.id, duplicate.id);
             duplicatedRoutes.push_back(std::move(duplicate));
+        }
+        const auto mappedInsertId = [&insertIdMap](const juce::String& originalId)
+        {
+            const auto mapping = std::find_if(
+                insertIdMap.cbegin(),
+                insertIdMap.cend(),
+                [&originalId](const auto& pair)
+                {
+                    return pair.first == originalId;
+                });
+            return mapping != insertIdMap.cend() ? mapping->second : originalId;
+        };
+        for (const auto& connection : project.routingConnections)
+        {
+            if (mappedId(connection.sourceTrackId) == connection.sourceTrackId)
+                continue;
+
+            auto duplicate = connection;
+            duplicate.id = juce::Uuid().toString();
+            duplicate.name += " Copy";
+            duplicate.sourceTrackId = mappedId(connection.sourceTrackId);
+            duplicate.destination.trackId = mappedId(
+                connection.destination.trackId);
+            duplicate.destination.insertId = mappedInsertId(
+                connection.destination.insertId);
+            routeIdMap.emplace_back(connection.id, duplicate.id);
+            duplicatedConnections.push_back(std::move(duplicate));
+        }
+        const auto mappedRouteId = [&routeIdMap](
+                                       const juce::String& originalId)
+        {
+            const auto mapping = std::find_if(
+                routeIdMap.cbegin(),
+                routeIdMap.cend(),
+                [&originalId](const auto& pair)
+                {
+                    return pair.first == originalId;
+                });
+            return mapping != routeIdMap.cend()
+                ? mapping->second
+                : originalId;
+        };
+        for (const auto& lane : project.automationLanes)
+        {
+            if (mappedId(lane.target.trackId) == lane.target.trackId)
+                continue;
+            auto duplicate = lane;
+            duplicate.id = juce::Uuid().toString();
+            duplicate.name += " Copy";
+            duplicate.target.trackId = mappedId(lane.target.trackId);
+            duplicate.target.routeId = mappedRouteId(lane.target.routeId);
+            duplicate.target.insertId = mappedInsertId(
+                lane.target.insertId);
+            for (auto& point : duplicate.points)
+                point.id = juce::Uuid().toString();
+            duplicatedAutomationLanes.push_back(std::move(duplicate));
+        }
+        for (const auto& snapshot : project.toneSnapshots)
+        {
+            const auto routeMapping = std::find_if(
+                reampRouteIdMap.cbegin(),
+                reampRouteIdMap.cend(),
+                [&snapshot](const auto& mapping)
+                {
+                    return mapping.first == snapshot.reampRouteId;
+                });
+            if (routeMapping == reampRouteIdMap.cend())
+                continue;
+            auto duplicate = snapshot;
+            duplicate.id = juce::Uuid().toString();
+            duplicate.name += " Copy";
+            duplicate.reampRouteId = routeMapping->second;
+            duplicate.sourceTrackId = mappedId(snapshot.sourceTrackId);
+            duplicate.returnTrackId = mappedId(snapshot.returnTrackId);
+            duplicate.frozen = false;
+            duplicate.frozenTrackId.clear();
+            duplicate.renderFile.clear();
+            duplicate.renderHash.clear();
+            duplicatedToneSnapshots.push_back(std::move(duplicate));
         }
         createdDuplicate = true;
     }
@@ -1728,6 +2826,33 @@ bool DuplicateTrackCommand::perform(Project& project, juce::String& error)
     project.reampRoutes.insert(project.reampRoutes.end(),
                                duplicatedRoutes.begin(),
                                duplicatedRoutes.end());
+    project.routingConnections.insert(project.routingConnections.end(),
+                                      duplicatedConnections.begin(),
+                                      duplicatedConnections.end());
+    project.automationLanes.insert(
+        project.automationLanes.end(),
+        duplicatedAutomationLanes.begin(),
+        duplicatedAutomationLanes.end());
+    for (auto& snapshot : duplicatedToneSnapshots)
+    {
+        snapshot.sourceFingerprint =
+            ReampSnapshotService::sourceFingerprint(
+                project,
+                snapshot.sourceTrackId);
+        snapshot.chainFingerprint =
+            ReampSnapshotService::chainFingerprint(
+                project,
+                snapshot.reampRouteId);
+    }
+    project.toneSnapshots.insert(
+        project.toneSnapshots.end(),
+        duplicatedToneSnapshots.begin(),
+        duplicatedToneSnapshots.end());
+    if (!project.validateRoutingGraph(error))
+    {
+        undo(project);
+        return false;
+    }
     return true;
 }
 
@@ -1758,10 +2883,430 @@ void DuplicateTrackCommand::undo(Project& project)
                                });
                        }),
         project.reampRoutes.end());
+    project.routingConnections.erase(
+        std::remove_if(
+            project.routingConnections.begin(),
+            project.routingConnections.end(),
+            [this](const auto& candidate)
+            {
+                return std::any_of(
+                    duplicatedConnections.cbegin(),
+                    duplicatedConnections.cend(),
+                    [&candidate](const auto& duplicate)
+                    {
+                        return candidate.id == duplicate.id;
+                    });
+            }),
+        project.routingConnections.end());
+    project.automationLanes.erase(
+        std::remove_if(
+            project.automationLanes.begin(),
+            project.automationLanes.end(),
+            [this](const auto& candidate)
+            {
+                return std::any_of(
+                    duplicatedAutomationLanes.cbegin(),
+                    duplicatedAutomationLanes.cend(),
+                    [&candidate](const auto& duplicate)
+                    {
+                        return candidate.id == duplicate.id;
+                    });
+            }),
+        project.automationLanes.end());
+    project.toneSnapshots.erase(
+        std::remove_if(
+            project.toneSnapshots.begin(),
+            project.toneSnapshots.end(),
+            [this](const auto& candidate)
+            {
+                return std::any_of(
+                    duplicatedToneSnapshots.cbegin(),
+                    duplicatedToneSnapshots.cend(),
+                    [&candidate](const auto& duplicate)
+                    {
+                        return candidate.id == duplicate.id;
+                    });
+            }),
+        project.toneSnapshots.end());
 }
 
 const juce::String& DuplicateTrackCommand::duplicatedTrackId() const noexcept
 {
     return duplicatedRootTrackId;
+}
+
+AddToneSnapshotCommand::AddToneSnapshotCommand(ToneSnapshot snapshotToAdd)
+    : snapshot(std::move(snapshotToAdd))
+{
+}
+
+juce::String AddToneSnapshotCommand::name() const
+{
+    return "Capture tone snapshot";
+}
+
+bool AddToneSnapshotCommand::perform(Project& project, juce::String& error)
+{
+    if (std::any_of(
+            project.toneSnapshots.cbegin(),
+            project.toneSnapshots.cend(),
+            [this](const auto& candidate)
+            {
+                return candidate.id == snapshot.id;
+            }))
+    {
+        error = "A tone snapshot with the same ID already exists.";
+        return false;
+    }
+    if (!ToneSnapshot::fromVar(snapshot.toVar(), error).has_value())
+        return false;
+    project.toneSnapshots.push_back(snapshot);
+    return true;
+}
+
+void AddToneSnapshotCommand::undo(Project& project)
+{
+    project.toneSnapshots.erase(
+        std::remove_if(
+            project.toneSnapshots.begin(),
+            project.toneSnapshots.end(),
+            [this](const auto& candidate)
+            {
+                return candidate.id == snapshot.id;
+            }),
+        project.toneSnapshots.end());
+}
+
+SetToneSnapshotsCommand::SetToneSnapshotsCommand(
+    std::vector<ToneSnapshot> before,
+    std::vector<ToneSnapshot> after)
+    : oldSnapshots(std::move(before)),
+      newSnapshots(std::move(after))
+{
+}
+
+juce::String SetToneSnapshotsCommand::name() const
+{
+    return "Update tone snapshots";
+}
+
+bool SetToneSnapshotsCommand::perform(Project& project, juce::String& error)
+{
+    std::vector<juce::String> ids;
+    for (const auto& snapshot : newSnapshots)
+    {
+        if (!ToneSnapshot::fromVar(snapshot.toVar(), error).has_value()
+            || std::find(ids.cbegin(), ids.cend(), snapshot.id)
+                != ids.cend())
+        {
+            if (error.isEmpty())
+                error = "Tone snapshot IDs must be unique.";
+            return false;
+        }
+        ids.push_back(snapshot.id);
+    }
+    project.toneSnapshots = newSnapshots;
+    return true;
+}
+
+void SetToneSnapshotsCommand::undo(Project& project)
+{
+    project.toneSnapshots = oldSnapshots;
+}
+
+RecallToneSnapshotCommand::RecallToneSnapshotCommand(
+    ToneSnapshot snapshotToRecall)
+    : snapshot(std::move(snapshotToRecall))
+{
+}
+
+juce::String RecallToneSnapshotCommand::name() const
+{
+    return "Recall tone snapshot";
+}
+
+bool RecallToneSnapshotCommand::perform(Project& project, juce::String& error)
+{
+    auto* returnTrack = project.findTrack(snapshot.returnTrackId);
+    const auto route = std::find_if(
+        project.reampRoutes.begin(),
+        project.reampRoutes.end(),
+        [this](const auto& candidate)
+        {
+            return candidate.id == snapshot.reampRouteId;
+        });
+    if (returnTrack == nullptr || route == project.reampRoutes.end())
+    {
+        error = "The tone snapshot route is unavailable.";
+        return false;
+    }
+    if (!capturedOriginal)
+    {
+        oldReturnTrack = *returnTrack;
+        oldRoutes = project.routingConnections;
+        oldAutomation = project.automationLanes;
+        oldActiveSnapshotId = route->activeSnapshotId;
+        capturedOriginal = true;
+    }
+
+    returnTrack->volumeDecibels = snapshot.returnVolumeDecibels;
+    returnTrack->pan = snapshot.returnPan;
+    returnTrack->polarityInverted = snapshot.returnPolarityInverted;
+    returnTrack->inserts = snapshot.inserts;
+    const auto touches = [this](const RoutingConnection& connection)
+    {
+        return connection.sourceTrackId == snapshot.sourceTrackId
+            || connection.sourceTrackId == snapshot.returnTrackId
+            || connection.destination.trackId == snapshot.sourceTrackId
+            || connection.destination.trackId == snapshot.returnTrackId;
+    };
+    project.routingConnections.erase(
+        std::remove_if(
+            project.routingConnections.begin(),
+            project.routingConnections.end(),
+            touches),
+        project.routingConnections.end());
+    project.routingConnections.insert(
+        project.routingConnections.end(),
+        snapshot.routes.begin(),
+        snapshot.routes.end());
+    project.automationLanes.erase(
+        std::remove_if(
+            project.automationLanes.begin(),
+            project.automationLanes.end(),
+            [this](const auto& lane)
+            {
+                return lane.target.trackId == snapshot.sourceTrackId
+                    || lane.target.trackId == snapshot.returnTrackId;
+            }),
+        project.automationLanes.end());
+    project.automationLanes.insert(
+        project.automationLanes.end(),
+        snapshot.automation.begin(),
+        snapshot.automation.end());
+    route->activeSnapshotId = snapshot.id;
+    if (!project.validateRoutingGraph(error))
+    {
+        undo(project);
+        return false;
+    }
+    return true;
+}
+
+void RecallToneSnapshotCommand::undo(Project& project)
+{
+    if (auto* returnTrack = project.findTrack(snapshot.returnTrackId))
+        *returnTrack = oldReturnTrack;
+    project.routingConnections = oldRoutes;
+    project.automationLanes = oldAutomation;
+    const auto route = std::find_if(
+        project.reampRoutes.begin(),
+        project.reampRoutes.end(),
+        [this](const auto& candidate)
+        {
+            return candidate.id == snapshot.reampRouteId;
+        });
+    if (route != project.reampRoutes.end())
+        route->activeSnapshotId = oldActiveSnapshotId;
+}
+
+AddMixerSnapshotCommand::AddMixerSnapshotCommand(
+    MixerSnapshot snapshotToAdd)
+    : snapshot(std::move(snapshotToAdd))
+{
+}
+
+juce::String AddMixerSnapshotCommand::name() const
+{
+    return "Capture mixer snapshot";
+}
+
+bool AddMixerSnapshotCommand::perform(Project& project, juce::String& error)
+{
+    if (std::any_of(
+            project.mixerSnapshots.cbegin(),
+            project.mixerSnapshots.cend(),
+            [this](const auto& candidate)
+            {
+                return candidate.id == snapshot.id;
+            }))
+    {
+        error = "A mixer snapshot with the same ID already exists.";
+        return false;
+    }
+    if (!MixerSnapshot::fromVar(snapshot.toVar(), error).has_value())
+        return false;
+    project.mixerSnapshots.push_back(snapshot);
+    return true;
+}
+
+void AddMixerSnapshotCommand::undo(Project& project)
+{
+    project.mixerSnapshots.erase(
+        std::remove_if(
+            project.mixerSnapshots.begin(),
+            project.mixerSnapshots.end(),
+            [this](const auto& candidate)
+            {
+                return candidate.id == snapshot.id;
+            }),
+        project.mixerSnapshots.end());
+}
+
+AddRenderReportsCommand::AddRenderReportsCommand(
+    std::vector<RenderReport> reportsToAdd)
+    : reports(std::move(reportsToAdd))
+{
+}
+
+juce::String AddRenderReportsCommand::name() const
+{
+    return "Add render reports";
+}
+
+bool AddRenderReportsCommand::perform(Project& project, juce::String& error)
+{
+    for (const auto& report : reports)
+    {
+        if (!RenderReport::fromVar(report.toVar(), error).has_value()
+            || std::any_of(
+                project.renderReports.cbegin(),
+                project.renderReports.cend(),
+                [&report](const auto& candidate)
+                {
+                    return candidate.id == report.id;
+                }))
+        {
+            if (error.isEmpty())
+                error = "Render report IDs must be unique.";
+            return false;
+        }
+    }
+    project.renderReports.insert(project.renderReports.end(),
+                                 reports.begin(),
+                                 reports.end());
+    return true;
+}
+
+void AddRenderReportsCommand::undo(Project& project)
+{
+    project.renderReports.erase(
+        std::remove_if(
+            project.renderReports.begin(),
+            project.renderReports.end(),
+            [this](const auto& candidate)
+            {
+                return std::any_of(
+                    reports.cbegin(),
+                    reports.cend(),
+                    [&candidate](const auto& report)
+                    {
+                        return report.id == candidate.id;
+                    });
+            }),
+        project.renderReports.end());
+}
+
+RecallMixerSnapshotCommand::RecallMixerSnapshotCommand(
+    MixerSnapshot snapshotToRecall)
+    : snapshot(std::move(snapshotToRecall))
+{
+}
+
+juce::String RecallMixerSnapshotCommand::name() const
+{
+    return "Recall mixer snapshot";
+}
+
+bool RecallMixerSnapshotCommand::perform(Project& project,
+                                         juce::String& error)
+{
+    if (!capturedOriginal)
+    {
+        for (const auto& state : snapshot.tracks)
+        {
+            const auto* track = project.findTrack(state.trackId);
+            if (track == nullptr)
+            {
+                error = "A mixer snapshot track is unavailable.";
+                return false;
+            }
+            oldTracks.push_back(*track);
+        }
+        oldRoutes = project.routingConnections;
+        oldAutomation = project.automationLanes;
+        capturedOriginal = true;
+    }
+
+    std::vector<juce::String> trackIds;
+    for (const auto& state : snapshot.tracks)
+    {
+        auto* track = project.findTrack(state.trackId);
+        if (track == nullptr)
+        {
+            error = "A mixer snapshot track is unavailable.";
+            return false;
+        }
+        trackIds.push_back(track->id);
+        track->volumeDecibels = state.volumeDecibels;
+        track->pan = state.pan;
+        track->muted = state.muted;
+        track->solo = state.solo;
+        track->soloSafe = state.soloSafe;
+        track->polarityInverted = state.polarityInverted;
+        track->channelLayout = state.channelLayout;
+        track->folderTrackId = state.folderTrackId;
+        track->controlledTrackIds = state.controlledTrackIds;
+        track->inserts = state.inserts;
+    }
+    const auto touches = [&trackIds](const RoutingConnection& route)
+    {
+        return std::find(trackIds.cbegin(),
+                         trackIds.cend(),
+                         route.sourceTrackId) != trackIds.cend()
+            || std::find(trackIds.cbegin(),
+                         trackIds.cend(),
+                         route.destination.trackId) != trackIds.cend();
+    };
+    project.routingConnections.erase(
+        std::remove_if(
+            project.routingConnections.begin(),
+            project.routingConnections.end(),
+            touches),
+        project.routingConnections.end());
+    project.routingConnections.insert(
+        project.routingConnections.end(),
+        snapshot.routes.begin(),
+        snapshot.routes.end());
+    project.automationLanes.erase(
+        std::remove_if(
+            project.automationLanes.begin(),
+            project.automationLanes.end(),
+            [&trackIds](const auto& lane)
+            {
+                return std::find(trackIds.cbegin(),
+                                 trackIds.cend(),
+                                 lane.target.trackId) != trackIds.cend();
+            }),
+        project.automationLanes.end());
+    project.automationLanes.insert(
+        project.automationLanes.end(),
+        snapshot.automation.begin(),
+        snapshot.automation.end());
+    if (!project.validateRoutingGraph(error))
+    {
+        undo(project);
+        return false;
+    }
+    return true;
+}
+
+void RecallMixerSnapshotCommand::undo(Project& project)
+{
+    for (const auto& oldTrack : oldTracks)
+        if (auto* track = project.findTrack(oldTrack.id))
+            *track = oldTrack;
+    project.routingConnections = oldRoutes;
+    project.automationLanes = oldAutomation;
 }
 }
