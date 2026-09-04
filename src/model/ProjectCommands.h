@@ -50,6 +50,19 @@ private:
     std::vector<std::unique_ptr<ProjectCommand>> commands;
 };
 
+class AddSongSectionCommand final : public ProjectCommand
+{
+public:
+    explicit AddSongSectionCommand(SongSection sectionToAdd);
+
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    SongSection section;
+};
+
 class AddTrackCommand final : public ProjectCommand
 {
 public:

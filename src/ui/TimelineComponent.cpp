@@ -84,7 +84,9 @@ void TimelineComponent::clearRecordingPreviews()
 
 void TimelineComponent::setPixelsPerSecond(double pixels)
 {
-    pixelsPerSecond = juce::jlimit(24.0, 320.0, pixels);
+    pixelsPerSecond = juce::jlimit(minimumPixelsPerSecond,
+                                   maximumPixelsPerSecond,
+                                   pixels);
     repaint();
 }
 
@@ -105,8 +107,12 @@ int TimelineComponent::preferredWidth(int minimumWidth) const
     for (const auto& preview : recordingPreviews)
         previewEnd = std::max(previewEnd, preview.startSeconds + preview.durationSeconds);
     const auto seconds = std::max(projectSeconds, previewEnd) + 8.0;
+    const auto maximumContentWidth = static_cast<double>(
+        std::numeric_limits<int>::max() - trackHeaderWidth);
+    const auto contentWidth = std::min(maximumContentWidth,
+                                       std::ceil(seconds * pixelsPerSecond));
     return std::max(minimumWidth,
-                    trackHeaderWidth + static_cast<int>(std::ceil(seconds * pixelsPerSecond)));
+                    trackHeaderWidth + static_cast<int>(contentWidth));
 }
 
 int TimelineComponent::preferredHeight(int minimumHeight) const
@@ -129,6 +135,41 @@ void TimelineComponent::paint(juce::Graphics& graphics)
     const auto maximumSeconds = std::max(
         project->lengthSeconds() + 8.0,
         static_cast<double>(getWidth() - trackHeaderWidth) / pixelsPerSecond);
+    const std::array sectionColours {
+        juce::Colour(StudioColours::violet),
+        juce::Colour(StudioColours::orange),
+        juce::Colour(StudioColours::green),
+        juce::Colour(StudioColours::amber)
+    };
+    for (std::size_t index = 0; index < project->sections.size(); ++index)
+    {
+        const auto& section = project->sections[index];
+        const auto startX = secondsToX(section.timeSeconds);
+        const auto endSeconds = index + 1 < project->sections.size()
+            ? project->sections[index + 1].timeSeconds
+            : maximumSeconds;
+        const auto endX = secondsToX(endSeconds);
+        const auto colour = sectionColours[index % sectionColours.size()];
+        graphics.setColour(colour.withAlpha(0.18f));
+        graphics.fillRect(startX,
+                          0.0f,
+                          std::max(1.0f, endX - startX),
+                          static_cast<float>(sectionLaneHeight));
+        graphics.setColour(colour.withAlpha(0.85f));
+        graphics.drawVerticalLine(static_cast<int>(startX),
+                                  0.0f,
+                                  static_cast<float>(getHeight()));
+        graphics.setFont(juce::Font(juce::FontOptions(10.0f,
+                                                      juce::Font::bold)));
+        graphics.drawText(section.name,
+                          static_cast<int>(startX) + 6,
+                          0,
+                          std::max(0, static_cast<int>(endX - startX) - 10),
+                          sectionLaneHeight,
+                          juce::Justification::centredLeft,
+                          true);
+    }
+
     auto seconds = 0.0;
     for (int line = 0; line < 100000 && seconds <= maximumSeconds; ++line)
     {
@@ -144,9 +185,9 @@ void TimelineComponent::paint(juce::Graphics& graphics)
             graphics.setFont(12.0f);
             graphics.drawText(juce::String(position.bar),
                               x + 5,
-                              0,
+                              sectionLaneHeight,
                               42,
-                              rulerHeight,
+                              rulerHeight - sectionLaneHeight,
                               juce::Justification::centredLeft);
         }
 
@@ -172,12 +213,12 @@ void TimelineComponent::paint(juce::Graphics& graphics)
     {
         const auto x = static_cast<int>(secondsToX(tempoChange.timeSeconds));
         graphics.setColour(juce::Colour(StudioColours::orange));
-        graphics.fillRect(x - 1, 0, 3, 5);
+        graphics.fillRect(x - 1, sectionLaneHeight, 3, 5);
         graphics.setFont(9.0f);
         graphics.drawText(juce::String(tempoChange.bpm, 1)
                               + (tempoChange.rampToNext ? " R" : ""),
                           x + 4,
-                          1,
+                          sectionLaneHeight + 1,
                           52,
                           12,
                           juce::Justification::centredLeft);
@@ -199,17 +240,35 @@ void TimelineComponent::paint(juce::Graphics& graphics)
     {
         const auto x = static_cast<int>(secondsToX(meterChange.timeSeconds));
         graphics.setColour(juce::Colour(StudioColours::green));
-        graphics.fillRect(x - 1, 16, 3, 5);
+        graphics.fillRect(x - 1, sectionLaneHeight + 16, 3, 5);
         graphics.setFont(9.0f);
         graphics.drawText(juce::String(meterChange.numerator)
                               + "/"
                               + juce::String(meterChange.denominator),
                           x + 4,
-                          15,
+                          sectionLaneHeight + 15,
                           42,
                           12,
                           juce::Justification::centredLeft);
     }
+
+    graphics.setColour(juce::Colour(StudioColours::panel));
+    graphics.fillRect(viewportPositionX, 0, trackHeaderWidth, rulerHeight);
+    graphics.setColour(juce::Colour(StudioColours::secondaryText));
+    graphics.setFont(juce::Font(juce::FontOptions(9.0f,
+                                                  juce::Font::bold)));
+    graphics.drawText("SECTIONS",
+                      viewportPositionX + 12,
+                      0,
+                      trackHeaderWidth - 24,
+                      sectionLaneHeight,
+                      juce::Justification::centredLeft);
+    graphics.drawText("TIMELINE",
+                      viewportPositionX + 12,
+                      sectionLaneHeight,
+                      trackHeaderWidth - 24,
+                      rulerHeight - sectionLaneHeight,
+                      juce::Justification::centredLeft);
 
     const auto tracks = visibleTracks();
     for (std::size_t index = 0; index < tracks.size(); ++index)
@@ -884,6 +943,9 @@ void TimelineComponent::mouseDown(const juce::MouseEvent& event)
         return;
     }
 
+    if (event.position.y < static_cast<float>(sectionLaneHeight))
+        return;
+
     const auto inTrackHeader = event.position.x >= static_cast<float>(viewportPositionX)
         && event.position.x < static_cast<float>(viewportPositionX + trackHeaderWidth);
     if (project != nullptr && inTrackHeader)
@@ -1244,13 +1306,32 @@ void TimelineComponent::mouseExit(const juce::MouseEvent&)
 void TimelineComponent::mouseWheelMove(const juce::MouseEvent& event,
                                        const juce::MouseWheelDetails& wheel)
 {
-    if ((event.mods.isCommandDown() || event.mods.isCtrlDown()) && onZoomRequested)
+    if (std::abs(wheel.deltaY) > 0.0001f
+        && std::abs(wheel.deltaY) >= std::abs(wheel.deltaX)
+        && onZoomRequested)
     {
-        onZoomRequested(wheel.deltaY > 0.0f ? 1.2 : 1.0 / 1.2);
+        const auto exponent = static_cast<double>(wheel.deltaY)
+            * (wheel.isSmooth ? 4.0 : 10.0);
+        const auto factor = juce::jlimit(0.8,
+                                        1.25,
+                                        std::pow(1.2, exponent));
+        onZoomRequested(factor, xToSeconds(event.position.x));
         return;
     }
 
     juce::Component::mouseWheelMove(event, wheel);
+}
+
+void TimelineComponent::mouseMagnify(const juce::MouseEvent& event,
+                                     float scaleFactor)
+{
+    if (onZoomRequested)
+    {
+        onZoomRequested(juce::jlimit(0.5,
+                                    2.0,
+                                    static_cast<double>(scaleFactor)),
+                        xToSeconds(event.position.x));
+    }
 }
 
 void TimelineComponent::showContextMenu(const juce::MouseEvent& event)
@@ -1258,14 +1339,33 @@ void TimelineComponent::showContextMenu(const juce::MouseEvent& event)
     if (project == nullptr)
         return;
 
+    const auto inTrackHeader = event.position.x >= static_cast<float>(viewportPositionX)
+        && event.position.x < static_cast<float>(viewportPositionX + trackHeaderWidth);
+    if (!inTrackHeader
+        && event.position.y < static_cast<float>(sectionLaneHeight))
+    {
+        juce::PopupMenu menu;
+        menu.addItem("Add section here...", [this, position = xToSeconds(event.position.x)]
+        {
+            if (onAddSectionRequested)
+                onAddSectionRequested(position);
+        });
+        const auto screenPosition = event.getScreenPosition();
+        menu.showMenuAsync(juce::PopupMenu::Options()
+                               .withTargetComponent(this)
+                               .withTargetScreenArea({ screenPosition.x,
+                                                       screenPosition.y,
+                                                       1,
+                                                       1 }));
+        return;
+    }
+
     const auto tracks = visibleTracks();
     const auto trackIndex = trackIndexAt(event.position.y);
     const auto* clickedTrack = trackIndex >= 0 && trackIndex < static_cast<int>(tracks.size())
         ? tracks[static_cast<std::size_t>(trackIndex)]
         : nullptr;
 
-    const auto inTrackHeader = event.position.x >= static_cast<float>(viewportPositionX)
-        && event.position.x < static_cast<float>(viewportPositionX + trackHeaderWidth);
     if (!inTrackHeader && onSeek)
         onSeek(xToSeconds(event.position.x));
 
@@ -1688,10 +1788,20 @@ void TimelineComponent::drawClipWaveform(juce::Graphics& graphics,
 {
     graphics.saveState();
     graphics.reduceClipRegion(bounds.toNearestInt().reduced(5));
+    const auto visibleBounds = graphics.getClipBounds().toFloat();
     const auto middle = bounds.getCentreY() + 8.0f;
     const auto waveformWidth = std::max(1.0f, bounds.getWidth() - 12.0f);
+    constexpr auto columnWidth = 4.0f;
+    const auto waveformStart = bounds.getX() + 8.0f;
+    const auto firstVisibleColumn = std::max(
+        0.0f,
+        static_cast<float>(
+            std::ceil((visibleBounds.getX() - waveformStart) / columnWidth)));
+    const auto firstX = waveformStart + firstVisibleColumn * columnWidth;
+    const auto lastX = std::min(bounds.getRight() - 4.0f,
+                                visibleBounds.getRight());
     graphics.setColour(juce::Colours::white.withAlpha(alpha));
-    for (float x = bounds.getX() + 8.0f; x < bounds.getRight() - 4.0f; x += 4.0f)
+    for (float x = firstX; x < lastX; x += columnWidth)
     {
         const auto progress = juce::jlimit(0.0,
                                            1.0,

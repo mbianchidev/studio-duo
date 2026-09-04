@@ -363,7 +363,7 @@ MainComponent::MainComponent()
     configureButton(undoButton, "Undo (Command/Ctrl+Z)");
     configureButton(redoButton, "Redo (Command/Ctrl+Shift+Z)");
     configureButton(playButton, "Play or pause (Space)");
-    configureButton(stopButton, "Stop and return to the start");
+    configureButton(stopButton, "Stop playback; recordings stop at the current position");
     configureButton(recordButton, "Record the selected audio track");
     configureButton(loopButton, "Loop the project range");
     configureButton(metronomeButton, "Toggle the metronome");
@@ -372,7 +372,7 @@ MainComponent::MainComponent()
     configureButton(importButton, "Import WAV, AIFF, FLAC, or MP3 audio");
     configureButton(duplicateTrackButton, "Duplicate the selected track and its edits");
     configureButton(deleteTrackButton, "Delete the selected track");
-    configureButton(trackingButton, "Configure tempo, meter, punch, count-in, and click routing");
+    configureButton(trackingButton, "Configure sections, tempo, meter, punch, count-in, and click routing");
     configureButton(automationButton, "Edit and record mixer and plugin automation");
     configureButton(sessionPanelToggleButton, "Collapse or expand the session sidebar");
     configureButton(inspectorPanelToggleButton, "Show or hide the inspector");
@@ -798,7 +798,14 @@ MainComponent::MainComponent()
             audioEngine.play();
         setStatus("Playhead moved. Plugin pipelines reset.");
     };
-    timeline.onZoomRequested = [this](double factor) { zoomTimeline(factor); };
+    timeline.onZoomRequested = [this](double factor, double focalSeconds)
+    {
+        zoomTimeline(factor, false, focalSeconds);
+    };
+    timeline.onAddSectionRequested = [this](double position)
+    {
+        promptSongSection(position);
+    };
     timeline.onSplitSelected = [this] { splitSelectedClip(); };
     timeline.onTrimStartSelected = [this] { trimSelectedClipStartToPlayhead(); };
     timeline.onTrimEndSelected = [this] { trimSelectedClipEndToPlayhead(); };
@@ -4295,6 +4302,12 @@ void MainComponent::showTrackingMenu()
 {
     const auto position = audioEngine.positionSeconds();
     juce::PopupMenu menu;
+    menu.addSectionHeader("Song sections");
+    menu.addItem("Add section at playhead...", [this, position]
+    {
+        promptSongSection(position);
+    });
+    menu.addSeparator();
     menu.addSectionHeader("Tempo and meter");
     menu.addItem("Add tempo change at playhead...", [this] { promptTempoChange(); });
     menu.addItem("Add meter change at playhead...", [this] { promptMeterChange(); });
@@ -4982,6 +4995,45 @@ void MainComponent::showTrackingMenu()
     menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(trackingButton));
 }
 
+void MainComponent::promptSongSection(double position)
+{
+    auto* dialog = new juce::AlertWindow(
+        "Song section",
+        "Create a section marker without moving the playhead.",
+        juce::MessageBoxIconType::NoIcon);
+    dialog->addTextEditor(
+        "name",
+        "Section " + juce::String(static_cast<int>(project.sections.size() + 1)),
+        "Name");
+    dialog->addButton("Create", 1, juce::KeyPress(juce::KeyPress::returnKey));
+    dialog->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+    dialog->centreAroundComponent(&trackingButton, 380, 180);
+    const juce::Component::SafePointer<juce::AlertWindow> dialogSafe(dialog);
+    dialog->enterModalState(
+        true,
+        juce::ModalCallbackFunction::create(
+            [safe = juce::Component::SafePointer<MainComponent>(this),
+             dialogSafe,
+             position](int result)
+            {
+                if (result != 1 || safe == nullptr || dialogSafe == nullptr)
+                    return;
+
+                SongSection section;
+                section.name = dialogSafe->getTextEditorContents("name").trim();
+                section.timeSeconds = std::max(0.0, position);
+                if (section.name.isEmpty())
+                {
+                    safe->showError("Section unavailable",
+                                    "Enter a name for the song section.");
+                    return;
+                }
+                safe->perform(std::make_unique<AddSongSectionCommand>(
+                    std::move(section)));
+            }),
+        true);
+}
+
 void MainComponent::showAutomationPanel()
 {
     auto panel = std::make_unique<AutomationPanel>();
@@ -5656,19 +5708,29 @@ void MainComponent::updateTimelineSize()
                      timeline.preferredHeight(timelineViewport.getHeight()));
 }
 
-void MainComponent::zoomTimeline(double factor, bool reset)
+void MainComponent::zoomTimeline(double factor,
+                                 bool reset,
+                                 std::optional<double> focalSeconds)
 {
+    const auto oldViewportX = timelineViewport.getViewPositionX();
+    const auto focalOffset = focalSeconds.has_value()
+        ? static_cast<int>(timeline.xForSeconds(*focalSeconds)) - oldViewportX
+        : timelineViewport.getWidth() / 2;
     const auto newPixelsPerSecond = reset
-        ? 96.0
+        ? TimelineComponent::defaultPixelsPerSecond
         : timeline.getPixelsPerSecond() * factor;
     timeline.setPixelsPerSecond(newPixelsPerSecond);
-    const auto percentage = static_cast<int>(std::round(timeline.getPixelsPerSecond() / 96.0 * 100.0));
+    const auto percentage = static_cast<int>(std::round(
+        timeline.getPixelsPerSecond()
+        / TimelineComponent::defaultPixelsPerSecond
+        * 100.0));
     zoomResetButton.setButtonText(juce::String(percentage) + "%");
     updateTimelineSize();
 
-    const auto playheadX = static_cast<int>(timeline.xForSeconds(audioEngine.positionSeconds()));
+    const auto focusSeconds = focalSeconds.value_or(audioEngine.positionSeconds());
+    const auto focusX = static_cast<int>(timeline.xForSeconds(focusSeconds));
     timelineViewport.setViewPosition(juce::jmax(0,
-                                               playheadX - timelineViewport.getWidth() / 2),
+                                               focusX - focalOffset),
                                      timelineViewport.getViewPositionY());
     timeline.setViewportPosition(timelineViewport.getViewPositionX());
 }

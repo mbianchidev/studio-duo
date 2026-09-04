@@ -1,6 +1,7 @@
 #include "model/ProjectCommands.h"
 #include "audio/AudioAnalysis.h"
 #include "audio/RecordingWaveform.h"
+#include "audio/StudioAudioEngine.h"
 #include "plugin_host/PluginCatalog.h"
 #include "plugin_host/PluginBridgeProtocol.h"
 #include "plugin_host/PluginStateStore.h"
@@ -26,6 +27,10 @@ void serializationRoundTrip()
     project.meterChanges = {
         { 0.0, 4, 4 },
         { 8.0, 7, 8 }
+    };
+    project.sections = {
+        { juce::Uuid().toString(), "Intro", 0.0 },
+        { juce::Uuid().toString(), "Verse", 8.0 }
     };
     project.metronomeEnabled = false;
     project.metronomeSubdivision = 2;
@@ -121,6 +126,11 @@ void serializationRoundTrip()
                && decoded->meterChanges.size() == 2
                && decoded->meterChanges[1].numerator == 7,
            "Tempo and meter maps survive serialization.");
+    expect(decoded.has_value()
+               && decoded->sections.size() == 2
+               && decoded->sections[0].name == "Intro"
+               && std::abs(decoded->sections[1].timeSeconds - 8.0) < 0.0001,
+           "Song sections survive serialization.");
     expect(decoded.has_value()
                && !decoded->metronomeEnabled
                && decoded->metronomeSubdivision == 2
@@ -265,6 +275,44 @@ void commandHistory()
                             project,
                             error),
            "Track names cannot be empty.");
+
+    studio::SongSection chorus;
+    chorus.name = "Chorus";
+    chorus.timeSeconds = 12.0;
+    const auto chorusId = chorus.id;
+    expect(history.perform(
+               std::make_unique<studio::AddSongSectionCommand>(chorus),
+               project,
+               error),
+           error.toRawUTF8());
+    studio::SongSection intro;
+    intro.name = "Intro";
+    intro.timeSeconds = 0.0;
+    const auto introId = intro.id;
+    expect(history.perform(
+               std::make_unique<studio::AddSongSectionCommand>(intro),
+               project,
+               error),
+           error.toRawUTF8());
+    expect(project.sections.size() == 2
+               && project.sections.front().id == introId
+               && project.sections.back().id == chorusId,
+           "Song section commands keep markers ordered on the timeline.");
+    error.clear();
+    studio::SongSection duplicatePosition;
+    duplicatePosition.name = "Duplicate";
+    duplicatePosition.timeSeconds = 12.0;
+    expect(!history.perform(
+               std::make_unique<studio::AddSongSectionCommand>(
+                   duplicatePosition),
+               project,
+               error),
+           "Song sections reject duplicate timeline positions.");
+    expect(history.undo(project), "Adding a song section can be undone.");
+    expect(project.sections.size() == 1
+               && project.sections.front().id == chorusId,
+           "Undo removes only the latest song section.");
+    expect(history.redo(project, error), error.toRawUTF8());
 
     const auto transportBefore = studio::ProjectTransportState::fromProject(project);
     auto transportAfter = transportBefore;
@@ -1222,6 +1270,15 @@ void synchronizedRecordingCapture()
            "Multitrack capture never exceeds the callback block.");
 }
 
+void recordingStopPreservesPlayhead()
+{
+    studio::StudioAudioEngine engine;
+    engine.seekSeconds(1.25);
+    engine.stopRecording();
+    expect(std::abs(engine.positionSeconds() - 1.25) < 0.0001,
+           "Stopping a recording preserves the playhead position.");
+}
+
 void multitrackRecordingTargets()
 {
     auto project = studio::Project::createDefault();
@@ -1340,6 +1397,7 @@ int main()
     pluginBridgeProtocol();
     liveRecordingWaveform();
     synchronizedRecordingCapture();
+    recordingStopPreservesPlayhead();
     multitrackRecordingTargets();
     multitrackRecordingCommand();
     routingModelTests();

@@ -9,6 +9,7 @@ exchange, and mastering remain later roadmap phases.
 
 - CoreAudio, ASIO, and WASAPI device selection
 - Tempo and meter maps with jump or ramp changes
+- Persistent song-section placeholders on the timeline ruler
 - Routed metronome with accents and subdivisions
 - Punch, count-in, pre-roll, post-roll, and loop transport
 - Sample-aligned lock-free multitrack audio recording
@@ -51,6 +52,9 @@ exchange, and mastering remain later roadmap phases.
 | Zoom timeline out or in | `Command/Ctrl+-` or `Command/Ctrl++` |
 | Reset timeline zoom | `Command/Ctrl+0` |
 
+Scroll the mouse wheel over the timeline to zoom around the pointer. On macOS,
+trackpad scrolling and pinch gestures zoom the same view.
+
 ## Start a session
 
 1. Open **I/O** and enable the required hardware inputs and outputs.
@@ -88,6 +92,7 @@ Press **REC** again or **STOP** to finish every active recording at the same
 audio callback boundary. The timeline draws a live waveform from lock-free peak
 buckets while recording. Stopping flushes each WAV before its clip is added; the
 inspector identifies the saved filename and the status bar reports completion.
+The playhead stays at the recording stop position.
 
 Each completed pass creates grouped `v1`, `v2`, `v3`, and later child tracks
 below the recorded parent. The whole multitrack pass is one undoable command.
@@ -107,6 +112,7 @@ playback to the active playlist.
 
 **TRACKING SETUP** manages:
 
+- Song-section placeholders at the playhead
 - Tempo and meter changes at the playhead
 - Jump and ramp tempo transitions
 - Punch points, count-in, pre-roll, and post-roll
@@ -114,6 +120,9 @@ playback to the active playlist.
 - Metronome subdivision and hardware output
 
 All settings are persistent and undoable.
+
+Right-click the **SECTIONS** lane above the bar ruler to create a named section
+at that exact timeline position without moving the playhead.
 
 Arm two or more parent tracks and choose **Link armed parent tracks** to create a
 phase-locked edit group. Split, trim, move, delete, comp, warp, and quantize

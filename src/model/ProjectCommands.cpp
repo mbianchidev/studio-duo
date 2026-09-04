@@ -113,6 +113,60 @@ void BatchProjectCommand::undo(Project& project)
             (*iterator)->undo(project);
 }
 
+AddSongSectionCommand::AddSongSectionCommand(SongSection sectionToAdd)
+    : section(std::move(sectionToAdd))
+{
+}
+
+juce::String AddSongSectionCommand::name() const
+{
+    return "Add song section";
+}
+
+bool AddSongSectionCommand::perform(Project& project, juce::String& error)
+{
+    section.name = section.name.trim();
+    const auto duplicate = std::find_if(
+        project.sections.cbegin(),
+        project.sections.cend(),
+        [this](const auto& existing)
+        {
+            return existing.id == section.id
+                || std::abs(existing.timeSeconds - section.timeSeconds) < 0.0001;
+        });
+    if (section.id.isEmpty()
+        || section.name.isEmpty()
+        || section.timeSeconds < 0.0
+        || duplicate != project.sections.cend())
+    {
+        error = "A song section needs a name and a unique non-negative timeline position.";
+        return false;
+    }
+
+    const auto insertion = std::lower_bound(
+        project.sections.begin(),
+        project.sections.end(),
+        section.timeSeconds,
+        [](const auto& existing, double position)
+        {
+            return existing.timeSeconds < position;
+        });
+    project.sections.insert(insertion, section);
+    return true;
+}
+
+void AddSongSectionCommand::undo(Project& project)
+{
+    project.sections.erase(
+        std::remove_if(project.sections.begin(),
+                       project.sections.end(),
+                       [this](const auto& existing)
+                       {
+                           return existing.id == section.id;
+                       }),
+        project.sections.end());
+}
+
 AddTrackCommand::AddTrackCommand(Track trackToAdd)
     : track(std::move(trackToAdd))
 {

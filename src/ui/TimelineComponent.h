@@ -33,6 +33,8 @@ public:
     [[nodiscard]] int preferredWidth(int minimumWidth) const;
     [[nodiscard]] int preferredHeight(int minimumHeight) const;
 
+    static constexpr double defaultPixelsPerSecond = 96.0;
+
     std::function<void(const juce::String&)> onTrackSelected;
     std::function<void(const juce::String&)> onTrackMute;
     std::function<void(const juce::String&)> onTrackSolo;
@@ -46,7 +48,8 @@ public:
     std::function<void(const juce::String&, const juce::String&, double)> onClipMoved;
     std::function<void(const juce::String&, double, double, double)> onClipTrimmed;
     std::function<void(double)> onSeek;
-    std::function<void(double)> onZoomRequested;
+    std::function<void(double, double)> onZoomRequested;
+    std::function<void(double)> onAddSectionRequested;
     std::function<void()> onSplitSelected;
     std::function<void()> onTrimStartSelected;
     std::function<void()> onTrimEndSelected;
@@ -79,6 +82,7 @@ public:
     void mouseExit(const juce::MouseEvent& event) override;
     void mouseWheelMove(const juce::MouseEvent& event,
                         const juce::MouseWheelDetails& wheel) override;
+    void mouseMagnify(const juce::MouseEvent& event, float scaleFactor) override;
 
 private:
     struct Hit
@@ -157,7 +161,10 @@ private:
     DragMode dragMode = DragMode::none;
     DragMode hoveredDragMode = DragMode::none;
 
-    static constexpr int rulerHeight = 36;
+    static constexpr double minimumPixelsPerSecond = 24.0;
+    static constexpr double maximumPixelsPerSecond = 9600.0;
+    static constexpr int sectionLaneHeight = 24;
+    static constexpr int rulerHeight = 60;
     static constexpr int trackHeaderWidth = 176;
     static constexpr int trackHeight = 88;
     static constexpr int addTrackHeight = 44;
