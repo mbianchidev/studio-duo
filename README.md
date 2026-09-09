@@ -49,6 +49,12 @@ On macOS with the default generator:
 open "build/StudioDuo_artefacts/Studio Duo.app"
 ```
 
+## Install
+
+Published builds are available from
+[GitHub Releases](https://github.com/mbianchidev/studio-duo/releases). Releases
+include a universal macOS DMG, a Windows x64 ZIP, and SHA-256 checksums.
+
 ## Documentation
 
 - [Documentation index](docs/README.md)
@@ -56,6 +62,7 @@ open "build/StudioDuo_artefacts/Studio Duo.app"
 - [Product, roadmap, and technical design](docs/design.md)
 - [Development and architecture](docs/development.md)
 - [Contributing](docs/contributing.md)
+- [Releasing](docs/releasing.md)
 
 ## License
 

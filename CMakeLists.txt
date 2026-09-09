@@ -1,8 +1,14 @@
 cmake_minimum_required(VERSION 3.25)
 
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" STUDIO_DUO_PROJECT_VERSION LIMIT_COUNT 1)
+string(STRIP "${STUDIO_DUO_PROJECT_VERSION}" STUDIO_DUO_PROJECT_VERSION)
+if(NOT STUDIO_DUO_PROJECT_VERSION MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+$")
+    message(FATAL_ERROR "VERSION must contain a semantic version such as 1.2.3")
+endif()
+
 project(
     StudioDuo
-    VERSION 0.1.0
+    VERSION "${STUDIO_DUO_PROJECT_VERSION}"
     DESCRIPTION "A native open-source DAW built for modern metal production"
     LANGUAGES C CXX
 )
