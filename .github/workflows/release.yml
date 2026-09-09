@@ -1,0 +1,184 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate release tag
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate version and main ancestry
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(tr -d '[:space:]' < VERSION)"
+          [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$GITHUB_REF_NAME" == "v$version" ]]
+          git fetch origin main --no-tags
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+
+  macos:
+    name: Build macOS DMG
+    needs: validate
+    runs-on: macos-latest
+    timeout-minutes: 120
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: release-macos-${{ hashFiles('CMakeLists.txt') }}
+
+      - name: Configure universal build
+        run: >
+          cmake -S . -B build -G Xcode
+          -DSTUDIO_DUO_BUILD_TESTS=ON
+          -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+          -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0
+
+      - name: Build
+        run: cmake --build build --config Release --parallel 1
+
+      - name: Test
+        run: ctest --test-dir build --build-config Release --output-on-failure
+
+      - name: Package DMG
+        shell: bash
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+          app="build/StudioDuo_artefacts/Release/Studio Duo.app"
+          staging="$RUNNER_TEMP/Studio Duo"
+          output="Studio-Duo-${VERSION}-macOS-universal.dmg"
+
+          test -d "$app"
+          rm -rf "$staging"
+          mkdir -p "$staging"
+          ditto "$app" "$staging/Studio Duo.app"
+          ln -s /Applications "$staging/Applications"
+          hdiutil create \
+            -volname "Studio Duo $VERSION" \
+            -srcfolder "$staging" \
+            -ov \
+            -format UDZO \
+            "$output"
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-release
+          path: Studio-Duo-${{ needs.validate.outputs.version }}-macOS-universal.dmg
+          if-no-files-found: error
+          retention-days: 7
+
+  windows:
+    name: Build Windows ZIP
+    needs: validate
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: release-windows-${{ hashFiles('CMakeLists.txt') }}
+
+      - name: Configure
+        run: cmake -S . -B build -A x64 -DSTUDIO_DUO_BUILD_TESTS=ON
+
+      - name: Build
+        run: cmake --build build --config Release --parallel 4
+
+      - name: Test
+        run: ctest --test-dir build --build-config Release --output-on-failure
+
+      - name: Package ZIP
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $executable = "build/StudioDuo_artefacts/Release/Studio Duo.exe"
+          $staging = Join-Path $env:RUNNER_TEMP "Studio-Duo-$env:VERSION-Windows-x64"
+          $output = "Studio-Duo-$env:VERSION-Windows-x64.zip"
+
+          if (-not (Test-Path $executable -PathType Leaf)) {
+            throw "Studio Duo executable was not produced at $executable"
+          }
+
+          New-Item -ItemType Directory -Path $staging -Force | Out-Null
+          Copy-Item $executable (Join-Path $staging "Studio Duo.exe")
+          Copy-Item "README.md", "LICENSE" $staging
+          Compress-Archive -Path $staging -DestinationPath $output -Force
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-release
+          path: Studio-Duo-${{ needs.validate.outputs.version }}-Windows-x64.zip
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish GitHub Release
+    needs: [validate, macos, windows]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create checksums
+        working-directory: dist
+        run: sha256sum Studio-Duo-* > SHA256SUMS.txt
+
+      - name: Publish release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --clobber
+          else
+            gh release create "$TAG" dist/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --verify-tag \
+              --generate-notes \
+              --title "Studio Duo $VERSION"
+          fi
