@@ -173,6 +173,8 @@ target_sources(
         src/render/RenderEngine.h
         src/ui/MainComponent.cpp
         src/ui/MainComponent.h
+        src/ui/MainWindowSizing.cpp
+        src/ui/MainWindowSizing.h
         src/ui/AutomationPanel.cpp
         src/ui/AutomationPanel.h
         src/ui/MixerPanel.cpp
@@ -352,8 +354,11 @@ if(STUDIO_DUO_BUILD_TESTS)
             tests/RenderEngineTests.cpp
             tests/PluginCompatibilityTests.cpp
             tests/ProjectMigrationTests.cpp
+            tests/WindowSizingTests.cpp
             src/ui/RoutingUiModel.cpp
             src/ui/RoutingUiModel.h
+            src/ui/MainWindowSizing.cpp
+            src/ui/MainWindowSizing.h
             src/audio/StudioAudioDeviceManager.cpp
             src/audio/StudioAudioDeviceManager.h
             src/audio/StudioAudioEngine.cpp

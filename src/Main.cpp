@@ -1,4 +1,5 @@
 #include "ui/MainComponent.h"
+#include "ui/MainWindowSizing.h"
 #include "plugin_host/PluginBridgeClient.h"
 #include "plugin_host/PluginBridgeWorker.h"
 #include "plugin_host/PluginScanWorker.h"
@@ -338,8 +339,42 @@ private:
             setUsingNativeTitleBar(true);
             setContentOwned(new MainComponent(), true);
             setResizable(true, false);
-            setResizeLimits(1120, 720, 3840, 2160);
-            centreWithSize(1480, 900);
+
+            juce::BorderSize<int> nativeFrame;
+            if (auto* peer = getPeer())
+            {
+                if (const auto frame = peer->getFrameSizeIfPresent())
+                    nativeFrame = *frame;
+            }
+
+            if (const auto* display = juce::Desktop::getInstance()
+                                          .getDisplays()
+                                          .getPrimaryDisplay())
+            {
+                const auto initialBounds =
+                    calculateInitialMainWindowBounds(
+                        display->userBounds.toNearestInt(),
+                        nativeFrame);
+                if (!initialBounds.isEmpty())
+                {
+                    setResizeLimits(
+                        juce::jmin(1120, initialBounds.getWidth()),
+                        juce::jmin(720, initialBounds.getHeight()),
+                        3840,
+                        2160);
+                    setBoundsConstrained(initialBounds);
+                }
+                else
+                {
+                    setResizeLimits(960, 600, 3840, 2160);
+                    setSize(1120, 720);
+                }
+            }
+            else
+            {
+                setResizeLimits(960, 600, 3840, 2160);
+                setSize(1120, 720);
+            }
             setVisible(true);
         }
 
