@@ -158,6 +158,8 @@ target_sources(
     StudioDuo
     PRIVATE
         src/Main.cpp
+        src/audio/StudioAudioDeviceManager.cpp
+        src/audio/StudioAudioDeviceManager.h
         src/audio/StudioAudioEngine.cpp
         src/audio/StudioAudioEngine.h
         src/audio/RecordingWaveform.h
@@ -219,6 +221,10 @@ target_compile_definitions(
         JUCE_MODAL_LOOPS_PERMITTED=1
         STUDIO_DUO_VERSION="${PROJECT_VERSION}"
 )
+
+if(WIN32)
+    target_compile_definitions(StudioDuo PRIVATE JUCE_ASIO=1)
+endif()
 
 if(APPLE)
     target_compile_definitions(StudioDuo PRIVATE JUCE_PLUGINHOST_AU=1)
@@ -348,6 +354,8 @@ if(STUDIO_DUO_BUILD_TESTS)
             tests/ProjectMigrationTests.cpp
             src/ui/RoutingUiModel.cpp
             src/ui/RoutingUiModel.h
+            src/audio/StudioAudioDeviceManager.cpp
+            src/audio/StudioAudioDeviceManager.h
             src/audio/StudioAudioEngine.cpp
             src/audio/StudioAudioEngine.h
             src/plugin_host/PluginBridgeClient.cpp
@@ -395,6 +403,9 @@ if(STUDIO_DUO_BUILD_TESTS)
             STUDIO_DUO_TESTING=1
             STUDIO_DUO_VERSION="${PROJECT_VERSION}"
     )
+    if(WIN32)
+        target_compile_definitions(StudioDuoTests PRIVATE JUCE_ASIO=1)
+    endif()
     if(APPLE)
         target_compile_definitions(
             StudioDuoTests

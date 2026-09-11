@@ -1,6 +1,7 @@
 #include "TestHarness.h"
 #include "TestSuites.h"
 
+#include "audio/StudioAudioDeviceManager.h"
 #include "devices/DeviceRegistry.h"
 #include "audio/StudioAudioEngine.h"
 #include "model/ProjectModel.h"
@@ -35,6 +36,30 @@ juce::AudioBuffer<float> constantBuffer(float value, int samples = 256)
 
 void deviceTests()
 {
+    expect(studio::preferredAsioDeviceName({}).isEmpty(),
+           "An empty ASIO driver list has no preferred device.");
+
+    const juce::StringArray asioDrivers {
+        "ASIO4ALL v2",
+        "Generic Low Latency ASIO Driver",
+        "Focusrite USB ASIO"
+    };
+    expect(studio::preferredAsioDeviceName(asioDrivers)
+               == "Focusrite USB ASIO",
+           "A native ASIO driver is preferred over compatibility wrappers.");
+
+    const juce::StringArray wrapperOnly { "ASIO4ALL v2" };
+    expect(studio::preferredAsioDeviceName(wrapperOnly) == "ASIO4ALL v2",
+           "A compatibility wrapper remains usable when it is the only ASIO driver.");
+
+    const juce::StringArray nativeDrivers {
+        "RME Fireface USB",
+        "Focusrite USB ASIO"
+    };
+    expect(studio::preferredAsioDeviceName(nativeDrivers)
+               == "RME Fireface USB",
+           "The first native ASIO driver remains the default.");
+
     const auto descriptors = studio::DeviceRegistry::descriptors();
     expect(descriptors.size() == 10,
            "The bundled registry contains all ten Phase 3 utility devices.");

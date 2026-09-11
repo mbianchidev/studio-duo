@@ -7,6 +7,7 @@
 #include "PluginParameterPanel.h"
 #include "RoutingPanel.h"
 #include "TimelineComponent.h"
+#include "audio/StudioAudioDeviceManager.h"
 #include "audio/StudioAudioEngine.h"
 #include "model/ProjectCommands.h"
 #include "plugin_host/PluginBrowserComponent.h"
@@ -192,7 +193,7 @@ private:
 
     StudioTheme theme;
     std::unique_ptr<juce::Drawable> brandLogo;
-    juce::AudioDeviceManager deviceManager;
+    StudioAudioDeviceManager deviceManager;
     StudioAudioEngine audioEngine;
     Project project { Project::createDefault() };
     CommandStack commandStack;

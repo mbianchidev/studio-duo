@@ -68,5 +68,6 @@ include a universal macOS DMG, a Windows x64 ZIP, and SHA-256 checksums.
 
 Studio Duo is licensed under the
 [GNU Affero General Public License v3.0 only](LICENSE). JUCE 9 uses its AGPLv3
-option; Signalsmith Stretch 1.1.0, CLAP 1.2.10, and clap-helpers are MIT
-licensed. ARA SDK 2.3.0 is Apache-2.0 licensed.
+option. On Windows, Studio Duo uses JUCE's dual-licensed Steinberg ASIO SDK
+headers under their GPLv3 option. Signalsmith Stretch 1.1.0, CLAP 1.2.10, and
+clap-helpers are MIT licensed. ARA SDK 2.3.0 is Apache-2.0 licensed.

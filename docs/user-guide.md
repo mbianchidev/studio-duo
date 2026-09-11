@@ -67,7 +67,9 @@ trackpad scrolling and pinch gestures zoom the same view.
 
 Studio Duo enables the first recording input shortly after its window appears.
 On macOS, the system may request microphone access at that point. Use **I/O**
-to enable more inputs or change the active device.
+to enable more inputs or change the active device. On Windows, Studio Duo
+automatically prefers a native ASIO driver over generic compatibility wrappers
+and falls back to WASAPI when ASIO is unavailable or cannot start.
 
 Monitoring is off by default to avoid accidental feedback. Stereo capture uses
 the selected hardware input and the adjacent channel.
