@@ -528,6 +528,8 @@ Completed in the working application:
 ### Phase 6: version 1.0 hardening
 
 - Large-session performance work
+- Coordinated startup progress, safe-start recovery, and redacted diagnostics
+  ([tracking issue](https://github.com/mbianchidev/studio-duo/issues/14))
 - Accessibility and complete keyboard operation
 - Cross-platform project exchange
 - Plugin and hardware compatibility passes
