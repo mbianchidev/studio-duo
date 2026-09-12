@@ -82,7 +82,7 @@ try {
         '/SUPPRESSMSGBOXES',
         '/NORESTART',
         '/SP-',
-        "/DIR=`"$innoDirectory`""
+        "/DIR=$innoDirectory"
     )
     Invoke-StudioDuoProcess `
         -FilePath $innoInstaller `
