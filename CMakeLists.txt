@@ -27,7 +27,7 @@ if(NOT TARGET juce::juce_gui_extra)
     FetchContent_Declare(
         JUCE
         GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
-        GIT_TAG 9.0.1
+        GIT_TAG 9.0.2
         GIT_SHALLOW TRUE
     )
     FetchContent_MakeAvailable(JUCE)
@@ -165,6 +165,8 @@ target_sources(
         src/audio/StudioAudioEngine.cpp
         src/audio/StudioAudioEngine.h
         src/audio/RecordingWaveform.h
+        src/logging/StudioLogger.cpp
+        src/logging/StudioLogger.h
         src/plugin_host/PluginBrowserComponent.cpp
         src/plugin_host/PluginBrowserComponent.h
         src/plugin_host/PluginBridgeWorker.cpp
@@ -353,6 +355,7 @@ if(STUDIO_DUO_BUILD_TESTS)
             tests/PluginRecoveryTests.cpp
             tests/AutomationTests.cpp
             tests/DeviceTests.cpp
+            tests/LoggingTests.cpp
             tests/ReampSnapshotTests.cpp
             tests/RenderEngineTests.cpp
             tests/PluginCompatibilityTests.cpp
@@ -366,6 +369,8 @@ if(STUDIO_DUO_BUILD_TESTS)
             src/audio/StudioAudioDeviceManager.h
             src/audio/StudioAudioEngine.cpp
             src/audio/StudioAudioEngine.h
+            src/logging/StudioLogger.cpp
+            src/logging/StudioLogger.h
             src/plugin_host/PluginBridgeClient.cpp
             src/plugin_host/PluginBridgeClient.h
             src/plugin_host/PluginBridgeProtocol.h

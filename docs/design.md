@@ -453,6 +453,9 @@ decisions. Destructive file processing always creates a new source file.
 - Logs have stable categories and include project-safe object IDs.
 - Logs do not include audio, plugin state, personal metadata, or full project
   paths unless the user chooses a diagnostic export.
+- File logging is asynchronous. Daily process-specific logs remain plain text
+  for 24 hours, are then gzip-compressed, and expire after the configured
+  retention period.
 
 ## Delivery plan
 

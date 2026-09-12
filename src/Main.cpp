@@ -6,6 +6,7 @@
 #include "plugin_host/PluginCompatibilityValidator.h"
 #include "plugin_host/ScreamForgeValidation.h"
 #include "platform/ApplicationIcon.h"
+#include "logging/StudioLogger.h"
 
 #include <juce_gui_extra/juce_gui_extra.h>
 
@@ -35,9 +36,15 @@ public:
 
     void initialise(const juce::String& commandLine) override
     {
+        fileLogger = StudioLogger::createDefault();
+        juce::Logger::setCurrentLogger(fileLogger.get());
+
         auto bridgeWorker = std::make_unique<PluginBridgeWorker>();
         if (bridgeWorker->initialise(commandLine))
         {
+            logDebug(
+                "app.lifecycle",
+                "Plugin bridge worker started.");
             pluginBridgeWorker = std::move(bridgeWorker);
             return;
         }
@@ -45,6 +52,9 @@ public:
         auto worker = std::make_unique<PluginScanWorker>();
         if (worker->initialise(commandLine))
         {
+            logDebug(
+                "app.lifecycle",
+                "Plugin scan worker started.");
             pluginScanWorker = std::move(worker);
             return;
         }
@@ -92,16 +102,29 @@ public:
 #if JUCE_MAC
         applyPlatformApplicationIcon();
 #endif
+        logInfo(
+            "app.lifecycle",
+            "Studio Duo "
+                + getApplicationVersion()
+                + " started on "
+                + juce::SystemStats::getOperatingSystemName());
         mainWindow = std::make_unique<MainWindow>(getApplicationName());
     }
 
     void shutdown() override
     {
+        const auto mainApplication = mainWindow != nullptr;
         mainWindow.reset();
         pluginScanWorker.reset();
         pluginBridgeWorker.reset();
         bridgeSelfTest.reset();
         pluginActivationCatalog.reset();
+        if (mainApplication)
+            logInfo(
+                "app.lifecycle",
+                "Studio Duo shutdown completed.");
+        juce::Logger::setCurrentLogger(nullptr);
+        fileLogger.reset();
     }
 
     void systemRequestedQuit() override
@@ -114,6 +137,29 @@ public:
 
     void anotherInstanceStarted(const juce::String&) override
     {
+    }
+
+    void unhandledException(
+        const std::exception* exception,
+        const juce::String& sourceFile,
+        int lineNumber) override
+    {
+        logError(
+            "app.exception",
+            juce::String(
+                exception != nullptr
+                    ? exception->what()
+                    : "Unknown exception")
+                + " at "
+                + juce::File(sourceFile).getFileName()
+                + ":"
+                + juce::String(lineNumber));
+        if (fileLogger != nullptr)
+            fileLogger->flush();
+        juce::JUCEApplication::unhandledException(
+            exception,
+            sourceFile,
+            lineNumber);
     }
 
 private:
@@ -129,7 +175,9 @@ private:
         const auto result = bridgeSelfTest->start();
         if (result.failed())
         {
-            juce::Logger::writeToLog("plugin.bridge.self-test: " + result.getErrorMessage());
+            logError(
+                "plugin.bridge.self-test",
+                result.getErrorMessage());
             setApplicationReturnValue(1);
             quit();
             return;
@@ -151,7 +199,9 @@ private:
         bridgeSelfTest->stop();
         setApplicationReturnValue(passed ? 0 : 1);
         if (!passed)
-            juce::Logger::writeToLog("plugin.bridge.self-test: " + diagnostics);
+            logError(
+                "plugin.bridge.self-test",
+                diagnostics);
         quit();
     }
 
@@ -178,7 +228,9 @@ private:
         });
         if (candidate == entries.cend())
         {
-            juce::Logger::writeToLog("plugin.bridge.activation-test: no compatible catalog plugin");
+            logError(
+                "plugin.bridge.activation-test",
+                "No compatible catalog plugin.");
             setApplicationReturnValue(2);
             quit();
             return;
@@ -195,7 +247,9 @@ private:
         const auto result = bridgeSelfTest->startPlugin(*description, 48000.0, 512);
         if (result.failed())
         {
-            juce::Logger::writeToLog("plugin.bridge.activation-test: " + result.getErrorMessage());
+            logError(
+                "plugin.bridge.activation-test",
+                result.getErrorMessage());
             setApplicationReturnValue(1);
             quit();
             return;
@@ -241,14 +295,14 @@ private:
             && hideResult.wasOk();
         if (!passed)
         {
-            juce::Logger::writeToLog(
-                "plugin.bridge.activation-test: "
-                + (editorResult.failed()
-                       ? editorResult.getErrorMessage()
-                       : hideResult.failed()
-                           ? hideResult.getErrorMessage()
-                           : juce::String(
-                               "Sandbox produced no audio.")));
+            logError(
+                "plugin.bridge.activation-test",
+                editorResult.failed()
+                    ? editorResult.getErrorMessage()
+                    : hideResult.failed()
+                        ? hideResult.getErrorMessage()
+                        : juce::String(
+                            "Sandbox produced no audio."));
         }
         bridgeSelfTest->stop();
         setApplicationReturnValue(passed ? 0 : 1);
@@ -399,6 +453,7 @@ private:
     std::unique_ptr<PluginBridgeWorker> pluginBridgeWorker;
     std::unique_ptr<PluginBridgeClient> bridgeSelfTest;
     std::unique_ptr<PluginCatalog> pluginActivationCatalog;
+    std::unique_ptr<StudioLogger> fileLogger;
     juce::String validationIdentifier;
 };
 }

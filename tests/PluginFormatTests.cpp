@@ -743,6 +743,12 @@ void pluginFormatTests()
               && timingRefreshedStatuses.front().latencySamples
                      == 64,
            "Live latency changes publish refreshed PDC timing without stopping audio.");
+    for (int block = 0; block < 16; ++block)
+    {
+        monoEngine.seekSeconds(0.0);
+        monoEngine.play();
+        monoEngine.processActiveBlockForTesting(64);
+    }
     monoEngine.seekSeconds(0.0);
     monoEngine.play();
     const auto alignedBeforeMetadataRescan =
@@ -796,7 +802,35 @@ void pluginFormatTests()
                      == 64
               && !monoEngine.pluginRuntimeTransitionPending()
               && metadataRescanDifference < 0.0001f,
-           "Metadata-only CLAP rescans preserve live PDC history and alignment.");
+           (           "Metadata-only CLAP rescans preserve live PDC history and alignment"
+            " (statuses "
+            + juce::String(
+                static_cast<int>(
+                    metadataOnlyStatuses.size()))
+            + ", parameters "
+            + juce::String(
+                metadataOnlyStatuses.empty()
+                    ? 0
+                    : static_cast<int>(
+                          metadataOnlyStatuses.front()
+                              .parameters.size()))
+            + ", latency "
+            + juce::String(
+                metadataOnlyStatuses.empty()
+                    ? -1
+                    : metadataOnlyStatuses.front()
+                          .latencySamples)
+            + ", transition "
+            + juce::String(
+                monoEngine.pluginRuntimeTransitionPending()
+                    ? "pending"
+                    : "complete")
+            + ", difference "
+            + juce::String(
+                metadataRescanDifference,
+                8)
+            + ").")
+               .toRawUTF8());
     monoSource.deleteFile();
 
     auto project = studio::Project::createDefault();
