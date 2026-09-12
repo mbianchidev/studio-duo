@@ -1,5 +1,6 @@
 #include "StudioAudioEngine.h"
 
+#include "logging/StudioLogger.h"
 #include "mix/RoutingGraphCompiler.h"
 #include "plugin_host/PluginFormats.h"
 #include "plugin_host/ClapPluginInstance.h"
@@ -56,8 +57,9 @@ std::shared_ptr<juce::AudioProcessor> messageThreadOwnedProcessor(
             if (!juce::MessageManager::callAsync(
                     [value] { delete value; }))
             {
-                juce::Logger::writeToLog(
-                    "plugin.runtime: message thread unavailable during processor teardown");
+                logError(
+                    "plugin.runtime",
+                    "Message thread unavailable during processor teardown.");
             }
         }
     };
@@ -4996,8 +4998,9 @@ void StudioAudioEngine::closeInProcessEditors()
     if (messageLock.lockWasGained())
         clear();
     else
-        juce::Logger::writeToLog(
-            "plugin.editor: could not acquire the message thread for cleanup");
+        logError(
+            "plugin.editor",
+            "Could not acquire the message thread for cleanup.");
 }
 
 bool StudioAudioEngine::closeInProcessEditorsBeforeRuntimeChange()
@@ -5213,9 +5216,9 @@ void StudioAudioEngine::runPluginRuntimeBuilder()
         if (preserved.status
             != AraPreservationResult::Status::success)
         {
-            juce::Logger::writeToLog(
-                "plugin.ara.preserve: "
-                + preserved.error);
+            logError(
+                "plugin.ara.preserve",
+                preserved.error);
             const juce::ScopedLock lock(pluginRequestLock);
             if (generation == desiredPluginGeneration)
             {
@@ -6807,6 +6810,6 @@ void StudioAudioEngine::audioDeviceStopped()
 
 void StudioAudioEngine::audioDeviceError(const juce::String& errorMessage)
 {
-    juce::Logger::writeToLog("audio.device: " + errorMessage);
+    logError("audio.device", errorMessage);
 }
 }

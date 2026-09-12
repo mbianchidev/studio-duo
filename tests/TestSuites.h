@@ -8,6 +8,7 @@ void pluginSearchPathTests();
 void pluginRecoveryTests();
 void automationTests();
 void deviceTests();
+void loggingTests();
 void reampSnapshotTests();
 void renderEngineTests();
 void pluginCompatibilityTests();

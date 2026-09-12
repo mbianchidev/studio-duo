@@ -1,5 +1,7 @@
 #include "ClapPluginInstance.h"
 
+#include "logging/StudioLogger.h"
+
 #include <clap/clap.h>
 
 #include <array>
@@ -1368,8 +1370,9 @@ ClapPluginInstance::~ClapPluginInstance()
                 delete implementation;
             }))
     {
-        juce::Logger::writeToLog(
-            "clap.lifecycle: destruction main thread unavailable");
+        logError(
+            "clap.lifecycle",
+            "Destruction main thread unavailable.");
     }
 }
 
@@ -1423,8 +1426,9 @@ void ClapPluginInstance::prepareToPlay(double sampleRate, int maximumBlockSize)
                   {
                       activate();
                   }))
-        juce::Logger::writeToLog(
-            "clap.lifecycle: activation main thread unavailable");
+        logError(
+            "clap.lifecycle",
+            "Activation main thread unavailable.");
 }
 
 void ClapPluginInstance::releaseResources()
@@ -1449,8 +1453,9 @@ void ClapPluginInstance::releaseResources()
                   {
                       deactivate();
                   }))
-        juce::Logger::writeToLog(
-            "clap.lifecycle: deactivation main thread unavailable");
+        logError(
+            "clap.lifecycle",
+            "Deactivation main thread unavailable.");
 }
 
 void ClapPluginInstance::processBlock(juce::AudioBuffer<float>& audio,
@@ -1693,8 +1698,9 @@ void ClapPluginInstance::getStateInformation(
     if (const auto result = saveValidatedState(destination);
         result.failed())
     {
-        juce::Logger::writeToLog(
-            "clap.state: " + result.getErrorMessage());
+        logError(
+            "clap.state",
+            result.getErrorMessage());
     }
 }
 
@@ -1703,8 +1709,9 @@ void ClapPluginInstance::setStateInformation(const void* data, int size)
     if (const auto result = restoreValidatedState(data, size);
         result.failed())
     {
-        juce::Logger::writeToLog(
-            "clap.state: " + result.getErrorMessage());
+        logError(
+            "clap.state",
+            result.getErrorMessage());
     }
 }
 

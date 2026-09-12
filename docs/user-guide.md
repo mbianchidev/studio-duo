@@ -332,6 +332,30 @@ fast deterministic graph. Bundled and trusted processors render offline;
 sandboxed third-party processors use the same one-block pipeline in a real-time
 fallback so processing is never silently omitted.
 
+## Logs and diagnostics
+
+Studio Duo writes asynchronous, process-specific daily logs below
+`~/Library/Application Support/Studio Duo/Logs` on macOS and
+`%APPDATA%\Studio Duo\Logs` on Windows. Logs from the last 24 hours remain
+plain text, older logs are gzip-compressed, and files older than seven days are
+deleted.
+
+Create `logging.json` beside the `Logs` directory to change retention or enable
+verbose debug logging, then restart Studio Duo:
+
+```json
+{
+  "schemaVersion": 1,
+  "retentionDays": 7,
+  "debugLogging": false
+}
+```
+
+`retentionDays` accepts 1 through 365. Debug logging is disabled by default.
+Logs redact the user-home and current workspace paths and never include audio
+content or plugin state. User-visible failures and caught application errors
+are written at `ERROR`; routine lifecycle information is intentionally small.
+
 ## Brand assets
 
 Editable logo, icon, PNG, ICNS, and ICO sources are stored in

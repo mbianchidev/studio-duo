@@ -1,6 +1,7 @@
 #include "MainComponent.h"
 
 #include "automation/AutomationRecorder.h"
+#include "logging/StudioLogger.h"
 #include "plugin_host/PluginStateStore.h"
 #include "reamp/ReampSnapshotService.h"
 #include "render/RenderEngine.h"
@@ -1227,9 +1228,9 @@ bool MainComponent::connectAudioEngine()
 
     const auto saveResult = deviceManager.saveCurrentSetup();
     if (saveResult.failed())
-        juce::Logger::writeToLog(
-            "audio.settings: "
-            + saveResult.getErrorMessage());
+        logError(
+            "audio.settings",
+            saveResult.getErrorMessage());
 
     refreshInputControls();
     if (const auto* device = deviceManager.getCurrentAudioDevice())
@@ -6312,6 +6313,12 @@ Track* MainComponent::recordingTrack()
 
 void MainComponent::setStatus(const juce::String& message, bool error)
 {
+    if (error
+        && (!statusIsError
+            || statusLabel.getText() != message))
+    {
+        logError("ui.status", message);
+    }
     statusIsError = error;
     statusLabel.setColour(juce::Label::textColourId,
                           juce::Colour(error ? StudioColours::orange : StudioColours::secondaryText));

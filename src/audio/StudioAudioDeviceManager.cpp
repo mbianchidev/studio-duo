@@ -1,5 +1,7 @@
 #include "StudioAudioDeviceManager.h"
 
+#include "logging/StudioLogger.h"
+
 namespace studio
 {
 namespace
@@ -146,16 +148,22 @@ StudioAudioDeviceManager::StudioAudioDeviceManager()
 juce::Result StudioAudioDeviceManager::initialiseStudioAudio()
 {
     const auto started = juce::Time::getMillisecondCounterHiRes();
-    const auto logResult = [started](const juce::String& message)
+    const auto logResult = [started](
+                               StudioLogLevel level,
+                               const juce::String& message)
     {
-        juce::Logger::writeToLog(
-            "audio.startup: "
-            + message
+        const auto timedMessage =
+            message
             + " ("
             + juce::String(
-                juce::Time::getMillisecondCounterHiRes() - started,
-                1)
-            + " ms)");
+                  juce::Time::getMillisecondCounterHiRes()
+                      - started,
+                  1)
+            + " ms)";
+        if (level == StudioLogLevel::error)
+            logError("audio.startup", timedMessage);
+        else
+            logInfo("audio.startup", timedMessage);
     };
 
     if (settingsFile.existsAsFile())
@@ -163,8 +171,9 @@ juce::Result StudioAudioDeviceManager::initialiseStudioAudio()
         auto saved = juce::parseXML(settingsFile);
         if (saved == nullptr || !saved->hasTagName("DEVICESETUP"))
         {
-            juce::Logger::writeToLog(
-                "audio.settings: ignored corrupt audio-device.xml");
+            logError(
+                "audio.settings",
+                "Ignored corrupt audio-device.xml.");
         }
         else
         {
@@ -185,6 +194,7 @@ juce::Result StudioAudioDeviceManager::initialiseStudioAudio()
             if (error.isEmpty() && getCurrentAudioDevice() != nullptr)
             {
                 logResult(
+                    StudioLogLevel::info,
                     "restored "
                     + getCurrentAudioDeviceType()
                     + " device "
@@ -195,7 +205,9 @@ juce::Result StudioAudioDeviceManager::initialiseStudioAudio()
             const auto detail = error.isNotEmpty()
                 ? error
                 : juce::String("the saved device did not open");
-            logResult("saved device failed: " + detail);
+            logResult(
+                StudioLogLevel::error,
+                "Saved device failed: " + detail);
             return juce::Result::fail(
                 "Saved audio device setup failed: "
                 + detail
@@ -214,9 +226,17 @@ juce::Result StudioAudioDeviceManager::initialiseStudioAudio()
         return nullptr;
     }();
 
-    const auto asioDeviceName = asioType != nullptr
-        ? preferredAsioDeviceName(asioType->getDeviceNames(false))
-        : juce::String();
+    const auto asioDevices = asioType != nullptr
+        ? asioType->getDeviceNames(false)
+        : juce::StringArray();
+    logDebug(
+        "audio.discovery",
+        asioDevices.isEmpty()
+            ? "No ASIO drivers found."
+            : "ASIO drivers: "
+                + asioDevices.joinIntoString(", "));
+    const auto asioDeviceName =
+        preferredAsioDeviceName(asioDevices);
     if (asioDeviceName.isNotEmpty())
     {
         const auto setup = preferredAsioDeviceSetup(asioDeviceName);
@@ -230,6 +250,7 @@ juce::Result StudioAudioDeviceManager::initialiseStudioAudio()
         if (error.isNotEmpty())
         {
             logResult(
+                StudioLogLevel::error,
                 "ASIO device "
                 + asioDeviceName
                 + " failed: "
@@ -242,7 +263,9 @@ juce::Result StudioAudioDeviceManager::initialiseStudioAudio()
                 + ". Open I/O to select another driver or reset the device.");
         }
 
-        logResult("opened ASIO device " + asioDeviceName);
+        logResult(
+            StudioLogLevel::info,
+            "Opened ASIO device " + asioDeviceName);
         return juce::Result::ok();
     }
 
@@ -253,7 +276,9 @@ juce::Result StudioAudioDeviceManager::initialiseStudioAudio()
 #endif
     if (error.isNotEmpty())
     {
-        logResult("default device failed: " + error);
+        logResult(
+            StudioLogLevel::error,
+            "Default device failed: " + error);
         return juce::Result::fail(
             "Audio device setup failed: "
             + error
@@ -262,12 +287,15 @@ juce::Result StudioAudioDeviceManager::initialiseStudioAudio()
 
     if (getCurrentAudioDevice() == nullptr)
     {
-        logResult("no default device opened");
+        logResult(
+            StudioLogLevel::error,
+            "No default device opened.");
         return juce::Result::fail(
             "No audio device could be opened. Open I/O to select a device.");
     }
 
     logResult(
+        StudioLogLevel::info,
         "opened "
         + getCurrentAudioDeviceType()
         + " device "
@@ -281,9 +309,20 @@ juce::Result StudioAudioDeviceManager::saveCurrentSetup() const
         return juce::Result::fail(
             "No open audio device is available to save.");
 
-    return writeTextAtomically(
+    const auto result = writeTextAtomically(
         settingsFile,
         currentSetupXml(*this)->toString());
+    if (result.wasOk())
+    {
+        logDebug(
+            "audio.settings",
+            "Saved "
+                + getCurrentAudioDeviceType()
+                + " setup for "
+                + getCurrentAudioDevice()->getName()
+                + ".");
+    }
+    return result;
 }
 
 void StudioAudioDeviceManager::prepareDeviceTypesForSettings()
@@ -299,6 +338,9 @@ void StudioAudioDeviceManager::addWindowsFallbackDeviceTypes()
     if (windowsFallbackDeviceTypesAdded)
         return;
 
+    logDebug(
+        "audio.discovery",
+        "Preparing WASAPI and DirectSound device types.");
     const auto addType = [this](juce::AudioIODeviceType* rawType)
     {
         auto type = std::unique_ptr<juce::AudioIODeviceType>(rawType);

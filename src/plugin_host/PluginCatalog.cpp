@@ -1,5 +1,6 @@
 #include "PluginCatalog.h"
 
+#include "logging/StudioLogger.h"
 #include "PluginFormats.h"
 #include "PluginScanWorker.h"
 #include "devices/DeviceRegistry.h"
@@ -260,9 +261,19 @@ PluginCatalog::PluginCatalog()
     statusMessage = count == 0 ? "No plugins scanned yet."
                                : juce::String(count) + " plugins loaded from catalog.";
     if (searchPathError.isNotEmpty())
+    {
         statusMessage << " " << searchPathError;
+        logError(
+            "plugin.catalog",
+            searchPathError);
+    }
     if (compatibilityError.isNotEmpty())
+    {
         statusMessage << " " << compatibilityError;
+        logError(
+            "plugin.catalog",
+            compatibilityError);
+    }
 }
 
 PluginCatalog::~PluginCatalog()
@@ -280,7 +291,19 @@ void PluginCatalog::startScan(bool forceRescan)
     forceNextScan.store(forceRescan, std::memory_order_release);
     scanning.store(true, std::memory_order_release);
     updateState("Preparing sandboxed plugin scan...", 0.0f);
-    startThread();
+    logInfo(
+        "plugin.scan",
+        forceRescan
+            ? "Started a forced plugin rescan."
+            : "Started a plugin scan.");
+    if (!startThread())
+    {
+        const auto message =
+            juce::String("Could not start the plugin scanner thread.");
+        scanning.store(false, std::memory_order_release);
+        updateState(message, 0.0f);
+        logError("plugin.scan", message);
+    }
 }
 
 void PluginCatalog::cancelScan()
@@ -635,6 +658,9 @@ void PluginCatalog::run()
     if (threadShouldExit() || cancelRequested->load(std::memory_order_acquire))
     {
         updateState("Plugin scan cancelled.", scanProgress.load(std::memory_order_relaxed));
+        logInfo(
+            "plugin.scan",
+            "Plugin scan cancelled.");
         scanning.store(false, std::memory_order_release);
         catalogRevision.fetch_add(1, std::memory_order_acq_rel);
         return;
@@ -671,6 +697,30 @@ void PluginCatalog::run()
                           << ".";
     }
     updateState(completionMessage, 1.0f);
+    if (saveResult.failed())
+    {
+        logError(
+            "plugin.scan",
+            saveResult.getErrorMessage());
+    }
+    else if (!failedFiles.isEmpty())
+    {
+        logError(
+            "plugin.scan",
+            juce::String(failedFiles.size())
+                + " plugin file(s) failed or timed out; "
+                + juce::String(pluginCount)
+                + " plugins are ready.");
+    }
+    else
+    {
+        logInfo(
+            "plugin.scan",
+            juce::String(pluginCount)
+                + " plugins ready; "
+                + juce::String(blockedCount)
+                + " blocked.");
+    }
     {
         const juce::ScopedLock compatibilityGuard(compatibilityLock);
         for (const auto& failedFile : failedFiles)
@@ -688,7 +738,12 @@ void PluginCatalog::run()
         {
             juce::String compatibilityError;
             if (!compatibilityDatabase.save(compatibilityError))
+            {
                 updateState(compatibilityError, 1.0f);
+                logError(
+                    "plugin.catalog",
+                    compatibilityError);
+            }
         }
     }
 
@@ -705,6 +760,9 @@ void PluginCatalog::load()
     if (xml == nullptr)
     {
         updateState("Plugin catalog is corrupt; a new scan will rebuild it.", 0.0f);
+        logError(
+            "plugin.catalog",
+            "Plugin catalog is corrupt; a new scan will rebuild it.");
         return;
     }
 

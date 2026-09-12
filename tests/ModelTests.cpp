@@ -1408,6 +1408,7 @@ int main()
     pluginRecoveryTests();
     automationTests();
     deviceTests();
+    loggingTests();
     reampSnapshotTests();
     renderEngineTests();
     pluginCompatibilityTests();
