@@ -20,7 +20,7 @@ jobs:
       version: ${{ steps.version.outputs.version }}
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -43,10 +43,10 @@ jobs:
     timeout-minutes: 120
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Cache dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: build/_deps
           key: release-macos-${{ hashFiles('CMakeLists.txt') }}
@@ -87,7 +87,7 @@ jobs:
             "$output"
 
       - name: Upload macOS artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: macos-release
           path: Studio-Duo-${{ needs.validate.outputs.version }}-macOS-universal.dmg
@@ -95,16 +95,16 @@ jobs:
           retention-days: 7
 
   windows:
-    name: Build Windows ZIP
+    name: Build signed Windows packages
     needs: validate
     runs-on: windows-latest
     timeout-minutes: 120
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Cache dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: build/_deps
           key: release-windows-${{ hashFiles('CMakeLists.txt') }}
@@ -118,30 +118,33 @@ jobs:
       - name: Test
         run: ctest --test-dir build --build-config Release --output-on-failure
 
-      - name: Package ZIP
+      - name: Build signed Windows packages
         shell: pwsh
         env:
           VERSION: ${{ needs.validate.outputs.version }}
+          CERTIFICATE_BASE64: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
         run: |
-          $ErrorActionPreference = "Stop"
-          $executable = "build/StudioDuo_artefacts/Release/Studio Duo.exe"
-          $staging = Join-Path $env:RUNNER_TEMP "Studio-Duo-$env:VERSION-Windows-x64"
-          $output = "Studio-Duo-$env:VERSION-Windows-x64.zip"
-
-          if (-not (Test-Path $executable -PathType Leaf)) {
-            throw "Studio Duo executable was not produced at $executable"
+          if ([string]::IsNullOrWhiteSpace($env:CERTIFICATE_BASE64)) {
+            throw "WINDOWS_SIGNING_CERTIFICATE_BASE64 is not configured"
           }
-
-          New-Item -ItemType Directory -Path $staging -Force | Out-Null
-          Copy-Item $executable (Join-Path $staging "Studio Duo.exe")
-          Copy-Item "README.md", "LICENSE" $staging
-          Compress-Archive -Path $staging -DestinationPath $output -Force
+          if ([string]::IsNullOrWhiteSpace($env:CERTIFICATE_PASSWORD)) {
+            throw "WINDOWS_SIGNING_CERTIFICATE_PASSWORD is not configured"
+          }
+          & ./packaging/windows/build-release-packages.ps1 `
+            -Version $env:VERSION `
+            -Executable "build/StudioDuo_artefacts/Release/Studio Duo.exe" `
+            -OutputDirectory (Get-Location).Path `
+            -CertificateBase64 $env:CERTIFICATE_BASE64 `
+            -CertificatePassword $env:CERTIFICATE_PASSWORD
 
       - name: Upload Windows artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: windows-release
-          path: Studio-Duo-${{ needs.validate.outputs.version }}-Windows-x64.zip
+          path: |
+            Studio-Duo-${{ needs.validate.outputs.version }}-Windows-x64.zip
+            Studio-Duo-${{ needs.validate.outputs.version }}-Windows-x64-Setup.exe
           if-no-files-found: error
           retention-days: 7
 
@@ -154,7 +157,7 @@ jobs:
       contents: write
     steps:
       - name: Download release artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true

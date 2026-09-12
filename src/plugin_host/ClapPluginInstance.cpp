@@ -436,7 +436,8 @@ public:
                                          info.id,
                                          plain,
                                          text.data(),
-                                         text.size()))
+                                         static_cast<std::uint32_t>(
+                                             text.size())))
                 return juce::String::fromUTF8(text.data())
                     .substring(0, maximumLength);
             return juce::String(plain, 3).substring(0, maximumLength);

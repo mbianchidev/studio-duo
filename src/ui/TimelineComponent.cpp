@@ -1955,25 +1955,25 @@ void TimelineComponent::updateHoverState(juce::Point<float> position)
         }
     }
 
-    auto cursor = juce::MouseCursor::NormalCursor;
+    auto mouseCursor = juce::MouseCursor::NormalCursor;
     if (nextMode == DragMode::gain
         || nextMode == DragMode::fadeInCurve
         || nextMode == DragMode::fadeOutCurve)
     {
-        cursor = juce::MouseCursor::UpDownResizeCursor;
+        mouseCursor = juce::MouseCursor::UpDownResizeCursor;
     }
     else if (nextMode == DragMode::fadeIn
              || nextMode == DragMode::fadeOut
              || nextMode == DragMode::trimStart
              || nextMode == DragMode::trimEnd)
     {
-        cursor = juce::MouseCursor::LeftRightResizeCursor;
+        mouseCursor = juce::MouseCursor::LeftRightResizeCursor;
     }
     else if (nextMode == DragMode::move)
     {
-        cursor = juce::MouseCursor::DraggingHandCursor;
+        mouseCursor = juce::MouseCursor::DraggingHandCursor;
     }
-    setMouseCursor(cursor);
+    setMouseCursor(mouseCursor);
 
     if (nextClipId == hoveredClipId && nextMode == hoveredDragMode)
         return;

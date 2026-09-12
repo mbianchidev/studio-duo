@@ -5,7 +5,8 @@ tag starts the GitHub Actions release workflow, which builds and tests the
 application before publishing:
 
 - a universal macOS DMG for Apple Silicon and Intel Macs
-- a Windows x64 ZIP containing `Studio Duo.exe`
+- a signed Windows x64 Inno Setup installer
+- a portable Windows x64 ZIP containing the signed `Studio Duo.exe`
 - `SHA256SUMS.txt` for download verification
 
 ## Prerequisites
@@ -15,6 +16,22 @@ The release maintainer needs:
 - a clean checkout of the `main` branch
 - permission to push `main` and tags to the repository
 - Git, CMake 3.25 or newer, and the normal Studio Duo build toolchain
+
+Before the first signed Windows release, configure these GitHub Actions
+repository secrets:
+
+- `WINDOWS_SIGNING_CERTIFICATE_BASE64`: the Base64-encoded contents of a trusted
+  Authenticode code-signing certificate in PFX format
+- `WINDOWS_SIGNING_CERTIFICATE_PASSWORD`: the PFX password
+
+For example, encode the PFX without line breaks:
+
+```sh
+base64 < studio-duo-signing.pfx | tr -d '\n'
+```
+
+Never commit the PFX or its password. The release workflow fails instead of
+publishing unsigned Windows binaries when either secret is unavailable.
 
 The script fast-forwards the local checkout to the latest `origin/main`, runs a
 release build and the complete test suite, creates any required version commit
@@ -37,6 +54,12 @@ To select a version explicitly:
 
 ```sh
 ./scripts/release.sh 0.2.0
+```
+
+For the next patch release:
+
+```sh
+./scripts/release.sh 0.1.1
 ```
 
 A leading `v` is also accepted. Release versions must use the stable
@@ -63,7 +86,11 @@ The workflow rejects a tag when:
 - the tagged commit is not reachable from `origin/main`
 
 Both platform builds must pass the complete test suite before the GitHub Release
-is published. GitHub automatically generates release notes from the merged
+is published. Windows publication also requires successful Authenticode signing
+and verification of both `Studio Duo.exe` and the installer. The installer
+embeds the current Microsoft Visual C++ x64 Redistributable, verifies its
+Microsoft signature while packaging, and installs it only when the installed
+runtime is older. GitHub automatically generates release notes from the merged
 changes since the previous tag.
 
 ## Install released artifacts
@@ -76,6 +103,16 @@ pipeline applies an ad hoc application signature but does not use an Apple
 Developer ID or notarization, so macOS may require approval in **System
 Settings > Privacy & Security** on first launch.
 
-On Windows, extract the ZIP to a writable directory and run `Studio Duo.exe`.
+On Windows, run
+`Studio-Duo-<version>-Windows-x64-Setup.exe`. It installs to
+`C:\Program Files\Studio Duo`, creates a Start Menu shortcut, optionally creates
+a desktop shortcut, and registers an uninstaller in **Settings > Installed
+apps**. The permanent installer application ID makes later versions upgrade the
+same installation. Uninstalling or upgrading does not remove user data under
+`%APPDATA%\Studio Duo`.
+
+The ZIP remains available for portable use: extract it to a writable directory
+and run `Studio Duo.exe`. Neither Windows package currently associates Explorer
+with `.studioduo` directory packages.
 
 Verify either download against `SHA256SUMS.txt` before installation.

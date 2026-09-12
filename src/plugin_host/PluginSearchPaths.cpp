@@ -11,7 +11,7 @@ juce::String normalizePathText(juce::String path,
     if (path.isEmpty())
         return {};
 
-    const auto separator =
+    const juce::juce_wchar separator =
         style == PluginSearchPathStyle::windows ? '\\' : '/';
     if (style == PluginSearchPathStyle::windows)
         path = path.replaceCharacter('/', separator);

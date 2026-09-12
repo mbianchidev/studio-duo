@@ -1888,10 +1888,10 @@ void MainComponent::beginOpenProject()
         true,
         this);
 
-    const auto flags = juce::FileBrowserComponent::openMode
+    const auto chooserFlags = juce::FileBrowserComponent::openMode
         | juce::FileBrowserComponent::canSelectFiles
         | juce::FileBrowserComponent::canSelectDirectories;
-    fileChooser->launchAsync(flags, [safe = juce::Component::SafePointer<MainComponent>(this)](const auto& chooser)
+    fileChooser->launchAsync(chooserFlags, [safe = juce::Component::SafePointer<MainComponent>(this)](const auto& chooser)
     {
         if (safe == nullptr)
             return;
@@ -1919,9 +1919,9 @@ void MainComponent::beginSaveProject()
                                                       true,
                                                       true,
                                                       this);
-    const auto flags = juce::FileBrowserComponent::saveMode
+    const auto chooserFlags = juce::FileBrowserComponent::saveMode
         | juce::FileBrowserComponent::canSelectFiles;
-    fileChooser->launchAsync(flags, [safe = juce::Component::SafePointer<MainComponent>(this)](const auto& chooser)
+    fileChooser->launchAsync(chooserFlags, [safe = juce::Component::SafePointer<MainComponent>(this)](const auto& chooser)
     {
         if (safe == nullptr)
             return;
@@ -1942,9 +1942,9 @@ void MainComponent::beginImportAudio()
         true,
         false,
         this);
-    const auto flags = juce::FileBrowserComponent::openMode
+    const auto chooserFlags = juce::FileBrowserComponent::openMode
         | juce::FileBrowserComponent::canSelectFiles;
-    fileChooser->launchAsync(flags, [safe = juce::Component::SafePointer<MainComponent>(this)](const auto& chooser)
+    fileChooser->launchAsync(chooserFlags, [safe = juce::Component::SafePointer<MainComponent>(this)](const auto& chooser)
     {
         if (safe == nullptr)
             return;
@@ -1966,9 +1966,9 @@ void MainComponent::beginExportMix()
                                                       true,
                                                       false,
                                                       this);
-    const auto flags = juce::FileBrowserComponent::saveMode
+    const auto chooserFlags = juce::FileBrowserComponent::saveMode
         | juce::FileBrowserComponent::canSelectFiles;
-    fileChooser->launchAsync(flags, [safe = juce::Component::SafePointer<MainComponent>(this)](const auto& chooser)
+    fileChooser->launchAsync(chooserFlags, [safe = juce::Component::SafePointer<MainComponent>(this)](const auto& chooser)
     {
         if (safe == nullptr)
             return;
@@ -3214,8 +3214,8 @@ void MainComponent::splitSelectedClip()
         return;
     }
 
-    const auto cursor = audioEngine.positionSeconds();
-    const auto clipIds = linkedClipIdsAt(selectedClipId, cursor);
+    const auto playheadSeconds = audioEngine.positionSeconds();
+    const auto clipIds = linkedClipIdsAt(selectedClipId, playheadSeconds);
     const auto* group = project.editGroupForTrack(selectedTrackId);
     if (group != nullptr
         && group->enabled
@@ -3227,7 +3227,9 @@ void MainComponent::splitSelectedClip()
 
     std::vector<std::unique_ptr<ProjectCommand>> commands;
     for (const auto& clipId : clipIds)
-        commands.push_back(std::make_unique<SplitClipCommand>(clipId, cursor));
+        commands.push_back(std::make_unique<SplitClipCommand>(
+            clipId,
+            playheadSeconds));
     perform(std::make_unique<BatchProjectCommand>(
         clipIds.size() > 1 ? "Split linked clips" : "Split clip",
         std::move(commands)));
@@ -3242,16 +3244,17 @@ void MainComponent::trimSelectedClipStartToPlayhead()
         return;
     }
 
-    const auto cursor = audioEngine.positionSeconds();
-    if (cursor <= clip->startSeconds + 0.001 || cursor >= clip->endSeconds() - 0.001)
+    const auto playheadSeconds = audioEngine.positionSeconds();
+    if (playheadSeconds <= clip->startSeconds + 0.001
+        || playheadSeconds >= clip->endSeconds() - 0.001)
     {
         setStatus("Place the playhead inside the selected clip before trimming its start.", true);
         return;
     }
 
-    const auto removedDuration = cursor - clip->startSeconds;
+    const auto removedDuration = playheadSeconds - clip->startSeconds;
     trimClip(clip->id,
-             cursor,
+             playheadSeconds,
              clip->sourceOffsetSeconds + removedDuration,
              clip->durationSeconds - removedDuration);
 }
@@ -3265,8 +3268,9 @@ void MainComponent::trimSelectedClipEndToPlayhead()
         return;
     }
 
-    const auto cursor = audioEngine.positionSeconds();
-    if (cursor <= clip->startSeconds + 0.001 || cursor >= clip->endSeconds() - 0.001)
+    const auto playheadSeconds = audioEngine.positionSeconds();
+    if (playheadSeconds <= clip->startSeconds + 0.001
+        || playheadSeconds >= clip->endSeconds() - 0.001)
     {
         setStatus("Place the playhead inside the selected clip before trimming its end.", true);
         return;
@@ -3275,7 +3279,7 @@ void MainComponent::trimSelectedClipEndToPlayhead()
     trimClip(clip->id,
              clip->startSeconds,
              clip->sourceOffsetSeconds,
-             cursor - clip->startSeconds);
+             playheadSeconds - clip->startSeconds);
 }
 
 void MainComponent::copySelectedClip()
