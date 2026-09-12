@@ -1404,6 +1404,7 @@ int main()
     routingEngineTests();
     routingUiModelTests();
     pluginFormatTests();
+    pluginSearchPathTests();
     pluginRecoveryTests();
     automationTests();
     deviceTests();

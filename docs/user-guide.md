@@ -234,6 +234,21 @@ Units, and CLAP bundles outside the main process. Bundled utility devices are
 always listed. Select an entry and choose **ADD** to attach it to the selected
 track.
 
+Choose **PATHS** to review the active VST3 locations, add a custom folder with
+the native directory chooser, or remove a custom folder. Custom folders are
+stored in application settings and apply to every project.
+
+Studio Duo scans these VST3 defaults recursively:
+
+- Windows: `C:\Program Files\Common Files\VST3`,
+  `%LOCALAPPDATA%\Programs\Common\VST3`, and folders in `VST3_PATH`
+- macOS: `/Library/Audio/Plug-Ins/VST3`,
+  `~/Library/Audio/Plug-Ins/VST3`, and folders in `VST3_PATH`
+
+Default and custom paths are normalized and deduplicated before each scan.
+Missing, unreadable, or invalid custom folders are skipped and identified in
+the processor-catalog status while the remaining locations continue scanning.
+
 Ready external inserts process playback in sandbox workers. Double-click an
 insert to open its plugin editor in the worker process; plugins without a native
 editor receive an isolated generic editor. Right-click an insert to open the

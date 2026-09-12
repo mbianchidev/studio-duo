@@ -24,6 +24,10 @@ PluginBrowserComponent::PluginBrowserComponent(PluginCatalog& catalogToDisplay)
             catalog.startScan(false);
     };
 
+    addAndMakeVisible(pathsButton);
+    pathsButton.setTooltip("Show, add, or remove VST3 plugin search folders");
+    pathsButton.onClick = [this] { showVst3FolderMenu(); };
+
     addAndMakeVisible(addButton);
     addButton.setTooltip("Add the selected plugin to the selected track");
     addButton.setEnabled(false);
@@ -56,6 +60,10 @@ PluginBrowserComponent::PluginBrowserComponent(PluginCatalog& catalogToDisplay)
     progressBar.setColour(juce::ProgressBar::backgroundColourId, juce::Colour(StudioColours::window));
     progressBar.setColour(juce::ProgressBar::foregroundColourId, juce::Colour(StudioColours::orange));
 
+    const auto initialStatus = catalog.status();
+    statusLabel.setText(initialStatus, juce::dontSendNotification);
+    statusLabel.setTooltip(initialStatus);
+
     addAndMakeVisible(list);
     list.setRowHeight(44);
     list.setColour(juce::ListBox::backgroundColourId, juce::Colour(StudioColours::panel));
@@ -63,6 +71,7 @@ PluginBrowserComponent::PluginBrowserComponent(PluginCatalog& catalogToDisplay)
     list.setOutlineThickness(1);
 
     rebuildFilter();
+    lastRevision = catalog.revision();
     startTimerHz(10);
 }
 
@@ -94,11 +103,13 @@ void PluginBrowserComponent::resized()
         bounds.removeFromTop(6);
     }
     auto controls = bounds.removeFromTop(30);
-    scanButton.setBounds(controls.removeFromRight(64));
+    scanButton.setBounds(controls.removeFromRight(58));
     controls.removeFromRight(6);
-    validateButton.setBounds(controls.removeFromRight(52));
+    pathsButton.setBounds(controls.removeFromRight(52));
     controls.removeFromRight(6);
-    addButton.setBounds(controls.removeFromRight(52));
+    validateButton.setBounds(controls.removeFromRight(48));
+    controls.removeFromRight(6);
+    addButton.setBounds(controls.removeFromRight(48));
     controls.removeFromRight(6);
     if (getWidth() >= 340)
         search.setBounds(controls);
@@ -186,6 +197,7 @@ void PluginBrowserComponent::selectedRowsChanged(int lastRowSelected)
     description << " | " << juce::String(entry.inputChannels)
                 << " in / " << juce::String(entry.outputChannels) << " out";
     statusLabel.setText(description, juce::dontSendNotification);
+    statusLabel.setTooltip(description);
 }
 
 void PluginBrowserComponent::listBoxItemDoubleClicked(int row, const juce::MouseEvent&)
@@ -200,14 +212,96 @@ void PluginBrowserComponent::timerCallback()
 {
     progressValue = catalog.progress();
     scanButton.setButtonText(catalog.isScanning() ? "CANCEL" : "SCAN");
+    pathsButton.setEnabled(!catalog.isScanning());
 
     const auto currentRevision = catalog.revision();
     if (currentRevision == lastRevision)
         return;
 
     lastRevision = currentRevision;
-    statusLabel.setText(catalog.status(), juce::dontSendNotification);
+    const auto currentStatus = catalog.status();
+    statusLabel.setText(currentStatus, juce::dontSendNotification);
+    statusLabel.setTooltip(currentStatus);
     rebuildFilter();
+}
+
+void PluginBrowserComponent::showVst3FolderMenu()
+{
+    juce::PopupMenu menu;
+    menu.addSectionHeader("Default VST3 folders");
+    const auto defaultFolders = catalog.defaultVst3SearchFolders();
+    for (const auto& folder : defaultFolders)
+        menu.addItem(folder, false, false, [] {});
+    if (defaultFolders.isEmpty())
+        menu.addItem("No default folders", false, false, [] {});
+
+    menu.addSectionHeader("Custom VST3 folders");
+    const auto customFolders = catalog.customVst3SearchFolders();
+    for (const auto& folder : customFolders)
+        menu.addItem(folder, false, false, [] {});
+    if (customFolders.isEmpty())
+        menu.addItem("No custom folders", false, false, [] {});
+
+    menu.addSeparator();
+    menu.addItem("Add VST3 folder...", [this] { beginAddVst3Folder(); });
+    juce::PopupMenu removeMenu;
+    for (const auto& folder : customFolders)
+    {
+        removeMenu.addItem(
+            folder,
+            [this, folder]
+            {
+                catalog.removeCustomVst3SearchFolder(juce::File(folder));
+            });
+    }
+    menu.addSubMenu(
+        "Remove custom folder",
+        removeMenu,
+        !customFolders.isEmpty());
+    menu.showMenuAsync(
+        juce::PopupMenu::Options().withTargetComponent(pathsButton));
+}
+
+void PluginBrowserComponent::beginAddVst3Folder()
+{
+    if (folderChooser != nullptr)
+        return;
+
+    auto initialFolder = juce::File::getSpecialLocation(
+        juce::File::userHomeDirectory);
+    const auto customFolders = catalog.customVst3SearchFolders();
+    for (int index = customFolders.size(); --index >= 0;)
+    {
+        const juce::File candidate(customFolders[index]);
+        if (candidate.isDirectory())
+        {
+            initialFolder = candidate;
+            break;
+        }
+    }
+
+    folderChooser = std::make_unique<juce::FileChooser>(
+        "Add VST3 plugin search folder",
+        initialFolder,
+        "*",
+        true,
+        true,
+        this);
+    const auto flags = juce::FileBrowserComponent::openMode
+        | juce::FileBrowserComponent::canSelectDirectories;
+    folderChooser->launchAsync(
+        flags,
+        [safe = juce::Component::SafePointer<PluginBrowserComponent>(this)](
+            const auto& chooser)
+        {
+            if (safe == nullptr)
+                return;
+
+            const auto result = chooser.getResult();
+            if (result.getFullPathName().isNotEmpty())
+                safe->catalog.addCustomVst3SearchFolder(result);
+            safe->folderChooser.reset();
+        });
 }
 
 void PluginBrowserComponent::rebuildFilter()

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "PluginCompatibilityDatabase.h"
+#include "PluginSearchPaths.h"
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
@@ -44,6 +45,10 @@ public:
     [[nodiscard]] std::uint64_t revision() const noexcept;
     [[nodiscard]] juce::StringArray availableFormats() const;
     [[nodiscard]] juce::File dataDirectory() const;
+    [[nodiscard]] juce::StringArray defaultVst3SearchFolders() const;
+    [[nodiscard]] juce::StringArray customVst3SearchFolders() const;
+    juce::Result addCustomVst3SearchFolder(const juce::File& folder);
+    juce::Result removeCustomVst3SearchFolder(const juce::File& folder);
     void recordRuntimeReady(const PluginInsert& insert);
     void recordRuntimeFailure(const PluginInsert& insert,
                               PluginFailureKind failure,
@@ -82,6 +87,8 @@ private:
     juce::File catalogDirectory;
     juce::File catalogFile;
     juce::File deadMansPedalFile;
+    juce::FileSearchPath defaultVst3Folders;
+    PluginSearchPaths pluginSearchPaths;
     PluginCompatibilityDatabase compatibilityDatabase;
     std::shared_ptr<std::atomic<bool>> cancelRequested;
     std::atomic<bool> scanning { false };
@@ -89,6 +96,7 @@ private:
     std::atomic<float> scanProgress { 0.0f };
     std::atomic<std::uint64_t> catalogRevision { 0 };
     mutable juce::CriticalSection stateLock;
+    mutable juce::CriticalSection searchPathLock;
     mutable juce::CriticalSection compatibilityLock;
     juce::String statusMessage;
     std::vector<std::pair<juce::String, juce::String>>
