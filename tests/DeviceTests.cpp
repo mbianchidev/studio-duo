@@ -60,6 +60,35 @@ void deviceTests()
                == "RME Fireface USB",
            "The first native ASIO driver remains the default.");
 
+    const auto focusriteSetup =
+        studio::preferredAsioDeviceSetup("Focusrite USB ASIO");
+    expect(focusriteSetup.inputDeviceName == "Focusrite USB ASIO"
+               && focusriteSetup.outputDeviceName
+                    == "Focusrite USB ASIO",
+           "ASIO uses the same hardware device for input and output.");
+    expect(!focusriteSetup.useDefaultInputChannels
+               && focusriteSetup.inputChannels
+                      .countNumberOfSetBits()
+                    == studio::maximumHardwareAudioChannels,
+           "All ASIO hardware inputs are active by default.");
+    expect(!focusriteSetup.useDefaultOutputChannels
+               && focusriteSetup.outputChannels
+                      .countNumberOfSetBits()
+                    == 2,
+           "ASIO starts with a stereo hardware output.");
+
+    juce::BigInteger sparseChannels;
+    sparseChannels.setBit(0);
+    sparseChannels.setBit(2);
+    sparseChannels.setBit(5);
+    expect(studio::callbackChannelIndex(sparseChannels, 0) == 0
+               && studio::callbackChannelIndex(sparseChannels, 2) == 1
+               && studio::callbackChannelIndex(sparseChannels, 5) == 2,
+           "Sparse hardware channels map to compact audio callbacks.");
+    expect(studio::callbackChannelIndex(sparseChannels, 1) == -1
+               && studio::callbackChannelIndex(sparseChannels, -1) == -1,
+           "Inactive hardware channels are absent from audio callbacks.");
+
     const auto descriptors = studio::DeviceRegistry::descriptors();
     expect(descriptors.size() == 10,
            "The bundled registry contains all ten Phase 3 utility devices.");

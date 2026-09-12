@@ -2,6 +2,7 @@
 
 #include "AudioAnalysis.h"
 #include "RecordingWaveform.h"
+#include "StudioAudioDeviceManager.h"
 #include "automation/AutomationScheduler.h"
 #include "model/ProjectModel.h"
 #include "plugin_host/PluginBridgeClient.h"
@@ -644,6 +645,12 @@ private:
     std::atomic<int> monitoringChannels { 1 };
     std::atomic<float> outputLeftPeak { 0.0f };
     std::atomic<float> outputRightPeak { 0.0f };
+    std::array<int, maximumHardwareAudioChannels>
+        physicalInputToCallbackChannel {};
+    std::array<int, maximumHardwareAudioChannels>
+        physicalOutputToCallbackChannel {};
+    int physicalInputChannelCount = 0;
+    int physicalOutputChannelCount = 0;
     std::array<PluginRuntimeGraph, 3> pluginRuntimeGraphs;
     std::array<std::atomic<std::uint64_t>, 3> pluginRuntimeGenerations {};
     std::array<std::atomic<int>, 3> pluginRuntimeReaders {};

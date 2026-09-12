@@ -65,11 +65,15 @@ trackpad scrolling and pinch gestures zoom the same view.
 4. Save the project as a `.studioduo` directory package before recording so new
    media is written below its `media/` directory.
 
-Studio Duo enables the first recording input shortly after its window appears.
-On macOS, the system may request microphone access at that point. Use **I/O**
-to enable more inputs or change the active device. On Windows, Studio Duo
-automatically prefers a native ASIO driver over generic compatibility wrappers
-and falls back to WASAPI when ASIO is unavailable or cannot start.
+Studio Duo restores the last working audio device shortly after its window
+appears. On macOS, the system may request microphone access at that point. Use
+**I/O** to enable inputs or change the active device. On the first Windows
+launch, Studio Duo prefers a native ASIO driver over generic compatibility
+wrappers, enables every hardware input, and uses the driver's current sample
+rate and default buffer size. If an installed ASIO driver fails to start, Studio
+Duo leaves audio disabled and reports the driver error instead of silently
+opening a different backend; choose another driver in **I/O**. WASAPI remains
+available when no ASIO driver is installed or when selected manually.
 
 Monitoring is off by default to avoid accidental feedback. Stereo capture uses
 the selected hardware input and the adjacent channel.

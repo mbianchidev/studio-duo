@@ -1,6 +1,5 @@
 #include "StudioAudioEngine.h"
 
-#include "StudioAudioDeviceManager.h"
 #include "mix/RoutingGraphCompiler.h"
 #include "plugin_host/PluginFormats.h"
 #include "plugin_host/ClapPluginInstance.h"
@@ -359,6 +358,8 @@ void StudioAudioEngine::LockFreeRecorder::run()
 StudioAudioEngine::StudioAudioEngine()
 {
     formatManager.registerBasicFormats();
+    physicalInputToCallbackChannel.fill(-1);
+    physicalOutputToCallbackChannel.fill(-1);
     for (auto& snapshot : snapshots)
     {
         snapshot.sampleRate = sampleRate.load();
@@ -396,75 +397,8 @@ juce::Result StudioAudioEngine::initialise(juce::AudioDeviceManager& manager)
     shutdown();
     shuttingDown.store(false, std::memory_order_release);
 
-    // Audio starts after the window's first paint, so microphone permission and
-    // device discovery cannot prevent the initial UI from appearing.
-    juce::String error;
-
-#if JUCE_WINDOWS
-    const auto& deviceTypes = manager.getAvailableDeviceTypes();
-    juce::String fallbackDeviceType;
-    for (auto* type : deviceTypes)
-    {
-        if (!type->getTypeName().equalsIgnoreCase("ASIO")
-            && !type->getDeviceNames(true).isEmpty()
-            && !type->getDeviceNames(false).isEmpty())
-        {
-            fallbackDeviceType = type->getTypeName();
-            break;
-        }
-    }
-
-    juce::String asioDeviceName;
-    if (manager.getCurrentAudioDeviceType().equalsIgnoreCase("ASIO"))
-    {
-        if (auto* asioType = manager.getCurrentDeviceTypeObject())
-            asioDeviceName =
-                preferredAsioDeviceName(asioType->getDeviceNames(false));
-    }
-
-    if (asioDeviceName.isNotEmpty())
-    {
-        juce::AudioDeviceManager::AudioDeviceSetup setup;
-        setup.inputDeviceName = asioDeviceName;
-        setup.outputDeviceName = asioDeviceName;
-        error = manager.initialise(1, 2, nullptr, false, {}, &setup);
-    }
-    else
-    {
-        error = manager.initialiseWithDefaultDevices(1, 2);
-    }
-
-    if (error.isNotEmpty()
-        && asioDeviceName.isNotEmpty()
-        && fallbackDeviceType.isNotEmpty())
-    {
-        const auto asioError = error;
-        juce::Logger::writeToLog(
-            "audio.device: ASIO startup failed for "
-            + asioDeviceName
-            + "; falling back to "
-            + fallbackDeviceType
-            + ": "
-            + asioError);
-        manager.setCurrentAudioDeviceType(fallbackDeviceType, false);
-        const auto fallbackError =
-            manager.initialiseWithDefaultDevices(1, 2);
-        if (fallbackError.isEmpty())
-        {
-            error.clear();
-        }
-        else
-        {
-            error = "ASIO (" + asioDeviceName + "): " + asioError
-                + "\n" + fallbackDeviceType + ": " + fallbackError;
-        }
-    }
-#else
-    error = manager.initialiseWithDefaultDevices(1, 2);
-#endif
-
-    if (error.isNotEmpty())
-        return juce::Result::fail("Audio device setup failed: " + error);
+    if (manager.getCurrentAudioDevice() == nullptr)
+        return juce::Result::fail("No audio device is open.");
 
     deviceManager = &manager;
     deviceManager->addAudioCallback(this);
@@ -5908,6 +5842,51 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
         if (outputChannelData[channel] != nullptr)
             juce::FloatVectorOperations::clear(outputChannelData[channel], numSamples);
 
+    std::array<const float*, maximumHardwareAudioChannels>
+        physicalInputData {};
+    if (physicalInputChannelCount > 0)
+    {
+        for (auto channel = 0;
+             channel < physicalInputChannelCount;
+             ++channel)
+        {
+            const auto callbackChannel =
+                physicalInputToCallbackChannel[
+                    static_cast<std::size_t>(channel)];
+            if (inputChannelData != nullptr
+                && callbackChannel >= 0
+                && callbackChannel < numInputChannels)
+            {
+                physicalInputData[static_cast<std::size_t>(channel)]
+                    = inputChannelData[callbackChannel];
+            }
+        }
+        inputChannelData = physicalInputData.data();
+        numInputChannels = physicalInputChannelCount;
+    }
+
+    std::array<float*, maximumHardwareAudioChannels>
+        physicalOutputData {};
+    if (physicalOutputChannelCount > 0)
+    {
+        for (auto channel = 0;
+             channel < physicalOutputChannelCount;
+             ++channel)
+        {
+            const auto callbackChannel =
+                physicalOutputToCallbackChannel[
+                    static_cast<std::size_t>(channel)];
+            if (callbackChannel >= 0
+                && callbackChannel < numOutputChannels)
+            {
+                physicalOutputData[static_cast<std::size_t>(channel)]
+                    = outputChannelData[callbackChannel];
+            }
+        }
+        outputChannelData = physicalOutputData.data();
+        numOutputChannels = physicalOutputChannelCount;
+    }
+
     if (pluginResetInProgress.load(std::memory_order_acquire))
         return;
 
@@ -6787,6 +6766,34 @@ void StudioAudioEngine::audioDeviceAboutToStart(juce::AudioIODevice* device)
                      std::memory_order_release);
     deviceBlockSize.store(device != nullptr ? device->getCurrentBufferSizeSamples() : 512,
                           std::memory_order_release);
+    physicalInputToCallbackChannel.fill(-1);
+    physicalOutputToCallbackChannel.fill(-1);
+    physicalInputChannelCount = 0;
+    physicalOutputChannelCount = 0;
+
+    if (device == nullptr)
+        return;
+
+    physicalInputChannelCount = std::min(
+        device->getInputChannelNames().size(),
+        maximumHardwareAudioChannels);
+    physicalOutputChannelCount = std::min(
+        device->getOutputChannelNames().size(),
+        maximumHardwareAudioChannels);
+    const auto activeInputs = device->getActiveInputChannels();
+    const auto activeOutputs = device->getActiveOutputChannels();
+    for (auto channel = 0; channel < physicalInputChannelCount; ++channel)
+    {
+        physicalInputToCallbackChannel[
+            static_cast<std::size_t>(channel)]
+            = callbackChannelIndex(activeInputs, channel);
+    }
+    for (auto channel = 0; channel < physicalOutputChannelCount; ++channel)
+    {
+        physicalOutputToCallbackChannel[
+            static_cast<std::size_t>(channel)]
+            = callbackChannelIndex(activeOutputs, channel);
+    }
 }
 
 void StudioAudioEngine::audioDeviceStopped()
@@ -6794,6 +6801,8 @@ void StudioAudioEngine::audioDeviceStopped()
     playing.store(false, std::memory_order_release);
     outputLeftPeak.store(0.0f, std::memory_order_relaxed);
     outputRightPeak.store(0.0f, std::memory_order_relaxed);
+    physicalInputChannelCount = 0;
+    physicalOutputChannelCount = 0;
 }
 
 void StudioAudioEngine::audioDeviceError(const juce::String& errorMessage)

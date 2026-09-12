@@ -58,6 +58,7 @@ private:
     bool keyPressed(const juce::KeyPress& key, juce::Component*) override;
 
     void initialiseAudio();
+    bool connectAudioEngine();
     void createNewProject();
     void beginOpenProject();
     void beginSaveProject();
@@ -207,6 +208,7 @@ private:
     juce::String replacementInsertId;
     bool dirty = false;
     bool appShutdownPrepared = false;
+    bool audioEngineInitialised = false;
     bool exportInProgress = false;
     ExportInputBlocker exportInputBlocker;
     bool statusIsError = false;

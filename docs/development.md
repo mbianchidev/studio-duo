@@ -1,6 +1,6 @@
 # Studio Duo development
 
-Studio Duo is a C++20 desktop application built with JUCE 9. The default CMake
+Studio Duo is a C++20 desktop application built with JUCE 9.0.2. The default CMake
 configuration fetches the pinned JUCE source when a compatible package is not
 already installed. It also fetches the MIT-licensed Signalsmith Stretch 1.1.0
 headers used for pitch-preserving elastic audio, CLAP 1.2.10 and clap-helpers

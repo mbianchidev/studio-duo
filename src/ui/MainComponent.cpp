@@ -1193,12 +1193,28 @@ void MainComponent::initialiseAudio()
     if (appShutdownPrepared)
         return;
 
-    if (const auto result = audioEngine.initialise(deviceManager);
+    if (const auto result = deviceManager.initialiseStudioAudio();
         result.failed())
     {
         setStatus(result.getErrorMessage(), true);
         return;
     }
+
+    connectAudioEngine();
+}
+
+bool MainComponent::connectAudioEngine()
+{
+    if (audioEngineInitialised)
+        return true;
+
+    if (const auto result = audioEngine.initialise(deviceManager);
+        result.failed())
+    {
+        setStatus(result.getErrorMessage(), true);
+        return false;
+    }
+    audioEngineInitialised = true;
 
     if (const auto result = audioEngine.updateProject(
             project,
@@ -1206,11 +1222,34 @@ void MainComponent::initialiseAudio()
         result.failed())
     {
         setStatus(result.getErrorMessage(), true);
-        return;
+        return false;
     }
 
+    const auto saveResult = deviceManager.saveCurrentSetup();
+    if (saveResult.failed())
+        juce::Logger::writeToLog(
+            "audio.settings: "
+            + saveResult.getErrorMessage());
+
     refreshInputControls();
-    setStatus("Ready. Import audio or arm a track and record.");
+    if (const auto* device = deviceManager.getCurrentAudioDevice())
+    {
+        setStatus(
+            "Ready. "
+            + deviceManager.getCurrentAudioDeviceType()
+            + ": "
+            + device->getName()
+            + " ("
+            + juce::String(
+                device->getActiveInputChannels()
+                    .countNumberOfSetBits())
+            + " inputs, "
+            + juce::String(
+                device->getActiveOutputChannels()
+                    .countNumberOfSetBits())
+            + " outputs).");
+    }
+    return true;
 }
 
 MainComponent::~MainComponent()
@@ -1714,7 +1753,9 @@ void MainComponent::timerCallback()
         juce::AudioDeviceManager::AudioDeviceSetup audioSetup;
         deviceManager.getAudioDeviceSetup(audioSetup);
         const auto signature = device != nullptr
-            ? audioSetup.inputDeviceName
+            ? deviceManager.getCurrentAudioDeviceType()
+                + ":"
+                + audioSetup.inputDeviceName
                 + ":"
                 + audioSetup.outputDeviceName
                 + ":"
@@ -1730,12 +1771,30 @@ void MainComponent::timerCallback()
         {
             inputConfigurationSignature = signature;
             refreshInputControls();
-            if (const auto result = audioEngine.updateProject(
-                    project,
-                    pluginRuntimeRequests());
-                result.failed())
+            if (device != nullptr && !audioEngineInitialised)
             {
-                setStatus(result.getErrorMessage(), true);
+                connectAudioEngine();
+            }
+            else if (audioEngineInitialised)
+            {
+                if (const auto result = audioEngine.updateProject(
+                        project,
+                        pluginRuntimeRequests());
+                    result.failed())
+                {
+                    setStatus(result.getErrorMessage(), true);
+                }
+                if (device != nullptr)
+                {
+                    if (const auto result =
+                            deviceManager.saveCurrentSetup();
+                        result.failed())
+                    {
+                        setStatus(
+                            result.getErrorMessage(),
+                            true);
+                    }
+                }
             }
         }
     }
@@ -1984,15 +2043,16 @@ void MainComponent::beginExportMix()
 
 void MainComponent::showAudioSettings()
 {
+    deviceManager.prepareDeviceTypesForSettings();
     auto selector = std::make_unique<juce::AudioDeviceSelectorComponent>(
         deviceManager,
         0,
-        2,
+        maximumHardwareAudioChannels,
         0,
-        2,
+        maximumHardwareAudioChannels,
         true,
         true,
-        true,
+        false,
         false);
     selector->setSize(560, 460);
 
