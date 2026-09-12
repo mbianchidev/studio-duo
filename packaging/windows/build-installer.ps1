@@ -89,9 +89,11 @@ try {
     $vcRedist = Join-Path $workDirectory 'vc_redist.x64.exe'
     Invoke-WebRequest -Uri $vcRedistUri -OutFile $vcRedist
     $vcSignature = Get-AuthenticodeSignature -LiteralPath $vcRedist
-    if ($vcSignature.Status -ne 'Valid'
-        -or $null -eq $vcSignature.SignerCertificate
-        -or $vcSignature.SignerCertificate.Subject -notmatch 'Microsoft Corporation') {
+    if (
+        $vcSignature.Status -ne 'Valid' -or
+        $null -eq $vcSignature.SignerCertificate -or
+        $vcSignature.SignerCertificate.Subject -notmatch 'Microsoft Corporation'
+    ) {
         throw 'The downloaded Visual C++ Runtime does not have a valid Microsoft signature.'
     }
 
