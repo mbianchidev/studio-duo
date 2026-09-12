@@ -54,15 +54,18 @@ jobs:
           $version = (Get-Content VERSION -Raw).Trim()
           $passwordText = "studio-duo-ci-signing"
           $password = ConvertTo-SecureString $passwordText -AsPlainText -Force
+          Write-Host "Creating CI code-signing certificate"
           $certificate = New-SelfSignedCertificate `
             -Type CodeSigningCert `
             -Subject "CN=Studio Duo CI Test" `
             -CertStoreLocation "Cert:\CurrentUser\My" `
+            -KeyExportPolicy Exportable `
             -NotAfter (Get-Date).AddDays(1)
           $pfxPath = Join-Path $env:RUNNER_TEMP "studio-duo-ci-signing.pfx"
           $cerPath = Join-Path $env:RUNNER_TEMP "studio-duo-ci-signing.cer"
 
           try {
+            Write-Host "Exporting and trusting CI code-signing certificate"
             Export-PfxCertificate `
               -Cert $certificate `
               -FilePath $pfxPath `
@@ -77,12 +80,14 @@ jobs:
               [IO.File]::ReadAllBytes($pfxPath)
             )
 
+            Write-Host "Building signed Windows test packages"
             & ./packaging/windows/build-release-packages.ps1 `
               -Version $version `
               -Executable "build/StudioDuo_artefacts/Release/Studio Duo.exe" `
               -OutputDirectory "$env:RUNNER_TEMP\studio-duo-windows-packages" `
               -CertificateBase64 $certificateBase64 `
-              -CertificatePassword $passwordText
+              -CertificatePassword $passwordText `
+              -TimestampUrl ""
           } finally {
             Remove-Item `
               "Cert:\CurrentUser\My\$($certificate.Thumbprint)" `

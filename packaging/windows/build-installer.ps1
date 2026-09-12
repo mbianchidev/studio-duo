@@ -63,6 +63,7 @@ New-Item -ItemType Directory -Path $workDirectory -Force | Out-Null
 
 try {
     $innoInstaller = Join-Path $workDirectory "innosetup-$innoVersion-x64.exe"
+    Write-Host "Downloading Inno Setup $innoVersion"
     Invoke-WebRequest -Uri $innoInstallerUri -OutFile $innoInstaller
     $actualInnoHash = (Get-FileHash -LiteralPath $innoInstaller -Algorithm SHA256).Hash
     if ($actualInnoHash -ne $innoInstallerSha256) {
@@ -70,6 +71,7 @@ try {
     }
 
     $innoDirectory = Join-Path $workDirectory 'Inno Setup'
+    Write-Host "Installing Inno Setup $innoVersion"
     $innoInstallArguments = @(
         '/CURRENTUSER',
         '/VERYSILENT',
@@ -93,6 +95,7 @@ try {
     }
 
     $vcRedist = Join-Path $workDirectory 'vc_redist.x64.exe'
+    Write-Host 'Downloading Microsoft Visual C++ x64 Runtime'
     Invoke-WebRequest -Uri $vcRedistUri -OutFile $vcRedist
     $vcSignature = Get-AuthenticodeSignature -LiteralPath $vcRedist
     if (
@@ -129,6 +132,7 @@ try {
     }
 
     try {
+        Write-Host 'Compiling Studio Duo installer'
         $compilerProcess = Start-Process `
             -FilePath $innoCompiler `
             -ArgumentList "`"$installerScript`"" `

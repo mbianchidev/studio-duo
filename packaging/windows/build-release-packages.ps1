@@ -16,7 +16,9 @@ param(
     [Parameter(Mandatory = $true)]
     [string] $CertificatePassword,
 
-    [string] $RepositoryRoot = (Join-Path $PSScriptRoot '..\..')
+    [string] $RepositoryRoot = (Join-Path $PSScriptRoot '..\..'),
+
+    [string] $TimestampUrl = 'http://timestamp.digicert.com'
 )
 
 Set-StrictMode -Version Latest
@@ -77,20 +79,29 @@ $zipPath = Join-Path $outputDirectoryPath (
 function Invoke-CodeSigning {
     param([Parameter(Mandatory = $true)][string] $Path)
 
+    Write-Host "Signing $Path"
+    $signArguments = @(
+        '/f', $certificatePath,
+        '/p', $CertificatePassword,
+        '/fd', 'SHA256',
+        '/d', 'Studio Duo',
+        '/du', 'https://github.com/mbianchidev/studio-duo'
+    )
+    if (-not [string]::IsNullOrWhiteSpace($TimestampUrl)) {
+        $signArguments += @(
+            '/td', 'SHA256',
+            '/tr', $TimestampUrl
+        )
+    }
+    $signArguments += $Path
+
     $global:LASTEXITCODE = 0
-    & $signTool.FullName sign `
-        /f $certificatePath `
-        /p $CertificatePassword `
-        /fd SHA256 `
-        /td SHA256 `
-        /tr 'http://timestamp.digicert.com' `
-        /d 'Studio Duo' `
-        /du 'https://github.com/mbianchidev/studio-duo' `
-        $Path
+    & $signTool.FullName sign @signArguments
     if ($LASTEXITCODE -ne 0) {
         throw "Authenticode signing failed for $Path with exit code $LASTEXITCODE"
     }
 
+    Write-Host "Verifying $Path"
     $global:LASTEXITCODE = 0
     & $signTool.FullName verify /pa /v $Path
     if ($LASTEXITCODE -ne 0) {
@@ -105,6 +116,7 @@ try {
     [System.IO.File]::WriteAllBytes($certificatePath, $certificateBytes)
 
     Invoke-CodeSigning $executablePath
+    Write-Host 'Building Inno Setup installer'
     $installerOutput = & (Join-Path $PSScriptRoot 'build-installer.ps1') `
         -Version $Version `
         -Executable $executablePath `
@@ -115,6 +127,7 @@ try {
     }
     Invoke-CodeSigning $installerPath
 
+    Write-Host 'Building portable ZIP'
     New-Item -ItemType Directory -Path $stagingDirectory -Force | Out-Null
     Copy-Item `
         -LiteralPath $executablePath `
