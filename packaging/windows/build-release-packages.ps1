@@ -18,11 +18,14 @@ param(
 
     [string] $RepositoryRoot = (Join-Path $PSScriptRoot '..\..'),
 
-    [string] $TimestampUrl = 'http://timestamp.digicert.com'
+    [string] $TimestampUrl = 'http://timestamp.digicert.com',
+
+    [switch] $SkipTrustVerification
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'process-utils.ps1')
 
 function Get-FullPath {
     param([Parameter(Mandatory = $true)][string] $Path)
@@ -95,25 +98,43 @@ function Invoke-CodeSigning {
     }
     $signArguments += $Path
 
-    $global:LASTEXITCODE = 0
-    & $signTool.FullName sign @signArguments
-    if ($LASTEXITCODE -ne 0) {
-        throw "Authenticode signing failed for $Path with exit code $LASTEXITCODE"
-    }
+    Invoke-StudioDuoProcess `
+        -FilePath $signTool.FullName `
+        -ArgumentList (@('sign') + $signArguments) `
+        -Description "Authenticode signing $Path" `
+        -TimeoutSeconds 120
 
     Write-Host "Verifying $Path"
-    $global:LASTEXITCODE = 0
-    & $signTool.FullName verify /pa /v $Path
-    if ($LASTEXITCODE -ne 0) {
-        throw "Authenticode verification failed for $Path with exit code $LASTEXITCODE"
+    if ($SkipTrustVerification) {
+        $signature = Get-AuthenticodeSignature -LiteralPath $Path
+        if (
+            $null -eq $signature.SignerCertificate -or
+            $signature.SignerCertificate.Thumbprint
+                -ne $signingCertificate.Thumbprint
+        ) {
+            throw "Authenticode signer verification failed for $Path"
+        }
+    } else {
+        Invoke-StudioDuoProcess `
+            -FilePath $signTool.FullName `
+            -ArgumentList @('verify', '/pa', '/v', $Path) `
+            -Description "Authenticode verification $Path" `
+            -TimeoutSeconds 60
     }
 }
 
+$signingCertificate = $null
 try {
     $certificateBytes = [Convert]::FromBase64String(
         ($CertificateBase64 -replace '\s', '')
     )
     [System.IO.File]::WriteAllBytes($certificatePath, $certificateBytes)
+    $signingCertificate =
+        [System.Security.Cryptography.X509Certificates.X509Certificate2]::new(
+            $certificatePath,
+            $CertificatePassword,
+            [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::EphemeralKeySet
+        )
 
     Invoke-CodeSigning $executablePath
     Write-Host 'Building Inno Setup installer'
@@ -164,4 +185,7 @@ try {
         -Recurse `
         -Force `
         -ErrorAction SilentlyContinue
+    if ($null -ne $signingCertificate) {
+        $signingCertificate.Dispose()
+    }
 }

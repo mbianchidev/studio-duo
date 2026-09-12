@@ -15,6 +15,7 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'process-utils.ps1')
 
 $innoVersion = '7.1.0'
 $innoInstallerUri =
@@ -64,7 +65,10 @@ New-Item -ItemType Directory -Path $workDirectory -Force | Out-Null
 try {
     $innoInstaller = Join-Path $workDirectory "innosetup-$innoVersion-x64.exe"
     Write-Host "Downloading Inno Setup $innoVersion"
-    Invoke-WebRequest -Uri $innoInstallerUri -OutFile $innoInstaller
+    Invoke-WebRequest `
+        -Uri $innoInstallerUri `
+        -OutFile $innoInstaller `
+        -TimeoutSec 120
     $actualInnoHash = (Get-FileHash -LiteralPath $innoInstaller -Algorithm SHA256).Hash
     if ($actualInnoHash -ne $innoInstallerSha256) {
         throw "Inno Setup checksum mismatch: expected $innoInstallerSha256, got $actualInnoHash"
@@ -80,14 +84,11 @@ try {
         '/SP-',
         "/DIR=`"$innoDirectory`""
     )
-    $innoInstallProcess = Start-Process `
+    Invoke-StudioDuoProcess `
         -FilePath $innoInstaller `
         -ArgumentList $innoInstallArguments `
-        -Wait `
-        -PassThru
-    if ($innoInstallProcess.ExitCode -ne 0) {
-        throw "Inno Setup installation failed with exit code $($innoInstallProcess.ExitCode)"
-    }
+        -Description "Installing Inno Setup $innoVersion" `
+        -TimeoutSeconds 120
 
     $innoCompiler = Join-Path $innoDirectory 'ISCC.exe'
     if (-not (Test-Path -LiteralPath $innoCompiler -PathType Leaf)) {
@@ -96,7 +97,10 @@ try {
 
     $vcRedist = Join-Path $workDirectory 'vc_redist.x64.exe'
     Write-Host 'Downloading Microsoft Visual C++ x64 Runtime'
-    Invoke-WebRequest -Uri $vcRedistUri -OutFile $vcRedist
+    Invoke-WebRequest `
+        -Uri $vcRedistUri `
+        -OutFile $vcRedist `
+        -TimeoutSec 120
     $vcSignature = Get-AuthenticodeSignature -LiteralPath $vcRedist
     if (
         $vcSignature.Status -ne 'Valid' -or
@@ -133,15 +137,11 @@ try {
 
     try {
         Write-Host 'Compiling Studio Duo installer'
-        $compilerProcess = Start-Process `
+        Invoke-StudioDuoProcess `
             -FilePath $innoCompiler `
-            -ArgumentList "`"$installerScript`"" `
-            -NoNewWindow `
-            -Wait `
-            -PassThru
-        if ($compilerProcess.ExitCode -ne 0) {
-            throw "Inno Setup compilation failed with exit code $($compilerProcess.ExitCode)"
-        }
+            -ArgumentList @($installerScript) `
+            -Description 'Compiling Studio Duo installer' `
+            -TimeoutSeconds 120
     } finally {
         foreach ($entry in $previousEnvironment.GetEnumerator()) {
             [Environment]::SetEnvironmentVariable(
