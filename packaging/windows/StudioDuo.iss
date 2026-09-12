@@ -129,9 +129,7 @@ begin
     VCRuntimeRestartRequired := True
   else if (ResultCode <> 0) and (ResultCode <> 1638) then
     RaiseException(
-      Format(
-        'The Microsoft Visual C++ Runtime installer failed with exit code %d.',
-        [ResultCode]));
+      Format('The Microsoft Visual C++ Runtime installer failed with exit code %d.', [ResultCode]));
 end;
 
 function NeedRestart: Boolean;
