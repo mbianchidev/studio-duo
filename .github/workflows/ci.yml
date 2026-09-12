@@ -46,3 +46,13 @@ jobs:
 
       - name: Test
         run: ctest --test-dir build --build-config Release --output-on-failure
+
+      - name: Validate Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = (Get-Content VERSION -Raw).Trim()
+          & ./packaging/windows/build-installer.ps1 `
+            -Version $version `
+            -Executable "build/StudioDuo_artefacts/Release/Studio Duo.exe" `
+            -OutputDirectory "$env:RUNNER_TEMP\studio-duo-installer"

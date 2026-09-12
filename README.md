@@ -53,7 +53,8 @@ open "build/StudioDuo_artefacts/Studio Duo.app"
 
 Published builds are available from
 [GitHub Releases](https://github.com/mbianchidev/studio-duo/releases). Releases
-include a universal macOS DMG, a Windows x64 ZIP, and SHA-256 checksums.
+include a universal macOS DMG, a signed Windows x64 installer, a portable
+Windows x64 ZIP, and SHA-256 checksums.
 
 ## Documentation
 

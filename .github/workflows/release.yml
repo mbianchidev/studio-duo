@@ -95,7 +95,7 @@ jobs:
           retention-days: 7
 
   windows:
-    name: Build Windows ZIP
+    name: Build signed Windows packages
     needs: validate
     runs-on: windows-latest
     timeout-minutes: 120
@@ -118,30 +118,92 @@ jobs:
       - name: Test
         run: ctest --test-dir build --build-config Release --output-on-failure
 
-      - name: Package ZIP
+      - name: Build signed Windows packages
         shell: pwsh
         env:
           VERSION: ${{ needs.validate.outputs.version }}
+          CERTIFICATE_BASE64: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
         run: |
           $ErrorActionPreference = "Stop"
           $executable = "build/StudioDuo_artefacts/Release/Studio Duo.exe"
           $staging = Join-Path $env:RUNNER_TEMP "Studio-Duo-$env:VERSION-Windows-x64"
-          $output = "Studio-Duo-$env:VERSION-Windows-x64.zip"
+          $zipOutput = "Studio-Duo-$env:VERSION-Windows-x64.zip"
+          $setupOutput = "Studio-Duo-$env:VERSION-Windows-x64-Setup.exe"
+          $certificatePath = Join-Path $env:RUNNER_TEMP "studio-duo-signing.pfx"
 
           if (-not (Test-Path $executable -PathType Leaf)) {
             throw "Studio Duo executable was not produced at $executable"
           }
+          if ([string]::IsNullOrWhiteSpace($env:CERTIFICATE_BASE64)) {
+            throw "WINDOWS_SIGNING_CERTIFICATE_BASE64 is not configured"
+          }
+          if ([string]::IsNullOrWhiteSpace($env:CERTIFICATE_PASSWORD)) {
+            throw "WINDOWS_SIGNING_CERTIFICATE_PASSWORD is not configured"
+          }
 
-          New-Item -ItemType Directory -Path $staging -Force | Out-Null
-          Copy-Item $executable (Join-Path $staging "Studio Duo.exe")
-          Copy-Item "README.md", "LICENSE" $staging
-          Compress-Archive -Path $staging -DestinationPath $output -Force
+          $signTool = Get-ChildItem `
+            "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" `
+            -File |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1
+          if ($null -eq $signTool) {
+            throw "The Windows SDK SignTool executable is unavailable"
+          }
+
+          function Sign-Artifact {
+            param([Parameter(Mandatory = $true)][string] $Path)
+
+            & $signTool.FullName sign `
+              /f $certificatePath `
+              /p $env:CERTIFICATE_PASSWORD `
+              /fd SHA256 `
+              /td SHA256 `
+              /tr "http://timestamp.digicert.com" `
+              /d "Studio Duo" `
+              /du "https://github.com/mbianchidev/studio-duo" `
+              $Path
+            if ($LASTEXITCODE -ne 0) {
+              throw "Authenticode signing failed for $Path"
+            }
+
+            & $signTool.FullName verify /pa /v $Path
+            if ($LASTEXITCODE -ne 0) {
+              throw "Authenticode verification failed for $Path"
+            }
+          }
+
+          try {
+            $certificateBytes = [Convert]::FromBase64String(
+              ($env:CERTIFICATE_BASE64 -replace "\s", "")
+            )
+            [IO.File]::WriteAllBytes($certificatePath, $certificateBytes)
+
+            Sign-Artifact $executable
+            & ./packaging/windows/build-installer.ps1 `
+              -Version $env:VERSION `
+              -Executable $executable `
+              -OutputDirectory (Get-Location).Path
+            if (-not (Test-Path $setupOutput -PathType Leaf)) {
+              throw "Windows installer was not produced at $setupOutput"
+            }
+            Sign-Artifact $setupOutput
+
+            New-Item -ItemType Directory -Path $staging -Force | Out-Null
+            Copy-Item $executable (Join-Path $staging "Studio Duo.exe")
+            Copy-Item "README.md", "LICENSE" $staging
+            Compress-Archive -Path $staging -DestinationPath $zipOutput -Force
+          } finally {
+            Remove-Item $certificatePath -Force -ErrorAction SilentlyContinue
+          }
 
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v7
         with:
           name: windows-release
-          path: Studio-Duo-${{ needs.validate.outputs.version }}-Windows-x64.zip
+          path: |
+            Studio-Duo-${{ needs.validate.outputs.version }}-Windows-x64.zip
+            Studio-Duo-${{ needs.validate.outputs.version }}-Windows-x64-Setup.exe
           if-no-files-found: error
           retention-days: 7
 
