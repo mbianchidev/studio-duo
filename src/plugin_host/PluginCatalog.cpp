@@ -232,13 +232,24 @@ PluginCatalog::PluginCatalog()
                            .getChildFile("Plugin Catalog")),
       catalogFile(catalogDirectory.getChildFile("plugins.xml")),
       deadMansPedalFile(catalogDirectory.getChildFile("scan-deadman.txt")),
+      pluginSearchPaths(catalogDirectory.getChildFile("search-paths.json")),
       compatibilityDatabase(
           catalogDirectory.getChildFile("compatibility.json")),
       cancelRequested(std::make_shared<std::atomic<bool>>(false))
 {
     catalogDirectory.createDirectory();
     PluginFormats::addSupportedFormats(formatManager);
+    for (auto* format : formatManager.getFormats())
+    {
+        if (format->getName() == "VST3")
+        {
+            defaultVst3Folders = format->getDefaultLocationsToSearch();
+            break;
+        }
+    }
     knownPlugins.setCustomScanner(std::make_unique<OutOfProcessPluginScanner>(cancelRequested));
+    juce::String searchPathError;
+    pluginSearchPaths.load(searchPathError);
     load();
     juce::String compatibilityError;
     compatibilityDatabase.load(compatibilityError);
@@ -248,6 +259,8 @@ PluginCatalog::PluginCatalog()
     const auto count = knownPlugins.getNumTypes();
     statusMessage = count == 0 ? "No plugins scanned yet."
                                : juce::String(count) + " plugins loaded from catalog.";
+    if (searchPathError.isNotEmpty())
+        statusMessage << " " << searchPathError;
     if (compatibilityError.isNotEmpty())
         statusMessage << " " << compatibilityError;
 }
@@ -367,6 +380,95 @@ juce::File PluginCatalog::dataDirectory() const
     return catalogDirectory;
 }
 
+juce::StringArray PluginCatalog::defaultVst3SearchFolders() const
+{
+    juce::StringArray paths;
+    for (int index = 0; index < defaultVst3Folders.getNumPaths(); ++index)
+        paths.add(defaultVst3Folders[index].getFullPathName());
+    return PluginSearchPaths::normalizeAndDeduplicate(
+        paths,
+        PluginSearchPaths::nativePathStyle());
+}
+
+juce::StringArray PluginCatalog::customVst3SearchFolders() const
+{
+    const juce::ScopedLock lock(searchPathLock);
+    return pluginSearchPaths.customFolders();
+}
+
+juce::Result PluginCatalog::addCustomVst3SearchFolder(
+    const juce::File& folder)
+{
+    if (isScanning())
+    {
+        const auto message =
+            juce::String("Cancel the plugin scan before changing VST3 folders.");
+        updateState(message, progress());
+        return juce::Result::fail(message);
+    }
+
+    for (const auto& defaultFolder : defaultVst3SearchFolders())
+    {
+        if (juce::File(defaultFolder) == folder)
+        {
+            updateState(
+                "That folder is already included in the default VST3 locations.",
+                progress());
+            return juce::Result::ok();
+        }
+    }
+
+    juce::Result result = juce::Result::ok();
+    auto wasAlreadyConfigured = false;
+    {
+        const juce::ScopedLock lock(searchPathLock);
+        const auto previousCount = pluginSearchPaths.customFolders().size();
+        result = pluginSearchPaths.addCustomFolder(folder);
+        wasAlreadyConfigured =
+            result.wasOk()
+            && pluginSearchPaths.customFolders().size() == previousCount;
+    }
+
+    if (result.failed())
+        updateState(result.getErrorMessage(), progress());
+    else if (wasAlreadyConfigured)
+        updateState(
+            "VST3 folder already configured: " + folder.getFullPathName(),
+            progress());
+    else
+        updateState(
+            "Added VST3 folder: " + folder.getFullPathName()
+                + ". Choose SCAN to discover plugins.",
+            progress());
+    return result;
+}
+
+juce::Result PluginCatalog::removeCustomVst3SearchFolder(
+    const juce::File& folder)
+{
+    if (isScanning())
+    {
+        const auto message =
+            juce::String("Cancel the plugin scan before changing VST3 folders.");
+        updateState(message, progress());
+        return juce::Result::fail(message);
+    }
+
+    juce::Result result = juce::Result::ok();
+    {
+        const juce::ScopedLock lock(searchPathLock);
+        result = pluginSearchPaths.removeCustomFolder(folder);
+    }
+    if (result.failed())
+        updateState(result.getErrorMessage(), progress());
+    else
+        updateState(
+            "Removed VST3 folder: " + folder.getFullPathName()
+                + ". Future scans will skip it.",
+            progress());
+    return result;
+}
+
 void PluginCatalog::recordRuntimeReady(const PluginInsert& insert)
 {
     const juce::ScopedLock compatibilityGuard(compatibilityLock);
@@ -462,6 +564,7 @@ void PluginCatalog::run()
     const auto force = forceNextScan.exchange(false, std::memory_order_acq_rel);
     const auto formatCount = formatManager.getNumFormats();
     juce::StringArray failedFiles;
+    juce::StringArray searchPathWarnings;
 
     for (int formatIndex = 0; formatIndex < formatCount && !threadShouldExit(); ++formatIndex)
     {
@@ -469,19 +572,41 @@ void PluginCatalog::run()
         if (format == nullptr)
             continue;
 
-        auto identifiers = format->searchPathsForPlugins(format->getDefaultLocationsToSearch(),
+        const auto formatName = format->getName();
+        auto folders = format->getDefaultLocationsToSearch();
+        if (formatName == "VST3")
+        {
+            PluginSearchPlan plan;
+            {
+                const juce::ScopedLock lock(searchPathLock);
+                plan = pluginSearchPaths.createScanPlan(defaultVst3Folders);
+            }
+            folders = plan.folders;
+            searchPathWarnings.addArray(plan.warnings);
+        }
+
+        auto identifiers = format->searchPathsForPlugins(folders,
                                                          true,
                                                          false);
         if (identifiers.isEmpty())
         {
-            updateState("No " + format->getName() + " plugins found in default locations.",
+            auto message =
+                formatName == "VST3"
+                    ? juce::String("No VST3 plugins found in configured locations.")
+                    : "No " + formatName + " plugins found in default locations.";
+            if (formatName == "VST3" && !searchPathWarnings.isEmpty())
+            {
+                message << " Skipped custom folders: "
+                        << searchPathWarnings.joinIntoString("; ") << ".";
+            }
+            updateState(message,
                         static_cast<float>(formatIndex + 1) / static_cast<float>(formatCount));
             continue;
         }
 
         juce::PluginDirectoryScanner scanner(knownPlugins,
                                              *format,
-                                             format->getDefaultLocationsToSearch(),
+                                             folders,
                                              true,
                                              deadMansPedalFile,
                                              false);
@@ -497,7 +622,7 @@ void PluginCatalog::run()
             const auto totalProgress = (static_cast<float>(formatIndex) + scanner.getProgress())
                 / static_cast<float>(formatCount);
             updateState(currentPlugin.isEmpty()
-                            ? "Scanning " + format->getName() + "..."
+                            ? "Scanning " + formatName + "..."
                             : "Scanning " + currentPlugin + " in a worker process...",
                         totalProgress);
             if (!hasMore)
@@ -518,26 +643,34 @@ void PluginCatalog::run()
     const auto saveResult = save();
     const auto pluginCount = knownPlugins.getNumTypes();
     const auto blockedCount = knownPlugins.getBlacklistedFiles().size();
+    juce::String completionMessage;
     if (saveResult.failed())
     {
-        updateState(saveResult.getErrorMessage(), 1.0f);
+        completionMessage = saveResult.getErrorMessage();
     }
     else if (!failedFiles.isEmpty())
     {
-        updateState(juce::String(pluginCount)
-                        + " plugins ready; "
-                        + juce::String(failedFiles.size())
-                        + " files did not expose a supported plugin.",
-                    1.0f);
+        completionMessage = juce::String(pluginCount)
+            + " plugins ready; "
+            + juce::String(failedFiles.size())
+            + " files did not expose a supported plugin.";
     }
     else
     {
-        updateState(juce::String(pluginCount)
-                        + " plugins ready; "
-                        + juce::String(blockedCount)
-                        + " blocked after worker failures.",
-                    1.0f);
+        completionMessage = juce::String(pluginCount)
+            + " plugins ready; "
+            + juce::String(blockedCount)
+            + " blocked after worker failures.";
     }
+    if (!searchPathWarnings.isEmpty())
+    {
+        completionMessage << " Skipped "
+                          << juce::String(searchPathWarnings.size())
+                          << " custom VST3 folder(s): "
+                          << searchPathWarnings.joinIntoString("; ")
+                          << ".";
+    }
+    updateState(completionMessage, 1.0f);
     {
         const juce::ScopedLock compatibilityGuard(compatibilityLock);
         for (const auto& failedFile : failedFiles)

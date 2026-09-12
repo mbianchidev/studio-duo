@@ -132,6 +132,8 @@ set(STUDIO_DUO_PLUGIN_SOURCES
     src/plugin_host/PluginEditorWindow.h
     src/plugin_host/PluginFormats.cpp
     src/plugin_host/PluginFormats.h
+    src/plugin_host/PluginSearchPaths.cpp
+    src/plugin_host/PluginSearchPaths.h
     src/plugin_host/SampleAccurateAutomationTarget.h
     src/plugin_host/PluginStateStore.cpp
     src/plugin_host/PluginStateStore.h
@@ -347,6 +349,7 @@ if(STUDIO_DUO_BUILD_TESTS)
             tests/RoutingEngineTests.cpp
             tests/RoutingUiModelTests.cpp
             tests/PluginFormatTests.cpp
+            tests/PluginSearchPathTests.cpp
             tests/PluginRecoveryTests.cpp
             tests/AutomationTests.cpp
             tests/DeviceTests.cpp
@@ -374,6 +377,8 @@ if(STUDIO_DUO_BUILD_TESTS)
             src/plugin_host/ClapPluginInstance.h
             src/plugin_host/PluginFormats.cpp
             src/plugin_host/PluginFormats.h
+            src/plugin_host/PluginSearchPaths.cpp
+            src/plugin_host/PluginSearchPaths.h
             src/plugin_host/PluginCompatibilityDatabase.cpp
             src/plugin_host/PluginCompatibilityDatabase.h
             src/plugin_host/PluginCompatibilityValidator.cpp

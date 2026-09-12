@@ -33,10 +33,13 @@ private:
     void listBoxItemDoubleClicked(int row, const juce::MouseEvent&) override;
     void timerCallback() override;
     void rebuildFilter();
+    void showVst3FolderMenu();
+    void beginAddVst3Folder();
 
     PluginCatalog& catalog;
     juce::TextEditor search;
     juce::TextButton scanButton { "SCAN" };
+    juce::TextButton pathsButton { "PATHS" };
     juce::TextButton addButton { "ADD" };
     juce::TextButton validateButton { "TEST" };
     juce::Label statusLabel;
@@ -45,6 +48,7 @@ private:
     juce::ProgressBar progressBar { progressValue };
     std::vector<PluginCatalogEntry> allEntries;
     std::vector<PluginCatalogEntry> filteredEntries;
+    std::unique_ptr<juce::FileChooser> folderChooser;
     std::uint64_t lastRevision = 0;
     int selectedRow = -1;
 
