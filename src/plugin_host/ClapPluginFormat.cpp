@@ -5,7 +5,6 @@
 #include <clap/clap.h>
 
 #include <algorithm>
-#include <cstdlib>
 #include <cstring>
 
 namespace studio
@@ -224,23 +223,31 @@ juce::FileSearchPath ClapPluginFormat::getDefaultLocationsToSearch()
                   .getChildFile("Library/Audio/Plug-Ins/CLAP"));
     paths.add(juce::File("/Library/Audio/Plug-Ins/CLAP"));
 #elif JUCE_WINDOWS
-    if (const auto* common = std::getenv("COMMONPROGRAMFILES"))
-        paths.add(juce::File(juce::String::fromUTF8(common) + "\\CLAP"));
-    if (const auto* local = std::getenv("LOCALAPPDATA"))
-        paths.add(juce::File(juce::String::fromUTF8(local)
-                             + "\\Programs\\Common\\CLAP"));
+    const auto common = juce::SystemStats::getEnvironmentVariable(
+        "COMMONPROGRAMFILES",
+        {});
+    if (common.isNotEmpty())
+        paths.add(juce::File(common + "\\CLAP"));
+    const auto local = juce::SystemStats::getEnvironmentVariable(
+        "LOCALAPPDATA",
+        {});
+    if (local.isNotEmpty())
+        paths.add(juce::File(local + "\\Programs\\Common\\CLAP"));
 #else
     paths.add(juce::File::getSpecialLocation(juce::File::userHomeDirectory)
                   .getChildFile(".clap"));
     paths.add(juce::File("/usr/lib/clap"));
 #endif
-    if (const auto* clapPath = std::getenv("CLAP_PATH"))
+    const auto clapPath = juce::SystemStats::getEnvironmentVariable(
+        "CLAP_PATH",
+        {});
+    if (clapPath.isNotEmpty())
     {
         juce::StringArray environmentPaths;
 #if JUCE_WINDOWS
-        environmentPaths.addTokens(juce::String::fromUTF8(clapPath), ";", "");
+        environmentPaths.addTokens(clapPath, ";", "");
 #else
-        environmentPaths.addTokens(juce::String::fromUTF8(clapPath), ":", "");
+        environmentPaths.addTokens(clapPath, ":", "");
 #endif
         for (const auto& path : environmentPaths)
             paths.add(juce::File(path));

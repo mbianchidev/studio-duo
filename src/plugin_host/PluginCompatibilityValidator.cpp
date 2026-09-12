@@ -7,7 +7,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstdlib>
 
 namespace studio
 {
@@ -116,8 +115,12 @@ PluginValidationCheck platformValidation(
     if (description.pluginFormatName == "VST3")
     {
         juce::StringArray candidates;
-        if (const auto* configured = std::getenv("VST3_VALIDATOR"))
-            candidates.add(juce::String::fromUTF8(configured));
+        const auto configured =
+            juce::SystemStats::getEnvironmentVariable(
+                "VST3_VALIDATOR",
+                {});
+        if (configured.isNotEmpty())
+            candidates.add(configured);
 #if JUCE_MAC
         candidates.add("/opt/homebrew/bin/validator");
         candidates.add("/usr/local/bin/validator");

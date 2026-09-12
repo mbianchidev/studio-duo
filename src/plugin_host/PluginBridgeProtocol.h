@@ -57,6 +57,8 @@ struct alignas(64) PluginBridgeSharedState
     std::atomic<std::uint32_t> parameterEventCount { 0 };
     std::atomic<std::uint32_t> parameterEventOverflowCount { 0 };
     std::atomic<std::uint32_t> heartbeat { 0 };
+    // Preserve the existing cache-line boundary without compiler-inserted padding.
+    std::array<std::uint8_t, 8> reservedAlignmentPadding {};
     alignas(64) std::array<std::array<float, maxBlockSize>, maxChannels> input {};
     alignas(64) std::array<std::array<float, maxBlockSize>, maxChannels> sidechain {};
     alignas(64) std::array<std::array<float, maxBlockSize>, maxChannels> output {};
