@@ -30,10 +30,10 @@ jobs:
 
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Cache JUCE source
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: build/_deps
           key: juce-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}

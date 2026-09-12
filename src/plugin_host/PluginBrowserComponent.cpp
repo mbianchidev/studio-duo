@@ -287,10 +287,10 @@ void PluginBrowserComponent::beginAddVst3Folder()
         true,
         true,
         this);
-    const auto flags = juce::FileBrowserComponent::openMode
+    const auto chooserFlags = juce::FileBrowserComponent::openMode
         | juce::FileBrowserComponent::canSelectDirectories;
     folderChooser->launchAsync(
-        flags,
+        chooserFlags,
         [safe = juce::Component::SafePointer<PluginBrowserComponent>(this)](
             const auto& chooser)
         {
