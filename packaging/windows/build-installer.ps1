@@ -70,15 +70,21 @@ try {
     }
 
     $innoDirectory = Join-Path $workDirectory 'Inno Setup'
-    & $innoInstaller `
-        '/CURRENTUSER' `
-        '/VERYSILENT' `
-        '/SUPPRESSMSGBOXES' `
-        '/NORESTART' `
-        '/SP-' `
-        "/DIR=$innoDirectory"
-    if ($LASTEXITCODE -ne 0) {
-        throw "Inno Setup installation failed with exit code $LASTEXITCODE"
+    $innoInstallArguments = @(
+        '/CURRENTUSER',
+        '/VERYSILENT',
+        '/SUPPRESSMSGBOXES',
+        '/NORESTART',
+        '/SP-',
+        "/DIR=`"$innoDirectory`""
+    )
+    $innoInstallProcess = Start-Process `
+        -FilePath $innoInstaller `
+        -ArgumentList $innoInstallArguments `
+        -Wait `
+        -PassThru
+    if ($innoInstallProcess.ExitCode -ne 0) {
+        throw "Inno Setup installation failed with exit code $($innoInstallProcess.ExitCode)"
     }
 
     $innoCompiler = Join-Path $innoDirectory 'ISCC.exe'
@@ -123,11 +129,14 @@ try {
     }
 
     try {
-        $compilerOutput = & $innoCompiler $installerScript 2>&1
-        $compilerExitCode = $LASTEXITCODE
-        $compilerOutput | ForEach-Object { Write-Host $_ }
-        if ($compilerExitCode -ne 0) {
-            throw "Inno Setup compilation failed with exit code $compilerExitCode"
+        $compilerProcess = Start-Process `
+            -FilePath $innoCompiler `
+            -ArgumentList "`"$installerScript`"" `
+            -NoNewWindow `
+            -Wait `
+            -PassThru
+        if ($compilerProcess.ExitCode -ne 0) {
+            throw "Inno Setup compilation failed with exit code $($compilerProcess.ExitCode)"
         }
     } finally {
         foreach ($entry in $previousEnvironment.GetEnumerator()) {
