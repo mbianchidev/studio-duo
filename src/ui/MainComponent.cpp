@@ -1381,28 +1381,73 @@ void MainComponent::resized()
     auto brand = topRow.removeFromLeft(170);
     projectLabel.setBounds(brand.withTrimmedLeft(60).withTrimmedTop(24).withHeight(28));
 
-    auto fileControls = topRow.removeFromLeft(320);
-    newButton.setBounds(fileControls.removeFromLeft(58).reduced(3, 12));
-    openButton.setBounds(fileControls.removeFromLeft(62).reduced(3, 12));
-    saveButton.setBounds(fileControls.removeFromLeft(62).reduced(3, 12));
-    exportButton.setBounds(fileControls.removeFromLeft(74).reduced(3, 12));
-    audioSetupButton.setBounds(fileControls.removeFromLeft(48).reduced(3, 12));
+    const auto layoutFileControls =
+        [this](juce::Rectangle<int> area, int verticalInset)
+        {
+            newButton.setBounds(
+                area.removeFromLeft(58).reduced(3, verticalInset));
+            openButton.setBounds(
+                area.removeFromLeft(62).reduced(3, verticalInset));
+            saveButton.setBounds(
+                area.removeFromLeft(62).reduced(3, verticalInset));
+            exportButton.setBounds(
+                area.removeFromLeft(74).reduced(3, verticalInset));
+            audioSetupButton.setBounds(
+                area.removeFromLeft(48).reduced(3, verticalInset));
+        };
+    const auto layoutEditControls =
+        [this](juce::Rectangle<int> area, int verticalInset)
+        {
+            undoButton.setBounds(
+                area.removeFromLeft(62).reduced(3, verticalInset));
+            redoButton.setBounds(
+                area.removeFromLeft(62).reduced(3, verticalInset));
+        };
+    const auto layoutTransportControls =
+        [this](juce::Rectangle<int> area, int verticalInset)
+        {
+            playButton.setBounds(
+                area.removeFromLeft(66).reduced(3, verticalInset));
+            stopButton.setBounds(
+                area.removeFromLeft(62).reduced(3, verticalInset));
+            recordButton.setBounds(
+                area.removeFromLeft(58).reduced(3, verticalInset));
+            loopButton.setBounds(
+                area.removeFromLeft(76).reduced(3, verticalInset));
+        };
+    const auto layoutTempoControls =
+        [this](juce::Rectangle<int> area, int verticalInset)
+        {
+            tempoLabel.setBounds(
+                area.removeFromRight(38).reduced(0, verticalInset));
+            tempoSlider.setBounds(area.reduced(3, verticalInset));
+        };
 
-    auto editControls = topRow.removeFromLeft(128);
-    undoButton.setBounds(editControls.removeFromLeft(62).reduced(3, 12));
-    redoButton.setBounds(editControls.removeFromLeft(62).reduced(3, 12));
+    if (topRow.getWidth() < 1160)
+    {
+        auto firstRow = topRow.removeFromTop(28);
+        topRow.removeFromTop(4);
+        auto secondRow = topRow.removeFromTop(28);
 
-    auto transport = topRow.removeFromLeft(270);
-    playButton.setBounds(transport.removeFromLeft(66).reduced(3, 9));
-    stopButton.setBounds(transport.removeFromLeft(62).reduced(3, 9));
-    recordButton.setBounds(transport.removeFromLeft(58).reduced(3, 9));
-    loopButton.setBounds(transport.removeFromLeft(76).reduced(3, 9));
+        layoutFileControls(firstRow.removeFromLeft(320), 1);
+        layoutTempoControls(firstRow.removeFromRight(180), 2);
+        metronomeButton.setBounds(
+            firstRow.removeFromRight(78).reduced(3, 1));
+        positionLabel.setBounds(firstRow.reduced(6, 2));
 
-    auto tempoArea = topRow.removeFromRight(180);
-    tempoLabel.setBounds(tempoArea.removeFromRight(38).reduced(0, 10));
-    tempoSlider.setBounds(tempoArea.reduced(3, 10));
-    metronomeButton.setBounds(topRow.removeFromRight(78).reduced(3, 9));
-    positionLabel.setBounds(topRow.reduced(6, 8));
+        layoutEditControls(secondRow.removeFromLeft(128), 1);
+        layoutTransportControls(secondRow.removeFromLeft(270), 1);
+    }
+    else
+    {
+        layoutFileControls(topRow.removeFromLeft(320), 12);
+        layoutEditControls(topRow.removeFromLeft(128), 12);
+        layoutTransportControls(topRow.removeFromLeft(270), 9);
+        layoutTempoControls(topRow.removeFromRight(180), 10);
+        metronomeButton.setBounds(
+            topRow.removeFromRight(78).reduced(3, 9));
+        positionLabel.setBounds(topRow.reduced(6, 8));
+    }
 
     if (leftPanelCollapsed)
     {

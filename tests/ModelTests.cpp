@@ -1411,6 +1411,7 @@ int main()
     renderEngineTests();
     pluginCompatibilityTests();
     projectMigrationTests();
+    windowSizingTests();
 
     if (failures == 0)
     {

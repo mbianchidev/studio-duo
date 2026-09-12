@@ -11,3 +11,4 @@ void reampSnapshotTests();
 void renderEngineTests();
 void pluginCompatibilityTests();
 void projectMigrationTests();
+void windowSizingTests();

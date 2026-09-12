@@ -1,5 +1,6 @@
 #include "StudioAudioEngine.h"
 
+#include "StudioAudioDeviceManager.h"
 #include "mix/RoutingGraphCompiler.h"
 #include "plugin_host/PluginFormats.h"
 #include "plugin_host/ClapPluginInstance.h"
@@ -397,7 +398,71 @@ juce::Result StudioAudioEngine::initialise(juce::AudioDeviceManager& manager)
 
     // Audio starts after the window's first paint, so microphone permission and
     // device discovery cannot prevent the initial UI from appearing.
-    const auto error = manager.initialiseWithDefaultDevices(1, 2);
+    juce::String error;
+
+#if JUCE_WINDOWS
+    const auto& deviceTypes = manager.getAvailableDeviceTypes();
+    juce::String fallbackDeviceType;
+    for (auto* type : deviceTypes)
+    {
+        if (!type->getTypeName().equalsIgnoreCase("ASIO")
+            && !type->getDeviceNames(true).isEmpty()
+            && !type->getDeviceNames(false).isEmpty())
+        {
+            fallbackDeviceType = type->getTypeName();
+            break;
+        }
+    }
+
+    juce::String asioDeviceName;
+    if (manager.getCurrentAudioDeviceType().equalsIgnoreCase("ASIO"))
+    {
+        if (auto* asioType = manager.getCurrentDeviceTypeObject())
+            asioDeviceName =
+                preferredAsioDeviceName(asioType->getDeviceNames(false));
+    }
+
+    if (asioDeviceName.isNotEmpty())
+    {
+        juce::AudioDeviceManager::AudioDeviceSetup setup;
+        setup.inputDeviceName = asioDeviceName;
+        setup.outputDeviceName = asioDeviceName;
+        error = manager.initialise(1, 2, nullptr, false, {}, &setup);
+    }
+    else
+    {
+        error = manager.initialiseWithDefaultDevices(1, 2);
+    }
+
+    if (error.isNotEmpty()
+        && asioDeviceName.isNotEmpty()
+        && fallbackDeviceType.isNotEmpty())
+    {
+        const auto asioError = error;
+        juce::Logger::writeToLog(
+            "audio.device: ASIO startup failed for "
+            + asioDeviceName
+            + "; falling back to "
+            + fallbackDeviceType
+            + ": "
+            + asioError);
+        manager.setCurrentAudioDeviceType(fallbackDeviceType, false);
+        const auto fallbackError =
+            manager.initialiseWithDefaultDevices(1, 2);
+        if (fallbackError.isEmpty())
+        {
+            error.clear();
+        }
+        else
+        {
+            error = "ASIO (" + asioDeviceName + "): " + asioError
+                + "\n" + fallbackDeviceType + ": " + fallbackError;
+        }
+    }
+#else
+    error = manager.initialiseWithDefaultDevices(1, 2);
+#endif
+
     if (error.isNotEmpty())
         return juce::Result::fail("Audio device setup failed: " + error);
 
