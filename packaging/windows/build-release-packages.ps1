@@ -109,8 +109,7 @@ function Invoke-CodeSigning {
         $signature = Get-AuthenticodeSignature -LiteralPath $Path
         if (
             $null -eq $signature.SignerCertificate -or
-            $signature.SignerCertificate.Thumbprint
-                -ne $signingCertificate.Thumbprint
+            $signature.SignerCertificate.Thumbprint -ne $signingCertificate.Thumbprint
         ) {
             throw "Authenticode signer verification failed for $Path"
         }
