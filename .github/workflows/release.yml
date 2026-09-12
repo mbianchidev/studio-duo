@@ -125,77 +125,18 @@ jobs:
           CERTIFICATE_BASE64: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_BASE64 }}
           CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
         run: |
-          $ErrorActionPreference = "Stop"
-          $executable = "build/StudioDuo_artefacts/Release/Studio Duo.exe"
-          $staging = Join-Path $env:RUNNER_TEMP "Studio-Duo-$env:VERSION-Windows-x64"
-          $zipOutput = "Studio-Duo-$env:VERSION-Windows-x64.zip"
-          $setupOutput = "Studio-Duo-$env:VERSION-Windows-x64-Setup.exe"
-          $certificatePath = Join-Path $env:RUNNER_TEMP "studio-duo-signing.pfx"
-
-          if (-not (Test-Path $executable -PathType Leaf)) {
-            throw "Studio Duo executable was not produced at $executable"
-          }
           if ([string]::IsNullOrWhiteSpace($env:CERTIFICATE_BASE64)) {
             throw "WINDOWS_SIGNING_CERTIFICATE_BASE64 is not configured"
           }
           if ([string]::IsNullOrWhiteSpace($env:CERTIFICATE_PASSWORD)) {
             throw "WINDOWS_SIGNING_CERTIFICATE_PASSWORD is not configured"
           }
-
-          $signTool = Get-ChildItem `
-            "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" `
-            -File |
-            Sort-Object FullName -Descending |
-            Select-Object -First 1
-          if ($null -eq $signTool) {
-            throw "The Windows SDK SignTool executable is unavailable"
-          }
-
-          function Sign-Artifact {
-            param([Parameter(Mandatory = $true)][string] $Path)
-
-            & $signTool.FullName sign `
-              /f $certificatePath `
-              /p $env:CERTIFICATE_PASSWORD `
-              /fd SHA256 `
-              /td SHA256 `
-              /tr "http://timestamp.digicert.com" `
-              /d "Studio Duo" `
-              /du "https://github.com/mbianchidev/studio-duo" `
-              $Path
-            if ($LASTEXITCODE -ne 0) {
-              throw "Authenticode signing failed for $Path"
-            }
-
-            & $signTool.FullName verify /pa /v $Path
-            if ($LASTEXITCODE -ne 0) {
-              throw "Authenticode verification failed for $Path"
-            }
-          }
-
-          try {
-            $certificateBytes = [Convert]::FromBase64String(
-              ($env:CERTIFICATE_BASE64 -replace "\s", "")
-            )
-            [IO.File]::WriteAllBytes($certificatePath, $certificateBytes)
-
-            Sign-Artifact $executable
-            & ./packaging/windows/build-installer.ps1 `
-              -Version $env:VERSION `
-              -Executable $executable `
-              -OutputDirectory (Get-Location).Path
-            if (-not (Test-Path $setupOutput -PathType Leaf)) {
-              throw "Windows installer was not produced at $setupOutput"
-            }
-            Sign-Artifact $setupOutput
-
-            New-Item -ItemType Directory -Path $staging -Force | Out-Null
-            Copy-Item $executable (Join-Path $staging "Studio Duo.exe")
-            Copy-Item "README.md", "LICENSE" $staging
-            Compress-Archive -Path $staging -DestinationPath $zipOutput -Force
-          } finally {
-            Remove-Item $certificatePath -Force -ErrorAction SilentlyContinue
-          }
+          & ./packaging/windows/build-release-packages.ps1 `
+            -Version $env:VERSION `
+            -Executable "build/StudioDuo_artefacts/Release/Studio Duo.exe" `
+            -OutputDirectory (Get-Location).Path `
+            -CertificateBase64 $env:CERTIFICATE_BASE64 `
+            -CertificatePassword $env:CERTIFICATE_PASSWORD
 
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v7

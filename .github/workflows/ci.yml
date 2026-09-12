@@ -47,12 +47,50 @@ jobs:
       - name: Test
         run: ctest --test-dir build --build-config Release --output-on-failure
 
-      - name: Validate Windows installer
+      - name: Validate signed Windows packages
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $version = (Get-Content VERSION -Raw).Trim()
-          & ./packaging/windows/build-installer.ps1 `
-            -Version $version `
-            -Executable "build/StudioDuo_artefacts/Release/Studio Duo.exe" `
-            -OutputDirectory "$env:RUNNER_TEMP\studio-duo-installer"
+          $passwordText = "studio-duo-ci-signing"
+          $password = ConvertTo-SecureString $passwordText -AsPlainText -Force
+          $certificate = New-SelfSignedCertificate `
+            -Type CodeSigningCert `
+            -Subject "CN=Studio Duo CI Test" `
+            -CertStoreLocation "Cert:\CurrentUser\My" `
+            -NotAfter (Get-Date).AddDays(1)
+          $pfxPath = Join-Path $env:RUNNER_TEMP "studio-duo-ci-signing.pfx"
+          $cerPath = Join-Path $env:RUNNER_TEMP "studio-duo-ci-signing.cer"
+
+          try {
+            Export-PfxCertificate `
+              -Cert $certificate `
+              -FilePath $pfxPath `
+              -Password $password | Out-Null
+            Export-Certificate `
+              -Cert $certificate `
+              -FilePath $cerPath | Out-Null
+            Import-Certificate `
+              -FilePath $cerPath `
+              -CertStoreLocation "Cert:\CurrentUser\Root" | Out-Null
+            $certificateBase64 = [Convert]::ToBase64String(
+              [IO.File]::ReadAllBytes($pfxPath)
+            )
+
+            & ./packaging/windows/build-release-packages.ps1 `
+              -Version $version `
+              -Executable "build/StudioDuo_artefacts/Release/Studio Duo.exe" `
+              -OutputDirectory "$env:RUNNER_TEMP\studio-duo-windows-packages" `
+              -CertificateBase64 $certificateBase64 `
+              -CertificatePassword $passwordText
+          } finally {
+            Remove-Item `
+              "Cert:\CurrentUser\My\$($certificate.Thumbprint)" `
+              -Force `
+              -ErrorAction SilentlyContinue
+            Remove-Item `
+              "Cert:\CurrentUser\Root\$($certificate.Thumbprint)" `
+              -Force `
+              -ErrorAction SilentlyContinue
+            Remove-Item $pfxPath, $cerPath -Force -ErrorAction SilentlyContinue
+          }
