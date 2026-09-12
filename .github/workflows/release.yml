@@ -136,7 +136,8 @@ jobs:
             -Executable "build/StudioDuo_artefacts/Release/Studio Duo.exe" `
             -OutputDirectory (Get-Location).Path `
             -CertificateBase64 $env:CERTIFICATE_BASE64 `
-            -CertificatePassword $env:CERTIFICATE_PASSWORD
+            -CertificatePassword $env:CERTIFICATE_PASSWORD `
+            -SkipTrustVerification
 
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v7
