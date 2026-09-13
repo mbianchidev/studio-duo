@@ -56,7 +56,23 @@ UpdatePlatform currentUpdatePlatform()
 #if JUCE_MAC
     return UpdatePlatform::macOS;
 #elif JUCE_WINDOWS
-    return UpdatePlatform::windows;
+    const auto installLocation = juce::WindowsRegistry::getValue(
+        "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion"
+        "\\Uninstall\\{6B4141DC-39BF-429F-9D41-C21BDD63AE0E}_is1"
+        "\\InstallLocation",
+        {},
+        juce::WindowsRegistry::WoW64_64bit)
+        .trimCharactersAtEnd("\\/");
+    const auto executableDirectory =
+        juce::File::getSpecialLocation(
+            juce::File::currentExecutableFile)
+            .getParentDirectory()
+            .getFullPathName()
+            .trimCharactersAtEnd("\\/");
+    return installLocation.isNotEmpty()
+        && installLocation.equalsIgnoreCase(executableDirectory)
+        ? UpdatePlatform::windowsInstaller
+        : UpdatePlatform::windowsPortable;
 #else
     return UpdatePlatform::unsupported;
 #endif
@@ -68,8 +84,10 @@ juce::String updatePlatformName(UpdatePlatform platform)
     {
         case UpdatePlatform::macOS:
             return "macOS";
-        case UpdatePlatform::windows:
+        case UpdatePlatform::windowsInstaller:
             return "Windows";
+        case UpdatePlatform::windowsPortable:
+            return "portable Windows";
         case UpdatePlatform::unsupported:
             return "unsupported";
     }
@@ -84,8 +102,9 @@ juce::String expectedUpdateAssetFileName(
     {
         case UpdatePlatform::macOS:
             return "Studio-Duo-" + version + "-macOS-universal.zip";
-        case UpdatePlatform::windows:
+        case UpdatePlatform::windowsInstaller:
             return "Studio-Duo-" + version + "-Windows-x64-Setup.exe";
+        case UpdatePlatform::windowsPortable:
         case UpdatePlatform::unsupported:
             return {};
     }
@@ -148,7 +167,8 @@ std::optional<UpdateRelease> parseUpdateManifest(
     juce::String& error)
 {
     error.clear();
-    if (platform == UpdatePlatform::unsupported)
+    if (platform == UpdatePlatform::unsupported
+        || platform == UpdatePlatform::windowsPortable)
     {
         error = "Automatic updates are not available on this platform.";
         return std::nullopt;

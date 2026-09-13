@@ -150,6 +150,8 @@ void UpdateSettingsComponent::refresh(
     automaticDownloadToggle.setToggleState(
         snapshot.automaticDownloads,
         juce::dontSendNotification);
+    automaticDownloadToggle.setEnabled(
+        snapshot.phase != UpdatePhase::unsupported);
 
     downloadProgress = snapshot.progress;
     progressBar.setVisible(
@@ -160,7 +162,6 @@ void UpdateSettingsComponent::refresh(
         || snapshot.phase == UpdatePhase::downloading;
     checkButton.setEnabled(
         !busy
-        && snapshot.phase != UpdatePhase::ready
         && snapshot.phase != UpdatePhase::unsupported);
     downloadButton.setEnabled(
         !busy

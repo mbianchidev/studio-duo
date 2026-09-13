@@ -396,7 +396,8 @@ bundle and does not require notarization or an Apple update-signing key. The
 installed `.app` and its parent folder must be writable by the current user. On
 Windows, the updater runs the release installer silently and uses its existing
 upgrade identity; it adds no updater-specific certificate, key, service, or
-background process.
+background process. The portable Windows ZIP remains a manually replaced
+standalone copy; install Studio Duo with Setup to enable in-app updates.
 
 ## Logs and diagnostics
 

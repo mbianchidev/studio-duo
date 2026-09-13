@@ -49,6 +49,9 @@ backup="$parent/.Studio Duo.previous"
 update_complete=0
 
 cleanup() {
+    if [ ! -d "$target" ] && [ -d "$backup" ]; then
+        /bin/mv "$backup" "$target"
+    fi
     /bin/rm -rf "$stage"
     if [ "$update_complete" -eq 0 ] && [ -d "$target" ]; then
         /usr/bin/open "$target"

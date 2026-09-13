@@ -24,7 +24,7 @@ juce::Result launchUpdateInstaller(
     SHELLEXECUTEINFOW launchInfo {};
     launchInfo.cbSize = sizeof(launchInfo);
     launchInfo.fMask = SEE_MASK_NOCLOSEPROCESS;
-    launchInfo.lpVerb = L"runas";
+    launchInfo.lpVerb = L"open";
     launchInfo.lpFile = package.getFullPathName().toWideCharPointer();
     launchInfo.lpParameters = parameters.toWideCharPointer();
     launchInfo.nShow = SW_SHOWNORMAL;

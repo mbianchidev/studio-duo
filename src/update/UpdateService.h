@@ -83,6 +83,7 @@ private:
     void performCheck();
     void performDownload(const UpdateRelease& release);
     void publishFailure(const juce::String& message);
+    void publishCheckFailure(const juce::String& message);
     void publishState(
         UpdatePhase phase,
         const juce::String& message,
@@ -99,6 +100,9 @@ private:
     const juce::File downloadsDirectory;
     const UpdatePlatform platform = currentUpdatePlatform();
 
+    juce::InterProcessLock processLock {
+        "StudioDuoAutomaticUpdater"
+    };
     mutable juce::CriticalSection stateLock;
     juce::CriticalSection settingsLock;
     juce::CriticalSection networkLock;
@@ -109,6 +113,8 @@ private:
     std::atomic<Operation> requestedOperation { Operation::none };
     std::atomic<bool> automaticDownloads { true };
     juce::WebInputStream* activeWebStream = nullptr;
+    bool ownsProcessLock = false;
+    bool threadStarted = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(UpdateService)
 };

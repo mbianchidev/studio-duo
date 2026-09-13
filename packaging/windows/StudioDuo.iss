@@ -58,8 +58,8 @@ Name: "{autoprograms}\Studio Duo"; Filename: "{app}\Studio Duo.exe"; WorkingDir:
 Name: "{autodesktop}\Studio Duo"; Filename: "{app}\Studio Duo.exe"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\Studio Duo.exe"; Description: "Launch Studio Duo"; WorkingDir: "{app}"; Flags: nowait postinstall skipifsilent; Check: not IsAutomaticUpdate
-Filename: "{app}\Studio Duo.exe"; WorkingDir: "{app}"; Flags: nowait skipifdoesntexist; Check: IsAutomaticUpdate
+Filename: "{app}\Studio Duo.exe"; Description: "Launch Studio Duo"; WorkingDir: "{app}"; Flags: nowait postinstall skipifsilent runasoriginaluser; Check: not IsAutomaticUpdate
+Filename: "{app}\Studio Duo.exe"; WorkingDir: "{app}"; Flags: nowait skipifdoesntexist runasoriginaluser; Check: IsAutomaticUpdate
 
 [Code]
 const

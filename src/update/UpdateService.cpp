@@ -107,10 +107,35 @@ UpdateService::UpdateService(
 {
     state.currentVersion = currentVersion;
     state.message = "Updates are checked when Studio Duo starts.";
+    if (platform == UpdatePlatform::windowsPortable)
+    {
+        state.phase = UpdatePhase::unsupported;
+        state.message =
+            "Automatic updates are unavailable in the portable Windows build. "
+            "Install Studio Duo with Setup to enable in-app updates.";
+        return;
+    }
+    if (platform == UpdatePlatform::unsupported)
+    {
+        state.phase = UpdatePhase::unsupported;
+        state.message =
+            "Automatic updates are not available on this platform.";
+        return;
+    }
+    if (!processLock.enter(0))
+    {
+        state.phase = UpdatePhase::unsupported;
+        state.message =
+            "Updates are being managed by another Studio Duo window.";
+        return;
+    }
+    ownsProcessLock = true;
     cleanupIncompleteDownloads();
     loadSettings();
 
-    if (!startThread(juce::Thread::Priority::background))
+    threadStarted =
+        startThread(juce::Thread::Priority::background);
+    if (!threadStarted)
     {
         publishFailure(
             "Studio Duo could not start the background update service.");
@@ -119,20 +144,25 @@ UpdateService::UpdateService(
 
 UpdateService::~UpdateService()
 {
-    signalThreadShouldExit();
+    if (threadStarted)
     {
-        const juce::ScopedLock lock(networkLock);
-        if (activeWebStream != nullptr)
-            activeWebStream->cancel();
-    }
-    notify();
-    if (!stopThread(12000))
-    {
-        logError(
-            "update.shutdown",
-            "The update worker did not stop cleanly.");
+        signalThreadShouldExit();
+        {
+            const juce::ScopedLock lock(networkLock);
+            if (activeWebStream != nullptr)
+                activeWebStream->cancel();
+        }
+        notify();
+        if (!stopThread(12000))
+        {
+            logError(
+                "update.shutdown",
+                "The update worker did not stop cleanly.");
+        }
     }
     cancelPendingUpdate();
+    if (ownsProcessLock)
+        processLock.exit();
 }
 
 juce::File UpdateService::defaultStorageDirectory()
@@ -160,20 +190,15 @@ void UpdateService::removeListener(Listener* listener)
 
 void UpdateService::checkForUpdates()
 {
-    if (platform == UpdatePlatform::unsupported)
+    if (!ownsProcessLock)
     {
-        publishState(
-            UpdatePhase::unsupported,
-            "Automatic updates are not available on this platform.",
-            0.0);
         return;
     }
 
     {
         const juce::ScopedLock lock(stateLock);
         if (state.phase == UpdatePhase::checking
-            || state.phase == UpdatePhase::downloading
-            || state.phase == UpdatePhase::ready)
+            || state.phase == UpdatePhase::downloading)
             return;
         state.phase = UpdatePhase::checking;
         state.message = "Checking for updates...";
@@ -204,6 +229,9 @@ void UpdateService::downloadUpdate()
 
 juce::Result UpdateService::setAutomaticDownloads(bool enabled)
 {
+    if (!ownsProcessLock)
+        return juce::Result::fail(state.message);
+
     const auto previous = automaticDownloads.exchange(enabled);
     {
         const juce::ScopedLock lock(stateLock);
@@ -231,6 +259,9 @@ juce::Result UpdateService::setAutomaticDownloads(bool enabled)
 
 juce::Result UpdateService::launchReadyUpdate()
 {
+    if (!ownsProcessLock)
+        return juce::Result::fail(state.message);
+
     std::optional<PendingUpdate> pending;
     {
         const juce::ScopedLock lock(stateLock);
@@ -328,7 +359,7 @@ void UpdateService::performCheck()
         return;
     if (input == nullptr)
     {
-        publishFailure(
+        publishCheckFailure(
             "Studio Duo could not connect to the update service.");
         return;
     }
@@ -338,7 +369,7 @@ void UpdateService::performCheck()
         input.get());
     if (statusCode != 200)
     {
-        publishFailure(
+        publishCheckFailure(
             "The update service returned HTTP "
             + juce::String(statusCode)
             + ".");
@@ -353,7 +384,7 @@ void UpdateService::performCheck()
         return;
     if (manifestData.getSize() > maximumManifestBytes)
     {
-        publishFailure(
+        publishCheckFailure(
             "The update manifest is larger than the supported limit.");
         return;
     }
@@ -367,8 +398,63 @@ void UpdateService::performCheck()
         parseError);
     if (!release.has_value())
     {
-        publishFailure(parseError);
+        publishCheckFailure(parseError);
         return;
+    }
+
+    std::optional<PendingUpdate> pending;
+    {
+        const juce::ScopedLock lock(stateLock);
+        pending = pendingUpdate;
+    }
+    if (pending.has_value()
+        && !isNewerSemanticVersion(
+            release->version,
+            pending->version))
+    {
+        {
+            const juce::ScopedLock lock(stateLock);
+            availableRelease =
+                release->version == pending->version
+                    ? release
+                    : std::optional<UpdateRelease> {};
+            state.phase = UpdatePhase::ready;
+            state.availableVersion = pending->version;
+            state.releaseNotesUrl = pending->releaseNotesUrl;
+            state.message =
+                "Studio Duo "
+                + pending->version
+                + " is downloaded. Restart when you are ready to update.";
+            state.progress = 1.0;
+        }
+        triggerAsyncUpdate();
+        return;
+    }
+    if (pending.has_value())
+    {
+        {
+            const juce::ScopedLock lock(stateLock);
+            pendingUpdate.reset();
+        }
+        const auto saveResult = saveSettings();
+        if (saveResult.failed())
+        {
+            {
+                const juce::ScopedLock lock(stateLock);
+                pendingUpdate = pending;
+            }
+            publishCheckFailure(saveResult.getErrorMessage());
+            return;
+        }
+        if (pending->file.existsAsFile()
+            && !pending->file.deleteFile())
+        {
+            logError(
+                "update.cleanup",
+                "Could not remove superseded update package "
+                    + pending->file.getFileName()
+                    + ".");
+        }
     }
 
     if (!isNewerSemanticVersion(
@@ -629,6 +715,34 @@ void UpdateService::publishFailure(const juce::String& message)
     logError("update", message);
 }
 
+void UpdateService::publishCheckFailure(
+    const juce::String& message)
+{
+    {
+        const juce::ScopedLock lock(stateLock);
+        if (pendingUpdate.has_value())
+        {
+            state.phase = UpdatePhase::ready;
+            state.availableVersion = pendingUpdate->version;
+            state.releaseNotesUrl = pendingUpdate->releaseNotesUrl;
+            state.message =
+                "Studio Duo "
+                + pendingUpdate->version
+                + " is downloaded. A check for newer updates failed: "
+                + message;
+            state.progress = 1.0;
+        }
+        else
+        {
+            state.phase = UpdatePhase::failed;
+            state.message = message;
+            state.progress = 0.0;
+        }
+    }
+    logError("update.check", message);
+    triggerAsyncUpdate();
+}
+
 void UpdateService::publishState(
     UpdatePhase phase,
     const juce::String& message,
@@ -645,6 +759,12 @@ void UpdateService::publishState(
 
 juce::Result UpdateService::saveSettings()
 {
+    if (!ownsProcessLock)
+    {
+        return juce::Result::fail(
+            "Updates are being managed by another Studio Duo window.");
+    }
+
     const juce::ScopedLock settingsSaveLock(settingsLock);
     bool autoDownload = true;
     std::optional<PendingUpdate> pending;

@@ -1,5 +1,6 @@
 #include "update/UpdateManifest.h"
 #include "TestHarness.h"
+#include "TestSuites.h"
 
 namespace
 {
@@ -94,7 +95,7 @@ void manifestParsing()
 
     const auto windows = studio::parseUpdateManifest(
         validManifest(),
-        studio::UpdatePlatform::windows,
+        studio::UpdatePlatform::windowsInstaller,
         error);
     expect(windows.has_value(), error.toRawUTF8());
     expect(
@@ -125,6 +126,14 @@ void manifestParsing()
              error)
              .has_value(),
         "Update packages without a SHA-256 checksum are rejected.");
+
+    expect(
+        !studio::parseUpdateManifest(
+             validManifest(),
+             studio::UpdatePlatform::windowsPortable,
+             error)
+             .has_value(),
+        "Portable Windows builds do not advertise an in-place update.");
 }
 }
 

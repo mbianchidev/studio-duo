@@ -1619,7 +1619,6 @@ MainComponent::MainComponent()
         {
             if (safe == nullptr)
                 return;
-            safe->maybePromptForUpdate();
             safe->updateService.checkForUpdates();
         });
 }

@@ -101,7 +101,9 @@ The updater introduces no new release secret or signing system. macOS updates
 use the same ad-hoc-signed bundle produced by the normal build and do not
 require Apple notarization or a separate update-signing key. Windows updates
 reuse the existing installer and its permanent Inno Setup application ID; no
-Windows service or updater-specific credential is required.
+Windows service or updater-specific credential is required. Portable ZIP
+builds do not update in place; the installed Setup build provides the automatic
+update path.
 
 ## Install released artifacts
 

@@ -11,7 +11,8 @@ namespace studio
 enum class UpdatePlatform
 {
     macOS,
-    windows,
+    windowsInstaller,
+    windowsPortable,
     unsupported
 };
 

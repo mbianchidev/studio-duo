@@ -406,7 +406,10 @@ application-data directory. macOS uses a detached helper to verify the bundle
 ID, version, and existing code signature before atomically replacing the
 writable `.app`; Windows starts the existing Inno Setup upgrade package. No
 Apple notarization, separate update-signing key, Windows service, or
-updater-specific credential is required.
+updater-specific credential is required. The updater holds a process-wide lock
+so only one Studio Duo window owns shared update state. Portable Windows builds
+do not start the updater because replacing them with the installed Setup copy
+would leave the original portable executable stale.
 
 The bundle includes the generated ICNS and also embeds the 512 px PNG. Normal
 macOS startup assigns that image to `NSApplication` explicitly so Dock previews
