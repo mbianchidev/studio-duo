@@ -3074,6 +3074,37 @@ std::optional<StudioAudioEngine::RenderSnapshot> StudioAudioEngine::buildSnapsho
         route.tap = compiledRoute.tap;
         route.destinationIndex = compiledRoute.destinationTrackIndex;
         route.destinationInsertId = compiledRoute.destinationInsertId;
+        if (route.kind == RouteKind::sidechain
+            && route.destinationIndex >= 0
+            && route.destinationIndex
+                < static_cast<int>(snapshot.tracks.size()))
+        {
+            auto& destination = snapshot.tracks[
+                static_cast<std::size_t>(route.destinationIndex)];
+            const auto existing = std::find_if(
+                destination.sidechains.cbegin(),
+                destination.sidechains.cend(),
+                [&route](const auto& sidechain)
+                {
+                    return sidechain.insertId
+                        == route.destinationInsertId;
+                });
+            if (existing == destination.sidechains.cend())
+            {
+                route.destinationSidechainIndex =
+                    static_cast<int>(destination.sidechains.size());
+                destination.sidechains.push_back({
+                    route.destinationInsertId
+                });
+            }
+            else
+            {
+                route.destinationSidechainIndex =
+                    static_cast<int>(std::distance(
+                        destination.sidechains.cbegin(),
+                        existing));
+            }
+        }
         route.hardwareFirstChannel = compiledRoute.hardwareFirstChannel;
         route.hardwareChannels = compiledRoute.hardwareChannels;
         route.gain = compiledRoute.gain;
@@ -3602,26 +3633,49 @@ void StudioAudioEngine::configureRuntimeTiming(
     const std::vector<PluginRuntimeRequest>& pluginRequests,
     int transitionProgressSlot) const
 {
-    const auto latencyForKey = [&pluginRequests, &snapshot](std::uint64_t key)
+    const auto requestLatency =
+        [&snapshot](const PluginRuntimeRequest& request)
+    {
+        if (request.bypassed
+            || request.missing
+            || (!request.description.has_value()
+                && request.deviceIdentifier.isEmpty()))
+            return 0;
+        return (request.bridgeMode == PluginBridgeMode::sandboxed
+                    ? snapshot.processingQuantum
+                    : 0)
+            + std::max(0, request.latencySamples);
+    };
+    const auto latencyForKey =
+        [&pluginRequests, &requestLatency](std::uint64_t key)
     {
         return std::accumulate(pluginRequests.cbegin(),
                                pluginRequests.cend(),
                                0,
-                               [key, &snapshot](int total, const auto& request)
+                               [key, &requestLatency](
+                                   int total,
+                                   const auto& request)
         {
-            if (runtimeKey(request.trackId) != key
-                || request.bypassed
-                || request.missing
-                || (!request.description.has_value()
-                    && request.deviceIdentifier.isEmpty()))
+            if (runtimeKey(request.trackId) != key)
                 return total;
-
-            return total
-                + (request.bridgeMode == PluginBridgeMode::sandboxed
-                       ? snapshot.processingQuantum
-                       : 0)
-                + std::max(0, request.latencySamples);
+            return total + requestLatency(request);
         });
+    };
+    const auto latencyBeforeInsert =
+        [&pluginRequests, &requestLatency](
+            std::uint64_t key,
+            const juce::String& insertId)
+    {
+        auto latency = 0;
+        for (const auto& request : pluginRequests)
+        {
+            if (runtimeKey(request.trackId) != key)
+                continue;
+            if (request.insertId == insertId)
+                break;
+            latency += requestLatency(request);
+        }
+        return latency;
     };
     const auto tailForKey = [&pluginRequests](std::uint64_t key)
     {
@@ -3711,10 +3765,20 @@ void StudioAudioEngine::configureRuntimeTiming(
             transitionProgressSlot);
         for (auto& route : track.routes)
         {
-            const auto routeDestinationLatency = route.destinationIndex >= 0
+            auto routeDestinationLatency = route.destinationIndex >= 0
                 ? inputLatencies[static_cast<std::size_t>(
                       route.destinationIndex)]
                 : track.runtimeLatencySamples;
+            if (route.kind == RouteKind::sidechain
+                && route.destinationIndex >= 0)
+            {
+                const auto& destination = snapshot.tracks[
+                    static_cast<std::size_t>(
+                        route.destinationIndex)];
+                routeDestinationLatency += latencyBeforeInsert(
+                    destination.runtimeKey,
+                    route.destinationInsertId);
+            }
             configureDelayCompensator(
                 route.compensation,
                 routeDestinationLatency - track.runtimeLatencySamples,
@@ -4483,7 +4547,8 @@ void StudioAudioEngine::applyDelayCompensation(
 
 void StudioAudioEngine::processRuntimeChain(std::uint64_t key,
                                             juce::AudioBuffer<float>& buffer,
-                                            const juce::AudioBuffer<float>* sidechain,
+                                            const std::vector<RenderTrack::SidechainInput>*
+                                                sidechains,
                                             const std::vector<RenderSource::PluginAutomation>*
                                                 automation,
                                             std::int64_t timelineSample) noexcept
@@ -4505,6 +4570,20 @@ void StudioAudioEngine::processRuntimeChain(std::uint64_t key,
     {
         for (auto& insert : track->inserts)
         {
+            const juce::AudioBuffer<float>* sidechain = nullptr;
+            if (sidechains != nullptr)
+            {
+                const auto input = std::find_if(
+                    sidechains->cbegin(),
+                    sidechains->cend(),
+                    [&insert](const auto& candidate)
+                    {
+                        return candidate.insertId == insert.insertId;
+                    });
+                if (input != sidechains->cend())
+                    sidechain = &input->buffer;
+            }
+
             insert.parameterEventCount = 0;
             if (automation != nullptr)
             {
@@ -6233,8 +6312,11 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
             {
                 track.processingBuffer.clear(0, 0, samplesThisBlock);
                 track.processingBuffer.clear(1, 0, samplesThisBlock);
-                track.sidechainBuffer.clear(0, 0, samplesThisBlock);
-                track.sidechainBuffer.clear(1, 0, samplesThisBlock);
+                for (auto& sidechain : track.sidechains)
+                {
+                    sidechain.buffer.clear(0, 0, samplesThisBlock);
+                    sidechain.buffer.clear(1, 0, samplesThisBlock);
+                }
                 for (auto& route : track.routes)
                 {
                     route.processingBuffer.clear(0, 0, samplesThisBlock);
@@ -6300,7 +6382,7 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
                                                    samplesThisBlock);
                 processRuntimeChain(track.runtimeKey,
                                     trackView,
-                                    &track.sidechainBuffer,
+                                    &track.sidechains,
                                     &track.pluginAutomation,
                                     position);
                 const auto publishMeter = [&](bool postFader)
@@ -6431,18 +6513,29 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
                             auto& destination =
                                 snapshot.tracks[static_cast<std::size_t>(
                                     route.destinationIndex)];
-                            auto& destinationBuffer =
-                                route.kind == RouteKind::sidechain
-                                ? destination.sidechainBuffer
-                                : destination.processingBuffer;
-                            destinationBuffer.addFrom(
+                            auto* destinationBuffer =
+                                &destination.processingBuffer;
+                            if (route.kind == RouteKind::sidechain)
+                            {
+                                if (route.destinationSidechainIndex < 0
+                                    || route.destinationSidechainIndex
+                                        >= static_cast<int>(
+                                            destination.sidechains.size()))
+                                    continue;
+                                destinationBuffer =
+                                    &destination.sidechains[
+                                         static_cast<std::size_t>(
+                                             route.destinationSidechainIndex)]
+                                         .buffer;
+                            }
+                            destinationBuffer->addFrom(
                                 0,
                                 0,
                                 route.processingBuffer,
                                 0,
                                 0,
                                 samplesThisBlock);
-                            destinationBuffer.addFrom(
+                            destinationBuffer->addFrom(
                                 1,
                                 0,
                                 route.processingBuffer,

@@ -5,6 +5,7 @@
 #include "mix/RoutingGraphCompiler.h"
 #include "audio/StudioAudioEngine.h"
 #include "model/ProjectModel.h"
+#include "plugin_host/PluginFormats.h"
 
 void routingEngineTests()
 {
@@ -334,6 +335,224 @@ void routingEngineTests()
                && postFaderOutput.getNumSamples() > 100
                && preSample > postSample + 0.08f,
            "Pre-fader sends are independent from the source fader.");
+
+    juce::AudioPluginFormatManager fixtureFormats;
+    studio::PluginFormats::addSupportedFormats(fixtureFormats);
+    juce::OwnedArray<juce::PluginDescription> fixtureDescriptions;
+    for (auto* format : fixtureFormats.getFormats())
+    {
+        if (format->getName() != "VST3")
+            continue;
+        format->findAllTypesForFile(
+            fixtureDescriptions,
+            STUDIO_DUO_ROUTING_FIXTURE_PATH);
+        break;
+    }
+    expect(fixtureDescriptions.size() == 1,
+           "The routing fixture can be discovered.");
+
+    if (!fixtureDescriptions.isEmpty())
+    {
+        auto sidechainProject = studio::Project::createDefault();
+        sidechainProject.metronomeEnabled = false;
+        sidechainProject.tracks[0].volumeDecibels = -60.0f;
+        sidechainProject.tracks[1].volumeDecibels = -60.0f;
+
+        auto firstClip = renderClip;
+        sidechainProject.tracks[0].clips.push_back(firstClip);
+        auto secondClip = renderClip;
+        secondClip.id = juce::Uuid().toString();
+        secondClip.gainDecibels = -6.0206f;
+        sidechainProject.tracks[1].clips.push_back(secondClip);
+
+        studio::Track sidechainDestination;
+        sidechainDestination.name = "Sidechain destination";
+        sidechainDestination.type = studio::TrackType::aux;
+        studio::PluginInsert firstProbe;
+        firstProbe.pluginIdentifier =
+            fixtureDescriptions[0]->createIdentifierString();
+        firstProbe.name = "First sidechain probe";
+        firstProbe.format = "VST3";
+        firstProbe.bridgeMode =
+            studio::PluginBridgeMode::trustedInProcess;
+        studio::PluginInsert secondProbe = firstProbe;
+        secondProbe.id = juce::Uuid().toString();
+        secondProbe.name = "Second sidechain probe";
+        sidechainDestination.inserts = { firstProbe, secondProbe };
+        const auto destinationId = sidechainDestination.id;
+        sidechainProject.tracks.insert(
+            sidechainProject.tracks.end() - 1,
+            sidechainDestination);
+
+        studio::RoutingConnection firstSidechain;
+        firstSidechain.name = "First isolated sidechain";
+        firstSidechain.kind = studio::RouteKind::sidechain;
+        firstSidechain.tap = studio::RouteTap::preFader;
+        firstSidechain.sourceTrackId =
+            sidechainProject.tracks[0].id;
+        firstSidechain.destination.type =
+            studio::RouteEndpointType::pluginSidechain;
+        firstSidechain.destination.trackId = destinationId;
+        firstSidechain.destination.insertId = firstProbe.id;
+        sidechainProject.routingConnections.push_back(
+            firstSidechain);
+
+        auto secondSidechain = firstSidechain;
+        secondSidechain.id = juce::Uuid().toString();
+        secondSidechain.name = "Second isolated sidechain";
+        secondSidechain.sourceTrackId =
+            sidechainProject.tracks[1].id;
+        secondSidechain.destination.insertId = secondProbe.id;
+        sidechainProject.routingConnections.push_back(
+            secondSidechain);
+
+        const auto makeRequest =
+            [&fixtureDescriptions, destinationId](
+                const studio::PluginInsert& insert)
+        {
+            studio::StudioAudioEngine::PluginRuntimeRequest request;
+            request.trackId = destinationId;
+            request.insertId = insert.id;
+            request.name = insert.name;
+            request.description = *fixtureDescriptions[0];
+            request.sidechainChannels = 2;
+            request.bridgeMode =
+                studio::PluginBridgeMode::trustedInProcess;
+            return request;
+        };
+
+        juce::AudioBuffer<float> isolatedSidechains;
+        expect(engine.renderToBuffer(
+                   sidechainProject,
+                   isolatedSidechains,
+                   48000.0,
+                   {
+                       makeRequest(firstProbe),
+                       makeRequest(secondProbe)
+                   })
+                   .wasOk(),
+               "Per-insert sidechains render.");
+        const auto isolatedSample =
+            isolatedSidechains.getNumSamples() > 100
+            ? isolatedSidechains.getSample(0, 100)
+            : 0.0f;
+        expect(isolatedSample > 0.29f
+                   && isolatedSample < 0.32f,
+               ("Sidechain routes feed only their selected inserts (sample "
+                + juce::String(isolatedSample, 4)
+                + ").")
+                   .toRawUTF8());
+
+        const auto impulseFile = sourceFile.getSiblingFile(
+            sourceFile.getFileNameWithoutExtension()
+                + "-sidechain-impulse.wav");
+        {
+            juce::WavAudioFormat wav;
+            std::unique_ptr<juce::OutputStream> stream =
+                impulseFile.createOutputStream();
+            auto writer = wav.createWriterFor(
+                stream,
+                juce::AudioFormatWriterOptions {}
+                    .withSampleRate(48000.0)
+                    .withNumChannels(1)
+                    .withBitsPerSample(24));
+            juce::AudioBuffer<float> impulse(1, 64);
+            impulse.clear();
+            impulse.setSample(0, 0, 0.2f);
+            expect(writer != nullptr
+                       && writer->writeFromAudioSampleBuffer(
+                           impulse,
+                           0,
+                           impulse.getNumSamples()),
+                   "Sidechain latency impulse can be written.");
+            if (writer != nullptr)
+                writer->flush();
+        }
+
+        auto latencyProject = studio::Project::createDefault();
+        latencyProject.metronomeEnabled = false;
+        studio::AudioClip impulseClip;
+        impulseClip.sourceFile = impulseFile;
+        impulseClip.durationSeconds = 64.0 / 48000.0;
+        impulseClip.sourceLengthSeconds =
+            impulseClip.durationSeconds;
+        impulseClip.sourceRangeEndSeconds =
+            impulseClip.durationSeconds;
+        latencyProject.tracks[0].clips.push_back(impulseClip);
+        impulseClip.id = juce::Uuid().toString();
+        latencyProject.tracks[1].clips.push_back(impulseClip);
+        latencyProject.tracks[1].volumeDecibels = -60.0f;
+
+        studio::PluginInsert limiter;
+        limiter.pluginIdentifier = "studio.device.limiter";
+        limiter.name = "Latency before sidechain";
+        limiter.format = "Studio Duo";
+        limiter.bundledDevice = true;
+        limiter.bridgeMode =
+            studio::PluginBridgeMode::trustedInProcess;
+        limiter.latencySamples = 16;
+        auto latencyProbe = firstProbe;
+        latencyProbe.id = juce::Uuid().toString();
+        latencyProbe.name = "Latency-aligned sidechain";
+        latencyProject.tracks[0].inserts = {
+            limiter,
+            latencyProbe
+        };
+
+        studio::RoutingConnection latencySidechain;
+        latencySidechain.name = "Latency sidechain";
+        latencySidechain.kind = studio::RouteKind::sidechain;
+        latencySidechain.tap = studio::RouteTap::preFader;
+        latencySidechain.sourceTrackId =
+            latencyProject.tracks[1].id;
+        latencySidechain.destination.type =
+            studio::RouteEndpointType::pluginSidechain;
+        latencySidechain.destination.trackId =
+            latencyProject.tracks[0].id;
+        latencySidechain.destination.insertId =
+            latencyProbe.id;
+        latencyProject.routingConnections.push_back(
+            latencySidechain);
+
+        studio::StudioAudioEngine::PluginRuntimeRequest limiterRequest;
+        limiterRequest.trackId = latencyProject.tracks[0].id;
+        limiterRequest.insertId = limiter.id;
+        limiterRequest.name = limiter.name;
+        limiterRequest.deviceIdentifier = limiter.pluginIdentifier;
+        limiterRequest.latencySamples = limiter.latencySamples;
+        limiterRequest.bridgeMode =
+            studio::PluginBridgeMode::trustedInProcess;
+        auto latencyProbeRequest =
+            makeRequest(latencyProbe);
+        latencyProbeRequest.trackId =
+            latencyProject.tracks[0].id;
+
+        juce::AudioBuffer<float> alignedSidechain;
+        expect(engine.renderToBuffer(
+                   latencyProject,
+                   alignedSidechain,
+                   48000.0,
+                   {
+                       limiterRequest,
+                       latencyProbeRequest
+                   })
+                   .wasOk(),
+               "Insert-position sidechain compensation renders.");
+        const auto sidechainAtStart =
+            alignedSidechain.getSample(0, 0);
+        const auto sidechainAtLatency =
+            alignedSidechain.getSample(0, 16);
+        expect(std::abs(sidechainAtStart) < 0.001f
+                   && sidechainAtLatency > 0.19f,
+               ("Sidechains align to the target insert after preceding plugin latency (start "
+                + juce::String(sidechainAtStart, 5)
+                + ", latency "
+                + juce::String(sidechainAtLatency, 5)
+                + ").")
+                   .toRawUTF8());
+        impulseFile.deleteFile();
+    }
+
     sourceFile.deleteFile();
     clipRenderFile.deleteFile();
 }

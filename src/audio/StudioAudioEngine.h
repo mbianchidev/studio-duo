@@ -306,6 +306,7 @@ private:
             RouteTap tap = RouteTap::postFader;
             int destinationIndex = -1;
             juce::String destinationInsertId;
+            int destinationSidechainIndex = -1;
             int hardwareFirstChannel = 0;
             int hardwareChannels = 0;
             float gain = 1.0f;
@@ -318,6 +319,15 @@ private:
                 PluginBridgeSharedState::maxBlockSize
             };
             RenderSource::DelayCompensator compensation;
+        };
+
+        struct SidechainInput
+        {
+            juce::String insertId;
+            juce::AudioBuffer<float> buffer {
+                2,
+                PluginBridgeSharedState::maxBlockSize
+            };
         };
 
         std::uint64_t runtimeKey = 0;
@@ -338,11 +348,8 @@ private:
             2,
             PluginBridgeSharedState::maxBlockSize
         };
-        juce::AudioBuffer<float> sidechainBuffer {
-            2,
-            PluginBridgeSharedState::maxBlockSize
-        };
         std::vector<Route> routes;
+        std::vector<SidechainInput> sidechains;
         std::optional<CompiledAutomationLane> volumeAutomation;
         std::optional<CompiledAutomationLane> panAutomation;
         std::optional<CompiledAutomationLane> muteAutomation;
@@ -578,7 +585,8 @@ private:
         int maximumSourceReaders) noexcept;
     void processRuntimeChain(std::uint64_t runtimeKey,
                              juce::AudioBuffer<float>& buffer,
-                             const juce::AudioBuffer<float>* sidechain = nullptr,
+                             const std::vector<RenderTrack::SidechainInput>*
+                                 sidechains = nullptr,
                              const std::vector<RenderSource::PluginAutomation>*
                                  automation = nullptr,
                              std::int64_t timelineSample = 0) noexcept;

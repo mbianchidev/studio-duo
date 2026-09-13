@@ -320,6 +320,43 @@ if(STUDIO_DUO_BUILD_TESTS)
             juce::juce_audio_plugin_client
     )
 
+    juce_add_plugin(
+        StudioDuoRoutingFixture
+        COMPANY_NAME "Studio Duo"
+        COMPANY_WEBSITE "https://github.com/mbianchidev/studio-duo"
+        COMPANY_EMAIL "opensource@studio-duo.invalid"
+        BUNDLE_ID "dev.mbianchi.studioduo.routing-fixture"
+        PLUGIN_MANUFACTURER_CODE StDu
+        PLUGIN_CODE RtFt
+        FORMATS VST3
+        PRODUCT_NAME "Studio Duo Routing Fixture"
+        IS_SYNTH FALSE
+        NEEDS_MIDI_INPUT TRUE
+        NEEDS_MIDI_OUTPUT TRUE
+        IS_MIDI_EFFECT FALSE
+        COPY_PLUGIN_AFTER_BUILD FALSE
+    )
+    juce_generate_juce_header(StudioDuoRoutingFixture)
+    target_sources(
+        StudioDuoRoutingFixture
+        PRIVATE
+            tests/fixtures/RoutingTestPlugin.cpp
+    )
+    target_compile_definitions(
+        StudioDuoRoutingFixture
+        PRIVATE
+            JUCE_USE_CURL=0
+            JUCE_WEB_BROWSER=0
+        PUBLIC
+            JUCE_VST3_CAN_REPLACE_VST2=0
+    )
+    target_link_libraries(
+        StudioDuoRoutingFixture
+        PRIVATE
+            juce::juce_audio_utils
+            juce::juce_audio_plugin_client
+    )
+
     add_library(StudioDuoClapFixture MODULE tests/fixtures/ClapTestPlugin.cpp)
     target_link_libraries(StudioDuoClapFixture PRIVATE clap)
     set_target_properties(
@@ -430,6 +467,7 @@ if(STUDIO_DUO_BUILD_TESTS)
             PRIVATE
                 STUDIO_DUO_ARA_FIXTURE_PATH="$<TARGET_BUNDLE_DIR:StudioDuoAraFixture_VST3>"
                 STUDIO_DUO_CLAP_FIXTURE_PATH="$<TARGET_BUNDLE_DIR:StudioDuoClapFixture>"
+                STUDIO_DUO_ROUTING_FIXTURE_PATH="$<TARGET_BUNDLE_DIR:StudioDuoRoutingFixture_VST3>"
                 STUDIO_DUO_BRIDGE_WORKER_PATH="$<TARGET_FILE:StudioDuo>"
         )
     else()
@@ -438,6 +476,7 @@ if(STUDIO_DUO_BUILD_TESTS)
             PRIVATE
                 STUDIO_DUO_ARA_FIXTURE_PATH="$<TARGET_FILE:StudioDuoAraFixture_VST3>"
                 STUDIO_DUO_CLAP_FIXTURE_PATH="$<TARGET_FILE:StudioDuoClapFixture>"
+                STUDIO_DUO_ROUTING_FIXTURE_PATH="$<TARGET_FILE:StudioDuoRoutingFixture_VST3>"
                 STUDIO_DUO_BRIDGE_WORKER_PATH="$<TARGET_FILE:StudioDuo>"
         )
     endif()
@@ -446,6 +485,7 @@ if(STUDIO_DUO_BUILD_TESTS)
         StudioDuo
         StudioDuoAraFixture_VST3
         StudioDuoClapFixture
+        StudioDuoRoutingFixture_VST3
     )
     if(APPLE)
         target_compile_definitions(StudioDuoTests PRIVATE JUCE_PLUGINHOST_AU=1)
