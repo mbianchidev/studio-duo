@@ -14,3 +14,4 @@ void renderEngineTests();
 void pluginCompatibilityTests();
 void projectMigrationTests();
 void windowSizingTests();
+void transportTests();

@@ -9,6 +9,31 @@
 
 namespace studio
 {
+struct RecordingCaptureRange
+{
+    int sourceOffset = 0;
+    int samples = 0;
+};
+
+inline RecordingCaptureRange recordingCaptureRange(
+    std::int64_t callbackStart,
+    int callbackSamples,
+    std::int64_t captureStart,
+    std::int64_t captureEnd) noexcept
+{
+    const auto callbackEnd = callbackStart + std::max(0, callbackSamples);
+    const auto firstCaptureSample = std::max(callbackStart, captureStart);
+    const auto lastCaptureSample = captureEnd >= 0
+        ? std::min(callbackEnd, captureEnd)
+        : callbackEnd;
+    return {
+        static_cast<int>(
+            std::max<std::int64_t>(0, firstCaptureSample - callbackStart)),
+        static_cast<int>(
+            std::max<std::int64_t>(0, lastCaptureSample - firstCaptureSample))
+    };
+}
+
 template <typename Range>
 int synchronizedCaptureSamples(int requestedSamples, const Range& freeSamples) noexcept
 {

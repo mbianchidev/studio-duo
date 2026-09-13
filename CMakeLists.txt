@@ -361,6 +361,7 @@ if(STUDIO_DUO_BUILD_TESTS)
             tests/PluginCompatibilityTests.cpp
             tests/ProjectMigrationTests.cpp
             tests/WindowSizingTests.cpp
+            tests/TransportTests.cpp
             src/ui/RoutingUiModel.cpp
             src/ui/RoutingUiModel.h
             src/ui/MainWindowSizing.cpp

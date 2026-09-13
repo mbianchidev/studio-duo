@@ -411,7 +411,9 @@ public:
     [[nodiscard]] double secondsAtBeat(double beats) const noexcept;
     [[nodiscard]] MusicalPosition musicalPositionAt(double seconds) const noexcept;
     [[nodiscard]] RecordingPlan recordingPlan(double cursorSeconds) const noexcept;
+    [[nodiscard]] bool validateTransport(juce::String& error) const;
     [[nodiscard]] double lengthSeconds() const noexcept;
+    [[nodiscard]] double timelineEndSeconds() const noexcept;
     [[nodiscard]] bool hasActivePluginInserts() const noexcept;
     [[nodiscard]] juce::var toVar() const;
 

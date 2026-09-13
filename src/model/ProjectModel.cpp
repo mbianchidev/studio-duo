@@ -111,7 +111,11 @@ std::optional<TempoChange> TempoChange::fromVar(const juce::var& value,
     change.timeSeconds = numberProperty(*object, "timeSeconds", 0.0);
     change.bpm = numberProperty(*object, "bpm", 120.0);
     change.rampToNext = booleanProperty(*object, "rampToNext", false);
-    if (change.timeSeconds < 0.0 || change.bpm < 20.0 || change.bpm > 400.0)
+    if (!std::isfinite(change.timeSeconds)
+        || !std::isfinite(change.bpm)
+        || change.timeSeconds < 0.0
+        || change.bpm < 20.0
+        || change.bpm > 400.0)
     {
         error = "Tempo changes require a non-negative time and a tempo from 20 to 400 BPM.";
         return std::nullopt;
@@ -146,7 +150,8 @@ std::optional<MeterChange> MeterChange::fromVar(const juce::var& value,
     change.timeSeconds = numberProperty(*object, "timeSeconds", 0.0);
     change.numerator = integerProperty(*object, "numerator", 4);
     change.denominator = integerProperty(*object, "denominator", 4);
-    if (change.timeSeconds < 0.0
+    if (!std::isfinite(change.timeSeconds)
+        || change.timeSeconds < 0.0
         || change.numerator < 1
         || change.numerator > 32
         || !validMeterDenominator(change.denominator))
@@ -1682,6 +1687,102 @@ RecordingPlan Project::recordingPlan(double cursorSeconds) const noexcept
     return plan;
 }
 
+bool Project::validateTransport(juce::String& error) const
+{
+    if (!std::isfinite(tempo)
+        || tempo < 20.0
+        || tempo > 400.0
+        || timeSignatureNumerator < 1
+        || timeSignatureNumerator > 32
+        || !validMeterDenominator(timeSignatureDenominator))
+    {
+        error = "The base tempo or time signature is invalid.";
+        return false;
+    }
+
+    for (std::size_t index = 0; index < tempoChanges.size(); ++index)
+    {
+        const auto& change = tempoChanges[index];
+        if (!std::isfinite(change.timeSeconds)
+            || !std::isfinite(change.bpm)
+            || change.timeSeconds < 0.0
+            || change.bpm < 20.0
+            || change.bpm > 400.0)
+        {
+            error = "Tempo changes require finite positions and tempos from 20 to 400 BPM.";
+            return false;
+        }
+        if (index > 0
+            && change.timeSeconds <= tempoChanges[index - 1].timeSeconds)
+        {
+            error = "Tempo changes require unique positions in timeline order.";
+            return false;
+        }
+    }
+
+    for (std::size_t index = 0; index < meterChanges.size(); ++index)
+    {
+        const auto& change = meterChanges[index];
+        if (!std::isfinite(change.timeSeconds)
+            || change.timeSeconds < 0.0
+            || change.numerator < 1
+            || change.numerator > 32
+            || !validMeterDenominator(change.denominator))
+        {
+            error = "Meter changes require finite positions and supported time signatures.";
+            return false;
+        }
+        if (index > 0
+            && change.timeSeconds <= meterChanges[index - 1].timeSeconds)
+        {
+            error = "Meter changes require unique positions in timeline order.";
+            return false;
+        }
+    }
+
+    if (metronomeSubdivision < 1
+        || metronomeSubdivision > 8
+        || metronomeOutputChannel < 0
+        || !std::isfinite(metronomeLevel)
+        || metronomeLevel < 0.0f
+        || metronomeLevel > 1.0f
+        || !std::isfinite(metronomeAccentLevel)
+        || metronomeAccentLevel < 0.0f
+        || metronomeAccentLevel > 1.0f)
+    {
+        error = "The metronome routing, subdivision, or level is invalid.";
+        return false;
+    }
+
+    if (!std::isfinite(punchInSeconds)
+        || !std::isfinite(punchOutSeconds)
+        || punchInSeconds < 0.0
+        || punchOutSeconds <= punchInSeconds
+        || countInBars < 0
+        || countInBars > 8
+        || !std::isfinite(preRollSeconds)
+        || preRollSeconds < 0.0
+        || preRollSeconds > 30.0
+        || !std::isfinite(postRollSeconds)
+        || postRollSeconds < 0.0
+        || postRollSeconds > 30.0)
+    {
+        error = "The punch, count-in, or pre/post-roll settings are invalid.";
+        return false;
+    }
+
+    if (!std::isfinite(loopStartSeconds)
+        || !std::isfinite(loopEndSeconds)
+        || loopStartSeconds < 0.0
+        || loopEndSeconds <= loopStartSeconds)
+    {
+        error = "The loop range is invalid.";
+        return false;
+    }
+
+    return true;
+}
+
 double Project::lengthSeconds() const noexcept
 {
     double length = 8.0;
@@ -1692,6 +1793,20 @@ double Project::lengthSeconds() const noexcept
             length = std::max(length, clip.endSeconds());
 
     return length;
+}
+
+double Project::timelineEndSeconds() const noexcept
+{
+    auto end = lengthSeconds();
+    for (const auto& change : tempoChanges)
+        end = std::max(end, change.timeSeconds);
+    for (const auto& change : meterChanges)
+        end = std::max(end, change.timeSeconds);
+    if (punchEnabled)
+        end = std::max(end, punchOutSeconds + postRollSeconds);
+    if (loopEnabled)
+        end = std::max(end, loopEndSeconds);
+    return end;
 }
 
 bool Project::hasActivePluginInserts() const noexcept
@@ -1798,14 +1913,9 @@ std::optional<Project> Project::fromVar(const juce::var& value, juce::String& er
     Project project;
     project.id = object->getProperty("id").toString();
     project.name = object->getProperty("name").toString();
-    project.tempo = juce::jlimit(20.0, 400.0, numberProperty(*object, "tempo", 120.0));
-    project.timeSignatureNumerator = juce::jlimit(1, 32, integerProperty(*object, "timeSignatureNumerator", 4));
+    project.tempo = numberProperty(*object, "tempo", 120.0);
+    project.timeSignatureNumerator = integerProperty(*object, "timeSignatureNumerator", 4);
     project.timeSignatureDenominator = integerProperty(*object, "timeSignatureDenominator", 4);
-    if (!validMeterDenominator(project.timeSignatureDenominator))
-    {
-        error = "Project contains an unsupported base time-signature denominator.";
-        return std::nullopt;
-    }
     const auto tempoValues = object->getProperty("tempoChanges");
     if (tempoValues.isArray())
     {
@@ -1872,42 +1982,23 @@ std::optional<Project> Project::fromVar(const juce::var& value, juce::String& er
                          });
     }
     project.metronomeEnabled = booleanProperty(*object, "metronomeEnabled", true);
-    project.metronomeSubdivision = juce::jlimit(
-        1,
-        8,
-        integerProperty(*object, "metronomeSubdivision", 1));
-    project.metronomeOutputChannel = std::max(
-        0,
-        integerProperty(*object, "metronomeOutputChannel", 0));
-    project.metronomeLevel = juce::jlimit(
-        0.0f,
-        1.0f,
-        static_cast<float>(numberProperty(*object, "metronomeLevel", 0.65)));
-    project.metronomeAccentLevel = juce::jlimit(
-        0.0f,
-        1.0f,
-        static_cast<float>(numberProperty(*object, "metronomeAccentLevel", 1.0)));
+    project.metronomeSubdivision = integerProperty(*object, "metronomeSubdivision", 1);
+    project.metronomeOutputChannel = integerProperty(*object, "metronomeOutputChannel", 0);
+    project.metronomeLevel = static_cast<float>(
+        numberProperty(*object, "metronomeLevel", 0.65));
+    project.metronomeAccentLevel = static_cast<float>(
+        numberProperty(*object, "metronomeAccentLevel", 1.0));
     project.punchEnabled = booleanProperty(*object, "punchEnabled", false);
-    project.punchInSeconds = std::max(0.0,
-                                      numberProperty(*object, "punchInSeconds", 0.0));
-    project.punchOutSeconds = std::max(
-        project.punchInSeconds,
-        numberProperty(*object, "punchOutSeconds", 8.0));
-    project.countInBars = juce::jlimit(
-        0,
-        8,
-        integerProperty(*object, "countInBars", 0));
-    project.preRollSeconds = juce::jlimit(
-        0.0,
-        30.0,
-        numberProperty(*object, "preRollSeconds", 0.0));
-    project.postRollSeconds = juce::jlimit(
-        0.0,
-        30.0,
-        numberProperty(*object, "postRollSeconds", 0.0));
+    project.punchInSeconds = numberProperty(*object, "punchInSeconds", 0.0);
+    project.punchOutSeconds = numberProperty(*object, "punchOutSeconds", 8.0);
+    project.countInBars = integerProperty(*object, "countInBars", 0);
+    project.preRollSeconds = numberProperty(*object, "preRollSeconds", 0.0);
+    project.postRollSeconds = numberProperty(*object, "postRollSeconds", 0.0);
     project.loopEnabled = booleanProperty(*object, "loopEnabled", false);
-    project.loopStartSeconds = std::max(0.0, numberProperty(*object, "loopStartSeconds", 0.0));
-    project.loopEndSeconds = std::max(project.loopStartSeconds, numberProperty(*object, "loopEndSeconds", 8.0));
+    project.loopStartSeconds = numberProperty(*object, "loopStartSeconds", 0.0);
+    project.loopEndSeconds = numberProperty(*object, "loopEndSeconds", 8.0);
+    if (!project.validateTransport(error))
+        return std::nullopt;
     const auto editGroupValues = object->getProperty("editGroups");
     if (editGroupValues.isArray())
     {

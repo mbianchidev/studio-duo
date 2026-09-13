@@ -123,9 +123,13 @@ playback to the active playlist.
 - Jump and ramp tempo transitions
 - Punch points, count-in, pre-roll, and post-roll
 - Loop bounds
-- Metronome subdivision and hardware output
+- Straight and triplet metronome subdivisions, click/accent levels, and hardware
+  output
 
-All settings are persistent and undoable.
+All settings are persistent and undoable. The transport shows the current
+tempo and meter at the playhead, and the timeline keeps punch and loop ranges
+visible as coloured bounds. When punch and loop are both enabled, punch takes
+priority for recording while ordinary playback keeps using the loop range.
 
 Right-click the **SECTIONS** lane above the bar ruler to create a named section
 at that exact timeline position without moving the playhead.
@@ -211,7 +215,9 @@ children without hiding summing; use a bus for audio summing. VCAs control the
 assigned track faders without changing signal routing.
 
 A control-room track receives the master monitor path without entering exports.
-Its menu selects monitor hardware, dim, mono, mute, inserts, and click routing.
+Its menu selects monitor hardware, dim, mono, mute, and inserts. Metronome
+hardware routing remains separate in **TRACKING SETUP** and is never included in
+the final render.
 Mixer strips show separate pre-fader and post-fader meters. Plugin and bridge
 latencies are aligned at every summing and sidechain destination.
 

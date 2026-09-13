@@ -141,7 +141,7 @@ public:
     [[nodiscard]] int minimumRouteBufferCapacityForTesting() const noexcept;
     [[nodiscard]] double activeSnapshotSampleRateForTesting() const noexcept;
     [[nodiscard]] juce::AudioBuffer<float>
-        renderActiveBlockForTesting(int samples);
+        renderActiveBlockForTesting(int samples, int outputChannels = 2);
     void processActiveBlockForTesting(int samples);
     [[nodiscard]] static std::vector<float>
         delayTransitionForTesting(

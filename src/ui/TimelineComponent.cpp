@@ -102,7 +102,9 @@ float TimelineComponent::xForSeconds(double seconds) const noexcept
 
 int TimelineComponent::preferredWidth(int minimumWidth) const
 {
-    const auto projectSeconds = project != nullptr ? project->lengthSeconds() : 8.0;
+    const auto projectSeconds = project != nullptr
+        ? project->timelineEndSeconds()
+        : 8.0;
     auto previewEnd = 0.0;
     for (const auto& preview : recordingPreviews)
         previewEnd = std::max(previewEnd, preview.startSeconds + preview.durationSeconds);
@@ -133,7 +135,7 @@ void TimelineComponent::paint(juce::Graphics& graphics)
         return;
 
     const auto maximumSeconds = std::max(
-        project->lengthSeconds() + 8.0,
+        project->timelineEndSeconds() + 8.0,
         static_cast<double>(getWidth() - trackHeaderWidth) / pixelsPerSecond);
     const std::array sectionColours {
         juce::Colour(StudioColours::violet),
@@ -168,6 +170,34 @@ void TimelineComponent::paint(juce::Graphics& graphics)
                           sectionLaneHeight,
                           juce::Justification::centredLeft,
                           true);
+    }
+
+    const auto drawRangeFill = [this, &graphics](
+                                   double startSeconds,
+                                   double endSeconds,
+                                   juce::Colour colour)
+    {
+        if (endSeconds <= startSeconds)
+            return;
+        const auto startX = secondsToX(startSeconds);
+        const auto endX = secondsToX(endSeconds);
+        graphics.setColour(colour.withAlpha(0.045f));
+        graphics.fillRect(startX,
+                          static_cast<float>(rulerHeight),
+                          std::max(1.0f, endX - startX),
+                          static_cast<float>(getHeight() - rulerHeight));
+    };
+    if (project->loopEnabled)
+    {
+        drawRangeFill(project->loopStartSeconds,
+                      project->loopEndSeconds,
+                      juce::Colour(StudioColours::violet));
+    }
+    if (project->punchEnabled)
+    {
+        drawRangeFill(project->punchInSeconds,
+                      project->punchOutSeconds,
+                      juce::Colour(StudioColours::orange));
     }
 
     auto seconds = 0.0;
@@ -250,6 +280,40 @@ void TimelineComponent::paint(juce::Graphics& graphics)
                           42,
                           12,
                           juce::Justification::centredLeft);
+    }
+
+    const auto drawRangeMarkers = [this, &graphics](
+                                      double startSeconds,
+                                      double endSeconds,
+                                      juce::Colour colour)
+    {
+        if (endSeconds <= startSeconds)
+            return;
+        const auto startX = secondsToX(startSeconds);
+        const auto endX = secondsToX(endSeconds);
+        graphics.setColour(colour.withAlpha(0.72f));
+        graphics.fillRect(startX,
+                          static_cast<float>(rulerHeight - 4),
+                          std::max(1.0f, endX - startX),
+                          4.0f);
+        graphics.drawVerticalLine(static_cast<int>(startX),
+                                  static_cast<float>(sectionLaneHeight),
+                                  static_cast<float>(getHeight()));
+        graphics.drawVerticalLine(static_cast<int>(endX),
+                                  static_cast<float>(sectionLaneHeight),
+                                  static_cast<float>(getHeight()));
+    };
+    if (project->loopEnabled)
+    {
+        drawRangeMarkers(project->loopStartSeconds,
+                         project->loopEndSeconds,
+                         juce::Colour(StudioColours::violet));
+    }
+    if (project->punchEnabled)
+    {
+        drawRangeMarkers(project->punchInSeconds,
+                         project->punchOutSeconds,
+                         juce::Colour(StudioColours::orange));
     }
 
     graphics.setColour(juce::Colour(StudioColours::panel));
