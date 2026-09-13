@@ -312,7 +312,7 @@ source DI.
 For a selected tone path, **TRACKING SETUP** can:
 
 - Capture named snapshots of routing, processor state, level, and automation
-- Recall a snapshot with undo
+- Recall a snapshot with undo and its stored level-match trim
 - Show stale state after the DI, playlist, routing, automation, or chain changes
 - Freeze a plugin tone to an immutable WAV while preserving and muting the live
   return
@@ -321,8 +321,10 @@ For a selected tone path, **TRACKING SETUP** can:
 - Batch render every snapshot with one JSON report per item
 
 Rendered snapshots store content hashes. Batch comparison uses deterministic
-gated RMS trims for level-matched A/B; it does not claim mastering-loudness
-compliance.
+gated RMS trims, constrained to the return fader range, for level-matched A/B;
+it does not claim mastering-loudness compliance. Plugin tone paths read the
+current DI playlist during playback and rendering instead of keeping stale clip
+copies.
 
 ## Navigate the timeline
 

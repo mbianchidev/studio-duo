@@ -735,16 +735,27 @@ private:
     std::vector<ToneSnapshot> newSnapshots;
 };
 
+enum class ToneSnapshotRecallMode
+{
+    capturedLevel,
+    levelMatched
+};
+
 class RecallToneSnapshotCommand final : public ProjectCommand
 {
 public:
-    explicit RecallToneSnapshotCommand(ToneSnapshot snapshotToRecall);
+    explicit RecallToneSnapshotCommand(
+        ToneSnapshot snapshotToRecall,
+        ToneSnapshotRecallMode recallMode =
+            ToneSnapshotRecallMode::capturedLevel);
     [[nodiscard]] juce::String name() const override;
     bool perform(Project& project, juce::String& error) override;
     void undo(Project& project) override;
 
 private:
     ToneSnapshot snapshot;
+    ToneSnapshotRecallMode mode =
+        ToneSnapshotRecallMode::capturedLevel;
     Track oldReturnTrack;
     std::vector<RoutingConnection> oldRoutes;
     std::vector<AutomationLane> oldAutomation;

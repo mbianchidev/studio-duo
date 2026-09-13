@@ -3139,8 +3139,10 @@ void SetToneSnapshotsCommand::undo(Project& project)
 }
 
 RecallToneSnapshotCommand::RecallToneSnapshotCommand(
-    ToneSnapshot snapshotToRecall)
-    : snapshot(std::move(snapshotToRecall))
+    ToneSnapshot snapshotToRecall,
+    ToneSnapshotRecallMode recallMode)
+    : snapshot(std::move(snapshotToRecall)),
+      mode(recallMode)
 {
 }
 
@@ -3173,7 +3175,13 @@ bool RecallToneSnapshotCommand::perform(Project& project, juce::String& error)
         capturedOriginal = true;
     }
 
-    returnTrack->volumeDecibels = snapshot.returnVolumeDecibels;
+    returnTrack->volumeDecibels = juce::jlimit(
+        -60.0f,
+        12.0f,
+        snapshot.returnVolumeDecibels
+            + (mode == ToneSnapshotRecallMode::levelMatched
+                   ? snapshot.comparisonGainDecibels
+                   : 0.0f));
     returnTrack->pan = snapshot.returnPan;
     returnTrack->polarityInverted = snapshot.returnPolarityInverted;
     returnTrack->inserts = snapshot.inserts;

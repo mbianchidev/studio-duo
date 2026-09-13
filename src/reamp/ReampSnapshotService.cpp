@@ -3,6 +3,7 @@
 #include <juce_cryptography/juce_cryptography.h>
 
 #include <algorithm>
+#include <cmath>
 
 namespace studio
 {
@@ -25,6 +26,46 @@ bool routeTouches(const RoutingConnection& route,
         || route.sourceTrackId == returnTrackId
         || route.destination.trackId == sourceTrackId
         || route.destination.trackId == returnTrackId;
+}
+
+juce::Array<juce::var> clipState(const Project& project,
+                                 const juce::String& trackId)
+{
+    juce::Array<juce::var> clips;
+    for (const auto& candidate : project.tracks)
+    {
+        if (candidate.id != trackId
+            && candidate.parentTrackId != trackId)
+            continue;
+        for (const auto& clip : candidate.clips)
+        {
+            auto clipValue = clip.toVar();
+            if (auto* clipObject = clipValue.getDynamicObject())
+            {
+                clipObject->setProperty(
+                    "mediaHash",
+                    clip.sourceFile.existsAsFile()
+                        ? juce::SHA256(clip.sourceFile).toHexString()
+                        : juce::String("missing"));
+            }
+            clips.add(std::move(clipValue));
+        }
+    }
+    return clips;
+}
+
+void addTempoStateIfNeeded(juce::DynamicObject& object,
+                           const Project& project,
+                           bool hasBeatAutomation)
+{
+    if (!hasBeatAutomation)
+        return;
+
+    object.setProperty("tempo", project.tempo);
+    juce::Array<juce::var> tempoChanges;
+    for (const auto& change : project.tempoChanges)
+        tempoChanges.add(change.toVar());
+    object.setProperty("tempoChanges", juce::var(tempoChanges));
 }
 }
 
@@ -89,6 +130,36 @@ juce::String ReampSnapshotService::staleReason(
     if (sourceFingerprint(project, snapshot.sourceTrackId)
         != snapshot.sourceFingerprint)
         return "DI source changed";
+
+    const auto route = std::find_if(
+        project.reampRoutes.cbegin(),
+        project.reampRoutes.cend(),
+        [&snapshot](const auto& candidate)
+        {
+            return candidate.id == snapshot.reampRouteId;
+        });
+    const auto* returnTrack = project.findTrack(
+        snapshot.returnTrackId);
+    const auto matchedLevel = juce::jlimit(
+        -60.0f,
+        12.0f,
+        snapshot.returnVolumeDecibels
+            + snapshot.comparisonGainDecibels);
+    if (route != project.reampRoutes.cend()
+        && route->activeSnapshotId == snapshot.id
+        && returnTrack != nullptr
+        && std::abs(returnTrack->volumeDecibels - matchedLevel)
+            < 0.0001f)
+    {
+        auto comparisonProject = project;
+        comparisonProject.findTrack(snapshot.returnTrackId)
+            ->volumeDecibels =
+            snapshot.returnVolumeDecibels;
+        if (chainFingerprint(comparisonProject, snapshot.reampRouteId)
+            != snapshot.chainFingerprint)
+            return "Tone chain changed";
+        return {};
+    }
     if (chainFingerprint(project, snapshot.reampRouteId)
         != snapshot.chainFingerprint)
         return "Tone chain changed";
@@ -105,31 +176,37 @@ juce::String ReampSnapshotService::sourceFingerprint(
     auto object = std::make_unique<juce::DynamicObject>();
     object->setProperty("trackId", track->id);
     object->setProperty("activeTakeTrackId", track->activeTakeTrackId);
-    juce::Array<juce::var> clips;
-    for (const auto& candidate : project.tracks)
-    {
-        if (candidate.id != trackId
-            && candidate.parentTrackId != trackId)
-            continue;
-        for (const auto& clip : candidate.clips)
-        {
-            auto clipValue = clip.toVar();
-            if (auto* clipObject = clipValue.getDynamicObject())
-            {
-                clipObject->setProperty(
-                    "mediaHash",
-                    clip.sourceFile.existsAsFile()
-                        ? juce::SHA256(clip.sourceFile).toHexString()
-                        : juce::String("missing"));
-            }
-            clips.add(std::move(clipValue));
-        }
-    }
-    object->setProperty("clips", juce::var(clips));
+    object->setProperty("versionsCollapsed", track->versionsCollapsed);
+    object->setProperty("volumeDecibels", track->volumeDecibels);
+    object->setProperty("pan", track->pan);
+    object->setProperty("polarity", track->polarityInverted);
+    object->setProperty("muted", track->muted);
+    object->setProperty(
+        "channelLayout",
+        channelLayoutToString(track->channelLayout));
+    juce::Array<juce::var> inserts;
+    for (const auto& insert : track->inserts)
+        inserts.add(insert.toVar());
+    object->setProperty("inserts", juce::var(inserts));
+    object->setProperty("clips", juce::var(clipState(project, trackId)));
     juce::Array<juce::var> comps;
     for (const auto& region : track->compRegions)
         comps.add(region.toVar());
     object->setProperty("compRegions", juce::var(comps));
+    juce::Array<juce::var> automation;
+    auto hasBeatAutomation = false;
+    for (const auto& lane : project.automationLanes)
+    {
+        if (lane.target.trackId != trackId
+            || lane.target.routeId.isNotEmpty())
+            continue;
+        automation.add(lane.toVar());
+        hasBeatAutomation =
+            hasBeatAutomation
+            || lane.timebase == AutomationTimebase::beats;
+    }
+    object->setProperty("automation", juce::var(automation));
+    addTempoStateIfNeeded(*object, project, hasBeatAutomation);
     return hash(juce::var(object.release()));
 }
 
@@ -150,27 +227,63 @@ juce::String ReampSnapshotService::chainFingerprint(
     if (returnTrack == nullptr)
         return {};
     auto object = std::make_unique<juce::DynamicObject>();
-    object->setProperty("route", route->toVar());
+    auto routeValue = route->toVar();
+    if (auto* routeObject = routeValue.getDynamicObject())
+        routeObject->removeProperty("activeSnapshotId");
+    object->setProperty("route", std::move(routeValue));
+    object->setProperty("outputTrackId", returnTrack->outputTrackId);
+    object->setProperty(
+        "activeTakeTrackId",
+        returnTrack->activeTakeTrackId);
+    object->setProperty(
+        "versionsCollapsed",
+        returnTrack->versionsCollapsed);
     object->setProperty("volumeDecibels", returnTrack->volumeDecibels);
     object->setProperty("pan", returnTrack->pan);
     object->setProperty("polarity", returnTrack->polarityInverted);
+    object->setProperty("muted", returnTrack->muted);
+    object->setProperty(
+        "channelLayout",
+        channelLayoutToString(returnTrack->channelLayout));
     juce::Array<juce::var> inserts;
     for (const auto& insert : returnTrack->inserts)
         inserts.add(insert.toVar());
     object->setProperty("inserts", juce::var(inserts));
+    object->setProperty(
+        "clips",
+        juce::var(clipState(project, returnTrack->id)));
+    juce::Array<juce::var> comps;
+    for (const auto& region : returnTrack->compRegions)
+        comps.add(region.toVar());
+    object->setProperty("compRegions", juce::var(comps));
     juce::Array<juce::var> routes;
+    juce::StringArray routeIds;
     for (const auto& connection : project.routingConnections)
         if (routeTouches(
                 connection,
                 route->sourceTrackId,
                 route->returnTrackId))
+        {
             routes.add(connection.toVar());
+            routeIds.add(connection.id);
+        }
     object->setProperty("routes", juce::var(routes));
     juce::Array<juce::var> automation;
+    auto hasBeatAutomation = false;
     for (const auto& lane : project.automationLanes)
-        if (lane.target.trackId == route->returnTrackId)
+    {
+        if (lane.target.trackId == route->returnTrackId
+            || (lane.target.routeId.isNotEmpty()
+                && routeIds.contains(lane.target.routeId)))
+        {
             automation.add(lane.toVar());
+            hasBeatAutomation =
+                hasBeatAutomation
+                || lane.timebase == AutomationTimebase::beats;
+        }
+    }
     object->setProperty("automation", juce::var(automation));
+    addTempoStateIfNeeded(*object, project, hasBeatAutomation);
     return hash(juce::var(object.release()));
 }
 

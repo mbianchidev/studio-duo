@@ -5459,11 +5459,16 @@ void MainComponent::createPluginTonePath(const juce::String& sourceTrackId)
         || source->parentTrackId.isNotEmpty())
         return;
 
-    const auto activeTakeId = project.activeTakeTrackId(sourceTrackId);
-    const auto* clipSource = activeTakeId.isNotEmpty()
-        ? project.findTrack(activeTakeId)
-        : source;
-    if (clipSource == nullptr || clipSource->clips.empty())
+    const auto hasSourceAudio = std::any_of(
+        project.tracks.cbegin(),
+        project.tracks.cend(),
+        [sourceTrackId](const auto& track)
+        {
+            return (track.id == sourceTrackId
+                    || track.parentTrackId == sourceTrackId)
+                && !track.clips.empty();
+        });
+    if (!hasSourceAudio)
     {
         setStatus("The DI source needs audio before creating a plugin tone path.", true);
         return;
@@ -5473,13 +5478,6 @@ void MainComponent::createPluginTonePath(const juce::String& sourceTrackId)
     toneTrack.name = source->name + " Tone";
     toneTrack.type = TrackType::audio;
     toneTrack.colour = source->colour.brighter(0.15f);
-    toneTrack.clips = clipSource->clips;
-    for (auto& clip : toneTrack.clips)
-    {
-        clip.id = juce::Uuid().toString();
-        clip.name = source->name + " tone";
-        clip.colour = toneTrack.colour;
-    }
 
     ReampRoute route;
     route.name = toneTrack.name;
@@ -5555,13 +5553,25 @@ void MainComponent::recallToneSnapshot(const juce::String& snapshotId)
         setStatus("The tone snapshot no longer exists.", true);
         return;
     }
-    const auto stale = ReampSnapshotService::staleReason(project, *snapshot);
-    if (perform(std::make_unique<RecallToneSnapshotCommand>(*snapshot)))
+    if (perform(std::make_unique<RecallToneSnapshotCommand>(
+            *snapshot,
+            ToneSnapshotRecallMode::levelMatched)))
+    {
+        const auto stale =
+            ReampSnapshotService::staleReason(project, *snapshot);
         setStatus(
             "Recalled "
                 + snapshot->name
+                + (std::abs(snapshot->comparisonGainDecibels) > 0.0001f
+                       ? " (level match "
+                           + juce::String(
+                               snapshot->comparisonGainDecibels,
+                               1)
+                           + " dB)"
+                       : juce::String())
                 + (stale.isNotEmpty() ? " (stale: " + stale + ")"
                                       : juce::String()));
+    }
 }
 
 void MainComponent::renderToneSnapshots(const juce::String& routeId,
@@ -5664,6 +5674,8 @@ void MainComponent::renderToneSnapshots(const juce::String& routeId,
             ? output.getRelativePathFrom(projectPackage)
             : output.getFullPathName();
         snapshot->renderHash = report.outputHash;
+        if (!allSnapshots)
+            continue;
         if (!referenceFile.existsAsFile())
         {
             referenceFile = output;
@@ -5677,8 +5689,10 @@ void MainComponent::renderToneSnapshots(const juce::String& routeId,
                     output,
                     matchError);
                 gain.has_value())
-                snapshot->comparisonGainDecibels =
-                    static_cast<float>(*gain);
+                snapshot->comparisonGainDecibels = juce::jlimit(
+                    -60.0f - snapshot->returnVolumeDecibels,
+                    12.0f - snapshot->returnVolumeDecibels,
+                    static_cast<float>(*gain));
         }
     }
 

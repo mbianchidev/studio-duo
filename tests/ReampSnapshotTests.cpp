@@ -28,6 +28,28 @@ void reampSnapshotTests()
     route.returnTrackId = returnTrack.id;
     project.reampRoutes.push_back(route);
 
+    studio::PluginInsert sourceInsert;
+    sourceInsert.pluginIdentifier = "studio.device.polarity";
+    sourceInsert.name = "Source polarity";
+    sourceInsert.format = "Studio Duo";
+    sourceInsert.bundledDevice = true;
+    sourceInsert.stateHash = "source-state-a";
+    source.inserts.push_back(sourceInsert);
+
+    studio::AutomationLane sourceAutomation;
+    sourceAutomation.name = "DI volume";
+    sourceAutomation.target.type =
+        studio::AutomationTargetType::trackVolume;
+    sourceAutomation.target.trackId = source.id;
+    sourceAutomation.timebase =
+        studio::AutomationTimebase::beats;
+    sourceAutomation.points.push_back({
+        juce::Uuid().toString(),
+        0.0,
+        0.5
+    });
+    project.automationLanes.push_back(sourceAutomation);
+
     juce::String error;
     const auto snapshot = studio::ReampSnapshotService::capture(
         project,
@@ -49,23 +71,71 @@ void reampSnapshotTests()
                .containsIgnoreCase("source"),
            "DI edits mark a tone render stale.");
     source.clips.front().gainDecibels = 0.0f;
+
+    source.volumeDecibels = -6.0f;
+    expect(studio::ReampSnapshotService::staleReason(project, *snapshot)
+               .containsIgnoreCase("source"),
+           "DI mixer changes mark a tone render stale.");
+    source.volumeDecibels = 0.0f;
+
+    source.inserts.front().stateHash = "source-state-b";
+    expect(studio::ReampSnapshotService::staleReason(project, *snapshot)
+               .containsIgnoreCase("source"),
+           "DI processor changes mark a tone render stale.");
+    source.inserts.front().stateHash = "source-state-a";
+
+    project.automationLanes.front().points.front().value = 0.75;
+    expect(studio::ReampSnapshotService::staleReason(project, *snapshot)
+               .containsIgnoreCase("source"),
+           "DI automation changes mark a tone render stale.");
+    project.automationLanes.front().points.front().value = 0.5;
+
+    project.tempo = 90.0;
+    expect(studio::ReampSnapshotService::staleReason(project, *snapshot)
+               .containsIgnoreCase("source"),
+           "Tempo changes mark beat-based DI automation stale.");
+    project.tempo = 120.0;
+
     returnTrack.volumeDecibels = -12.0f;
     returnTrack.inserts.front().stateHash = "state-b";
 
     studio::CommandStack history;
+    auto matchedSnapshot = *snapshot;
+    matchedSnapshot.comparisonGainDecibels = 2.5f;
     expect(history.perform(
                std::make_unique<studio::RecallToneSnapshotCommand>(
-                   *snapshot),
+                   matchedSnapshot,
+                   studio::ToneSnapshotRecallMode::levelMatched),
                project,
                error),
            error.toRawUTF8());
-    expect(std::abs(returnTrack.volumeDecibels + 3.0f) < 0.0001f
+    expect(std::abs(returnTrack.volumeDecibels + 0.5f) < 0.0001f
                && returnTrack.inserts.front().stateHash == "state-a",
-           "Tone snapshot recall restores level and processor state.");
+           "Level-matched tone recall applies the stored comparison trim.");
+    expect(studio::ReampSnapshotService::staleReason(
+               project,
+               matchedSnapshot)
+               .isEmpty(),
+           "Activating a level-matched snapshot does not make its render stale.");
     expect(history.undo(project)
                && std::abs(returnTrack.volumeDecibels + 12.0f) < 0.0001f
                && returnTrack.inserts.front().stateHash == "state-b",
            "Tone snapshot recall is undoable.");
+    expect(history.perform(
+               std::make_unique<studio::RecallToneSnapshotCommand>(
+                   matchedSnapshot),
+               project,
+               error),
+           error.toRawUTF8());
+    expect(std::abs(returnTrack.volumeDecibels + 3.0f) < 0.0001f,
+           "Render recall retains the captured level without comparison trim.");
+    expect(studio::ReampSnapshotService::staleReason(
+               project,
+               matchedSnapshot)
+               .isEmpty(),
+           "Activating a captured-level snapshot remains fresh.");
+    expect(history.undo(project),
+           "Raw tone snapshot recall remains undoable.");
 
     const auto mixerSnapshot = studio::MixerSnapshotService::capture(
         project,

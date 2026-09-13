@@ -272,9 +272,12 @@ signal to the selected output pair without removing it from the main mix. The
 calibration state machine emits one full-scale-safe impulse, suppresses software
 monitoring, detects the returned pulse, and stores the round-trip sample count.
 Return recordings use the route input and are placed earlier by the calibrated
-latency plus fine adjustment. Plugin paths duplicate references to the active DI
-playlist into a new ordinary audio track so the Phase 1 sandboxed VST3 insert
-chain becomes a basic non-destructive tone path.
+latency plus fine adjustment. Plugin paths resolve the active DI playlist
+through an ordinary audio return without copying clips, so edits and
+playlist changes remain sourced from the DI while the return owns the plugin
+chain. Tone fingerprints include source processing, automation, beat-tempo
+context, return routing, and return media. Snapshot recall can apply the
+persisted gated-RMS comparison trim without changing raw batch-render levels.
 
 To test hardware calibration, physically route the configured reamp output back
 to the configured return input, enable both channels in **I/O**, choose

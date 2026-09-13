@@ -2885,6 +2885,19 @@ std::optional<StudioAudioEngine::RenderSnapshot> StudioAudioEngine::buildSnapsho
         }
         const auto wholeContentSoloActive = compiledTrack->processing;
         const auto trackSoloActive = compiledTrack->audible;
+        const auto* linkedRoute = project.reampRouteForReturn(parent.id);
+        const auto* contentParent =
+            linkedRoute != nullptr
+                && linkedRoute->enabled
+                && linkedRoute->type == TonePathType::plugin
+            ? project.findTrack(linkedRoute->sourceTrackId)
+            : &parent;
+        if (contentParent == nullptr)
+        {
+            error = "A plugin tone path source became unavailable.";
+            return std::nullopt;
+        }
+        const auto referencesReampSource = contentParent != &parent;
 
         RenderTrack renderTrack;
         renderTrack.runtimeKey = runtimeKey(parent.id);
@@ -2898,41 +2911,44 @@ std::optional<StudioAudioEngine::RenderSnapshot> StudioAudioEngine::buildSnapsho
         const auto anySoloedChild = std::any_of(
             project.tracks.cbegin(),
             project.tracks.cend(),
-            [&parent](const auto& child)
+            [contentParent](const auto& child)
             {
-                return child.parentTrackId == parent.id
+                return child.parentTrackId == contentParent->id
                     && child.solo;
             });
 
-        auto parentClips = buildClips(parent, nullptr);
+        auto parentClips = buildClips(*contentParent, nullptr);
         if (!parentClips.has_value())
             return std::nullopt;
 
         RenderSource parentSource;
-        parentSource.trackId = parent.id;
+        parentSource.trackId = contentParent->id;
         parentSource.isParentContent = true;
         parentSource.audible = renderTrack.processing
             && !anySoloedChild;
         parentSource.clips = std::move(*parentClips);
         renderTrack.sources.push_back(std::move(parentSource));
 
-        const auto activeTakeId = project.activeTakeTrackId(parent.id);
+        const auto activeTakeId = project.activeTakeTrackId(
+            contentParent->id);
         for (const auto& child : project.tracks)
         {
-            if (child.parentTrackId != parent.id)
+            if (child.parentTrackId != contentParent->id)
                 continue;
 
             const auto selectedByComp = std::any_of(
-                parent.compRegions.cbegin(),
-                parent.compRegions.cend(),
+                contentParent->compRegions.cbegin(),
+                contentParent->compRegions.cend(),
                 [&child](const auto& region)
                 {
                     return region.sourceTrackId == child.id;
                 });
-            const auto selectedByPlaylist = parent.compRegions.empty()
+            const auto selectedByPlaylist =
+                contentParent->compRegions.empty()
                 && child.id == activeTakeId;
             const auto selectedBySolo = child.solo;
-            const auto selectedByExpanded = !parent.versionsCollapsed;
+            const auto selectedByExpanded =
+                !contentParent->versionsCollapsed;
             if (!selectedByExpanded
                 && !selectedByComp
                 && !selectedByPlaylist
@@ -2944,14 +2960,17 @@ std::optional<StudioAudioEngine::RenderSnapshot> StudioAudioEngine::buildSnapsho
                 !selectedByExpanded
                         && selectedByComp
                         && !selectedBySolo
-                    ? &parent.compRegions
+                    ? &contentParent->compRegions
                     : nullptr);
             if (!childClips.has_value())
                 return std::nullopt;
 
             RenderSource source;
-            source.runtimeKey = runtimeKey(child.id);
+            source.runtimeKey = referencesReampSource
+                ? 0
+                : runtimeKey(child.id);
             source.trackId = child.id;
+            source.isParentContent = referencesReampSource;
             source.volumeGain = juce::Decibels::decibelsToGain(child.volumeDecibels);
             source.pan = child.pan;
             source.audible = !parent.muted
