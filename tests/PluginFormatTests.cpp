@@ -831,6 +831,122 @@ void pluginFormatTests()
                 8)
             + ").")
                .toRawUTF8());
+
+    auto crashProject = studio::Project::createDefault();
+    crashProject.metronomeEnabled = false;
+    crashProject.loopEnabled = true;
+    crashProject.loopStartSeconds = 0.0;
+    crashProject.loopEndSeconds = monoClip.durationSeconds;
+    crashProject.tracks.front().clips.push_back(monoClip);
+    studio::PluginInsert crashInsert;
+    crashInsert.pluginIdentifier =
+        descriptions[0]->createIdentifierString();
+    crashInsert.name = "Crash fixture";
+    crashInsert.format = "CLAP";
+    crashInsert.bridgeMode =
+        studio::PluginBridgeMode::sandboxed;
+    crashProject.tracks.front().inserts.push_back(crashInsert);
+    studio::StudioAudioEngine::PluginRuntimeRequest crashRequest;
+    crashRequest.trackId = crashProject.tracks.front().id;
+    crashRequest.insertId = crashInsert.id;
+    crashRequest.name = crashInsert.name;
+    crashRequest.description = *descriptions[0];
+    crashRequest.bridgeMode =
+        studio::PluginBridgeMode::sandboxed;
+
+    studio::StudioAudioEngine crashEngine(
+        juce::File(STUDIO_DUO_BRIDGE_WORKER_PATH));
+    expect(crashEngine.updateProject(
+               crashProject,
+               { crashRequest })
+               .wasOk(),
+           "A sandbox crash fixture runtime can start.");
+    auto crashReady = false;
+    for (int attempt = 0; attempt < 500; ++attempt)
+    {
+        const auto crashStatuses =
+            crashEngine.pluginRuntimeStatuses();
+        crashReady = !crashStatuses.empty()
+            && crashStatuses.front().state
+                == studio::StudioAudioEngine::
+                    PluginRuntimeStatus::State::ready
+            && !crashEngine.pluginRuntimeTransitionPending();
+        if (crashReady)
+            break;
+        juce::Thread::sleep(10);
+    }
+    expect(crashReady,
+           "The sandbox crash fixture becomes ready.");
+    crashEngine.seekSeconds(0.0);
+    crashEngine.play();
+    for (int block = 0; block < 4; ++block)
+        crashEngine.processActiveBlockForTesting(64);
+    expect(crashEngine.simulatePluginCrashForTesting(
+               crashInsert.id),
+           "The sandbox crash fixture terminates its worker.");
+    auto crashDetected = false;
+    for (int attempt = 0; attempt < 200; ++attempt)
+    {
+        crashEngine.processActiveBlockForTesting(64);
+        const auto crashStatuses =
+            crashEngine.pluginRuntimeStatuses();
+        crashDetected = !crashStatuses.empty()
+            && crashStatuses.front().state
+                == studio::StudioAudioEngine::
+                    PluginRuntimeStatus::State::failed;
+        if (crashDetected)
+            break;
+        juce::Thread::sleep(10);
+    }
+    auto dryFallbackPeak = 0.0f;
+    for (int block = 0; block < 16; ++block)
+    {
+        const auto fallback =
+            crashEngine.renderActiveBlockForTesting(64);
+        dryFallbackPeak = std::max(
+            dryFallbackPeak,
+            fallback.getMagnitude(
+                0,
+                fallback.getNumSamples()));
+    }
+    const auto crashRoundTrip = studio::Project::fromVar(
+        crashProject.toVar(),
+        error);
+    expect(crashDetected
+               && dryFallbackPeak > 0.1f
+               && crashRoundTrip.has_value(),
+           ("A sandbox crash preserves the project and resumes aligned dry audio"
+            " (detected "
+            + juce::String(crashDetected ? 1 : 0)
+            + ", peak "
+            + juce::String(dryFallbackPeak, 4)
+            + ", project "
+            + juce::String(crashRoundTrip.has_value() ? 1 : 0)
+            + ").")
+               .toRawUTF8());
+
+    crashEngine.stop();
+    auto reloadRequest = crashRequest;
+    reloadRequest.state.reset();
+    expect(crashEngine.forcePluginRuntimeReload(
+               crashProject,
+               { reloadRequest },
+               crashInsert.id)
+               .wasOk(),
+           "A crashed sandbox can be explicitly reloaded.");
+    for (int attempt = 0;
+         attempt < 500
+         && crashEngine.pluginRuntimeTransitionPending();
+         ++attempt)
+        juce::Thread::sleep(10);
+    const auto reloadedStatuses =
+        crashEngine.pluginRuntimeStatuses();
+    expect(!reloadedStatuses.empty()
+               && reloadedStatuses.front().state
+                      == studio::StudioAudioEngine::
+                          PluginRuntimeStatus::State::ready,
+           "Explicit reload restores a crashed sandbox runtime.");
+    crashEngine.shutdown();
     monoSource.deleteFile();
 
     auto project = studio::Project::createDefault();

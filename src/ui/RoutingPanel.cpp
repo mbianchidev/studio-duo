@@ -55,7 +55,9 @@ std::vector<const RoutingConnection*> RoutingPanel::displayedRoutes() const
     for (const auto& route : project->routingConnections)
     {
         if (route.sourceTrackId == trackId
-            && route.kind != RouteKind::mainOutput)
+            && route.kind != RouteKind::controlRoom
+            && (route.kind != RouteKind::mainOutput
+                || route.signalType == SignalType::midi))
             result.push_back(&route);
     }
     return result;
@@ -73,7 +75,7 @@ void RoutingPanel::paint(juce::Graphics& graphics)
     if (routes.empty())
     {
         graphics.setFont(juce::Font(juce::FontOptions(10.0f)));
-        graphics.drawFittedText("No sends, sidechains, or direct hardware routes.",
+        graphics.drawFittedText("No MIDI, send, sidechain, or direct hardware routes.",
                                 0,
                                 28,
                                 getWidth(),
@@ -129,11 +131,50 @@ void RoutingPanel::showAddMenu()
     if (source == nullptr
         || source->type == TrackType::folder
         || source->type == TrackType::vca
-        || source->type == TrackType::midi
         || source->type == TrackType::controlRoom)
         return;
 
     juce::PopupMenu menu;
+    if (source->type == TrackType::midi
+        || source->type == TrackType::instrument)
+    {
+        juce::PopupMenu midi;
+        for (const auto& destination :
+             RoutingUiModel::midiDestinations(*project, trackId))
+        {
+            midi.addItem(destination.label,
+                         [this, destination]
+                         {
+                             RoutingConnection route;
+                             route.name = "MIDI to "
+                                 + destination.label;
+                             route.signalType = SignalType::midi;
+                             route.kind = RouteKind::send;
+                             route.sourceTrackId = trackId;
+                             route.destination.type =
+                                 RouteEndpointType::track;
+                             route.destination.trackId =
+                                 destination.trackId;
+                             if (onAddConnection)
+                                 onAddConnection(std::move(route));
+                         });
+        }
+        if (midi.getNumItems() == 0)
+            midi.addItem("No valid MIDI destinations",
+                         false,
+                         false,
+                         [] {});
+        menu.addSubMenu("MIDI destination", midi);
+        if (source->type == TrackType::midi)
+        {
+            menu.showMenuAsync(
+                juce::PopupMenu::Options().withTargetComponent(
+                    addButton));
+            return;
+        }
+        menu.addSeparator();
+    }
+
     const auto addSends = [this](juce::PopupMenu& target, RouteTap tap)
     {
         for (const auto& destination :
@@ -413,42 +454,47 @@ void RoutingPanel::showRouteMenu(const RoutingConnection& route)
                  {
                      update([](auto& value) { value.muted = !value.muted; });
                  });
-    menu.addItem("Pre-fader",
-                 true,
-                 route.tap == RouteTap::preFader,
-                 [update]
-                 {
-                     update([](auto& value)
-                     {
-                         value.tap = RouteTap::preFader;
-                     });
-                 });
-    menu.addItem("Post-fader",
-                 true,
-                 route.tap == RouteTap::postFader,
-                 [update]
-                 {
-                     update([](auto& value)
-                     {
-                         value.tap = RouteTap::postFader;
-                     });
-                 });
-
-    juce::PopupMenu levels;
-    for (const auto level : { -18.0f, -12.0f, -6.0f, 0.0f, 6.0f })
+    if (route.signalType == SignalType::audio)
     {
-        levels.addItem(juce::String(level, 1) + " dB",
-                       true,
-                       std::abs(route.gainDecibels - level) < 0.001f,
-                       [update, level]
-                       {
-                           update([level](auto& value)
-                           {
-                               value.gainDecibels = level;
-                           });
-                       });
+        menu.addItem("Pre-fader",
+                     true,
+                     route.tap == RouteTap::preFader,
+                     [update]
+                     {
+                         update([](auto& value)
+                         {
+                             value.tap = RouteTap::preFader;
+                         });
+                     });
+        menu.addItem("Post-fader",
+                     true,
+                     route.tap == RouteTap::postFader,
+                     [update]
+                     {
+                         update([](auto& value)
+                         {
+                             value.tap = RouteTap::postFader;
+                         });
+                     });
+
+        juce::PopupMenu levels;
+        for (const auto level :
+             { -18.0f, -12.0f, -6.0f, 0.0f, 6.0f })
+        {
+            levels.addItem(
+                juce::String(level, 1) + " dB",
+                true,
+                std::abs(route.gainDecibels - level) < 0.001f,
+                [update, level]
+                {
+                    update([level](auto& value)
+                    {
+                        value.gainDecibels = level;
+                    });
+                });
+        }
+        menu.addSubMenu("Level", levels);
     }
-    menu.addSubMenu("Level", levels);
     menu.addSeparator();
     menu.addItem("Remove route",
                  [this, routeId = route.id]

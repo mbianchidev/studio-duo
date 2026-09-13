@@ -51,4 +51,26 @@ void routingUiModelTests()
                && studio::RoutingUiModel::summary(project, route)
                       .containsIgnoreCase("Parallel"),
            "Routing UI summaries expose tap and destination.");
+
+    studio::Track midi;
+    midi.name = "MIDI";
+    midi.type = studio::TrackType::midi;
+    const auto midiId = midi.id;
+    project.tracks.insert(project.tracks.end() - 1, midi);
+    studio::Track instrument;
+    instrument.name = "Instrument";
+    instrument.type = studio::TrackType::instrument;
+    const auto instrumentId = instrument.id;
+    project.tracks.insert(project.tracks.end() - 1, instrument);
+
+    const auto midiDestinations =
+        studio::RoutingUiModel::midiDestinations(project, midiId);
+    expect(std::any_of(
+               midiDestinations.cbegin(),
+               midiDestinations.cend(),
+               [&instrumentId](const auto& destination)
+               {
+                   return destination.trackId == instrumentId;
+               }),
+           "Routing UI offers instrument tracks as MIDI destinations.");
 }

@@ -25,6 +25,7 @@ public:
     std::function<void(AutomationLane)> onAddLane;
     std::function<void(AutomationLane, AutomationLane)> onUpdateLane;
     std::function<void(const juce::String&)> onRemoveLane;
+    std::function<void()> onCommitPreview;
 
     void paint(juce::Graphics& graphics) override;
     void resized() override;
@@ -63,5 +64,6 @@ private:
     juce::TextButton addPointButton { "ADD POINT" };
     juce::TextButton removePointButton { "REMOVE NEAR" };
     juce::TextButton removeLaneButton { "DELETE LANE" };
+    juce::TextButton commitPreviewButton { "COMMIT PREVIEW" };
 };
 }

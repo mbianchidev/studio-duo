@@ -25,7 +25,7 @@ AutomationPanel::AutomationPanel()
     value.setSliderStyle(juce::Slider::LinearHorizontal);
     value.setTextBoxStyle(juce::Slider::TextBoxRight, false, 64, 24);
 
-    for (auto* component : std::array<juce::Component*, 11> {
+    for (auto* component : std::array<juce::Component*, 12> {
              &mode,
              &armed,
              &lanes,
@@ -36,7 +36,8 @@ AutomationPanel::AutomationPanel()
              &addLaneButton,
              &addPointButton,
              &removePointButton,
-             &removeLaneButton
+             &removeLaneButton,
+             &commitPreviewButton
          })
         addAndMakeVisible(component);
 
@@ -82,10 +83,58 @@ AutomationPanel::AutomationPanel()
                 juce::dontSendNotification);
         }
     };
+    beatTime.onClick = [this]
+    {
+        if (rebuilding || project == nullptr)
+            return;
+        auto* lane = selectedLane();
+        if (lane == nullptr)
+            return;
+        const auto nextTimebase = beatTime.getToggleState()
+            ? AutomationTimebase::beats
+            : AutomationTimebase::seconds;
+        if (lane->timebase == nextTimebase)
+            return;
+        auto before = *lane;
+        auto after = before;
+        for (auto& point : after.points)
+        {
+            point.position =
+                nextTimebase == AutomationTimebase::beats
+                ? project->beatsAt(point.position)
+                : project->secondsAtBeat(point.position);
+        }
+        after.timebase = nextTimebase;
+        if (onUpdateLane)
+            onUpdateLane(std::move(before), std::move(after));
+        refresh();
+    };
+    stepInterpolation.onClick = [this]
+    {
+        if (rebuilding)
+            return;
+        auto* lane = selectedLane();
+        if (lane == nullptr)
+            return;
+        auto before = *lane;
+        auto after = before;
+        after.interpolation =
+            stepInterpolation.getToggleState()
+            ? AutomationInterpolation::step
+            : AutomationInterpolation::linear;
+        if (onUpdateLane)
+            onUpdateLane(std::move(before), std::move(after));
+        refresh();
+    };
     addLaneButton.onClick = [this] { addLane(); };
     addPointButton.onClick = [this] { addPoint(); };
     removePointButton.onClick = [this] { removeNearestPoint(); };
     removeLaneButton.onClick = [this] { removeLane(); };
+    commitPreviewButton.onClick = [this]
+    {
+        if (onCommitPreview)
+            onCommitPreview();
+    };
     setSize(560, 330);
 }
 
@@ -144,15 +193,31 @@ void AutomationPanel::refresh()
             std::move(automationTarget)
         });
     };
-    addTarget("Track volume", AutomationTargetType::trackVolume);
-    addTarget("Track pan", AutomationTargetType::trackPan);
-    addTarget("Track mute", AutomationTargetType::trackMute);
-    addTarget("Track polarity", AutomationTargetType::trackPolarity);
+    if (track->type == TrackType::vca)
+    {
+        addTarget("VCA volume", AutomationTargetType::vcaVolume);
+    }
+    else if (track->type != TrackType::folder
+             && track->type != TrackType::midi)
+    {
+        addTarget("Track volume", AutomationTargetType::trackVolume);
+        addTarget("Track pan", AutomationTargetType::trackPan);
+        addTarget("Track mute", AutomationTargetType::trackMute);
+        addTarget("Track polarity", AutomationTargetType::trackPolarity);
+        if (track->type == TrackType::controlRoom)
+        {
+            addTarget(
+                "Control room dim",
+                AutomationTargetType::controlRoomDim);
+        }
+    }
 
     for (const auto& route : project->routingConnections)
     {
         if (route.sourceTrackId != trackId
-            || route.kind == RouteKind::mainOutput)
+            || route.kind == RouteKind::mainOutput
+            || route.kind == RouteKind::controlRoom
+            || route.signalType != SignalType::audio)
             continue;
         AutomationTarget gain;
         gain.type = AutomationTargetType::sendGain;
@@ -162,17 +227,41 @@ void AutomationPanel::refresh()
             route.name + " level",
             gain
         });
+        auto pan = gain;
+        pan.type = AutomationTargetType::sendPan;
+        targets.push_back({
+            route.name + " pan",
+            pan
+        });
+        auto mute = gain;
+        mute.type = AutomationTargetType::sendMute;
+        targets.push_back({
+            route.name + " mute",
+            mute
+        });
     }
     for (const auto& status : runtimeStatuses)
     {
         if (status.trackId != trackId)
             continue;
+        const auto insert = std::find_if(
+            track->inserts.cbegin(),
+            track->inserts.cend(),
+            [&status](const auto& candidate)
+            {
+                return candidate.id == status.insertId;
+            });
+        const auto targetType =
+            insert != track->inserts.cend()
+                && insert->bundledDevice
+            ? AutomationTargetType::deviceParameter
+            : AutomationTargetType::pluginParameter;
         for (const auto& parameter : status.parameters)
         {
             if (!parameter.automatable)
                 continue;
             AutomationTarget pluginTarget;
-            pluginTarget.type = AutomationTargetType::pluginParameter;
+            pluginTarget.type = targetType;
             pluginTarget.trackId = trackId;
             pluginTarget.insertId = status.insertId;
             pluginTarget.parameterId = parameter.id;
@@ -196,7 +285,24 @@ void AutomationPanel::refresh()
         lanes.addItem(lane.name, lanes.getNumItems() + 1);
     }
     if (!laneIds.empty())
+    {
         lanes.setSelectedId(1, juce::dontSendNotification);
+        const auto* lane = selectedLane();
+        if (lane != nullptr)
+        {
+            beatTime.setToggleState(
+                lane->timebase == AutomationTimebase::beats,
+                juce::dontSendNotification);
+            stepInterpolation.setToggleState(
+                lane->interpolation == AutomationInterpolation::step,
+                juce::dontSendNotification);
+            value.setValue(
+                lane->points.empty()
+                    ? 0.5
+                    : lane->points.back().value,
+                juce::dontSendNotification);
+        }
+    }
     rebuilding = false;
 }
 
@@ -345,5 +451,8 @@ void AutomationPanel::resized()
     addPointButton.setBounds(buttons.removeFromLeft(120).reduced(2));
     removePointButton.setBounds(buttons.removeFromLeft(140).reduced(2));
     removeLaneButton.setBounds(buttons.removeFromLeft(130).reduced(2));
+    bounds.removeFromTop(6);
+    commitPreviewButton.setBounds(
+        bounds.removeFromTop(34).removeFromLeft(180).reduced(2));
 }
 }

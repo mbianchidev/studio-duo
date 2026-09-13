@@ -2,6 +2,8 @@
 
 #include "AutomationTypes.h"
 
+#include <optional>
+
 namespace studio
 {
 struct AutomationGesture
@@ -18,5 +20,11 @@ public:
     static AutomationLane applyGesture(const AutomationLane& lane,
                                        AutomationMode mode,
                                        AutomationGesture gesture);
+    static std::optional<AutomationLane> writeGesture(
+        const AutomationLane* lane,
+        AutomationTarget target,
+        juce::String name,
+        AutomationMode mode,
+        AutomationGesture gesture);
 };
 }

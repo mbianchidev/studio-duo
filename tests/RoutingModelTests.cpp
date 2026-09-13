@@ -318,4 +318,94 @@ void routingModelTests()
                        && connection.destination.trackId == lifecycleBusId;
                }),
            "Duplicating a track remaps its routing connections.");
+
+    auto midiProject = studio::Project::createDefault();
+    studio::Track midiSource;
+    midiSource.name = "Instrument source";
+    midiSource.type = studio::TrackType::instrument;
+    const auto midiSourceId = midiSource.id;
+    studio::Track midiDestination;
+    midiDestination.name = "Instrument destination";
+    midiDestination.type = studio::TrackType::instrument;
+    const auto midiDestinationId = midiDestination.id;
+    midiProject.tracks.insert(
+        midiProject.tracks.end() - 1,
+        midiSource);
+    midiProject.tracks.insert(
+        midiProject.tracks.end() - 1,
+        midiDestination);
+
+    studio::RoutingConnection midiRoute;
+    midiRoute.name = "Instrument MIDI";
+    midiRoute.signalType = studio::SignalType::midi;
+    midiRoute.kind = studio::RouteKind::mainOutput;
+    midiRoute.sourceTrackId = midiSourceId;
+    midiRoute.destination.type =
+        studio::RouteEndpointType::track;
+    midiRoute.destination.trackId = midiDestinationId;
+    midiProject.routingConnections.push_back(midiRoute);
+    error.clear();
+    expect(midiProject.validateRoutingGraph(error),
+           error.toRawUTF8());
+
+    studio::Track midiAudioBus;
+    midiAudioBus.name = "Instrument audio bus";
+    midiAudioBus.type = studio::TrackType::bus;
+    const auto midiAudioBusId = midiAudioBus.id;
+    midiProject.tracks.insert(
+        midiProject.tracks.end() - 1,
+        midiAudioBus);
+    studio::CommandStack midiHistory;
+    error.clear();
+    expect(midiHistory.perform(
+               std::make_unique<studio::SetTrackOutputCommand>(
+                   midiSourceId,
+                   midiAudioBusId),
+               midiProject,
+               error),
+           error.toRawUTF8());
+    expect(std::any_of(
+               midiProject.routingConnections.cbegin(),
+               midiProject.routingConnections.cend(),
+               [&midiRoute](const auto& connection)
+               {
+                   return connection.id == midiRoute.id
+                       && connection.signalType
+                              == studio::SignalType::midi
+                       && connection.destination.trackId
+                              == midiRoute.destination.trackId;
+               }),
+           "Changing an instrument audio output preserves its MIDI main route.");
+
+    auto midiRemovalProject = midiProject;
+    studio::CommandStack midiRemovalHistory;
+    error.clear();
+    expect(midiRemovalHistory.perform(
+               std::make_unique<studio::RemoveTrackCommand>(
+                   midiDestinationId),
+               midiRemovalProject,
+               error),
+           error.toRawUTF8());
+    expect(midiRemovalProject.findTrack(midiDestinationId) == nullptr
+               && std::none_of(
+                   midiRemovalProject.routingConnections.cbegin(),
+                   midiRemovalProject.routingConnections.cend(),
+                   [&midiRoute](const auto& connection)
+                   {
+                       return connection.id == midiRoute.id;
+                   })
+               && midiRemovalProject.validateRoutingGraph(error),
+           "Deleting a MIDI destination removes its route without corrupting the project.");
+
+    studio::RoutingConnection midiFeedback = midiRoute;
+    midiFeedback.id = juce::Uuid().toString();
+    midiFeedback.name = "MIDI feedback";
+    midiFeedback.sourceTrackId = midiDestinationId;
+    midiFeedback.destination.trackId = midiSourceId;
+    midiProject.routingConnections.push_back(midiFeedback);
+    error.clear();
+    expect(!midiProject.validateRoutingGraph(error)
+               && error.containsIgnoreCase("MIDI")
+               && error.containsIgnoreCase("cycle"),
+           "MIDI routing rejects feedback cycles independently from audio routing.");
 }

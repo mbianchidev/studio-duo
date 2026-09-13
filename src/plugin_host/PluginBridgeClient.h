@@ -50,6 +50,7 @@ public:
         parameterDescriptors() const;
     [[nodiscard]] juce::String diagnosticState() const;
 #if STUDIO_DUO_TESTING
+    void terminateWorkerForTesting();
     static bool recoversLateFirstOutputForTesting();
     static bool resetsProcessingTimelineForTesting();
 #endif

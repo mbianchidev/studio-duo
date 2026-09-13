@@ -190,9 +190,12 @@ and convert version 2 `outputTrackId` values into explicit main-output routes.
 
 Routing snapshots compile main outputs, arbitrary pre/post-fader sends,
 sidechains, parallel paths, hardware maps, folders, VCAs, solo-safe closure,
-and control-room monitoring into a topological processing plan. Delay
-compensation follows every summing and sidechain dependency. Per-route delay
-lines allow one source to feed destinations with different path latencies.
+and control-room monitoring into a topological processing plan. Instrument
+tracks keep independent audio and MIDI routes; MIDI and instrument destinations
+use a separately validated acyclic graph ahead of Phase 4 event editing. Delay
+compensation follows every audio summing and sidechain dependency. Per-route
+delay lines allow one source to feed destinations with different path
+latencies.
 
 Automation lanes use seconds or musical beats and compile off-thread to integer
 sample positions. Track and route controls evaluate per sample. External plugin
@@ -200,8 +203,13 @@ events travel in the same bridge record as their audio block. Linear automation
 uses compact breakpoint/ramp descriptors. CLAP expands them to exact timed
 events inside one `process()` call, bundled gain applies processor-native
 per-sample ramps, and unsupported JUCE formats use an adaptive bounded split
-fallback. Overflow is counted rather than silently dropping later lanes. Read,
-touch, latch, write, trim, and preview edits remain typed and undoable.
+fallback. Overflow is counted rather than silently dropping later lanes.
+Control gestures retain their start and end transport positions, including
+plugin parameters, VCA gain, sends, master controls, and control-room
+volume/pan/mute/polarity/dim processing. Touch restores the prior lane, latch
+holds to its next point, trim records a relative offset, and preview keeps a
+pending gesture until explicit commit. Duplicate or unavailable automation
+targets are rejected before entering the command history.
 
 Bundled devices use the same processor, parameter, state, automation, sidechain,
 and render paths as external inserts. Their processing allocates state during
@@ -272,9 +280,12 @@ signal to the selected output pair without removing it from the main mix. The
 calibration state machine emits one full-scale-safe impulse, suppresses software
 monitoring, detects the returned pulse, and stores the round-trip sample count.
 Return recordings use the route input and are placed earlier by the calibrated
-latency plus fine adjustment. Plugin paths duplicate references to the active DI
-playlist into a new ordinary audio track so the Phase 1 sandboxed VST3 insert
-chain becomes a basic non-destructive tone path.
+latency plus fine adjustment. Plugin paths resolve the active DI playlist
+through an ordinary audio return without copying clips, so edits and
+playlist changes remain sourced from the DI while the return owns the plugin
+chain. Tone fingerprints include source processing, automation, beat-tempo
+context, return routing, and return media. Snapshot recall can apply the
+persisted gated-RMS comparison trim without changing raw batch-render levels.
 
 To test hardware calibration, physically route the configured reamp output back
 to the configured return input, enable both channels in **I/O**, choose

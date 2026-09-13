@@ -88,6 +88,59 @@ void automationTests()
                       < 0.0001,
            "Undo restores automation points.");
 
+    auto duplicateTargetLane = lane;
+    duplicateTargetLane.id = juce::Uuid().toString();
+    duplicateTargetLane.name = "Duplicate volume";
+    error.clear();
+    expect(!history.perform(
+               std::make_unique<studio::AddAutomationLaneCommand>(
+                   duplicateTargetLane),
+               project,
+               error)
+               && error.containsIgnoreCase("target"),
+           "A project cannot contain ambiguous duplicate automation targets.");
+    auto persistedDuplicateProject = project;
+    persistedDuplicateProject.automationLanes.push_back(
+        duplicateTargetLane);
+    error.clear();
+    expect(studio::Project::fromVar(
+               persistedDuplicateProject.toVar(),
+               error)
+               .has_value(),
+           "Existing format-v4 projects with duplicate targets remain readable.");
+
+    auto invalidRouteLane = lane;
+    invalidRouteLane.id = juce::Uuid().toString();
+    invalidRouteLane.name = "Missing route";
+    invalidRouteLane.target.type =
+        studio::AutomationTargetType::sendGain;
+    invalidRouteLane.target.routeId = "missing-route";
+    error.clear();
+    expect(!history.perform(
+               std::make_unique<studio::AddAutomationLaneCommand>(
+                   invalidRouteLane),
+               project,
+               error)
+               && error.containsIgnoreCase("route"),
+           "Automation edits reject unavailable route targets immediately.");
+
+    auto invalidInsertLane = lane;
+    invalidInsertLane.id = juce::Uuid().toString();
+    invalidInsertLane.name = "Missing insert";
+    invalidInsertLane.target.type =
+        studio::AutomationTargetType::pluginParameter;
+    invalidInsertLane.target.insertId = "missing-insert";
+    invalidInsertLane.target.parameterId = "gain";
+    invalidInsertLane.target.parameterIndex = 0;
+    error.clear();
+    expect(!history.perform(
+               std::make_unique<studio::AddAutomationLaneCommand>(
+                   invalidInsertLane),
+               project,
+               error)
+               && error.containsIgnoreCase("insert"),
+           "Automation edits reject unavailable insert targets immediately.");
+
     studio::Track aux;
     aux.name = "Automation Aux";
     aux.type = studio::TrackType::aux;
@@ -189,8 +242,20 @@ void automationTests()
         recordingLane,
         studio::AutomationMode::latch,
         { 0.25, 0.75, 0.2, 0.8 });
+    const auto compiledLatch = studio::AutomationScheduler::compile(
+        project,
+        latch,
+        48000.0,
+        error);
     expect(std::abs(latch.points.back().position - 1.0) < 0.0001
                && std::abs(latch.points[latch.points.size() - 2].value - 0.8)
+                      < 0.0001
+               && compiledLatch.has_value()
+               && std::abs(
+                      compiledLatch->valueAt(
+                          static_cast<std::int64_t>(
+                              std::llround(0.9 * 48000.0)))
+                      - 0.8)
                       < 0.0001,
            "Latch mode holds the touched value until the pass ends.");
 
@@ -209,6 +274,35 @@ void automationTests()
                && std::abs(preview.trimOffset - recordingLane.trimOffset)
                       < 0.0001,
            "Preview mode remains non-destructive until committed.");
+
+    studio::AutomationTarget pluginTarget;
+    pluginTarget.type =
+        studio::AutomationTargetType::pluginParameter;
+    pluginTarget.trackId = project.tracks.front().id;
+    pluginTarget.insertId = "plugin";
+    pluginTarget.parameterId = "gain";
+    pluginTarget.parameterIndex = 3;
+    const auto createdWrite =
+        studio::AutomationRecorder::writeGesture(
+            nullptr,
+            pluginTarget,
+            "Plugin gain",
+            studio::AutomationMode::write,
+            { 0.25, 0.75, 0.2, 0.8 });
+    expect(createdWrite.has_value()
+               && createdWrite->target.insertId == "plugin"
+               && createdWrite->target.parameterId == "gain"
+               && createdWrite->points.front().position == 0.25
+               && createdWrite->points.back().position == 0.75,
+           "A write gesture creates a typed plugin automation lane.");
+    expect(!studio::AutomationRecorder::writeGesture(
+                nullptr,
+                pluginTarget,
+                "Plugin gain",
+                studio::AutomationMode::preview,
+                { 0.25, 0.75, 0.2, 0.8 })
+                .has_value(),
+           "Preview gestures do not create automation lanes.");
 
     const auto sourceFile = juce::File::getSpecialLocation(
                                 juce::File::tempDirectory)
@@ -246,6 +340,101 @@ void automationTests()
     clip.sourceLengthSeconds = 0.01;
     clip.sourceRangeEndSeconds = 0.01;
     renderProject.tracks.front().clips.push_back(clip);
+
+    auto controlRoomProject = studio::Project::createDefault();
+    controlRoomProject.metronomeEnabled = false;
+    controlRoomProject.tracks.front().clips.push_back(clip);
+    studio::Track controlRoom;
+    controlRoom.name = "Control Room";
+    controlRoom.type = studio::TrackType::controlRoom;
+    controlRoom.hardwareOutputChannel = 2;
+    controlRoom.controlRoomDimDecibels = -20.0f;
+    const auto controlRoomId = controlRoom.id;
+    controlRoomProject.tracks.insert(
+        controlRoomProject.tracks.end() - 1,
+        controlRoom);
+    studio::RoutingConnection controlRoomRoute;
+    controlRoomRoute.name = "Control room";
+    controlRoomRoute.kind = studio::RouteKind::controlRoom;
+    controlRoomRoute.sourceTrackId =
+        controlRoomProject.masterTrackId();
+    controlRoomRoute.destination.type =
+        studio::RouteEndpointType::track;
+    controlRoomRoute.destination.trackId = controlRoomId;
+    controlRoomProject.routingConnections.push_back(
+        controlRoomRoute);
+    studio::AutomationLane controlRoomDim;
+    controlRoomDim.name = "Control room dim";
+    controlRoomDim.target.type =
+        studio::AutomationTargetType::controlRoomDim;
+    controlRoomDim.target.trackId = controlRoomId;
+    controlRoomDim.interpolation =
+        studio::AutomationInterpolation::step;
+    controlRoomDim.points = {
+        { juce::Uuid().toString(), 0.0, 0.0 },
+        { juce::Uuid().toString(),
+          100.0 / 48000.0,
+          1.0 }
+    };
+    controlRoomProject.automationLanes.push_back(
+        controlRoomDim);
+    studio::AutomationLane controlRoomPolarity;
+    controlRoomPolarity.name = "Control room polarity";
+    controlRoomPolarity.target.type =
+        studio::AutomationTargetType::trackPolarity;
+    controlRoomPolarity.target.trackId = controlRoomId;
+    controlRoomPolarity.interpolation =
+        studio::AutomationInterpolation::step;
+    controlRoomPolarity.points = {
+        { juce::Uuid().toString(), 0.0, 0.0 },
+        { juce::Uuid().toString(),
+          150.0 / 48000.0,
+          1.0 }
+    };
+    controlRoomProject.automationLanes.push_back(
+        controlRoomPolarity);
+    studio::AutomationLane masterPolarity;
+    masterPolarity.name = "Master polarity";
+    masterPolarity.target.type =
+        studio::AutomationTargetType::trackPolarity;
+    masterPolarity.target.trackId =
+        controlRoomProject.masterTrackId();
+    masterPolarity.interpolation =
+        studio::AutomationInterpolation::step;
+    masterPolarity.points = {
+        { juce::Uuid().toString(), 0.0, 0.0 },
+        { juce::Uuid().toString(),
+          200.0 / 48000.0,
+          1.0 }
+    };
+    controlRoomProject.automationLanes.push_back(
+        masterPolarity);
+
+    studio::StudioAudioEngine controlRoomEngine;
+    expect(controlRoomEngine.updateProject(controlRoomProject).wasOk(),
+           "Automated control-room projects publish.");
+    controlRoomEngine.seekSeconds(0.0);
+    controlRoomEngine.play();
+    const auto controlRoomOutput =
+        controlRoomEngine.renderActiveBlockForTesting(256, 4);
+    expect(controlRoomOutput.getSample(2, 99) > 0.19f
+               && controlRoomOutput.getSample(2, 100) < 0.03f
+               && controlRoomOutput.getSample(2, 149) > 0.019f
+               && controlRoomOutput.getSample(2, 150) < -0.019f
+               && controlRoomOutput.getSample(0, 199) > 0.19f
+               && controlRoomOutput.getSample(0, 200) < -0.19f,
+           "Control-room dim and polarity automation switch on exact samples.");
+    juce::AudioBuffer<float> offlineMasterPolarity;
+    expect(controlRoomEngine.renderToBuffer(
+               controlRoomProject,
+               offlineMasterPolarity,
+               48000.0)
+               .wasOk(),
+           "Processor-free master polarity automation renders offline.");
+    expect(offlineMasterPolarity.getSample(0, 199) > 0.19f
+               && offlineMasterPolarity.getSample(0, 200) < -0.19f,
+           "Fast offline renders apply master polarity on the same samples as live playback.");
+
     studio::AutomationLane fader;
     fader.name = "Sample fader";
     fader.target.type = studio::AutomationTargetType::trackVolume;

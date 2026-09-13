@@ -492,6 +492,14 @@ void PluginBridgeClient::fetchWorkerOutput() noexcept
 }
 
 #if STUDIO_DUO_TESTING
+void PluginBridgeClient::terminateWorkerForTesting()
+{
+    ready.store(false, std::memory_order_release);
+    connectionLost.store(true, std::memory_order_release);
+    killWorkerProcess();
+    responseCondition.notify_all();
+}
+
 bool PluginBridgeClient::recoversLateFirstOutputForTesting()
 {
     const auto completeWorkerBlock = [](PluginBridgeSharedState& state,
