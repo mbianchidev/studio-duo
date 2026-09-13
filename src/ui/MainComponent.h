@@ -9,6 +9,7 @@
 #include "TimelineComponent.h"
 #include "audio/StudioAudioDeviceManager.h"
 #include "audio/StudioAudioEngine.h"
+#include "model/LinkedEditModel.h"
 #include "model/ProjectCommands.h"
 #include "plugin_host/PluginBrowserComponent.h"
 #include "plugin_host/PluginCatalog.h"
@@ -177,9 +178,7 @@ private:
     void changeReampRoutes(const std::function<void(std::vector<ReampRoute>&)>& change);
     void recordTrackAutomation(AutomationTargetType type,
                                double normalizedValue);
-    [[nodiscard]] const AudioClip* activeClipAt(const juce::String& parentTrackId,
-                                                double seconds) const;
-    [[nodiscard]] std::vector<juce::String> linkedClipIdsAt(
+    [[nodiscard]] LinkedClipSelection linkedClipsAt(
         const juce::String& clipId,
         double seconds) const;
     bool updateLinkedClips(

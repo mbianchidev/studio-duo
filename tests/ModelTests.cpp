@@ -1,4 +1,5 @@
 #include "model/ProjectCommands.h"
+#include "model/LinkedEditModel.h"
 #include "audio/AudioAnalysis.h"
 #include "audio/RecordingWaveform.h"
 #include "audio/StudioAudioEngine.h"
@@ -944,6 +945,76 @@ void linkedMultitrackEditing()
            "Undo restores every clip in a linked edit.");
 }
 
+void linkedEditTargeting()
+{
+    auto project = studio::Project::createDefault();
+    project.tracks[0].clips.clear();
+    project.tracks[1].clips.clear();
+
+    studio::AudioClip first;
+    first.startSeconds = 1.0;
+    first.durationSeconds = 4.0;
+    first.sourceLengthSeconds = 4.0;
+    first.sourceRangeEndSeconds = 4.0;
+    const auto firstId = first.id;
+    project.tracks[0].clips.push_back(first);
+
+    studio::AudioClip second = first;
+    second.id = juce::Uuid().toString();
+    second.startSeconds = 0.5;
+    const auto secondId = second.id;
+    project.tracks[1].clips.push_back(second);
+
+    studio::EditGroup group;
+    group.trackIds = {
+        project.tracks[0].id,
+        project.tracks[1].id
+    };
+    group.timingReferenceTrackId = project.tracks[0].id;
+    project.editGroups.push_back(group);
+
+    const auto complete = studio::linkedClipsAt(
+        project,
+        firstId,
+        2.0);
+    expect(complete.isLinked()
+               && complete.isComplete()
+               && complete.clipIds.size() == 2
+               && complete.clipIds[0] == firstId
+               && complete.clipIds[1] == secondId,
+           "Linked edit targeting resolves one active clip per group track.");
+    expect(std::abs(studio::clampLinkedMoveDelta(
+                        project,
+                        complete,
+                        -2.0)
+                    + 0.5)
+               < 0.0001,
+           "Linked moves clamp once for the group and preserve relative timing at zero.");
+
+    project.editGroups.front().enabled = false;
+    const auto suspended = studio::linkedClipsAt(
+        project,
+        firstId,
+        2.0);
+    expect(!suspended.isLinked()
+               && suspended.isComplete()
+               && suspended.clipIds
+                      == std::vector<juce::String> { firstId },
+           "Suspending linked edits restores ordinary single-clip targeting.");
+
+    project.editGroups.front().enabled = true;
+    project.tracks[1].clips.clear();
+    const auto incomplete = studio::linkedClipsAt(
+        project,
+        firstId,
+        2.0);
+    expect(incomplete.isLinked()
+               && !incomplete.isComplete()
+               && incomplete.expectedClipCount == 2
+               && incomplete.clipIds.size() == 1,
+           "Linked edit targeting reports a missing group clip instead of silently returning a partial edit.");
+}
+
 void audioProcessingTools()
 {
     studio::AudioClip clip;
@@ -1155,6 +1226,94 @@ void packagePersistence()
     saveAsPackage.deleteRecursively();
     truncatedPackage.deleteRecursively();
     invalidPackage.deleteRecursively();
+}
+
+void projectRecovery()
+{
+    auto savedProject = studio::Project::createDefault();
+    savedProject.name = "Saved project";
+
+    const auto package = juce::File::getSpecialLocation(
+                             juce::File::tempDirectory)
+                             .getNonexistentChildFile(
+                                 "StudioDuoRecovery",
+                                 ".studioduo",
+                                 false);
+    expect(studio::ProjectFile::save(savedProject, package).wasOk(),
+           "Recovery fixture can be saved.");
+
+    auto foreignProject = studio::Project::createDefault();
+    foreignProject.name = "Foreign recovery";
+    juce::String error;
+    expect(studio::ProjectFile::writeRecoveryPoint(
+               foreignProject,
+               package)
+               .wasOk(),
+           "A mismatched recovery fixture can be written.");
+    auto opened = studio::ProjectFile::loadForOpen(package, error);
+    expect(opened.has_value()
+               && !opened->recovered
+               && opened->project.id == savedProject.id
+               && opened->warning.containsIgnoreCase("project ID"),
+           "A recovery point from another project cannot replace saved state.");
+
+    auto recoveredProject = savedProject;
+    recoveredProject.name = "Recovered project";
+    expect(studio::ProjectFile::writeRecoveryPoint(
+               recoveredProject,
+               package)
+               .wasOk(),
+           "Unsaved recovery state can be written.");
+
+    error.clear();
+    opened = studio::ProjectFile::loadForOpen(package, error);
+    expect(opened.has_value()
+               && opened->recovered
+               && opened->project.name == recoveredProject.name,
+           "Opening a project restores newer unsaved recovery state.");
+
+    expect(studio::ProjectFile::save(recoveredProject, package).wasOk(),
+           "Recovered state can be saved as the next generation.");
+    error.clear();
+    opened = studio::ProjectFile::loadForOpen(package, error);
+    expect(opened.has_value()
+               && !opened->recovered
+               && opened->project.name == recoveredProject.name,
+           "A recovery point matching the saved generation is not reported as unsaved.");
+
+    auto damagedRecovery = recoveredProject;
+    damagedRecovery.name = "Recovered after damage";
+    expect(studio::ProjectFile::writeRecoveryPoint(
+               damagedRecovery,
+               package)
+               .wasOk(),
+           "Recovery state can be refreshed before a simulated crash.");
+    const auto activeSession =
+        package.getChildFile("session/generation-00000002.json");
+    expect(activeSession.replaceWithText("{"),
+           "The active saved generation can be damaged for recovery testing.");
+    error.clear();
+    opened = studio::ProjectFile::loadForOpen(package, error);
+    expect(opened.has_value()
+               && opened->recovered
+               && opened->project.name == damagedRecovery.name
+               && opened->warning.containsIgnoreCase("saved project"),
+           "A valid recovery point opens when the saved generation is damaged.");
+
+    expect(studio::ProjectFile::save(damagedRecovery, package).wasOk(),
+           "A recovered project can replace a damaged saved generation.");
+    expect(package.getChildFile("recovery/latest.json")
+               .replaceWithText("{"),
+           "The recovery point can be damaged independently.");
+    error.clear();
+    opened = studio::ProjectFile::loadForOpen(package, error);
+    expect(opened.has_value()
+               && !opened->recovered
+               && opened->project.name == damagedRecovery.name
+               && opened->warning.containsIgnoreCase("recovery"),
+           "A damaged recovery point does not prevent opening valid saved state.");
+
+    package.deleteRecursively();
 }
 
 void rejectsInvalidBaseMeter()
@@ -1388,9 +1547,11 @@ int main()
     transportMaps();
     playlistsAndComping();
     linkedMultitrackEditing();
+    linkedEditTargeting();
     audioProcessingTools();
     reampWorkflow();
     packagePersistence();
+    projectRecovery();
     rejectsInvalidBaseMeter();
     pluginAwareExportGuard();
     pluginCatalogFiltering();

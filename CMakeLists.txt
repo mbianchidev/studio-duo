@@ -96,6 +96,8 @@ set(STUDIO_DUO_MODEL_SOURCES
     src/mix/RoutingGraphCompiler.h
     src/mix/SoloResolver.cpp
     src/mix/SoloResolver.h
+    src/model/LinkedEditModel.cpp
+    src/model/LinkedEditModel.h
     src/model/ProjectCommands.cpp
     src/model/ProjectCommands.h
     src/model/ProjectModel.cpp

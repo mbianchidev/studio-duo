@@ -7,6 +7,21 @@ namespace
 constexpr auto manifestName = "manifest.json";
 constexpr auto reducedIsolationMarkerName = "in-process-active.json";
 
+struct ManifestState
+{
+    int generation = 0;
+    juce::String projectId;
+    juce::String savedAt;
+};
+
+struct RecoveryPoint
+{
+    Project project;
+    int baseGeneration = 0;
+    bool hasBaseGeneration = false;
+    juce::String writtenAt;
+};
+
 int nextGeneration(const juce::File& manifest)
 {
     if (!manifest.existsAsFile())
@@ -17,6 +32,83 @@ int nextGeneration(const juce::File& manifest)
         return juce::jmax(1, static_cast<int>(object->getProperty("generation")) + 1);
 
     return 1;
+}
+
+std::optional<ManifestState> readManifestState(
+    const juce::File& packageDirectory,
+    juce::String& error)
+{
+    const auto manifestFile = packageDirectory.getChildFile(manifestName);
+    if (!manifestFile.existsAsFile())
+    {
+        error = "The selected package does not contain manifest.json.";
+        return std::nullopt;
+    }
+
+    const auto parsed = juce::JSON::parse(manifestFile.loadFileAsString());
+    const auto* object = parsed.getDynamicObject();
+    if (object == nullptr)
+    {
+        error = "The project manifest is not valid JSON.";
+        return std::nullopt;
+    }
+
+    ManifestState state;
+    state.generation = static_cast<int>(object->getProperty("generation"));
+    state.projectId = object->getProperty("projectId").toString();
+    state.savedAt = object->getProperty("savedAt").toString();
+    return state;
+}
+
+std::optional<RecoveryPoint> readRecoveryPoint(
+    const juce::File& packageDirectory,
+    juce::String& error)
+{
+    const auto recoveryFile = packageDirectory
+        .getChildFile("recovery")
+        .getChildFile("latest.json");
+    if (!recoveryFile.existsAsFile())
+    {
+        error = "The project does not contain a recovery point.";
+        return std::nullopt;
+    }
+
+    const auto parsed = juce::JSON::parse(recoveryFile.loadFileAsString());
+    const auto* object = parsed.getDynamicObject();
+    if (object == nullptr)
+    {
+        error = "The recovery point is not valid JSON.";
+        return std::nullopt;
+    }
+
+    juce::String projectError;
+    auto project = Project::fromVar(object->getProperty("project"),
+                                    projectError);
+    if (!project.has_value())
+    {
+        error = "The recovery point contains an invalid project: "
+            + projectError;
+        return std::nullopt;
+    }
+
+    RecoveryPoint point;
+    point.project = std::move(*project);
+    point.hasBaseGeneration = object->hasProperty("baseGeneration");
+    point.baseGeneration = static_cast<int>(
+        object->getProperty("baseGeneration"));
+    point.writtenAt = object->getProperty("writtenAt").toString();
+    if (point.hasBaseGeneration && point.baseGeneration < 0)
+    {
+        error = "The recovery point contains an invalid base generation.";
+        return std::nullopt;
+    }
+    return point;
+}
+
+bool sameProject(const Project& left, const Project& right)
+{
+    return juce::JSON::toString(left.toVar(), false)
+        == juce::JSON::toString(right.toVar(), false);
 }
 }
 
@@ -208,13 +300,151 @@ std::optional<Project> ProjectFile::load(const juce::File& requestedPackageDirec
     return Project::fromVar(sessionValue, error);
 }
 
+std::optional<ProjectOpenResult> ProjectFile::loadForOpen(
+    const juce::File& requestedPackageDirectory,
+    juce::String& error)
+{
+    const auto packageDirectory =
+        normalisePackagePath(requestedPackageDirectory);
+    juce::String savedError;
+    auto savedProject = load(packageDirectory, savedError);
+
+    const auto recoveryFile = packageDirectory
+        .getChildFile("recovery")
+        .getChildFile("latest.json");
+    if (!recoveryFile.existsAsFile())
+    {
+        if (!savedProject.has_value())
+        {
+            error = savedError;
+            return std::nullopt;
+        }
+        return ProjectOpenResult {
+            std::move(*savedProject),
+            false,
+            {}
+        };
+    }
+
+    juce::String recoveryError;
+    auto recoveryPoint = readRecoveryPoint(packageDirectory,
+                                           recoveryError);
+    if (!recoveryPoint.has_value())
+    {
+        if (!savedProject.has_value())
+        {
+            error = savedError
+                + " Recovery failed: "
+                + recoveryError;
+            return std::nullopt;
+        }
+        return ProjectOpenResult {
+            std::move(*savedProject),
+            false,
+            "The recovery point was ignored: " + recoveryError
+        };
+    }
+
+    juce::String manifestError;
+    const auto manifest = readManifestState(packageDirectory,
+                                            manifestError);
+    const auto expectedProjectId = savedProject.has_value()
+        ? savedProject->id
+        : manifest.has_value()
+            ? manifest->projectId
+            : juce::String();
+    if (expectedProjectId.isNotEmpty()
+        && recoveryPoint->project.id != expectedProjectId)
+    {
+        if (!savedProject.has_value())
+        {
+            error = savedError
+                + " Recovery failed: the recovery point belongs to a different project ID.";
+            return std::nullopt;
+        }
+        return ProjectOpenResult {
+            std::move(*savedProject),
+            false,
+            "The recovery point was ignored because it belongs to a different project ID."
+        };
+    }
+
+    if (!savedProject.has_value())
+    {
+        return ProjectOpenResult {
+            std::move(recoveryPoint->project),
+            true,
+            "The saved project could not be opened: " + savedError
+        };
+    }
+
+    if (sameProject(*savedProject, recoveryPoint->project))
+        return ProjectOpenResult {
+            std::move(*savedProject),
+            false,
+            {}
+        };
+
+    if (!manifest.has_value())
+    {
+        return ProjectOpenResult {
+            std::move(recoveryPoint->project),
+            true,
+            "The saved project metadata could not be read: "
+                + manifestError
+        };
+    }
+
+    auto recoveryIsCurrent = true;
+    if (recoveryPoint->hasBaseGeneration)
+    {
+        recoveryIsCurrent =
+            recoveryPoint->baseGeneration == manifest->generation;
+    }
+    else if (recoveryPoint->writtenAt.isNotEmpty()
+             && manifest->savedAt.isNotEmpty())
+    {
+        recoveryIsCurrent =
+            recoveryPoint->writtenAt >= manifest->savedAt;
+    }
+
+    if (!recoveryIsCurrent)
+    {
+        return ProjectOpenResult {
+            std::move(*savedProject),
+            false,
+            "A stale recovery point was ignored."
+        };
+    }
+
+    return ProjectOpenResult {
+        std::move(recoveryPoint->project),
+        true,
+        {}
+    };
+}
+
 juce::Result ProjectFile::writeRecoveryPoint(const Project& project, const juce::File& requestedPackageDirectory)
 {
-    const auto recoveryDirectory = normalisePackagePath(requestedPackageDirectory).getChildFile("recovery");
+    const auto packageDirectory =
+        normalisePackagePath(requestedPackageDirectory);
+    const auto recoveryDirectory =
+        packageDirectory.getChildFile("recovery");
     if (!recoveryDirectory.createDirectory())
         return juce::Result::fail("Could not create the recovery directory.");
 
+    auto baseGeneration = 0;
+    juce::String manifestError;
+    if (const auto manifest = readManifestState(packageDirectory,
+                                                manifestError);
+        manifest.has_value())
+    {
+        baseGeneration = manifest->generation;
+    }
+
     auto recovery = std::make_unique<juce::DynamicObject>();
+    recovery->setProperty("schemaVersion", 1);
+    recovery->setProperty("baseGeneration", baseGeneration);
     recovery->setProperty("writtenAt", juce::Time::getCurrentTime().toISO8601(true));
     recovery->setProperty("project", project.toVar());
     return writeJsonAtomically(recoveryDirectory.getChildFile("latest.json"), juce::var(recovery.release()));

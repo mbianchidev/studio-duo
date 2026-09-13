@@ -841,7 +841,9 @@ MainComponent::MainComponent()
             const auto* compParent = project.findTrack(parentId);
             const auto* sourceClip = parentId == parent->id
                 ? clip
-                : activeClipAt(parentId, reference);
+                : studio::activeClipAt(project,
+                                       parentId,
+                                       reference);
             const auto* sourceTake = sourceClip != nullptr
                 ? project.findTrackContainingClip(sourceClip->id)
                 : nullptr;
@@ -2356,8 +2358,8 @@ bool MainComponent::materializePluginStateReferences(
 void MainComponent::openProjectFrom(const juce::File& package)
 {
     juce::String error;
-    auto loaded = ProjectFile::load(package, error);
-    if (!loaded.has_value())
+    auto opened = ProjectFile::loadForOpen(package, error);
+    if (!opened.has_value())
     {
         showError("Project open failed", error);
         return;
@@ -2374,7 +2376,7 @@ void MainComponent::openProjectFrom(const juce::File& package)
     const auto recoveryInsertIds =
         ProjectFile::reducedIsolationMarker(projectPackage);
     auto recoveredInProcess = false;
-    for (auto& track : loaded->tracks)
+    for (auto& track : opened->project.tracks)
     {
         for (auto& insert : track.inserts)
         {
@@ -2389,21 +2391,28 @@ void MainComponent::openProjectFrom(const juce::File& package)
             }
         }
     }
-    project = std::move(*loaded);
+    project = std::move(opened->project);
     commandStack.clear();
     selectedClipId.clear();
     copiedClipId.clear();
     selectedTrackId = project.tracks.empty() ? juce::String() : project.tracks.front().id;
     tempoSlider.setValue(project.tempo, juce::dontSendNotification);
     loopButton.setToggleState(project.loopEnabled, juce::dontSendNotification);
-    dirty = false;
+    dirty = opened->recovered;
     selectTrack(selectedTrackId);
     projectChanged(false, false);
-    setStatus(
-        recoveredInProcess
-            ? "Opened recovery-safe: in-process plugins are disabled until explicitly reloaded."
-            : "Opened " + projectPackage.getFullPathName(),
-        recoveredInProcess);
+    auto status = opened->recovered
+        ? "Recovered unsaved changes from "
+            + projectPackage.getFullPathName()
+        : "Opened " + projectPackage.getFullPathName();
+    if (recoveredInProcess)
+        status += " In-process plugins are disabled until explicitly reloaded.";
+    if (opened->warning.isNotEmpty())
+        status += " " + opened->warning;
+    setStatus(status,
+              opened->recovered
+                  || recoveredInProcess
+                  || opened->warning.isNotEmpty());
 }
 
 void MainComponent::importAudioFile(const juce::File& source)
@@ -3279,23 +3288,21 @@ void MainComponent::splitSelectedClip()
     }
 
     const auto playheadSeconds = audioEngine.positionSeconds();
-    const auto clipIds = linkedClipIdsAt(selectedClipId, playheadSeconds);
-    const auto* group = project.editGroupForTrack(selectedTrackId);
-    if (group != nullptr
-        && group->enabled
-        && clipIds.size() != group->trackIds.size())
+    const auto linked = linkedClipsAt(selectedClipId,
+                                      playheadSeconds);
+    if (!linked.isComplete())
     {
         setStatus("Every linked track needs an active clip at the split position.", true);
         return;
     }
 
     std::vector<std::unique_ptr<ProjectCommand>> commands;
-    for (const auto& clipId : clipIds)
+    for (const auto& clipId : linked.clipIds)
         commands.push_back(std::make_unique<SplitClipCommand>(
             clipId,
             playheadSeconds));
     perform(std::make_unique<BatchProjectCommand>(
-        clipIds.size() > 1 ? "Split linked clips" : "Split clip",
+        linked.isLinked() ? "Split linked clips" : "Split clip",
         std::move(commands)));
 }
 
@@ -3401,12 +3408,17 @@ void MainComponent::deleteSelectedClip()
     const auto reference = selected != nullptr
         ? selected->startSeconds + selected->durationSeconds * 0.5
         : audioEngine.positionSeconds();
-    const auto clipIds = linkedClipIdsAt(selectedClipId, reference);
+    const auto linked = linkedClipsAt(selectedClipId, reference);
+    if (!linked.isComplete())
+    {
+        setStatus("Every linked track needs an active clip for a phase-locked delete.", true);
+        return;
+    }
     std::vector<std::unique_ptr<ProjectCommand>> commands;
-    for (const auto& clipId : clipIds)
+    for (const auto& clipId : linked.clipIds)
         commands.push_back(std::make_unique<DeleteClipCommand>(clipId));
     if (perform(std::make_unique<BatchProjectCommand>(
-            clipIds.size() > 1 ? "Delete linked clips" : "Delete clip",
+            linked.isLinked() ? "Delete linked clips" : "Delete clip",
             std::move(commands))))
     {
         selectedClipId.clear();
@@ -3435,18 +3447,19 @@ void MainComponent::moveClip(const juce::String& clipId,
     }
 
     const auto reference = clip->startSeconds + clip->durationSeconds * 0.5;
-    const auto linkedIds = linkedClipIdsAt(clipId, reference);
-    if (group != nullptr
-        && group->enabled
-        && linkedIds.size() != group->trackIds.size())
+    const auto linked = linkedClipsAt(clipId, reference);
+    if (!linked.isComplete())
     {
         setStatus("Every linked track needs an active clip for a phase-locked move.", true);
         return;
     }
 
-    const auto delta = startSeconds - clip->startSeconds;
+    const auto delta = clampLinkedMoveDelta(
+        project,
+        linked,
+        startSeconds - clip->startSeconds);
     std::vector<std::unique_ptr<ProjectCommand>> commands;
-    for (const auto& linkedId : linkedIds)
+    for (const auto& linkedId : linked.clipIds)
     {
         const auto* linkedClip = project.findClip(linkedId);
         const auto* linkedTrack = project.findTrackContainingClip(linkedId);
@@ -3454,11 +3467,11 @@ void MainComponent::moveClip(const juce::String& clipId,
             continue;
         commands.push_back(std::make_unique<MoveClipCommand>(
             linkedId,
-            std::max(0.0, linkedClip->startSeconds + delta),
+            linkedClip->startSeconds + delta,
             linkedId == clipId ? destinationTrackId : linkedTrack->id));
     }
     if (perform(std::make_unique<BatchProjectCommand>(
-            linkedIds.size() > 1 ? "Move linked clips" : "Move clip",
+            linked.isLinked() ? "Move linked clips" : "Move clip",
             std::move(commands))))
         selectClip(destinationTrackId, clipId);
 }
@@ -3473,10 +3486,8 @@ void MainComponent::trimClip(const juce::String& clipId,
         return;
 
     const auto reference = clip->startSeconds + clip->durationSeconds * 0.5;
-    const auto linkedIds = linkedClipIdsAt(clipId, reference);
-    const auto* group = project.editGroupForTrack(
-        project.findTrackContainingClip(clipId)->id);
-    if (group != nullptr && linkedIds.size() != group->trackIds.size())
+    const auto linked = linkedClipsAt(clipId, reference);
+    if (!linked.isComplete())
     {
         setStatus("Every linked track needs an active clip for a phase-locked trim.", true);
         return;
@@ -3486,7 +3497,7 @@ void MainComponent::trimClip(const juce::String& clipId,
     const auto sourceDelta = sourceOffsetSeconds - clip->sourceOffsetSeconds;
     const auto durationDelta = durationSeconds - clip->durationSeconds;
     std::vector<std::unique_ptr<ProjectCommand>> commands;
-    for (const auto& linkedId : linkedIds)
+    for (const auto& linkedId : linked.clipIds)
     {
         const auto* linkedClip = project.findClip(linkedId);
         if (linkedClip == nullptr)
@@ -3510,7 +3521,7 @@ void MainComponent::trimClip(const juce::String& clipId,
         }
     }
     perform(std::make_unique<BatchProjectCommand>(
-        linkedIds.size() > 1 ? "Trim linked clips" : "Trim clip",
+        linked.isLinked() ? "Trim linked clips" : "Trim clip",
         std::move(commands)));
 }
 
@@ -3537,8 +3548,10 @@ void MainComponent::quantizeSelectedGroup()
     }
 
     const auto referenceTime = clip->startSeconds + clip->durationSeconds * 0.5;
-    const auto* timingClip = activeClipAt(group->timingReferenceTrackId,
-                                          referenceTime);
+    const auto* timingClip = studio::activeClipAt(
+        project,
+        group->timingReferenceTrackId,
+        referenceTime);
     auto timingEventSeconds = timingClip != nullptr
         ? timingClip->startSeconds
         : clip->startSeconds;
@@ -3724,32 +3737,36 @@ void MainComponent::setClipFadeGesture(
     double durationSeconds,
     float curve)
 {
-    const auto* clip = project.findClip(clipId);
-    const auto* track = project.findTrackContainingClip(clipId);
-    if (clip == nullptr || track == nullptr)
-        return;
-    auto after = *clip;
-    if (fadeIn)
-    {
-        after.fadeInSeconds = juce::jlimit(
-            0.0,
-            after.durationSeconds,
-            durationSeconds);
-        after.fadeInCurve = juce::jlimit(-1.0f, 1.0f, curve);
-    }
-    else
-    {
-        after.fadeOutSeconds = juce::jlimit(
-            0.0,
-            after.durationSeconds,
-            durationSeconds);
-        after.fadeOutCurve = juce::jlimit(-1.0f, 1.0f, curve);
-    }
-    perform(std::make_unique<SetClipStateCommand>(
-        track->id,
-        *clip,
-        after,
-        fadeIn ? "Change clip fade in" : "Change clip fade out"));
+    updateLinkedClips(
+        clipId,
+        fadeIn ? "Change clip fade in" : "Change clip fade out",
+        [fadeIn, durationSeconds, curve](
+            AudioClip& after,
+            const AudioClip&,
+            juce::String&)
+        {
+            if (fadeIn)
+            {
+                after.fadeInSeconds = juce::jlimit(
+                    0.0,
+                    after.durationSeconds,
+                    durationSeconds);
+                after.fadeInCurve = juce::jlimit(-1.0f,
+                                                 1.0f,
+                                                 curve);
+            }
+            else
+            {
+                after.fadeOutSeconds = juce::jlimit(
+                    0.0,
+                    after.durationSeconds,
+                    durationSeconds);
+                after.fadeOutCurve = juce::jlimit(-1.0f,
+                                                  1.0f,
+                                                  curve);
+            }
+            return true;
+        });
 }
 
 void MainComponent::toggleClipMute(const juce::String& clipId)
@@ -3772,11 +3789,16 @@ void MainComponent::createClipCrossfade(const juce::String& clipId)
     const auto* selected = project.findClip(clipId);
     if (selected == nullptr)
         return;
-    const auto linkedIds = linkedClipIdsAt(
+    const auto linked = linkedClipsAt(
         clipId,
         selected->startSeconds + selected->durationSeconds * 0.5);
+    if (!linked.isComplete())
+    {
+        setStatus("Every linked track needs an active clip before creating crossfades.", true);
+        return;
+    }
     std::vector<std::unique_ptr<ProjectCommand>> commands;
-    for (const auto& linkedId : linkedIds)
+    for (const auto& linkedId : linked.clipIds)
     {
         const auto* current = project.findClip(linkedId);
         const auto* track = project.findTrackContainingClip(linkedId);
@@ -3822,7 +3844,7 @@ void MainComponent::createClipCrossfade(const juce::String& clipId)
             "Create crossfade"));
     }
     perform(std::make_unique<BatchProjectCommand>(
-        linkedIds.size() > 1 ? "Create linked crossfades" : "Create crossfade",
+        linked.isLinked() ? "Create linked crossfades" : "Create crossfade",
         std::move(commands)));
 }
 
@@ -3860,9 +3882,14 @@ void MainComponent::consolidateClip(const juce::String& clipId)
     const auto* selected = project.findClip(clipId);
     if (selected == nullptr)
         return;
-    const auto linkedIds = linkedClipIdsAt(
+    const auto linked = linkedClipsAt(
         clipId,
         selected->startSeconds + selected->durationSeconds * 0.5);
+    if (!linked.isComplete())
+    {
+        setStatus("Every linked track needs an active clip before consolidation.", true);
+        return;
+    }
     auto folder = projectPackage.exists()
         ? projectPackage.getChildFile("media")
         : juce::File::getSpecialLocation(juce::File::userMusicDirectory)
@@ -3875,7 +3902,7 @@ void MainComponent::consolidateClip(const juce::String& clipId)
 
     std::vector<juce::File> createdFiles;
     std::vector<std::unique_ptr<ProjectCommand>> commands;
-    for (const auto& linkedId : linkedIds)
+    for (const auto& linkedId : linked.clipIds)
     {
         const auto* current = project.findClip(linkedId);
         const auto* track = project.findTrackContainingClip(linkedId);
@@ -3920,7 +3947,7 @@ void MainComponent::consolidateClip(const juce::String& clipId)
             "Consolidate clip"));
     }
     if (!perform(std::make_unique<BatchProjectCommand>(
-            linkedIds.size() > 1 ? "Consolidate linked clips" : "Consolidate clip",
+            linked.isLinked() ? "Consolidate linked clips" : "Consolidate clip",
             std::move(commands))))
     {
         for (const auto& file : createdFiles)
@@ -6204,66 +6231,11 @@ void MainComponent::recordTrackAutomation(
         std::move(after)));
 }
 
-const AudioClip* MainComponent::activeClipAt(const juce::String& parentTrackId,
-                                             double seconds) const
-{
-    const auto* parent = project.findTrack(parentTrackId);
-    if (parent == nullptr)
-        return nullptr;
-
-    juce::String sourceTrackId;
-    const auto compRegion = std::find_if(
-        parent->compRegions.cbegin(),
-        parent->compRegions.cend(),
-        [seconds](const auto& region)
-        {
-            return seconds >= region.startSeconds - 0.0001
-                && seconds < region.endSeconds() + 0.0001;
-        });
-    if (compRegion != parent->compRegions.cend())
-        sourceTrackId = compRegion->sourceTrackId;
-    else
-        sourceTrackId = project.activeTakeTrackId(parentTrackId);
-    if (sourceTrackId.isEmpty())
-        sourceTrackId = parentTrackId;
-
-    const auto* source = project.findTrack(sourceTrackId);
-    if (source == nullptr)
-        return nullptr;
-    const auto clip = std::find_if(source->clips.cbegin(),
-                                   source->clips.cend(),
-                                   [seconds](const auto& candidate)
-    {
-        return seconds >= candidate.startSeconds - 0.0001
-            && seconds < candidate.endSeconds() + 0.0001;
-    });
-    return clip == source->clips.cend() ? nullptr : &*clip;
-}
-
-std::vector<juce::String> MainComponent::linkedClipIdsAt(
+LinkedClipSelection MainComponent::linkedClipsAt(
     const juce::String& clipId,
     double seconds) const
 {
-    const auto* selectedTrack = project.findTrackContainingClip(clipId);
-    const auto* group = selectedTrack != nullptr
-        ? project.editGroupForTrack(selectedTrack->id)
-        : nullptr;
-    if (group == nullptr || !group->enabled)
-        return { clipId };
-
-    const auto selectedRoot = project.rootTrackId(selectedTrack->id);
-    std::vector<juce::String> clipIds;
-    for (const auto& rootTrackId : group->trackIds)
-    {
-        if (rootTrackId == selectedRoot)
-        {
-            clipIds.push_back(clipId);
-            continue;
-        }
-        if (const auto* clip = activeClipAt(rootTrackId, seconds))
-            clipIds.push_back(clip->id);
-    }
-    return clipIds;
+    return studio::linkedClipsAt(project, clipId, seconds);
 }
 
 bool MainComponent::updateLinkedClips(
@@ -6276,11 +6248,8 @@ bool MainComponent::updateLinkedClips(
     if (selected == nullptr || selectedTrack == nullptr)
         return false;
     const auto reference = selected->startSeconds + selected->durationSeconds * 0.5;
-    const auto clipIds = linkedClipIdsAt(clipId, reference);
-    const auto* group = project.editGroupForTrack(selectedTrack->id);
-    if (group != nullptr
-        && group->enabled
-        && clipIds.size() != group->trackIds.size())
+    const auto linked = linkedClipsAt(clipId, reference);
+    if (!linked.isComplete())
     {
         setStatus("Every linked track needs an active clip for this operation.", true);
         return false;
@@ -6288,7 +6257,7 @@ bool MainComponent::updateLinkedClips(
 
     juce::String error;
     std::vector<std::unique_ptr<ProjectCommand>> commands;
-    for (const auto& linkedId : clipIds)
+    for (const auto& linkedId : linked.clipIds)
     {
         const auto* before = project.findClip(linkedId);
         const auto* track = project.findTrackContainingClip(linkedId);
@@ -6308,7 +6277,7 @@ bool MainComponent::updateLinkedClips(
             commandName));
     }
     return perform(std::make_unique<BatchProjectCommand>(
-        clipIds.size() > 1 ? commandName + " on linked clips" : commandName,
+        linked.isLinked() ? commandName + " on linked clips" : commandName,
         std::move(commands)));
 }
 
