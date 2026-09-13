@@ -407,10 +407,19 @@ void UpdateService::performCheck()
         const juce::ScopedLock lock(stateLock);
         pending = pendingUpdate;
     }
-    if (pending.has_value()
-        && !isNewerSemanticVersion(
-            release->version,
-            pending->version))
+    const auto pendingMatchesRelease =
+        pending.has_value()
+        && pending->version == release->version
+        && pending->file.getFileName()
+            == release->asset.fileName
+        && pending->sizeBytes == release->asset.sizeBytes
+        && pending->sha256 == release->asset.sha256;
+    const auto pendingIsNewer =
+        pending.has_value()
+        && isNewerSemanticVersion(
+            pending->version,
+            release->version);
+    if (pendingMatchesRelease || pendingIsNewer)
     {
         {
             const juce::ScopedLock lock(stateLock);
