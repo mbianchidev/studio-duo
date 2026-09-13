@@ -177,7 +177,11 @@ is not installed.
 
 Project saves use a `.studioduo` directory package. Session data is written to
 a new generation before `manifest.json` is atomically replaced. The latest
-complete state is also copied to `recovery/latest.json`.
+complete state is also copied to `recovery/latest.json` with the manifest
+generation it extends. Project open restores a valid divergent recovery point
+from the active generation, marks it unsaved, and can fall back to that point
+when the saved session is damaged. Stale or corrupt recovery data never
+replaces a valid saved generation and is reported to the user.
 
 Project format version 3 adds the typed routing graph, separate automation
 generations, processor policy/state metadata, tone and mixer snapshots, and
@@ -254,9 +258,12 @@ Snapshot construction renders each warp segment through Signalsmith Stretch
 before real-time playback, using a shorter-window preset for drums and the
 default preset for monophonic, polyphonic, and full-mix material. Crossfade
 generation closes gaps when needed and applies matched fades across linked
-tracks. Consolidation renders the processed selection into new WAV files and
-replaces clip state through one undoable command while leaving original media
-untouched.
+tracks. Linked target resolution requires one active clip per enabled group
+track before split, trim, move, delete, fade, crossfade, warp, or consolidation
+can begin, so an incomplete group cannot be edited partially. Group moves clamp
+once at timeline zero to preserve every relative offset. Consolidation renders
+the processed selection into new WAV files and replaces clip state through one
+undoable command while leaving original media untouched.
 
 Reamp routes persist the DI source, hardware or plugin tone-path type, return
 track, send and input channels, measured latency, polarity, fine alignment, and

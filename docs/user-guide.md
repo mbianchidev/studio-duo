@@ -75,6 +75,12 @@ Duo leaves audio disabled and reports the driver error instead of silently
 opening a different backend; choose another driver in **I/O**. WASAPI remains
 available when no ASIO driver is installed or when selected manually.
 
+After a project has been saved once, each edit refreshes its recovery point.
+Opening the package restores newer unsaved recovery state and marks the project
+with `*` so it can be saved normally. If the active saved generation is damaged,
+Studio Duo opens a valid recovery point instead; stale or corrupt recovery data
+is ignored with a warning when the saved project remains usable.
+
 Monitoring is off by default to avoid accidental feedback. Stereo capture uses
 the selected hardware input and the adjacent channel.
 
@@ -139,6 +145,12 @@ phase-locked edit group. Split, trim, move, delete, comp, warp, and quantize
 operations then apply across the active takes at the same timeline position.
 The setup menu also selects the timing reference, quantize strength, protected
 anchors, suspension, and unlinking.
+
+Fade-handle drags, crossfades, transient analysis, stretch settings, polarity,
+reverse, and consolidation also follow an enabled edit group. An operation is
+rejected before changing anything if any linked parent lacks an active clip at
+the edit position. Moving linked clips against timeline zero clamps the whole
+group together so relative timing stays unchanged.
 
 ## Edit clips
 

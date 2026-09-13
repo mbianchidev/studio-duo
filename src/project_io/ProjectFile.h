@@ -6,12 +6,22 @@
 
 namespace studio
 {
+struct ProjectOpenResult
+{
+    Project project;
+    bool recovered = false;
+    juce::String warning;
+};
+
 class ProjectFile
 {
 public:
     static juce::File normalisePackagePath(const juce::File& requestedPath);
     static juce::Result save(const Project& project, const juce::File& packageDirectory);
     static std::optional<Project> load(const juce::File& packageDirectory, juce::String& error);
+    static std::optional<ProjectOpenResult> loadForOpen(
+        const juce::File& packageDirectory,
+        juce::String& error);
     static juce::Result writeRecoveryPoint(const Project& project, const juce::File& packageDirectory);
     static juce::Result writeReducedIsolationMarker(
         const juce::File& packageDirectory,
