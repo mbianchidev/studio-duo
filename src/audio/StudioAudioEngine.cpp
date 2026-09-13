@@ -37,6 +37,32 @@ std::int64_t wrapLoopPosition(std::int64_t position,
     return loopStart + (position - loopStart) % loopLength;
 }
 
+juce::Result validateRecordingPlan(const RecordingPlan& plan)
+{
+    if (!std::isfinite(plan.transportStartSeconds)
+        || !std::isfinite(plan.captureStartSeconds)
+        || !std::isfinite(plan.captureEndSeconds)
+        || !std::isfinite(plan.transportEndSeconds)
+        || !std::isfinite(plan.loopStartSeconds)
+        || !std::isfinite(plan.loopEndSeconds)
+        || plan.transportStartSeconds < 0.0
+        || plan.captureStartSeconds < plan.transportStartSeconds
+        || (plan.captureEndSeconds >= 0.0
+            && plan.captureEndSeconds <= plan.captureStartSeconds)
+        || (plan.transportEndSeconds >= 0.0
+            && plan.transportEndSeconds < plan.captureStartSeconds)
+        || (plan.captureEndSeconds >= 0.0
+            && plan.transportEndSeconds >= 0.0
+            && plan.transportEndSeconds < plan.captureEndSeconds)
+        || (plan.loopEnabled
+            && (plan.loopStartSeconds < 0.0
+                || plan.loopEndSeconds <= plan.loopStartSeconds)))
+    {
+        return juce::Result::fail("The recording transport range is invalid.");
+    }
+    return juce::Result::ok();
+}
+
 std::shared_ptr<juce::AudioProcessor> messageThreadOwnedProcessor(
     std::unique_ptr<juce::AudioProcessor> processor)
 {
@@ -798,22 +824,24 @@ double StudioAudioEngine::activeSnapshotSampleRateForTesting() const noexcept
 }
 
 juce::AudioBuffer<float>
-StudioAudioEngine::renderActiveBlockForTesting(int samples)
+StudioAudioEngine::renderActiveBlockForTesting(int samples,
+                                               int outputChannels)
 {
+    const auto channelCount = std::max(1, outputChannels);
     juce::AudioBuffer<float> output(
-        2,
+        channelCount,
         std::max(1, samples));
     output.clear();
-    float* channels[] {
-        output.getWritePointer(0),
-        output.getWritePointer(1)
-    };
+    std::vector<float*> channels;
+    channels.reserve(static_cast<std::size_t>(channelCount));
+    for (int channel = 0; channel < channelCount; ++channel)
+        channels.push_back(output.getWritePointer(channel));
     juce::AudioIODeviceCallbackContext context;
     audioDeviceIOCallbackWithContext(
         nullptr,
         0,
-        channels,
-        2,
+        channels.data(),
+        channelCount,
         output.getNumSamples(),
         context);
     return output;
@@ -2069,6 +2097,8 @@ juce::Result StudioAudioEngine::startRecording(const std::vector<RecordingReques
     if (renderInProgress.load(std::memory_order_acquire))
         return juce::Result::fail(
             "Wait for the active render to finish before recording.");
+    if (const auto result = validateRecordingPlan(plan); result.failed())
+        return result;
     auto expectedOperation = 0;
     if (!exclusiveAudioOperation.compare_exchange_strong(
             expectedOperation,
@@ -2164,15 +2194,6 @@ juce::Result StudioAudioEngine::startRecording(const std::vector<RecordingReques
         }
     }
 
-    if (plan.captureStartSeconds < 0.0
-        || (plan.captureEndSeconds >= 0.0
-            && plan.captureEndSeconds <= plan.captureStartSeconds)
-        || (plan.transportEndSeconds >= 0.0
-            && plan.transportEndSeconds < plan.captureEndSeconds))
-    {
-        return juce::Result::fail("The recording transport range is invalid.");
-    }
-
     const auto recordingSampleRate = currentSampleRate();
     recordingCaptureStartSample.store(
         static_cast<std::int64_t>(std::llround(plan.captureStartSeconds
@@ -2265,7 +2286,8 @@ std::vector<StudioAudioEngine::RecordingResult> StudioAudioEngine::finishRecordi
 
 std::optional<double> StudioAudioEngine::audioFileDuration(const juce::File& source, juce::String& error)
 {
-    auto reader = formatManager.createReaderFor(source);
+    auto reader = std::unique_ptr<juce::AudioFormatReader>(
+        formatManager.createReaderFor(source));
     if (reader == nullptr)
     {
         error = "Studio Duo could not read " + source.getFileName() + ".";
@@ -2708,7 +2730,12 @@ juce::Result StudioAudioEngine::renderToBuffer(
     {
         float left = 0.0f;
         float right = 0.0f;
-        mixSample(*snapshot, sample, left, right);
+        const auto timelineSample = snapshot->loopEnabled
+            ? wrapLoopPosition(sample,
+                               snapshot->loopStartSample,
+                               snapshot->loopEndSample)
+            : sample;
+        mixSample(*snapshot, timelineSample, left, right);
         destination.setSample(0, sample, left);
         destination.setSample(1, sample, right);
     }
@@ -3621,7 +3648,8 @@ std::optional<juce::AudioBuffer<float>> StudioAudioEngine::readAndResample(
     double targetSampleRate,
     juce::String& error)
 {
-    auto reader = formatManager.createReaderFor(source);
+    auto reader = std::unique_ptr<juce::AudioFormatReader>(
+        formatManager.createReaderFor(source));
     if (reader == nullptr)
     {
         error = "Could not decode " + source.getFileName() + ".";
@@ -5936,17 +5964,13 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
                 std::memory_order_relaxed);
             const auto captureEnd = recordingCaptureEndSample.load(
                 std::memory_order_relaxed);
-            const auto callbackEnd = callbackStart + numSamples;
-            const auto firstCaptureSample = std::max(callbackStart, captureStart);
-            const auto lastCaptureSample = captureEnd >= 0
-                ? std::min(callbackEnd, captureEnd)
-                : callbackEnd;
-            const auto sourceSampleOffset = static_cast<int>(
-                std::max<std::int64_t>(0, firstCaptureSample - callbackStart));
-            const auto requestedCaptureSamples = static_cast<int>(
-                std::max<std::int64_t>(0, lastCaptureSample - firstCaptureSample));
+            const auto captureRange = recordingCaptureRange(
+                callbackStart,
+                numSamples,
+                captureStart,
+                captureEnd);
 
-            if (requestedCaptureSamples > 0)
+            if (captureRange.samples > 0)
             {
                 std::array<int, maximumRecordingTracks> freeSamples {};
                 for (int index = 0; index < recorderCount; ++index)
@@ -5956,17 +5980,17 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
                 }
 
                 const auto captureSamples = synchronizedCaptureSamples(
-                    requestedCaptureSamples,
+                    captureRange.samples,
                     std::span<const int>(freeSamples.data(),
                                          static_cast<std::size_t>(recorderCount)));
-                const auto droppedSamples = requestedCaptureSamples - captureSamples;
+                const auto droppedSamples = captureRange.samples - captureSamples;
                 for (int index = 0; index < recorderCount; ++index)
                 {
                     auto& recorder = recorders[static_cast<std::size_t>(index)];
                     recorder->noteDroppedSamples(droppedSamples);
                     recorder->push(inputChannelData,
                                    numInputChannels,
-                                   sourceSampleOffset,
+                                   captureRange.sourceOffset,
                                    captureSamples);
                 }
             }
@@ -6093,7 +6117,9 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
                     recordingTransportEnd - position));
             }
 
-            if (position >= snapshot.lengthSamples && !renderingRecording)
+            if (position >= snapshot.lengthSamples
+                && !renderingRecording
+                && !renderLooping)
             {
                 playing.store(false, std::memory_order_release);
                 break;
@@ -6581,7 +6607,9 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
                             clickPosition,
                             snapshot.loopStartSample,
                             snapshot.loopEndSample);
-                    if (renderingRecording || clickPosition < snapshot.contentLengthSamples)
+                    if (renderingRecording
+                        || renderLooping
+                        || clickPosition < snapshot.contentLengthSamples)
                         addMetronome(snapshot, clickPosition, clickLeft, clickRight);
                     snapshot.clickBuffer.setSample(0, sample, clickLeft);
                     snapshot.clickBuffer.setSample(1, sample, clickRight);
@@ -6652,7 +6680,9 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
                     snapshot.loopStartSample,
                     snapshot.loopEndSample);
             }
-            else if (!renderingRecording && position >= snapshot.lengthSamples)
+            else if (!renderingRecording
+                     && !renderLooping
+                     && position >= snapshot.lengthSamples)
             {
                 position = snapshot.lengthSamples;
                 playing.store(false, std::memory_order_release);

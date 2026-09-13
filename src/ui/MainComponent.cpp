@@ -2513,7 +2513,10 @@ void MainComponent::togglePlayback()
         return;
     }
 
-    if (audioEngine.positionSeconds() >= project.lengthSeconds() - 0.001)
+    const auto playbackEnd = project.loopEnabled
+        ? std::max(project.lengthSeconds(), project.loopEndSeconds)
+        : project.lengthSeconds();
+    if (audioEngine.positionSeconds() >= playbackEnd - 0.001)
     {
         if (!audioEngine.resetPluginProcessing())
         {
@@ -4538,7 +4541,7 @@ void MainComponent::showTrackingMenu()
     auto subdivision = addIntegerChoices(
         "Click subdivision",
         project.metronomeSubdivision,
-        { 1, 2, 4, 8 },
+        { 1, 2, 3, 4, 6, 8 },
         [](auto& state, int value) { state.metronomeSubdivision = value; });
     menu.addSubMenu(subdivision.first, subdivision.second);
 
@@ -4573,6 +4576,46 @@ void MainComponent::showTrackingMenu()
         project.postRollSeconds,
         [](auto& state, double value) { state.postRollSeconds = value; });
     menu.addSubMenu(postRoll.first, postRoll.second);
+
+    const auto addLevelChoices = [this](
+                                     const juce::String& title,
+                                     float current,
+                                     const std::function<void(
+                                         ProjectTransportState&,
+                                         float)>& set)
+    {
+        juce::PopupMenu submenu;
+        for (const auto value : { 0.0f, 0.25f, 0.5f, 0.65f, 0.75f, 1.0f })
+        {
+            submenu.addItem(
+                juce::String(static_cast<int>(std::round(value * 100.0f)))
+                    + "%",
+                true,
+                std::abs(value - current) < 0.0001f,
+                [this, value, set]
+                {
+                    changeTransportState([value, set](auto& state)
+                    {
+                        set(state, value);
+                    });
+                });
+        }
+        return std::pair { title, submenu };
+    };
+
+    auto clickLevel = addLevelChoices(
+        "Click level",
+        project.metronomeLevel,
+        [](auto& state, float value) { state.metronomeLevel = value; });
+    menu.addSubMenu(clickLevel.first, clickLevel.second);
+    auto accentLevel = addLevelChoices(
+        "Accent level",
+        project.metronomeAccentLevel,
+        [](auto& state, float value)
+        {
+            state.metronomeAccentLevel = value;
+        });
+    menu.addSubMenu(accentLevel.first, accentLevel.second);
 
     juce::PopupMenu clickOutputMenu;
     if (auto* device = deviceManager.getCurrentAudioDevice())
@@ -6348,6 +6391,12 @@ juce::String MainComponent::positionText(double seconds, const Project& project)
         + ":"
         + juce::String(wholeSeconds).paddedLeft('0', 2)
         + "."
-        + juce::String(milliseconds).paddedLeft('0', 3);
+        + juce::String(milliseconds).paddedLeft('0', 3)
+        + "    "
+        + juce::String(project.tempoAt(seconds), 1)
+        + " BPM  "
+        + juce::String(musical.meter.numerator)
+        + "/"
+        + juce::String(musical.meter.denominator);
 }
 }

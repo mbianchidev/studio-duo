@@ -1400,6 +1400,7 @@ int main()
     recordingStopPreservesPlayhead();
     multitrackRecordingTargets();
     multitrackRecordingCommand();
+    transportTests();
     routingModelTests();
     routingEngineTests();
     routingUiModelTests();

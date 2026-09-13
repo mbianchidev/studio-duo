@@ -1320,27 +1320,10 @@ juce::String SetProjectTransportCommand::name() const
 
 bool SetProjectTransportCommand::perform(Project& project, juce::String& error)
 {
-    if (newState.tempo < 20.0
-        || newState.tempo > 400.0
-        || newState.timeSignatureNumerator < 1
-        || newState.timeSignatureNumerator > 32
-        || (newState.timeSignatureDenominator != 1
-            && newState.timeSignatureDenominator != 2
-            && newState.timeSignatureDenominator != 4
-            && newState.timeSignatureDenominator != 8
-            && newState.timeSignatureDenominator != 16
-            && newState.timeSignatureDenominator != 32)
-        || newState.punchInSeconds < 0.0
-        || newState.punchOutSeconds <= newState.punchInSeconds
-        || newState.loopStartSeconds < 0.0
-        || newState.loopEndSeconds <= newState.loopStartSeconds
-        || newState.countInBars < 0
-        || newState.preRollSeconds < 0.0
-        || newState.postRollSeconds < 0.0)
-    {
-        error = "The transport settings contain an invalid tempo or time range.";
+    Project candidate;
+    apply(candidate, newState);
+    if (!candidate.validateTransport(error))
         return false;
-    }
 
     apply(project, newState);
     return true;
