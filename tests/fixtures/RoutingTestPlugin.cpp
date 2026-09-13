@@ -80,7 +80,10 @@ public:
                 0,
                 std::max(0, main.getNumSamples() - 1),
                 metadata.samplePosition);
-            const auto value = metadata.getMessage().getFloatVelocity();
+            const auto value =
+                metadata.getMessage().getNoteNumber() == 61
+                ? metadata.getMessage().getFloatVelocity()
+                : metadata.getMessage().getFloatVelocity() * 0.1f;
             for (int channel = 0; channel < main.getNumChannels(); ++channel)
                 main.addSample(channel, sample, value);
         }

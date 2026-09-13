@@ -16,5 +16,8 @@ public:
     static std::optional<std::vector<juce::String>> order(
         const Project& project,
         juce::String& error);
+    static std::optional<std::vector<juce::String>> midiOrder(
+        const Project& project,
+        juce::String& error);
 };
 }

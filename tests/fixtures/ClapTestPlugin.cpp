@@ -177,6 +177,22 @@ static clap_process_status plugin_process(const clap_plugin_t* plugin,
                         instance->host);
                 }
             }
+            else if (header->space_id
+                         == CLAP_CORE_EVENT_SPACE_ID
+                     && header->type == CLAP_EVENT_MIDI
+                     && header->size >= sizeof(clap_event_midi_t)
+                     && process->out_events != NULL)
+            {
+                clap_event_midi_t output =
+                    *(const clap_event_midi_t*) header;
+                const uint8_t status = output.data[0] & 0xf0;
+                if ((status == 0x80 || status == 0x90)
+                    && output.data[1] < 127)
+                    ++output.data[1];
+                process->out_events->try_push(
+                    process->out_events,
+                    &output.header);
+            }
             ++event_index;
         }
 
@@ -515,6 +531,41 @@ static const clap_plugin_audio_ports_t audio_ports = {
     .get = audio_ports_get
 };
 
+static uint32_t note_ports_count(
+    const clap_plugin_t* plugin,
+    bool is_input)
+{
+    expect_main_thread(plugin);
+    (void) is_input;
+    return 1;
+}
+
+static bool note_ports_get(
+    const clap_plugin_t* plugin,
+    uint32_t index,
+    bool is_input,
+    clap_note_port_info_t* info)
+{
+    expect_main_thread(plugin);
+    if (index != 0 || info == NULL)
+        return false;
+    memset(info, 0, sizeof(*info));
+    info->id = is_input ? 30 : 40;
+    info->supported_dialects = CLAP_NOTE_DIALECT_MIDI;
+    info->preferred_dialect = CLAP_NOTE_DIALECT_MIDI;
+    snprintf(
+        info->name,
+        sizeof(info->name),
+        "%s",
+        is_input ? "MIDI Input" : "MIDI Output");
+    return true;
+}
+
+static const clap_plugin_note_ports_t note_ports = {
+    .count = note_ports_count,
+    .get = note_ports_get
+};
+
 static const clap_plugin_params_t params = {
     .count = params_count,
     .get_info = params_get_info,
@@ -543,6 +594,8 @@ static const void* plugin_get_extension(const clap_plugin_t* plugin,
     (void) plugin;
     if (strcmp(id, CLAP_EXT_AUDIO_PORTS) == 0)
         return &audio_ports;
+    if (strcmp(id, CLAP_EXT_NOTE_PORTS) == 0)
+        return &note_ports;
     if (strcmp(id, CLAP_EXT_PARAMS) == 0)
         return &params;
     if (strcmp(id, CLAP_EXT_STATE) == 0)

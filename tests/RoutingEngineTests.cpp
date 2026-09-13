@@ -624,6 +624,264 @@ void routingEngineTests()
                           - monitoredOutput.getSample(0, 16))
                        < 0.001f,
                "Software monitoring follows track processing, PDC, and control-room routing while stopped.");
+
+        auto midiRuntimeProject = studio::Project::createDefault();
+        midiRuntimeProject.metronomeEnabled = false;
+        midiRuntimeProject.tracks[0].clips.push_back(renderClip);
+        midiRuntimeProject.tracks[0].volumeDecibels = -60.0f;
+
+        studio::Track midiSource;
+        midiSource.name = "Live MIDI source";
+        midiSource.type = studio::TrackType::midi;
+        midiSource.armed = true;
+        const auto midiSourceId = midiSource.id;
+        midiRuntimeProject.tracks.insert(
+            midiRuntimeProject.tracks.end() - 1,
+            midiSource);
+
+        studio::Track instrumentDestination;
+        instrumentDestination.name = "MIDI destination";
+        instrumentDestination.type =
+            studio::TrackType::instrument;
+        auto instrumentProbe = firstProbe;
+        instrumentProbe.id = juce::Uuid().toString();
+        instrumentProbe.name = "MIDI instrument probe";
+        instrumentDestination.inserts.push_back(
+            instrumentProbe);
+        const auto instrumentDestinationId =
+            instrumentDestination.id;
+        midiRuntimeProject.tracks.insert(
+            midiRuntimeProject.tracks.end() - 1,
+            instrumentDestination);
+
+        studio::RoutingConnection midiRuntimeRoute;
+        midiRuntimeRoute.name = "Live MIDI route";
+        midiRuntimeRoute.signalType = studio::SignalType::midi;
+        midiRuntimeRoute.kind = studio::RouteKind::mainOutput;
+        midiRuntimeRoute.sourceTrackId = midiSourceId;
+        midiRuntimeRoute.destination.type =
+            studio::RouteEndpointType::track;
+        midiRuntimeRoute.destination.trackId =
+            instrumentDestinationId;
+        midiRuntimeProject.routingConnections.push_back(
+            midiRuntimeRoute);
+
+        studio::StudioAudioEngine midiRuntimeEngine;
+        studio::StudioAudioEngine::PluginRuntimeRequest
+            instrumentRequest;
+        instrumentRequest.trackId = instrumentDestinationId;
+        instrumentRequest.insertId = instrumentProbe.id;
+        instrumentRequest.name = instrumentProbe.name;
+        instrumentRequest.description = *fixtureDescriptions[0];
+        instrumentRequest.bridgeMode =
+            studio::PluginBridgeMode::trustedInProcess;
+        expect(midiRuntimeEngine.updateProject(
+                   midiRuntimeProject,
+                   { instrumentRequest })
+                   .wasOk(),
+               "A MIDI-routed instrument project publishes.");
+        for (int attempt = 0;
+             attempt < 500
+             && midiRuntimeEngine.pluginRuntimeTransitionPending();
+             ++attempt)
+        {
+            if (auto* messages =
+                    juce::MessageManager::getInstanceWithoutCreating())
+                messages->runDispatchLoopUntil(10);
+            else
+                juce::Thread::sleep(10);
+        }
+        const auto midiStatuses =
+            midiRuntimeEngine.pluginRuntimeStatuses();
+        expect(!midiStatuses.empty()
+                   && midiStatuses.front().state
+                       == studio::StudioAudioEngine::
+                           PluginRuntimeStatus::State::ready,
+               midiStatuses.empty()
+                   ? "MIDI instrument runtime status is unavailable."
+                   : midiStatuses.front().message.toRawUTF8());
+
+        juce::MidiBuffer liveMidi;
+        liveMidi.addEvent(
+            juce::MidiMessage::noteOn(
+                1,
+                61,
+                static_cast<juce::uint8>(96)),
+            12);
+        const auto midiRuntimeOutput =
+            midiRuntimeEngine.renderActiveBlockWithMidiForTesting(
+                liveMidi,
+                64);
+        const auto midiSample =
+            midiRuntimeOutput.getSample(0, 12);
+        expect(midiSample > 0.7f,
+               ("Armed MIDI tracks route exact-sample events into instrument processing while stopped (sample "
+                + juce::String(midiSample, 5)
+                + ").")
+                   .toRawUTF8());
+
+        auto sandboxMidiProject = midiRuntimeProject;
+        auto* sandboxInstrument =
+            sandboxMidiProject.findTrack(
+                instrumentDestinationId);
+        sandboxInstrument->inserts.front().bridgeMode =
+            studio::PluginBridgeMode::sandboxed;
+        auto sandboxRequest = instrumentRequest;
+        sandboxRequest.bridgeMode =
+            studio::PluginBridgeMode::sandboxed;
+
+        studio::StudioAudioEngine sandboxMidiEngine(
+            juce::File(STUDIO_DUO_BRIDGE_WORKER_PATH));
+        expect(sandboxMidiEngine.updateProject(
+                   sandboxMidiProject,
+                   { sandboxRequest })
+                   .wasOk(),
+               "A sandboxed MIDI instrument project publishes.");
+        for (int attempt = 0;
+             attempt < 500
+             && sandboxMidiEngine.pluginRuntimeTransitionPending();
+             ++attempt)
+            juce::Thread::sleep(10);
+        const auto sandboxMidiStatuses =
+            sandboxMidiEngine.pluginRuntimeStatuses();
+        expect(!sandboxMidiStatuses.empty()
+                   && sandboxMidiStatuses.front().state
+                       == studio::StudioAudioEngine::
+                           PluginRuntimeStatus::State::ready,
+               sandboxMidiStatuses.empty()
+                   ? "Sandbox MIDI runtime status is unavailable."
+                   : sandboxMidiStatuses.front().message.toRawUTF8());
+        auto sandboxMidiPeak = 0.0f;
+        for (int block = 0; block < 12; ++block)
+        {
+            const auto output = block == 0
+                ? sandboxMidiEngine
+                      .renderActiveBlockWithMidiForTesting(
+                          liveMidi,
+                          64)
+                : sandboxMidiEngine.renderActiveBlockForTesting(
+                      64);
+            sandboxMidiPeak = std::max(
+                sandboxMidiPeak,
+                output.getMagnitude(
+                    0,
+                    0,
+                    output.getNumSamples()));
+            juce::Thread::sleep(3);
+        }
+        expect(sandboxMidiPeak > 0.7f,
+               ("Sandboxed instruments receive routed MIDI through the bridge (peak "
+                + juce::String(sandboxMidiPeak, 5)
+                + ").")
+                   .toRawUTF8());
+
+        juce::OwnedArray<juce::PluginDescription>
+            clapDescriptions;
+        for (auto* format : fixtureFormats.getFormats())
+        {
+            if (format->getName() != "CLAP")
+                continue;
+            format->findAllTypesForFile(
+                clapDescriptions,
+                STUDIO_DUO_CLAP_FIXTURE_PATH);
+            break;
+        }
+        expect(clapDescriptions.size() == 1,
+               "The CLAP MIDI fixture can be discovered.");
+        if (!clapDescriptions.isEmpty())
+        {
+            auto midiEffectProject = midiRuntimeProject;
+            auto* midiEffectTrack =
+                midiEffectProject.findTrack(midiSourceId);
+            studio::PluginInsert midiEffect;
+            midiEffect.pluginIdentifier =
+                clapDescriptions[0]->createIdentifierString();
+            midiEffect.name = "CLAP MIDI transpose";
+            midiEffect.format = "CLAP";
+            midiEffect.bridgeMode =
+                studio::PluginBridgeMode::sandboxed;
+            midiEffectTrack->inserts.push_back(midiEffect);
+
+            studio::StudioAudioEngine::PluginRuntimeRequest
+                midiEffectRequest;
+            midiEffectRequest.trackId = midiSourceId;
+            midiEffectRequest.insertId = midiEffect.id;
+            midiEffectRequest.name = midiEffect.name;
+            midiEffectRequest.description = *clapDescriptions[0];
+            midiEffectRequest.bridgeMode =
+                studio::PluginBridgeMode::sandboxed;
+
+            studio::StudioAudioEngine midiEffectEngine(
+                juce::File(STUDIO_DUO_BRIDGE_WORKER_PATH));
+            expect(midiEffectEngine.updateProject(
+                       midiEffectProject,
+                       {
+                           midiEffectRequest,
+                           instrumentRequest
+                       })
+                       .wasOk(),
+                   "A sandboxed MIDI-effect route publishes.");
+            for (int attempt = 0;
+                 attempt < 500
+                 && midiEffectEngine.pluginRuntimeTransitionPending();
+                 ++attempt)
+            {
+                if (auto* messages =
+                        juce::MessageManager::getInstanceWithoutCreating())
+                    messages->runDispatchLoopUntil(10);
+                else
+                    juce::Thread::sleep(10);
+            }
+            const auto midiEffectStatuses =
+                midiEffectEngine.pluginRuntimeStatuses();
+            expect(midiEffectStatuses.size() == 2
+                       && std::all_of(
+                           midiEffectStatuses.cbegin(),
+                           midiEffectStatuses.cend(),
+                           [](const auto& status)
+                           {
+                               return status.state
+                                   == studio::StudioAudioEngine::
+                                       PluginRuntimeStatus::State::ready;
+                           }),
+                   midiEffectStatuses.empty()
+                       ? "MIDI-effect runtime statuses are unavailable."
+                       : midiEffectStatuses.front().message.toRawUTF8());
+
+            juce::MidiBuffer sourceMidi;
+            sourceMidi.addEvent(
+                juce::MidiMessage::noteOn(
+                    1,
+                    60,
+                    static_cast<juce::uint8>(96)),
+                12);
+            auto midiEffectPeak = 0.0f;
+            for (int block = 0; block < 24; ++block)
+            {
+                const auto output = block == 0
+                    ? midiEffectEngine
+                          .renderActiveBlockWithMidiForTesting(
+                              sourceMidi,
+                              64)
+                    : midiEffectEngine
+                          .renderActiveBlockForTesting(64);
+                midiEffectPeak = std::max(
+                    midiEffectPeak,
+                    output.getMagnitude(
+                        0,
+                        0,
+                        output.getNumSamples()));
+                juce::Thread::sleep(3);
+            }
+            expect(midiEffectPeak > 0.7f,
+                   ("Sandboxed CLAP MIDI output routes into downstream instruments (peak "
+                    + juce::String(midiEffectPeak, 5)
+                    + ", late "
+                    + juce::String(
+                        midiEffectEngine.pluginLateBlockCount())
+                    + ").")
+                       .toRawUTF8());
+        }
     }
 
     sourceFile.deleteFile();

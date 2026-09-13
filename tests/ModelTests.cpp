@@ -1358,30 +1358,39 @@ void pluginCatalogFiltering()
 
 void pluginBridgeProtocol()
 {
-    studio::PluginBridgeSharedState state;
-    state.numChannels.store(2);
-    state.numSamples.store(4);
-    state.input[0][0] = 0.25f;
-    state.input[0][1] = -0.5f;
-    state.input[1][0] = 0.75f;
-    state.input[1][1] = -1.0f;
-    state.sidechainChannels.store(2);
-    state.sidechain[0][0] = 0.5f;
-    state.parameterEventCount.store(1);
-    state.parameterEvents[0].parameterIndex = 7;
-    state.parameterEvents[0].sampleOffset = 2;
-    state.parameterEvents[0].value = 0.75f;
-    state.hostSequence.store(1, std::memory_order_release);
+    auto state =
+        std::make_unique<studio::PluginBridgeSharedState>();
+    state->numChannels.store(2);
+    state->numSamples.store(4);
+    state->input[0][0] = 0.25f;
+    state->input[0][1] = -0.5f;
+    state->input[1][0] = 0.75f;
+    state->input[1][1] = -1.0f;
+    state->sidechainChannels.store(2);
+    state->sidechain[0][0] = 0.5f;
+    state->parameterEventCount.store(1);
+    state->parameterEvents[0].parameterIndex = 7;
+    state->parameterEvents[0].sampleOffset = 2;
+    state->parameterEvents[0].value = 0.75f;
+    state->midiInputEventCount.store(1);
+    state->midiInputByteCount.store(3);
+    state->midiInputEvents[0].sampleOffset = 3;
+    state->midiInputEvents[0].dataOffset = 0;
+    state->midiInputEvents[0].dataSize = 3;
+    state->midiInputData[0] = 0x90;
+    state->midiInputData[1] = 60;
+    state->midiInputData[2] = 100;
+    state->hostSequence.store(1, std::memory_order_release);
 
-    expect(studio::PluginBridgeProtocol::isValid(state), "Bridge protocol header is valid.");
-    expect(studio::PluginBridgeProtocol::processAvailableBlock(state),
+    expect(studio::PluginBridgeProtocol::isValid(*state), "Bridge protocol header is valid.");
+    expect(studio::PluginBridgeProtocol::processAvailableBlock(*state),
            "Bridge worker processes a published block.");
-    expect(state.workerSequence.load(std::memory_order_acquire) == 1,
+    expect(state->workerSequence.load(std::memory_order_acquire) == 1,
            "Bridge worker acknowledges the host sequence.");
-    expect(std::abs(state.output[0][0] - 0.25f) < 0.0001f
-               && std::abs(state.output[1][1] + 1.0f) < 0.0001f,
+    expect(std::abs(state->output[0][0] - 0.25f) < 0.0001f
+               && std::abs(state->output[1][1] + 1.0f) < 0.0001f,
            "Bridge transport preserves stereo samples.");
-    expect(!studio::PluginBridgeProtocol::processAvailableBlock(state),
+    expect(!studio::PluginBridgeProtocol::processAvailableBlock(*state),
            "Bridge worker does not process the same block twice.");
     expect(studio::PluginBridgeProtocol::outputSourceChannel(1, 0) == 0
                && studio::PluginBridgeProtocol::outputSourceChannel(1, 1)
@@ -1391,11 +1400,17 @@ void pluginBridgeProtocol()
                && studio::PluginBridgeProtocol::outputSourceChannel(2, 2)
                       == -1,
            "Bridge output mapping duplicates mono and never leaks stale channels.");
-    expect(studio::PluginBridgeProtocol::parameterEventCount(state) == 1
-               && state.parameterEvents[0].parameterIndex == 7
-               && state.parameterEvents[0].sampleOffset == 2
-               && std::abs(state.sidechain[0][0] - 0.5f) < 0.0001f,
-           "Bridge audio, sidechain, and parameter events share one block record.");
+    expect(studio::PluginBridgeProtocol::parameterEventCount(*state) == 1
+               && state->parameterEvents[0].parameterIndex == 7
+               && state->parameterEvents[0].sampleOffset == 2
+               && std::abs(state->sidechain[0][0] - 0.5f) < 0.0001f
+               && state->midiOutputEventCount.load() == 1
+               && state->midiOutputByteCount.load() == 3
+               && state->midiOutputEvents[0].sampleOffset == 3
+               && state->midiOutputData[0] == 0x90
+               && state->midiOutputData[1] == 60
+               && state->midiOutputData[2] == 100,
+           "Bridge audio, sidechain, parameter, and MIDI events share one block record.");
 }
 
 void liveRecordingWaveform()

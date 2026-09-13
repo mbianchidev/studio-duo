@@ -146,6 +146,11 @@ public:
         renderActiveBlockWithInputForTesting(
             const juce::AudioBuffer<float>& input,
             int outputChannels = 2);
+    [[nodiscard]] juce::AudioBuffer<float>
+        renderActiveBlockWithMidiForTesting(
+            const juce::MidiBuffer& midi,
+            int samples,
+            int outputChannels = 2);
     void processActiveBlockForTesting(int samples);
     bool simulatePluginCrashForTesting(
         const juce::String& insertId);
@@ -346,6 +351,7 @@ private:
         int meterIndex = -1;
         int runtimeLatencySamples = 0;
         int destinationIndex = -1;
+        int midiTrackIndex = -1;
         float offlineRoutingGainLeft = 1.0f;
         float offlineRoutingGainRight = 1.0f;
         bool offlineRouteAudible = true;
@@ -367,6 +373,19 @@ private:
 
     struct RenderSnapshot
     {
+        struct MidiTrack
+        {
+            std::uint64_t runtimeKey = 0;
+            int audioTrackIndex = -1;
+            bool inputArmed = false;
+            std::vector<int> destinationIndices;
+            juce::AudioBuffer<float> processingBuffer {
+                2,
+                PluginBridgeSharedState::maxBlockSize
+            };
+            juce::MidiBuffer midi;
+        };
+
         struct HardwareSend
         {
             std::uint64_t sourceRuntimeKey = 0;
@@ -424,6 +443,7 @@ private:
             controlRoomPluginAutomation;
         std::vector<HardwareSend> hardwareSends;
         std::vector<RenderTrack> tracks;
+        std::vector<MidiTrack> midiTracks;
         juce::AudioBuffer<float> masterBuffer {
             2,
             PluginBridgeSharedState::maxBlockSize
@@ -457,6 +477,8 @@ private:
         std::unique_ptr<AraDocumentHost> araDocument;
         juce::AudioBuffer<float> inProcessBuffer;
         juce::MidiBuffer midi;
+        juce::MidiBuffer midiInput;
+        juce::MidiBuffer midiSegment;
         std::vector<PluginBridgeParameterEvent> parameterEvents;
         std::vector<int> automationBoundaries;
         int parameterEventCount = 0;
@@ -595,11 +617,13 @@ private:
                                  sidechains = nullptr,
                              const std::vector<RenderSource::PluginAutomation>*
                                  automation = nullptr,
-                             std::int64_t timelineSample = 0) noexcept;
+                             std::int64_t timelineSample = 0,
+                             juce::MidiBuffer* midi = nullptr) noexcept;
     static bool processInProcessRuntime(
         InsertRuntime& insert,
         juce::AudioBuffer<float>& buffer,
         const juce::AudioBuffer<float>* sidechain,
+        juce::MidiBuffer& midi,
         int sidechainSampleOffset = 0,
         std::span<const PluginBridgeParameterEvent> automation = {}) noexcept;
     void requestPluginRuntime(std::vector<PluginRuntimeRequest> requests,
@@ -675,6 +699,9 @@ private:
     std::atomic<bool> playing { false };
     std::atomic<bool> metronomeEnabled { true };
     std::atomic<bool> monitoringEnabled { false };
+    std::atomic<bool> midiInputEnabled { false };
+    juce::MidiMessageCollector midiCollector;
+    juce::MidiBuffer incomingMidi;
     std::atomic<float> outputLeftPeak { 0.0f };
     std::atomic<float> outputRightPeak { 0.0f };
     std::array<int, maximumHardwareAudioChannels>
@@ -749,6 +776,9 @@ private:
     std::atomic<int> calibrationInputChannel { 0 };
     std::atomic<std::int64_t> calibrationSamplesElapsed { 0 };
     std::atomic<int> calibrationLatencySamples { -1 };
+#if defined(STUDIO_DUO_TESTING)
+    juce::MidiBuffer testingMidiInput;
+#endif
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(StudioAudioEngine)
 };

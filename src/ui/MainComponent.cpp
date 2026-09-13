@@ -401,7 +401,9 @@ MainComponent::MainComponent()
     configureButton(mixerPanelToggleButton, "Show or hide the mixer");
     configureButton(muteButton, "Mute selected track");
     configureButton(soloButton, "Solo selected track");
-    configureButton(armButton, "Arm selected track for recording");
+    configureButton(
+        armButton,
+        "Arm audio tracks for recording or MIDI and instrument tracks for live input");
     configureButton(trackColourButton, "Change selected track colour");
     configureButton(stereoInputButton, "Capture this input and the following input as stereo");
     configureButton(monitorButton, "Monitor the selected track input through Studio Duo");
@@ -2172,6 +2174,18 @@ void MainComponent::timerCallback()
         auto* device = deviceManager.getCurrentAudioDevice();
         juce::AudioDeviceManager::AudioDeviceSetup audioSetup;
         deviceManager.getAudioDeviceSetup(audioSetup);
+        auto midiInputSignature = juce::String();
+        for (const auto& midiInput :
+             juce::MidiInput::getAvailableDevices())
+        {
+            if (deviceManager.isMidiInputDeviceEnabled(
+                    midiInput.identifier))
+            {
+                midiInputSignature
+                    << midiInput.identifier
+                    << ";";
+            }
+        }
         const auto signature = device != nullptr
             ? deviceManager.getCurrentAudioDeviceType()
                 + ":"
@@ -2186,6 +2200,10 @@ void MainComponent::timerCallback()
                 + juce::String(device->getCurrentSampleRate(), 1)
                 + ":"
                 + juce::String(device->getCurrentBufferSizeSamples())
+                + ":"
+                + midiInputSignature
+                + ":"
+                + deviceManager.getDefaultMidiOutputIdentifier()
             : juce::String();
         if (signature != inputConfigurationSignature)
         {
@@ -4623,7 +4641,10 @@ void MainComponent::updateInspector()
         hasMixGain
         && (track->type != TrackType::master || !track->muted));
     soloButton.setEnabled(track->type != TrackType::master);
-    armButton.setEnabled(track->type == TrackType::audio);
+    armButton.setEnabled(
+        track->type == TrackType::audio
+        || track->type == TrackType::instrument
+        || track->type == TrackType::midi);
     trackColourButton.setEnabled(track->type != TrackType::master);
     splitClipButton.setEnabled(clip != nullptr);
     deleteClipButton.setEnabled(clip != nullptr);

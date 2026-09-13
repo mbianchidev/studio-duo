@@ -41,6 +41,11 @@ public:
         juce::AudioBuffer<float>& audio,
         const juce::AudioBuffer<float>* sidechain = nullptr,
         std::span<const PluginBridgeParameterEvent> parameterEvents = {}) noexcept;
+    void processBlock(
+        juce::AudioBuffer<float>& audio,
+        juce::MidiBuffer& midi,
+        const juce::AudioBuffer<float>* sidechain = nullptr,
+        std::span<const PluginBridgeParameterEvent> parameterEvents = {}) noexcept;
 
     [[nodiscard]] bool isReady() const noexcept;
     [[nodiscard]] std::uint64_t lateBlockCount() const noexcept;
@@ -69,7 +74,8 @@ private:
     void prepareOutputTimeline(int blockSize);
     void queueDryInput(int samples) noexcept;
     void queueCompletedOutput() noexcept;
-    void readTimelineOutput(juce::AudioBuffer<float>& audio) noexcept;
+    void readTimelineOutput(juce::AudioBuffer<float>& audio,
+                            juce::MidiBuffer& midi) noexcept;
     juce::Result sendEditorCommand(const juce::String& command,
                                   int width = 0,
                                   int height = 0);
@@ -86,6 +92,15 @@ private:
     std::array<std::array<float, PluginBridgeSharedState::maxBlockSize>,
                PluginBridgeSharedState::maxChannels> completedOutput {};
     juce::AudioBuffer<float> outputTimeline;
+    juce::MidiBuffer scratchMidi;
+    juce::MidiBuffer completedMidi;
+    juce::MidiBuffer outputMidiTimeline;
+    std::array<PluginBridgeMidiEvent,
+               PluginBridgeSharedState::maxMidiEvents> pendingMidiEvents {};
+    std::array<std::uint8_t,
+               PluginBridgeSharedState::maxMidiBytes> pendingMidiData {};
+    int pendingMidiEventCount = 0;
+    int pendingMidiByteCount = 0;
     int processingBlockSize = 512;
     int inputChannels = 0;
     int sidechainChannels = 0;
@@ -98,6 +113,7 @@ private:
     std::int64_t inFlightStartSample = 0;
     std::int64_t completedSequence = -1;
     std::int64_t completedStartSample = 0;
+    std::int64_t midiTimelineOrigin = 0;
     std::uint32_t completedOutputFlags = 0;
     std::int64_t streamSamplePosition = 0;
     std::int64_t wetReplacementBlockedUntilSample = 0;

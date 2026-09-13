@@ -242,6 +242,66 @@ std::vector<juce::String> audioNodeIds(const Project& project)
             result.push_back(track.id);
     return result;
 }
+
+std::optional<std::vector<juce::String>> midiNodeOrder(
+    const Project& project,
+    juce::String& error)
+{
+    std::vector<juce::String> nodes;
+    for (const auto& track : project.tracks)
+        if (isMidiNode(track))
+            nodes.push_back(track.id);
+
+    std::vector<int> incoming(nodes.size(), 0);
+    std::vector<std::vector<std::size_t>> outgoing(nodes.size());
+    for (const auto& connection : project.routingConnections)
+    {
+        if (!connection.enabled
+            || connection.signalType != SignalType::midi)
+            continue;
+        const auto source = std::find(
+            nodes.cbegin(),
+            nodes.cend(),
+            connection.sourceTrackId);
+        const auto destination = std::find(
+            nodes.cbegin(),
+            nodes.cend(),
+            connection.destination.trackId);
+        if (source == nodes.cend()
+            || destination == nodes.cend())
+            continue;
+        const auto sourceIndex = static_cast<std::size_t>(
+            std::distance(nodes.cbegin(), source));
+        const auto destinationIndex = static_cast<std::size_t>(
+            std::distance(nodes.cbegin(), destination));
+        outgoing[sourceIndex].push_back(destinationIndex);
+        ++incoming[destinationIndex];
+    }
+
+    std::vector<juce::String> result;
+    result.reserve(nodes.size());
+    std::vector<bool> emitted(nodes.size(), false);
+    while (result.size() < nodes.size())
+    {
+        auto progress = false;
+        for (std::size_t index = 0; index < nodes.size(); ++index)
+        {
+            if (emitted[index] || incoming[index] != 0)
+                continue;
+            emitted[index] = true;
+            progress = true;
+            result.push_back(nodes[index]);
+            for (const auto destination : outgoing[index])
+                --incoming[destination];
+        }
+        if (!progress)
+        {
+            error = "MIDI routing cannot contain a cycle.";
+            return std::nullopt;
+        }
+    }
+    return result;
+}
 }
 
 bool RoutingGraph::validate(const Project& project, juce::String& error)
@@ -294,59 +354,8 @@ std::optional<std::vector<juce::String>> RoutingGraph::order(
         }
     }
 
-    std::vector<juce::String> midiNodes;
-    for (const auto& track : project.tracks)
-        if (isMidiNode(track))
-            midiNodes.push_back(track.id);
-    std::vector<int> midiIncoming(midiNodes.size(), 0);
-    std::vector<std::vector<std::size_t>> midiOutgoing(
-        midiNodes.size());
-    for (const auto& connection : project.routingConnections)
-    {
-        if (!connection.enabled
-            || connection.signalType != SignalType::midi)
-            continue;
-        const auto source = std::find(
-            midiNodes.cbegin(),
-            midiNodes.cend(),
-            connection.sourceTrackId);
-        const auto destination = std::find(
-            midiNodes.cbegin(),
-            midiNodes.cend(),
-            connection.destination.trackId);
-        if (source == midiNodes.cend()
-            || destination == midiNodes.cend())
-            continue;
-        const auto sourceIndex = static_cast<std::size_t>(
-            std::distance(midiNodes.cbegin(), source));
-        const auto destinationIndex = static_cast<std::size_t>(
-            std::distance(midiNodes.cbegin(), destination));
-        midiOutgoing[sourceIndex].push_back(destinationIndex);
-        ++midiIncoming[destinationIndex];
-    }
-    std::vector<bool> midiEmitted(midiNodes.size(), false);
-    auto midiEmittedCount = std::size_t { 0 };
-    while (midiEmittedCount < midiNodes.size())
-    {
-        auto progress = false;
-        for (std::size_t index = 0;
-             index < midiNodes.size();
-             ++index)
-        {
-            if (midiEmitted[index] || midiIncoming[index] != 0)
-                continue;
-            midiEmitted[index] = true;
-            ++midiEmittedCount;
-            progress = true;
-            for (const auto destination : midiOutgoing[index])
-                --midiIncoming[destination];
-        }
-        if (!progress)
-        {
-            error = "MIDI routing cannot contain a cycle.";
-            return std::nullopt;
-        }
-    }
+    if (!midiNodeOrder(project, error).has_value())
+        return std::nullopt;
 
     const auto nodes = audioNodeIds(project);
     std::vector<int> incoming(nodes.size(), 0);
@@ -425,5 +434,14 @@ std::optional<std::vector<juce::String>> RoutingGraph::order(
         }
     }
     return result;
+}
+
+std::optional<std::vector<juce::String>> RoutingGraph::midiOrder(
+    const Project& project,
+    juce::String& error)
+{
+    if (!order(project, error).has_value())
+        return std::nullopt;
+    return midiNodeOrder(project, error);
 }
 }
