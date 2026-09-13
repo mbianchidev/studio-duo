@@ -9,6 +9,12 @@ PluginBridgeClient::PluginBridgeClient(
     juce::File executable)
     : workerExecutable(std::move(executable))
 {
+    scratchMidi.ensureSize(
+        PluginBridgeSharedState::maxMidiBytes);
+    completedMidi.ensureSize(
+        PluginBridgeSharedState::maxMidiBytes);
+    outputMidiTimeline.ensureSize(
+        PluginBridgeSharedState::maxMidiBytes * 4);
 }
 
 PluginBridgeClient::~PluginBridgeClient()
@@ -288,8 +294,14 @@ void PluginBridgeClient::resetProcessing()
     if (sharedState != nullptr)
         sharedState->resetRequested.store(1, std::memory_order_release);
     outputTimeline.clear();
+    outputMidiTimeline.clear();
+    scratchMidi.clear();
+    completedMidi.clear();
     pendingParameterEventCount = 0;
+    pendingMidiEventCount = 0;
+    pendingMidiByteCount = 0;
     streamSamplePosition = 0;
+    midiTimelineOrigin = 0;
     completedSequence = -1;
     completedOutputFlags = 0;
     wetReplacementBlockedUntilSample = 0;
@@ -353,9 +365,24 @@ void PluginBridgeClient::processBlock(
     const juce::AudioBuffer<float>* sidechain,
     std::span<const PluginBridgeParameterEvent> parameterEvents) noexcept
 {
+    scratchMidi.clear();
+    processBlock(
+        audio,
+        scratchMidi,
+        sidechain,
+        parameterEvents);
+}
+
+void PluginBridgeClient::processBlock(
+    juce::AudioBuffer<float>& audio,
+    juce::MidiBuffer& midi,
+    const juce::AudioBuffer<float>* sidechain,
+    std::span<const PluginBridgeParameterEvent> parameterEvents) noexcept
+{
     if (!isReady() || sharedState == nullptr)
     {
         audio.clear();
+        midi.clear();
         return;
     }
     const auto channels = std::min(audio.getNumChannels(), PluginBridgeSharedState::maxChannels);
@@ -426,6 +453,43 @@ void PluginBridgeClient::processBlock(
             return left.sampleOffset < right.sampleOffset;
         });
 
+    pendingMidiEventCount = 0;
+    pendingMidiByteCount = 0;
+    for (const auto metadata : midi)
+    {
+        const auto* data = metadata.data;
+        const auto bytes = metadata.numBytes;
+        if (data == nullptr
+            || bytes <= 0
+            || pendingMidiEventCount
+                >= PluginBridgeSharedState::maxMidiEvents
+            || pendingMidiByteCount
+                    > PluginBridgeSharedState::maxMidiBytes
+                        - bytes)
+        {
+            sharedState->midiInputOverflowCount.fetch_add(
+                1,
+                std::memory_order_relaxed);
+            continue;
+        }
+        auto& event = pendingMidiEvents[static_cast<std::size_t>(
+            pendingMidiEventCount++)];
+        event.sampleOffset = static_cast<std::uint32_t>(
+            juce::jlimit(
+                0,
+                std::max(0, samples - 1),
+                metadata.samplePosition));
+        event.dataOffset = static_cast<std::uint32_t>(
+            pendingMidiByteCount);
+        event.dataSize = static_cast<std::uint32_t>(bytes);
+        std::copy_n(
+            data,
+            bytes,
+            pendingMidiData.begin() + pendingMidiByteCount);
+        pendingMidiByteCount += bytes;
+    }
+    midi.clear();
+
     queueDryInput(samples);
     fetchWorkerOutput();
     queueCompletedOutput();
@@ -436,7 +500,7 @@ void PluginBridgeClient::processBlock(
 #endif
     fetchWorkerOutput();
     queueCompletedOutput();
-    readTimelineOutput(audio);
+    readTimelineOutput(audio, midi);
     if (inFlightSequence < 0
         && sharedState->workerSequence.load(std::memory_order_acquire)
             == sharedState->hostSequence.load(std::memory_order_relaxed))
@@ -484,6 +548,40 @@ void PluginBridgeClient::fetchWorkerOutput() noexcept
         completedOutputSamples = outputSize;
         completedOutputFlags = sharedState->outputFlags.load(
             std::memory_order_relaxed);
+        completedMidi.clear();
+        const auto midiEventCount = std::min(
+            static_cast<int>(
+                sharedState->midiOutputEventCount.load(
+                    std::memory_order_relaxed)),
+            PluginBridgeSharedState::maxMidiEvents);
+        const auto midiByteCount = std::min(
+            static_cast<int>(
+                sharedState->midiOutputByteCount.load(
+                    std::memory_order_relaxed)),
+            PluginBridgeSharedState::maxMidiBytes);
+        for (int index = 0; index < midiEventCount; ++index)
+        {
+            const auto& event =
+                sharedState->midiOutputEvents[
+                    static_cast<std::size_t>(index)];
+            if (event.dataSize == 0
+                || event.dataOffset
+                    > static_cast<std::uint32_t>(
+                        midiByteCount)
+                || event.dataSize
+                    > static_cast<std::uint32_t>(
+                        midiByteCount)
+                        - event.dataOffset)
+                continue;
+            completedMidi.addEvent(
+                sharedState->midiOutputData.data()
+                    + event.dataOffset,
+                static_cast<int>(event.dataSize),
+                juce::jlimit(
+                    0,
+                    std::max(0, outputSize - 1),
+                    static_cast<int>(event.sampleOffset)));
+        }
     }
 
     inFlightSequence = -1;
@@ -778,6 +876,14 @@ void PluginBridgeClient::publishInputBlock(int samples) noexcept
     for (int event = 0; event < pendingParameterEventCount; ++event)
         sharedState->parameterEvents[static_cast<std::size_t>(event)]
             = pendingParameterEvents[static_cast<std::size_t>(event)];
+    std::copy_n(
+        pendingMidiEvents.begin(),
+        pendingMidiEventCount,
+        sharedState->midiInputEvents.begin());
+    std::copy_n(
+        pendingMidiData.begin(),
+        pendingMidiByteCount,
+        sharedState->midiInputData.begin());
 
     sharedState->numChannels.store(static_cast<std::uint32_t>(inputChannels),
                                    std::memory_order_relaxed);
@@ -788,6 +894,12 @@ void PluginBridgeClient::publishInputBlock(int samples) noexcept
                                   std::memory_order_relaxed);
     sharedState->parameterEventCount.store(
         static_cast<std::uint32_t>(pendingParameterEventCount),
+        std::memory_order_relaxed);
+    sharedState->midiInputEventCount.store(
+        static_cast<std::uint32_t>(pendingMidiEventCount),
+        std::memory_order_relaxed);
+    sharedState->midiInputByteCount.store(
+        static_cast<std::uint32_t>(pendingMidiByteCount),
         std::memory_order_relaxed);
     if (timelineResetPending)
     {
@@ -823,7 +935,9 @@ void PluginBridgeClient::prepareOutputTimeline(int blockSize)
         true,
         false);
     outputTimeline.clear();
+    outputMidiTimeline.clear();
     streamSamplePosition = 0;
+    midiTimelineOrigin = 0;
     inFlightStartSample = 0;
     completedStartSample = 0;
     wetReplacementBlockedUntilSample = 0;
@@ -910,12 +1024,40 @@ void PluginBridgeClient::queueCompletedOutput() noexcept
                                [static_cast<std::size_t>(sample)]);
         }
     }
+    const auto midiTargetStart = targetStart
+        + juce::jlimit(
+            0,
+            PluginBridgeSharedState::maxSupportedLatencySamples,
+            pluginLatencySamples.load(
+                std::memory_order_relaxed));
+    if (midiTargetStart >= streamSamplePosition)
+    {
+        const auto relativeStart =
+            midiTargetStart - midiTimelineOrigin;
+        if (relativeStart >= 0
+            && relativeStart
+                <= std::numeric_limits<int>::max()
+                    - PluginBridgeSharedState::maxBlockSize)
+        {
+            outputMidiTimeline.addEvents(
+                completedMidi,
+                0,
+                completedOutputSamples,
+                static_cast<int>(relativeStart));
+        }
+        else
+        {
+            outputMidiTimeline.clear();
+            midiTimelineOrigin = streamSamplePosition;
+        }
+    }
     completedSequence = -1;
     completedOutputFlags = 0;
 }
 
 void PluginBridgeClient::readTimelineOutput(
-    juce::AudioBuffer<float>& audio) noexcept
+    juce::AudioBuffer<float>& audio,
+    juce::MidiBuffer& midi) noexcept
 {
     for (int sample = 0; sample < audio.getNumSamples(); ++sample)
     {
@@ -937,6 +1079,26 @@ void PluginBridgeClient::readTimelineOutput(
              ++channel)
             outputTimeline.setSample(channel, position, 0.0f);
     }
+
+    const auto relativeStart =
+        streamSamplePosition - midiTimelineOrigin;
+    if (relativeStart < 0
+        || relativeStart
+            > std::numeric_limits<int>::max()
+                - audio.getNumSamples())
+    {
+        outputMidiTimeline.clear();
+        midiTimelineOrigin = streamSamplePosition;
+        return;
+    }
+    midi.addEvents(
+        outputMidiTimeline,
+        static_cast<int>(relativeStart),
+        audio.getNumSamples(),
+        -static_cast<int>(relativeStart));
+    outputMidiTimeline.clear(
+        static_cast<int>(relativeStart),
+        audio.getNumSamples());
 }
 
 bool PluginBridgeClient::isReady() const noexcept

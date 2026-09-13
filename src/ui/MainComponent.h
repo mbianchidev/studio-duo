@@ -158,7 +158,6 @@ private:
     void updateInspector();
     void refreshInputControls();
     void refreshOutputControls();
-    void updateInputMonitoring();
     void showTrackColourMenu();
     void showTrackQuickEditor(const juce::String& trackId,
                               juce::Rectangle<int> targetScreenArea);

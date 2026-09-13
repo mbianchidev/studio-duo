@@ -408,7 +408,9 @@ void TimelineComponent::paint(juce::Graphics& graphics)
 
         drawControl(26, "M", track.muted, juce::Colour(StudioColours::amber));
         drawControl(60, "S", track.solo, juce::Colour(StudioColours::green));
-        if (track.type == TrackType::audio)
+        if (track.type == TrackType::audio
+            || track.type == TrackType::instrument
+            || track.type == TrackType::midi)
             drawControl(94, "R", track.armed, juce::Colour(StudioColours::orange));
 
         graphics.setColour(juce::Colour(StudioColours::secondaryText));
@@ -1050,7 +1052,10 @@ void TimelineComponent::mouseDown(const juce::MouseEvent& event)
                 else if (x >= 58 && x <= 92 && onTrackSolo)
                     onTrackSolo(track.id);
                 else if (x >= 92 && x <= 126
-                         && track.type == TrackType::audio
+                         && (track.type == TrackType::audio
+                             || track.type
+                                 == TrackType::instrument
+                             || track.type == TrackType::midi)
                          && onTrackArm)
                     onTrackArm(track.id);
                 else
@@ -1484,7 +1489,9 @@ void TimelineComponent::showContextMenu(const juce::MouseEvent& event)
         };
         menu.addItem(std::move(solo));
 
-        if (clickedTrack->type == TrackType::audio)
+        if (clickedTrack->type == TrackType::audio
+            || clickedTrack->type == TrackType::instrument
+            || clickedTrack->type == TrackType::midi)
         {
             juce::PopupMenu::Item arm(clickedTrack->armed ? "Disarm track" : "Arm track");
             arm.action = [this, trackId]

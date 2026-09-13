@@ -17,6 +17,8 @@ PluginBridgeWorker::PluginBridgeWorker()
     : juce::Thread("Studio Duo plugin bridge")
 {
     PluginFormats::addSupportedFormats(formatManager);
+    midiBuffer.ensureSize(
+        PluginBridgeSharedState::maxMidiBytes);
     automationBoundaries.reserve(
         static_cast<std::size_t>(
             PluginBridgeSharedState::maxParameterEvents * 2)
@@ -345,6 +347,41 @@ void PluginBridgeWorker::run()
         }
 
         midiBuffer.clear();
+        const auto midiInputEventCount = std::min(
+            static_cast<int>(
+                sharedState->midiInputEventCount.load(
+                    std::memory_order_relaxed)),
+            PluginBridgeSharedState::maxMidiEvents);
+        const auto midiInputByteCount = std::min(
+            static_cast<int>(
+                sharedState->midiInputByteCount.load(
+                    std::memory_order_relaxed)),
+            PluginBridgeSharedState::maxMidiBytes);
+        for (int index = 0;
+             index < midiInputEventCount;
+             ++index)
+        {
+            const auto& event =
+                sharedState->midiInputEvents[
+                    static_cast<std::size_t>(index)];
+            if (event.dataSize == 0
+                || event.dataOffset
+                    > static_cast<std::uint32_t>(
+                        midiInputByteCount)
+                || event.dataSize
+                    > static_cast<std::uint32_t>(
+                        midiInputByteCount)
+                        - event.dataOffset)
+                continue;
+            midiBuffer.addEvent(
+                sharedState->midiInputData.data()
+                    + event.dataOffset,
+                static_cast<int>(event.dataSize),
+                juce::jlimit(
+                    0,
+                    std::max(0, samples - 1),
+                    static_cast<int>(event.sampleOffset)));
+        }
         const auto eventCount =
             PluginBridgeProtocol::parameterEventCount(*sharedState);
         const auto events =
@@ -482,6 +519,50 @@ void PluginBridgeWorker::run()
                 plugin->processBlock(view, midiBuffer);
             }
         }
+        auto midiOutputEventCount = 0;
+        auto midiOutputByteCount = 0;
+        for (const auto metadata : midiBuffer)
+        {
+            const auto* data = metadata.data;
+            const auto bytes = metadata.numBytes;
+            if (data == nullptr
+                || bytes <= 0
+                || midiOutputEventCount
+                    >= PluginBridgeSharedState::maxMidiEvents
+                || midiOutputByteCount
+                        > PluginBridgeSharedState::maxMidiBytes
+                            - bytes)
+            {
+                sharedState->midiOutputOverflowCount.fetch_add(
+                    1,
+                    std::memory_order_relaxed);
+                continue;
+            }
+            auto& event =
+                sharedState->midiOutputEvents[
+                    static_cast<std::size_t>(
+                        midiOutputEventCount++)];
+            event.sampleOffset = static_cast<std::uint32_t>(
+                juce::jlimit(
+                    0,
+                    std::max(0, samples - 1),
+                    metadata.samplePosition));
+            event.dataOffset = static_cast<std::uint32_t>(
+                midiOutputByteCount);
+            event.dataSize = static_cast<std::uint32_t>(bytes);
+            std::copy_n(
+                data,
+                bytes,
+                sharedState->midiOutputData.begin()
+                    + midiOutputByteCount);
+            midiOutputByteCount += bytes;
+        }
+        sharedState->midiOutputEventCount.store(
+            static_cast<std::uint32_t>(midiOutputEventCount),
+            std::memory_order_relaxed);
+        sharedState->midiOutputByteCount.store(
+            static_cast<std::uint32_t>(midiOutputByteCount),
+            std::memory_order_relaxed);
         for (int channel = 0; channel < PluginBridgeSharedState::maxChannels; ++channel)
         {
             auto& destination = sharedState->output[static_cast<std::size_t>(channel)];

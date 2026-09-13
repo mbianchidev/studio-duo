@@ -54,6 +54,9 @@ juce::Result writeTextAtomically(
 std::unique_ptr<juce::XmlElement> currentSetupXml(
     const StudioAudioDeviceManager& manager)
 {
+    if (auto state = manager.createStateXml())
+        return state;
+
     const auto setup = manager.getAudioDeviceSetup();
     auto xml = std::make_unique<juce::XmlElement>("DEVICESETUP");
     xml->setAttribute(

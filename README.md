@@ -21,8 +21,11 @@ plugin platform. It is not yet the complete 1.0 DAW described in the
   routed metronome
 - Take lanes, comping, linked multitrack edits, transient tools, elastic audio,
   fades, crossfades, and consolidation
-- Cycle-safe sends, sidechains, auxes, nested buses, folders, VCAs, control room,
-  flexible hardware outputs, solo-safe behavior, and plugin delay compensation
+- Cycle-safe sends, per-insert sidechains, auxes, nested buses, folders, VCAs,
+  control room, graph-routed input monitoring, flexible hardware outputs,
+  solo-safe behavior, and plugin delay compensation
+- Live MIDI input and cycle-safe MIDI routing through in-process and sandboxed
+  VST3, Audio Unit, and CLAP processors
 - Sample-accurate mixer and plugin automation with read, touch, latch, write,
   trim, and preview modes
 - Sandboxed VST3, Audio Unit, and CLAP processing plus explicit ARA 2

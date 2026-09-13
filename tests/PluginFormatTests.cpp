@@ -141,6 +141,27 @@ void pluginFormatTests()
     expect(std::abs(audio.getSample(0, 32) - 0.5f) < 0.0001f,
            "CLAP instances process audio.");
 
+    midi.clear();
+    midi.addEvent(
+        juce::MidiMessage::noteOn(
+            1,
+            60,
+            static_cast<juce::uint8>(100)),
+        11);
+    audio.clear();
+    instance->processBlock(audio, midi);
+    const auto transposed = std::find_if(
+        midi.cbegin(),
+        midi.cend(),
+        [](const auto& metadata)
+        {
+            return metadata.samplePosition == 11
+                && metadata.getMessage().isNoteOn()
+                && metadata.getMessage().getNoteNumber() == 61;
+        });
+    expect(transposed != midi.cend(),
+           "CLAP note ports translate timed MIDI input and output events.");
+
     expect(instance->getParameters().size() == 300,
            "CLAP parameters are exposed without truncation.");
     const auto waitForInstance =

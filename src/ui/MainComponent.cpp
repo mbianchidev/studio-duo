@@ -401,7 +401,9 @@ MainComponent::MainComponent()
     configureButton(mixerPanelToggleButton, "Show or hide the mixer");
     configureButton(muteButton, "Mute selected track");
     configureButton(soloButton, "Solo selected track");
-    configureButton(armButton, "Arm selected track for recording");
+    configureButton(
+        armButton,
+        "Arm audio tracks for recording or MIDI and instrument tracks for live input");
     configureButton(trackColourButton, "Change selected track colour");
     configureButton(stereoInputButton, "Capture this input and the following input as stereo");
     configureButton(monitorButton, "Monitor the selected track input through Studio Duo");
@@ -2172,6 +2174,18 @@ void MainComponent::timerCallback()
         auto* device = deviceManager.getCurrentAudioDevice();
         juce::AudioDeviceManager::AudioDeviceSetup audioSetup;
         deviceManager.getAudioDeviceSetup(audioSetup);
+        auto midiInputSignature = juce::String();
+        for (const auto& midiInput :
+             juce::MidiInput::getAvailableDevices())
+        {
+            if (deviceManager.isMidiInputDeviceEnabled(
+                    midiInput.identifier))
+            {
+                midiInputSignature
+                    << midiInput.identifier
+                    << ";";
+            }
+        }
         const auto signature = device != nullptr
             ? deviceManager.getCurrentAudioDeviceType()
                 + ":"
@@ -2186,6 +2200,10 @@ void MainComponent::timerCallback()
                 + juce::String(device->getCurrentSampleRate(), 1)
                 + ":"
                 + juce::String(device->getCurrentBufferSizeSamples())
+                + ":"
+                + midiInputSignature
+                + ":"
+                + deviceManager.getDefaultMidiOutputIdentifier()
             : juce::String();
         if (signature != inputConfigurationSignature)
         {
@@ -2480,7 +2498,7 @@ void MainComponent::showAudioSettings()
 
     juce::DialogWindow::LaunchOptions options;
     options.content.setOwned(selector.release());
-    options.dialogTitle = "Studio Duo audio I/O";
+    options.dialogTitle = "Studio Duo audio and MIDI I/O";
     options.dialogBackgroundColour = juce::Colour(StudioColours::panel);
     options.escapeKeyTriggersCloseButton = true;
     options.useNativeTitleBar = true;
@@ -4623,7 +4641,10 @@ void MainComponent::updateInspector()
         hasMixGain
         && (track->type != TrackType::master || !track->muted));
     soloButton.setEnabled(track->type != TrackType::master);
-    armButton.setEnabled(track->type == TrackType::audio);
+    armButton.setEnabled(
+        track->type == TrackType::audio
+        || track->type == TrackType::instrument
+        || track->type == TrackType::midi);
     trackColourButton.setEnabled(track->type != TrackType::master);
     splitClipButton.setEnabled(clip != nullptr);
     deleteClipButton.setEnabled(clip != nullptr);
@@ -6386,28 +6407,6 @@ void MainComponent::recallMixerSnapshot(const juce::String& snapshotId)
     perform(std::make_unique<RecallMixerSnapshotCommand>(*snapshot));
 }
 
-void MainComponent::updateInputMonitoring()
-{
-    const Track* monitored = nullptr;
-    if (const auto* selected = project.findTrack(selectedTrackId);
-        selected != nullptr && selected->type == TrackType::audio && selected->inputMonitoring)
-        monitored = selected;
-
-    if (monitored == nullptr)
-    {
-        const auto iterator = std::find_if(project.tracks.cbegin(), project.tracks.cend(), [](const auto& track)
-        {
-            return track.type == TrackType::audio && track.inputMonitoring;
-        });
-        if (iterator != project.tracks.cend())
-            monitored = &*iterator;
-    }
-
-    audioEngine.setInputMonitoring(monitored != nullptr,
-                                   monitored != nullptr ? monitored->inputChannel : 0,
-                                   monitored != nullptr && monitored->stereoInput ? 2 : 1);
-}
-
 void MainComponent::updateTimelineSize()
 {
     if (timelineViewport.getWidth() <= 0 || timelineViewport.getHeight() <= 0)
@@ -6504,7 +6503,6 @@ void MainComponent::projectChanged(bool writeRecovery, bool markDirty)
     if (const auto result = audioEngine.updateProject(project,
                                                       pluginRuntimeRequests()); result.failed())
         setStatus(result.getErrorMessage(), true);
-    updateInputMonitoring();
 
     if (writeRecovery && projectPackage.exists())
         if (const auto result = ProjectFile::writeRecoveryPoint(project, projectPackage); result.failed())

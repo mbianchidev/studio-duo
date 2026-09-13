@@ -115,10 +115,10 @@ then reads the previous completed output. It never allocates, locks, waits, or
 uses IPC. A late worker causes the client to reuse the last valid output, or
 silence before the first completed block, and increments a diagnostic counter.
 Each sequence-bound block includes main and sidechain audio plus bounded
-sample-offset parameter events. The worker can receive a catalog
+sample-offset parameter and MIDI events. The worker can receive a catalog
 `PluginDescription`, instantiate VST3, Audio Unit, or CLAP processors, restore
-opaque state, negotiate buses, process parameter events at exact sample
-boundaries, and return latency, tail, and parameter metadata without loading
+opaque state, negotiate buses, process automation and MIDI at exact sample
+boundaries, and return audio, MIDI, latency, tail, and parameter metadata without loading
 third-party code into the DAW.
 
 Native VST3 and Audio Unit editors are created in the worker's accessory
@@ -143,12 +143,13 @@ inserts process the group result, and master inserts process the final mix.
 Snapshots and worker graphs share one published generation descriptor, so the
 audio callback never combines routing from different project states.
 
-Root tracks are ordered as an acyclic dependency graph before a snapshot is
-published. Audio, instrument, aux, and bus tracks can fan out through main
-routes, sends, sidechains, parallel paths, and hardware outputs. Every summing
-destination aligns incoming processor and bridge latency before running its
-inserts. The audio callback clears preallocated route buffers once per block
-and processes sources before every destination.
+Root tracks are ordered as acyclic audio and MIDI dependency graphs before a
+snapshot is published. Audio, instrument, aux, and bus tracks can fan out
+through main routes, sends, sidechains, parallel paths, and hardware outputs.
+Every sidechain owns a preallocated buffer for its selected insert, and its
+delay line includes the latency of earlier inserts on that destination. The
+audio callback clears route buffers once per block and processes sources before
+every destination.
 
 Each bridge reports plugin latency and tail duration after preparation. The
 engine aligns child sources, parent tracks, the master path, and the metronome,
@@ -189,13 +190,14 @@ render reports. Ordered migrations preserve version 1 direct-master behavior
 and convert version 2 `outputTrackId` values into explicit main-output routes.
 
 Routing snapshots compile main outputs, arbitrary pre/post-fader sends,
-sidechains, parallel paths, hardware maps, folders, VCAs, solo-safe closure,
-and control-room monitoring into a topological processing plan. Instrument
-tracks keep independent audio and MIDI routes; MIDI and instrument destinations
-use a separately validated acyclic graph ahead of Phase 4 event editing. Delay
-compensation follows every audio summing and sidechain dependency. Per-route
-delay lines allow one source to feed destinations with different path
-latencies.
+per-insert sidechains, parallel paths, hardware maps, folders, VCAs, solo-safe
+closure, and control-room monitoring into a topological processing plan.
+Enabled MIDI devices feed every armed MIDI or instrument track. MIDI-only
+tracks run their insert chains before events fan out through the separately
+validated acyclic MIDI graph; instrument tracks keep independent audio and MIDI
+routes. VST3, Audio Unit, and CLAP events retain their block-relative sample
+offsets across sandbox workers. Delay compensation follows every audio summing
+dependency and aligns sidechains to the input of their selected insert.
 
 Automation lanes use seconds or musical beats and compile off-thread to integer
 sample positions. Track and route controls evaluate per sample. External plugin
@@ -353,8 +355,10 @@ double-click to reset center.
 
 Audio tracks persist their first hardware input, mono/stereo mode, and software
 monitoring state. The lock-free recorder copies only those selected callback
-channels into its FIFO. Monitoring is mixed after timeline playback and before
-peak measurement without allocating, locking, or waiting on the audio callback.
+channels into its FIFO. Monitored input is injected into the track's pre-insert
+buffer, so inserts, automation, sends, buses, delay compensation, hardware
+outputs, master processing, and control-room monitoring use the same graph as
+timeline playback without allocating, locking, or waiting on the audio callback.
 
 Each target owns a lock-free recorder and writer thread. The audio callback uses
 the smallest available FIFO capacity across the active recorder set, so every

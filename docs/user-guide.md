@@ -24,8 +24,11 @@ exchange, and mastering remain later roadmap phases.
   warnings and safe-disabled reopening
 - Persistent plugin state, compatibility records, missing-plugin replacement,
   latency metadata, crash/timeout diagnostics, and per-insert reload
-- Pre/post-fader sends, sidechains, parallel paths, auxes, nested buses,
-  folders, VCAs, control room, hardware outputs, and solo-safe routing
+- Pre/post-fader sends, per-insert sidechains, parallel paths, auxes, nested
+  buses, folders, VCAs, control room, hardware outputs, graph-routed input
+  monitoring, and solo-safe routing
+- Live MIDI input and cycle-safe MIDI routes through in-process and sandboxed
+  instrument and MIDI-effect plugins
 - Sample-accurate mixer, send, bundled-device, and plugin automation
 - Parametric EQ, compressor, true-peak limiter, reverb, gate, gain, polarity,
   delay, tuner, and signal generator devices
@@ -82,7 +85,9 @@ Studio Duo opens a valid recovery point instead; stale or corrupt recovery data
 is ignored with a warning when the saved project remains usable.
 
 Monitoring is off by default to avoid accidental feedback. Stereo capture uses
-the selected hardware input and the adjacent channel.
+the selected hardware input and the adjacent channel. Monitored input enters the
+selected track before its inserts, then follows its fader, sends, buses, plugin
+delay compensation, hardware routes, master, and control-room path.
 
 ## Manage tracks
 
@@ -221,10 +226,14 @@ direct hardware outputs. Click a route to change tap, level, mute, enablement,
 or remove it. Aux and bus tracks sum every incoming path. The graph rejects
 cycles across main routes, sends, and sidechains.
 
-**+ TRACK** also creates instrument and MIDI tracks. MIDI and instrument tracks
-can add independent MIDI destinations in the routing panel without replacing an
-instrument track's audio output. MIDI feedback cycles are rejected before the
-route is added. MIDI clip recording and editing remain Phase 4 work.
+**+ TRACK** also creates instrument and MIDI tracks. Enable a MIDI input in
+**I/O**, then arm a MIDI or instrument track with **R** to receive it while the
+transport is running or stopped. MIDI and instrument tracks can add independent
+MIDI destinations without replacing an instrument track's audio output. MIDI
+track inserts process events before they are sent downstream; standard and CLAP
+events cross sandbox workers with their sample offsets intact. MIDI feedback
+cycles are rejected before the route is added. MIDI clip recording and editing
+remain Phase 4 work.
 
 **TRACK** in the routing panel changes mono/stereo layout, polarity, solo-safe
 state, folder placement, and VCA assignment. Folder mute and solo scope their
@@ -236,7 +245,8 @@ Its menu selects monitor hardware, dim, mono, mute, and inserts. Metronome
 hardware routing remains separate in **TRACKING SETUP** and is never included in
 the final render.
 Mixer strips show separate pre-fader and post-fader meters. Plugin and bridge
-latencies are aligned at every summing and sidechain destination.
+latencies are aligned at every summing point and at the exact insert targeted by
+each sidechain.
 
 ## Automate controls and plugin parameters
 

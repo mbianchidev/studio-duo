@@ -553,6 +553,14 @@ public:
 
     struct InputEvents
     {
+        union Event
+        {
+            clap_event_header_t header;
+            clap_event_param_value_t parameter;
+            clap_event_midi_t midi;
+            clap_event_midi_sysex_t sysex;
+        };
+
         InputEvents()
         {
             interface = { this, size, get };
@@ -575,7 +583,7 @@ public:
         }
 
         clap_input_events_t interface {};
-        std::vector<clap_event_param_value_t> values;
+        std::vector<Event> values;
         std::uint32_t count = 0;
     };
 
@@ -593,22 +601,90 @@ public:
         {
             if (list == nullptr
                 || header == nullptr
-                || header->space_id != CLAP_CORE_EVENT_SPACE_ID
-                || header->type != CLAP_EVENT_PARAM_VALUE
-                || header->size < sizeof(clap_event_param_value_t))
+                || header->space_id != CLAP_CORE_EVENT_SPACE_ID)
                 return true;
-            const auto* event =
-                reinterpret_cast<const clap_event_param_value_t*>(
-                    header);
             auto* events = static_cast<OutputEvents*>(list->ctx);
-            if (auto* parameter =
-                    events->owner->parameterFor(event->param_id))
-                parameter->updateFromPlugin(event->value);
+            if (header->type == CLAP_EVENT_PARAM_VALUE
+                && header->size >= sizeof(clap_event_param_value_t))
+            {
+                const auto* event =
+                    reinterpret_cast<const clap_event_param_value_t*>(
+                        header);
+                if (auto* parameter =
+                        events->owner->parameterFor(event->param_id))
+                    parameter->updateFromPlugin(event->value);
+                return true;
+            }
+            if (events->midiOutput == nullptr)
+                return true;
+            if (header->type == CLAP_EVENT_MIDI
+                && header->size >= sizeof(clap_event_midi_t))
+            {
+                const auto* event =
+                    reinterpret_cast<const clap_event_midi_t*>(
+                        header);
+                const auto messageSize = juce::jlimit(
+                    1,
+                    3,
+                    juce::MidiMessage::
+                        getMessageLengthFromFirstByte(
+                            event->data[0]));
+                events->midiOutput->addEvent(
+                    event->data,
+                    messageSize,
+                    static_cast<int>(header->time));
+            }
+            else if (header->type == CLAP_EVENT_MIDI_SYSEX
+                     && header->size
+                         >= sizeof(clap_event_midi_sysex_t))
+            {
+                const auto* event =
+                    reinterpret_cast<
+                        const clap_event_midi_sysex_t*>(
+                        header);
+                if (event->buffer != nullptr && event->size > 0)
+                {
+                    events->midiOutput->addEvent(
+                        event->buffer,
+                        static_cast<int>(event->size),
+                        static_cast<int>(header->time));
+                }
+            }
+            else if ((header->type == CLAP_EVENT_NOTE_ON
+                      || header->type == CLAP_EVENT_NOTE_OFF)
+                     && header->size >= sizeof(clap_event_note_t))
+            {
+                const auto* event =
+                    reinterpret_cast<const clap_event_note_t*>(
+                        header);
+                const auto channel = juce::jlimit(
+                    1,
+                    16,
+                    static_cast<int>(event->channel) + 1);
+                const auto note = juce::jlimit(
+                    0,
+                    127,
+                    static_cast<int>(event->key));
+                const auto velocity = static_cast<float>(
+                    juce::jlimit(0.0, 1.0, event->velocity));
+                events->midiOutput->addEvent(
+                    header->type == CLAP_EVENT_NOTE_ON
+                        ? juce::MidiMessage::noteOn(
+                              channel,
+                              note,
+                              velocity)
+                        : juce::MidiMessage::noteOff(
+                              channel,
+                              note,
+                              velocity),
+                    static_cast<int>(header->time));
+            }
             return true;
         }
 
         clap_output_events_t interface {};
         Impl* owner = nullptr;
+        juce::MidiBuffer* midiOutput = nullptr;
     };
 
     Impl()
@@ -657,6 +733,11 @@ public:
                 implementation->plugin->get_extension(
                     implementation->plugin,
                     CLAP_EXT_AUDIO_PORTS));
+        implementation->notePorts =
+            static_cast<const clap_plugin_note_ports_t*>(
+                implementation->plugin->get_extension(
+                    implementation->plugin,
+                    CLAP_EXT_NOTE_PORTS));
         implementation->params =
             static_cast<const clap_plugin_params_t*>(
                 implementation->plugin->get_extension(
@@ -679,6 +760,7 @@ public:
                     CLAP_EXT_TAIL));
         implementation->scanPorts(true, implementation->inputs);
         implementation->scanPorts(false, implementation->outputs);
+        implementation->scanNotePorts();
         return implementation;
     }
 
@@ -706,6 +788,30 @@ public:
                 info.in_place_pair
             });
         }
+    }
+
+    void scanNotePorts()
+    {
+        acceptsMidiInput = false;
+        producesMidiOutput = false;
+        if (notePorts == nullptr)
+            return;
+        const auto supportsMidi = [this](bool input)
+        {
+            const auto count = notePorts->count(plugin, input);
+            for (std::uint32_t index = 0; index < count; ++index)
+            {
+                clap_note_port_info_t info {};
+                if (notePorts->get(plugin, index, input, &info)
+                    && (info.supported_dialects
+                        & CLAP_NOTE_DIALECT_MIDI)
+                        != 0)
+                    return true;
+            }
+            return false;
+        };
+        acceptsMidiInput = supportsMidi(true);
+        producesMidiOutput = supportsMidi(false);
     }
 
     [[nodiscard]] Parameter* parameterFor(clap_id id) const noexcept
@@ -759,8 +865,10 @@ public:
                 continue;
             if (inputEvents.count >= inputEvents.values.size())
                 break;
-            auto& event = inputEvents.values[inputEvents.count++];
-            event = {};
+            auto& storage =
+                inputEvents.values[inputEvents.count++];
+            storage.parameter = {};
+            auto& event = storage.parameter;
             event.header.size = sizeof(event);
             event.header.time = 0;
             event.header.space_id = CLAP_CORE_EVENT_SPACE_ID;
@@ -1042,7 +1150,8 @@ public:
         parameters = std::move(hosted);
         inputEvents.values.resize(
             parameters.size()
-            + maximumScheduledAutomationEvents);
+            + maximumScheduledAutomationEvents
+            + PluginBridgeSharedState::maxMidiEvents);
         scheduledAutomationEventCount = 0;
 
         if (rebuildAll && wasActive)
@@ -1220,6 +1329,7 @@ public:
     std::unique_ptr<Host> host;
     const clap_plugin_t* plugin = nullptr;
     const clap_plugin_audio_ports_t* audioPorts = nullptr;
+    const clap_plugin_note_ports_t* notePorts = nullptr;
     const clap_plugin_params_t* params = nullptr;
     const clap_plugin_state_t* state = nullptr;
     const clap_plugin_latency_t* latency = nullptr;
@@ -1239,6 +1349,11 @@ public:
     std::uint32_t scheduledAutomationEventCount = 0;
     std::atomic<std::uint64_t> scheduledAutomationEventsDropped { 0 };
     OutputEvents outputEvents;
+    std::array<std::uint8_t,
+               PluginBridgeSharedState::maxMidiBytes> midiInputData {};
+    std::size_t midiInputBytes = 0;
+    bool acceptsMidiInput = false;
+    bool producesMidiOutput = false;
     std::atomic<bool> active { false };
     std::atomic<bool> processing { false };
     double sampleRate = 48000.0;
@@ -1337,7 +1452,8 @@ ClapPluginInstance::ClapPluginInstance(
         Impl::maximumScheduledAutomationEvents);
     impl->inputEvents.values.resize(
         impl->parameters.size()
-        + Impl::maximumScheduledAutomationEvents);
+        + Impl::maximumScheduledAutomationEvents
+        + PluginBridgeSharedState::maxMidiEvents);
     startTimerHz(50);
 }
 
@@ -1459,7 +1575,7 @@ void ClapPluginInstance::releaseResources()
 }
 
 void ClapPluginInstance::processBlock(juce::AudioBuffer<float>& audio,
-                                      juce::MidiBuffer&)
+                                      juce::MidiBuffer& midi)
 {
     juce::ScopedNoDenormals noDenormals;
     if (impl->lifecycleChanging.load(std::memory_order_seq_cst)
@@ -1510,19 +1626,103 @@ void ClapPluginInstance::processBlock(juce::AudioBuffer<float>& audio,
         if (impl->scheduledAutomationEvents[index].header.time
             < static_cast<std::uint32_t>(audio.getNumSamples()))
         {
-            impl->inputEvents.values[impl->inputEvents.count++] =
-                impl->scheduledAutomationEvents[index];
+            impl->inputEvents.values[
+                impl->inputEvents.count++].parameter =
+                    impl->scheduledAutomationEvents[index];
         }
     }
     impl->scheduledAutomationEventCount = 0;
+    impl->midiInputBytes = 0;
+    if (impl->acceptsMidiInput)
+    {
+        for (const auto metadata : midi)
+        {
+            if (impl->inputEvents.count
+                >= impl->inputEvents.values.size())
+                break;
+            const auto bytes = metadata.numBytes;
+            if (metadata.data == nullptr || bytes <= 0)
+                continue;
+            auto& storage = impl->inputEvents.values[
+                impl->inputEvents.count];
+            if (bytes <= 3)
+            {
+                storage.midi = {};
+                storage.midi.header.size =
+                    sizeof(storage.midi);
+                storage.midi.header.time =
+                    static_cast<std::uint32_t>(
+                        juce::jlimit(
+                            0,
+                            std::max(
+                                0,
+                                audio.getNumSamples() - 1),
+                            metadata.samplePosition));
+                storage.midi.header.space_id =
+                    CLAP_CORE_EVENT_SPACE_ID;
+                storage.midi.header.type =
+                    CLAP_EVENT_MIDI;
+                storage.midi.port_index = 0;
+                std::copy_n(
+                    metadata.data,
+                    bytes,
+                    storage.midi.data);
+                ++impl->inputEvents.count;
+                continue;
+            }
+            const auto byteCount =
+                static_cast<std::size_t>(bytes);
+            if (byteCount > impl->midiInputData.size()
+                || impl->midiInputBytes
+                    > impl->midiInputData.size() - byteCount)
+                continue;
+            std::copy_n(
+                metadata.data,
+                bytes,
+                impl->midiInputData.begin()
+                    + static_cast<std::ptrdiff_t>(
+                        impl->midiInputBytes));
+            storage.sysex = {};
+            storage.sysex.header.size =
+                sizeof(storage.sysex);
+            storage.sysex.header.time =
+                static_cast<std::uint32_t>(
+                    juce::jlimit(
+                        0,
+                        std::max(
+                            0,
+                            audio.getNumSamples() - 1),
+                        metadata.samplePosition));
+            storage.sysex.header.space_id =
+                CLAP_CORE_EVENT_SPACE_ID;
+            storage.sysex.header.type =
+                CLAP_EVENT_MIDI_SYSEX;
+            storage.sysex.port_index = 0;
+            storage.sysex.buffer =
+                impl->midiInputData.data()
+                + impl->midiInputBytes;
+            storage.sysex.size =
+                static_cast<std::uint32_t>(bytes);
+            impl->midiInputBytes += byteCount;
+            ++impl->inputEvents.count;
+        }
+        midi.clear();
+    }
     std::sort(
         impl->inputEvents.values.begin(),
         impl->inputEvents.values.begin() + impl->inputEvents.count,
         [](const auto& left, const auto& right)
         {
-            return left.header.time == right.header.time
-                ? left.param_id < right.param_id
-                : left.header.time < right.header.time;
+            if (left.header.time != right.header.time)
+                return left.header.time < right.header.time;
+            if (left.header.type != right.header.type)
+                return left.header.type < right.header.type;
+            if (left.header.type == CLAP_EVENT_PARAM_VALUE)
+            {
+                return left.parameter.param_id
+                    < right.parameter.param_id;
+            }
+            return false;
         });
 
     const auto inputCount = impl->inputs.size();
@@ -1617,7 +1817,10 @@ void ClapPluginInstance::processBlock(juce::AudioBuffer<float>& audio,
         &impl->inputEvents.interface,
         &impl->outputEvents.interface
     };
+    impl->outputEvents.midiOutput =
+        impl->producesMidiOutput ? &midi : nullptr;
     const auto status = impl->plugin->process(impl->plugin, &process);
+    impl->outputEvents.midiOutput = nullptr;
     impl->steadyTime += audio.getNumSamples();
     if (status == CLAP_PROCESS_ERROR)
         audio.clear();
@@ -1651,12 +1854,12 @@ double ClapPluginInstance::getTailLengthSeconds() const
 
 bool ClapPluginInstance::acceptsMidi() const
 {
-    return false;
+    return impl != nullptr && impl->acceptsMidiInput;
 }
 
 bool ClapPluginInstance::producesMidi() const
 {
-    return false;
+    return impl != nullptr && impl->producesMidiOutput;
 }
 
 juce::AudioProcessorEditor* ClapPluginInstance::createEditor()

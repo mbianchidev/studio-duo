@@ -32,15 +32,24 @@ struct PluginBridgeParameterEvent
     float rampEndValue = 0.0f;
 };
 
+struct PluginBridgeMidiEvent
+{
+    std::uint32_t sampleOffset = 0;
+    std::uint32_t dataOffset = 0;
+    std::uint32_t dataSize = 0;
+};
+
 struct alignas(64) PluginBridgeSharedState
 {
     static constexpr std::uint32_t magicValue = 0x53444252;
-    static constexpr std::uint32_t protocolVersion = 5;
+    static constexpr std::uint32_t protocolVersion = 6;
     static constexpr std::uint32_t bypassOutputFlag = 1u;
     static constexpr std::uint32_t resetAppliedFlag = 1u << 1u;
     static constexpr int maxChannels = 8;
     static constexpr int maxBlockSize = 4096;
     static constexpr int maxParameterEvents = 16384;
+    static constexpr int maxMidiEvents = 2048;
+    static constexpr int maxMidiBytes = 65536;
     static constexpr int maxSupportedLatencySamples = 65536;
 
     std::uint32_t magic = magicValue;
@@ -56,14 +65,28 @@ struct alignas(64) PluginBridgeSharedState
     std::atomic<std::uint32_t> outputFlags { 0 };
     std::atomic<std::uint32_t> parameterEventCount { 0 };
     std::atomic<std::uint32_t> parameterEventOverflowCount { 0 };
+    std::atomic<std::uint32_t> midiInputEventCount { 0 };
+    std::atomic<std::uint32_t> midiInputByteCount { 0 };
+    std::atomic<std::uint32_t> midiOutputEventCount { 0 };
+    std::atomic<std::uint32_t> midiOutputByteCount { 0 };
+    std::atomic<std::uint32_t> midiInputOverflowCount { 0 };
+    std::atomic<std::uint32_t> midiOutputOverflowCount { 0 };
     std::atomic<std::uint32_t> heartbeat { 0 };
     // Preserve the existing cache-line boundary without compiler-inserted padding.
-    std::array<std::uint8_t, 8> reservedAlignmentPadding {};
+    std::array<std::uint8_t, 48> reservedAlignmentPadding {};
     alignas(64) std::array<std::array<float, maxBlockSize>, maxChannels> input {};
     alignas(64) std::array<std::array<float, maxBlockSize>, maxChannels> sidechain {};
     alignas(64) std::array<std::array<float, maxBlockSize>, maxChannels> output {};
     alignas(64) std::array<PluginBridgeParameterEvent, maxParameterEvents>
         parameterEvents {};
+    alignas(64) std::array<PluginBridgeMidiEvent, maxMidiEvents>
+        midiInputEvents {};
+    alignas(64) std::array<std::uint8_t, maxMidiBytes>
+        midiInputData {};
+    alignas(64) std::array<PluginBridgeMidiEvent, maxMidiEvents>
+        midiOutputEvents {};
+    alignas(64) std::array<std::uint8_t, maxMidiBytes>
+        midiOutputData {};
 };
 
 static_assert(std::atomic<std::uint32_t>::is_always_lock_free,
@@ -107,6 +130,28 @@ public:
 
         state.numOutputChannels.store(
             static_cast<std::uint32_t>(channels),
+            std::memory_order_relaxed);
+        const auto midiEvents = std::min(
+            static_cast<int>(state.midiInputEventCount.load(
+                std::memory_order_relaxed)),
+            PluginBridgeSharedState::maxMidiEvents);
+        const auto midiBytes = std::min(
+            static_cast<int>(state.midiInputByteCount.load(
+                std::memory_order_relaxed)),
+            PluginBridgeSharedState::maxMidiBytes);
+        std::copy_n(
+            state.midiInputEvents.begin(),
+            midiEvents,
+            state.midiOutputEvents.begin());
+        std::copy_n(
+            state.midiInputData.begin(),
+            midiBytes,
+            state.midiOutputData.begin());
+        state.midiOutputEventCount.store(
+            static_cast<std::uint32_t>(midiEvents),
+            std::memory_order_relaxed);
+        state.midiOutputByteCount.store(
+            static_cast<std::uint32_t>(midiBytes),
             std::memory_order_relaxed);
         state.outputFlags.store(outputFlags, std::memory_order_relaxed);
         state.workerSequence.store(hostSequence, std::memory_order_release);
