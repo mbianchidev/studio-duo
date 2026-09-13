@@ -551,6 +551,79 @@ void routingEngineTests()
                 + ").")
                    .toRawUTF8());
         impulseFile.deleteFile();
+
+        auto monitoringProject = studio::Project::createDefault();
+        monitoringProject.metronomeEnabled = false;
+        monitoringProject.tracks[0].inputMonitoring = true;
+        monitoringProject.tracks[0].inputChannel = 0;
+        monitoringProject.tracks[0].volumeDecibels = -6.0206f;
+        auto monitoringLimiter = limiter;
+        monitoringLimiter.id = juce::Uuid().toString();
+        monitoringLimiter.name = "Monitoring latency";
+        monitoringProject.tracks[0].inserts.push_back(
+            monitoringLimiter);
+
+        studio::Track monitoringControlRoom;
+        monitoringControlRoom.name = "Monitoring control room";
+        monitoringControlRoom.type =
+            studio::TrackType::controlRoom;
+        monitoringControlRoom.hardwareOutputChannel = 2;
+        const auto monitoringControlRoomId =
+            monitoringControlRoom.id;
+        monitoringProject.tracks.insert(
+            monitoringProject.tracks.end() - 1,
+            monitoringControlRoom);
+        studio::RoutingConnection monitoringRoute;
+        monitoringRoute.name = "Monitoring control-room route";
+        monitoringRoute.kind = studio::RouteKind::controlRoom;
+        monitoringRoute.sourceTrackId =
+            monitoringProject.masterTrackId();
+        monitoringRoute.destination.type =
+            studio::RouteEndpointType::track;
+        monitoringRoute.destination.trackId =
+            monitoringControlRoomId;
+        monitoringProject.routingConnections.push_back(
+            monitoringRoute);
+
+        studio::StudioAudioEngine monitoringEngine;
+        studio::StudioAudioEngine::PluginRuntimeRequest
+            monitoringRequest;
+        monitoringRequest.trackId =
+            monitoringProject.tracks[0].id;
+        monitoringRequest.insertId = monitoringLimiter.id;
+        monitoringRequest.name = monitoringLimiter.name;
+        monitoringRequest.deviceIdentifier =
+            monitoringLimiter.pluginIdentifier;
+        monitoringRequest.latencySamples =
+            monitoringLimiter.latencySamples;
+        monitoringRequest.bridgeMode =
+            studio::PluginBridgeMode::trustedInProcess;
+        expect(monitoringEngine.updateProject(
+                   monitoringProject,
+                   { monitoringRequest })
+                   .wasOk(),
+               "A monitored project publishes its processing graph.");
+        for (int attempt = 0;
+             attempt < 100
+             && monitoringEngine.pluginRuntimeTransitionPending();
+             ++attempt)
+            juce::Thread::sleep(10);
+
+        juce::AudioBuffer<float> monitoredInput(1, 64);
+        monitoredInput.clear();
+        monitoredInput.setSample(0, 0, 0.2f);
+        const auto monitoredOutput =
+            monitoringEngine.renderActiveBlockWithInputForTesting(
+                monitoredInput,
+                4);
+        expect(std::abs(monitoredOutput.getSample(0, 0))
+                       < 0.001f
+                   && monitoredOutput.getSample(0, 16) > 0.05f
+                   && std::abs(
+                          monitoredOutput.getSample(2, 16)
+                          - monitoredOutput.getSample(0, 16))
+                       < 0.001f,
+               "Software monitoring follows track processing, PDC, and control-room routing while stopped.");
     }
 
     sourceFile.deleteFile();

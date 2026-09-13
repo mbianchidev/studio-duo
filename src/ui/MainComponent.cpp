@@ -6386,28 +6386,6 @@ void MainComponent::recallMixerSnapshot(const juce::String& snapshotId)
     perform(std::make_unique<RecallMixerSnapshotCommand>(*snapshot));
 }
 
-void MainComponent::updateInputMonitoring()
-{
-    const Track* monitored = nullptr;
-    if (const auto* selected = project.findTrack(selectedTrackId);
-        selected != nullptr && selected->type == TrackType::audio && selected->inputMonitoring)
-        monitored = selected;
-
-    if (monitored == nullptr)
-    {
-        const auto iterator = std::find_if(project.tracks.cbegin(), project.tracks.cend(), [](const auto& track)
-        {
-            return track.type == TrackType::audio && track.inputMonitoring;
-        });
-        if (iterator != project.tracks.cend())
-            monitored = &*iterator;
-    }
-
-    audioEngine.setInputMonitoring(monitored != nullptr,
-                                   monitored != nullptr ? monitored->inputChannel : 0,
-                                   monitored != nullptr && monitored->stereoInput ? 2 : 1);
-}
-
 void MainComponent::updateTimelineSize()
 {
     if (timelineViewport.getWidth() <= 0 || timelineViewport.getHeight() <= 0)
@@ -6504,7 +6482,6 @@ void MainComponent::projectChanged(bool writeRecovery, bool markDirty)
     if (const auto result = audioEngine.updateProject(project,
                                                       pluginRuntimeRequests()); result.failed())
         setStatus(result.getErrorMessage(), true);
-    updateInputMonitoring();
 
     if (writeRecovery && projectPackage.exists())
         if (const auto result = ProjectFile::writeRecoveryPoint(project, projectPackage); result.failed())

@@ -130,7 +130,6 @@ public:
     void seekSeconds(double seconds) noexcept;
     [[nodiscard]] bool resetPluginProcessing();
     void setMetronomeEnabled(bool enabled) noexcept;
-    void setInputMonitoring(bool enabled, int firstInputChannel, int channels) noexcept;
 
     [[nodiscard]] bool isPlaying() const noexcept;
     [[nodiscard]] bool isRecording() const noexcept;
@@ -143,6 +142,10 @@ public:
     [[nodiscard]] double activeSnapshotSampleRateForTesting() const noexcept;
     [[nodiscard]] juce::AudioBuffer<float>
         renderActiveBlockForTesting(int samples, int outputChannels = 2);
+    [[nodiscard]] juce::AudioBuffer<float>
+        renderActiveBlockWithInputForTesting(
+            const juce::AudioBuffer<float>& input,
+            int outputChannels = 2);
     void processActiveBlockForTesting(int samples);
     bool simulatePluginCrashForTesting(
         const juce::String& insertId);
@@ -337,6 +340,9 @@ private:
         bool polarityInverted = false;
         bool audible = true;
         bool processing = true;
+        bool inputMonitoring = false;
+        int inputChannel = 0;
+        int inputChannels = 1;
         int meterIndex = -1;
         int runtimeLatencySamples = 0;
         int destinationIndex = -1;
@@ -669,8 +675,6 @@ private:
     std::atomic<bool> playing { false };
     std::atomic<bool> metronomeEnabled { true };
     std::atomic<bool> monitoringEnabled { false };
-    std::atomic<int> monitoringFirstInput { 0 };
-    std::atomic<int> monitoringChannels { 1 };
     std::atomic<float> outputLeftPeak { 0.0f };
     std::atomic<float> outputRightPeak { 0.0f };
     std::array<int, maximumHardwareAudioChannels>
