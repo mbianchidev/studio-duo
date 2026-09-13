@@ -70,6 +70,43 @@ std::vector<RoutingDestinationItem> RoutingUiModel::sidechainDestinations(
     return result;
 }
 
+std::vector<RoutingDestinationItem> RoutingUiModel::midiDestinations(
+    const Project& project,
+    const juce::String& sourceTrackId)
+{
+    std::vector<RoutingDestinationItem> result;
+    for (const auto& track : project.tracks)
+    {
+        if (track.parentTrackId.isNotEmpty()
+            || track.id == sourceTrackId
+            || (track.type != TrackType::instrument
+                && track.type != TrackType::midi))
+            continue;
+
+        RoutingConnection candidate;
+        candidate.name = "MIDI send";
+        candidate.signalType = SignalType::midi;
+        candidate.kind = RouteKind::send;
+        candidate.sourceTrackId = sourceTrackId;
+        candidate.destination.type = RouteEndpointType::track;
+        candidate.destination.trackId = track.id;
+        auto copy = project;
+        copy.routingConnections.push_back(std::move(candidate));
+        juce::String error;
+        if (!copy.validateRoutingGraph(error))
+            continue;
+        result.push_back({
+            track.id,
+            {},
+            (track.type == TrackType::instrument
+                 ? "Instrument: "
+                 : "MIDI: ")
+                + track.name
+        });
+    }
+    return result;
+}
+
 juce::String RoutingUiModel::summary(
     const Project& project,
     const RoutingConnection& connection)
@@ -106,6 +143,9 @@ juce::String RoutingUiModel::summary(
                                 : juce::String("Missing insert"));
         }
     }
+
+    if (connection.signalType == SignalType::midi)
+        return "MIDI -> " + destination;
 
     const auto tap = juce::String(
         connection.tap == RouteTap::preFader ? "Pre" : "Post");

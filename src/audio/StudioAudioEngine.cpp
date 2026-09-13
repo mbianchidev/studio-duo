@@ -383,7 +383,10 @@ void StudioAudioEngine::LockFreeRecorder::run()
     }
 }
 
-StudioAudioEngine::StudioAudioEngine()
+StudioAudioEngine::StudioAudioEngine(
+    juce::File pluginBridgeWorker)
+    : pluginBridgeWorkerExecutable(
+          std::move(pluginBridgeWorker))
 {
     formatManager.registerBasicFormats();
     physicalInputToCallbackChannel.fill(-1);
@@ -850,6 +853,30 @@ StudioAudioEngine::renderActiveBlockForTesting(int samples,
 void StudioAudioEngine::processActiveBlockForTesting(int samples)
 {
     juce::ignoreUnused(renderActiveBlockForTesting(samples));
+}
+
+bool StudioAudioEngine::simulatePluginCrashForTesting(
+    const juce::String& insertId)
+{
+    const juce::ScopedLock lock(pluginRequestLock);
+    auto& graph = pluginRuntimeGraphs[static_cast<std::size_t>(
+        activePluginRuntime.load(std::memory_order_acquire))];
+    for (auto& track : graph.tracks)
+    {
+        const auto insert = std::find_if(
+            track.inserts.begin(),
+            track.inserts.end(),
+            [&insertId](const auto& candidate)
+            {
+                return candidate.insertId == insertId;
+            });
+        if (insert == track.inserts.end()
+            || insert->bridge == nullptr)
+            continue;
+        insert->bridge->terminateWorkerForTesting();
+        return true;
+    }
+    return false;
 }
 
 std::vector<float> StudioAudioEngine::delayTransitionForTesting(
@@ -2798,6 +2825,8 @@ std::optional<StudioAudioEngine::RenderSnapshot> StudioAudioEngine::buildSnapsho
         snapshot.masterGain = juce::Decibels::decibelsToGain(master->volumeDecibels);
         snapshot.masterPan = master->pan;
         snapshot.masterAudible = !master->muted;
+        snapshot.masterPolarityInverted =
+            master->polarityInverted;
     }
 
     const auto buildClips = [this, targetSampleRate, &error](
@@ -3084,6 +3113,8 @@ std::optional<StudioAudioEngine::RenderSnapshot> StudioAudioEngine::buildSnapsho
         snapshot.controlRoomDimGain = juce::Decibels::decibelsToGain(
             controlRoom->controlRoomDimDecibels);
         snapshot.controlRoomMono = controlRoom->controlRoomMono;
+        snapshot.controlRoomPolarityInverted =
+            controlRoom->polarityInverted;
     }
     snapshot.offlineTrackLeft.resize(snapshot.tracks.size(), 0.0f);
     snapshot.offlineTrackRight.resize(snapshot.tracks.size(), 0.0f);
@@ -3114,6 +3145,8 @@ std::optional<StudioAudioEngine::RenderSnapshot> StudioAudioEngine::buildSnapsho
                     snapshot.masterMuteAutomation = *compiled;
                     break;
                 case AutomationTargetType::trackPolarity:
+                    snapshot.masterPolarityAutomation = *compiled;
+                    break;
                 case AutomationTargetType::vcaVolume:
                 case AutomationTargetType::sendGain:
                 case AutomationTargetType::sendPan:
@@ -3128,6 +3161,46 @@ std::optional<StudioAudioEngine::RenderSnapshot> StudioAudioEngine::buildSnapsho
                         lane.target.parameterIndex,
                         *compiled
                     });
+                    break;
+            }
+            continue;
+        }
+
+        const auto* automationTrack = project.findTrack(
+            lane.target.trackId);
+        if (automationTrack != nullptr
+            && automationTrack->type == TrackType::controlRoom)
+        {
+            switch (lane.target.type)
+            {
+                case AutomationTargetType::trackVolume:
+                    snapshot.controlRoomVolumeAutomation = *compiled;
+                    break;
+                case AutomationTargetType::trackPan:
+                    snapshot.controlRoomPanAutomation = *compiled;
+                    break;
+                case AutomationTargetType::trackMute:
+                    snapshot.controlRoomMuteAutomation = *compiled;
+                    break;
+                case AutomationTargetType::controlRoomDim:
+                    snapshot.controlRoomDimAutomation = *compiled;
+                    break;
+                case AutomationTargetType::trackPolarity:
+                    snapshot.controlRoomPolarityAutomation = *compiled;
+                    break;
+                case AutomationTargetType::pluginParameter:
+                case AutomationTargetType::deviceParameter:
+                    snapshot.controlRoomPluginAutomation.push_back({
+                        lane.target.insertId,
+                        lane.target.parameterId,
+                        lane.target.parameterIndex,
+                        *compiled
+                    });
+                    break;
+                case AutomationTargetType::vcaVolume:
+                case AutomationTargetType::sendGain:
+                case AutomationTargetType::sendPan:
+                case AutomationTargetType::sendMute:
                     break;
             }
             continue;
@@ -3300,6 +3373,9 @@ void StudioAudioEngine::resolvePluginAutomationParameterIds(
     resolve(
         snapshot.masterRuntimeKey,
         snapshot.masterPluginAutomation);
+    resolve(
+        snapshot.controlRoomRuntimeKey,
+        snapshot.controlRoomPluginAutomation);
 }
 
 void StudioAudioEngine::startPluginSnapshotRefreshLocked()
@@ -4058,7 +4134,13 @@ void StudioAudioEngine::mixSample(RenderSnapshot& snapshot,
     const auto masterGain = automatedVolumeGain(
         snapshot.masterVolumeAutomation,
         timelineSample,
-        snapshot.masterGain);
+        snapshot.masterGain)
+        * (automatedSwitch(
+               snapshot.masterPolarityAutomation,
+               timelineSample,
+               snapshot.masterPolarityInverted)
+               ? -1.0f
+               : 1.0f);
     const auto masterPan = automatedPan(
         snapshot.masterPanAutomation,
         timelineSample,
@@ -5639,7 +5721,8 @@ void StudioAudioEngine::runPluginRuntimeBuilder()
                 continue;
             }
 
-            auto bridge = std::make_unique<PluginBridgeClient>();
+            auto bridge = std::make_unique<PluginBridgeClient>(
+                pluginBridgeWorkerExecutable);
             const auto result = bridge->startPlugin(*request.description,
                                                     currentSampleRate(),
                                                     juce::jlimit(
@@ -6522,11 +6605,15 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
             {
                 if (!snapshot.masterVolumeAutomation.has_value()
                     && !snapshot.masterPanAutomation.has_value()
-                    && !snapshot.masterMuteAutomation.has_value())
+                    && !snapshot.masterMuteAutomation.has_value()
+                    && !snapshot.masterPolarityAutomation.has_value())
                 {
                     applyTrackGainAndPan(snapshot.masterBuffer,
                                          samplesThisBlock,
-                                         snapshot.masterGain,
+                                         snapshot.masterGain
+                                             * (snapshot.masterPolarityInverted
+                                                    ? -1.0f
+                                                    : 1.0f),
                                          snapshot.masterPan);
                 }
                 else
@@ -6546,7 +6633,13 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
                         const auto gain = automatedVolumeGain(
                             snapshot.masterVolumeAutomation,
                             absoluteSample,
-                            snapshot.masterGain);
+                            snapshot.masterGain)
+                            * (automatedSwitch(
+                                   snapshot.masterPolarityAutomation,
+                                   absoluteSample,
+                                   snapshot.masterPolarityInverted)
+                                   ? -1.0f
+                                   : 1.0f);
                         const auto pan = automatedPan(
                             snapshot.masterPanAutomation,
                             absoluteSample,
@@ -6569,7 +6662,7 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
 
             snapshot.controlRoomBuffer.clear(0, 0, samplesThisBlock);
             snapshot.controlRoomBuffer.clear(1, 0, samplesThisBlock);
-            if (snapshot.controlRoomEnabled && !snapshot.controlRoomMuted)
+            if (snapshot.controlRoomEnabled)
             {
                 snapshot.controlRoomBuffer.copyFrom(
                     0,
@@ -6601,15 +6694,93 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
                     }
                 }
                 processRuntimeChain(snapshot.controlRoomRuntimeKey,
-                                    snapshot.controlRoomBuffer);
-                applyTrackGainAndPan(
-                    snapshot.controlRoomBuffer,
-                    samplesThisBlock,
-                    snapshot.controlRoomGain
-                        * (snapshot.controlRoomDimmed
-                               ? snapshot.controlRoomDimGain
-                               : 1.0f),
-                    snapshot.controlRoomPan);
+                                    snapshot.controlRoomBuffer,
+                                    nullptr,
+                                    &snapshot.controlRoomPluginAutomation,
+                                    position);
+                if (!snapshot.controlRoomVolumeAutomation.has_value()
+                    && !snapshot.controlRoomPanAutomation.has_value()
+                    && !snapshot.controlRoomMuteAutomation.has_value()
+                    && !snapshot.controlRoomDimAutomation.has_value()
+                    && !snapshot.controlRoomPolarityAutomation.has_value())
+                {
+                    if (snapshot.controlRoomMuted)
+                        snapshot.controlRoomBuffer.clear();
+                    else
+                        applyTrackGainAndPan(
+                            snapshot.controlRoomBuffer,
+                            samplesThisBlock,
+                            snapshot.controlRoomGain
+                                * (snapshot.controlRoomDimmed
+                                       ? snapshot.controlRoomDimGain
+                                       : 1.0f)
+                                * (snapshot.controlRoomPolarityInverted
+                                       ? -1.0f
+                                       : 1.0f),
+                            snapshot.controlRoomPan);
+                }
+                else
+                {
+                    for (int sample = 0;
+                         sample < samplesThisBlock;
+                         ++sample)
+                    {
+                        const auto absoluteSample =
+                            position + sample;
+                        if (automatedSwitch(
+                                snapshot.controlRoomMuteAutomation,
+                                absoluteSample,
+                                snapshot.controlRoomMuted))
+                        {
+                            snapshot.controlRoomBuffer.setSample(
+                                0,
+                                sample,
+                                0.0f);
+                            snapshot.controlRoomBuffer.setSample(
+                                1,
+                                sample,
+                                0.0f);
+                            continue;
+                        }
+                        const auto dimmed = automatedSwitch(
+                            snapshot.controlRoomDimAutomation,
+                            absoluteSample,
+                            snapshot.controlRoomDimmed);
+                        const auto gain = automatedVolumeGain(
+                            snapshot.controlRoomVolumeAutomation,
+                            absoluteSample,
+                            snapshot.controlRoomGain)
+                            * (dimmed
+                                   ? snapshot.controlRoomDimGain
+                                   : 1.0f)
+                            * (automatedSwitch(
+                                   snapshot.controlRoomPolarityAutomation,
+                                   absoluteSample,
+                                   snapshot.controlRoomPolarityInverted)
+                                   ? -1.0f
+                                   : 1.0f);
+                        const auto pan = automatedPan(
+                            snapshot.controlRoomPanAutomation,
+                            absoluteSample,
+                            snapshot.controlRoomPan);
+                        snapshot.controlRoomBuffer.applyGain(
+                            0,
+                            sample,
+                            1,
+                            gain
+                                * (pan > 0.0f
+                                       ? 1.0f - pan
+                                       : 1.0f));
+                        snapshot.controlRoomBuffer.applyGain(
+                            1,
+                            sample,
+                            1,
+                            gain
+                                * (pan < 0.0f
+                                       ? 1.0f + pan
+                                       : 1.0f));
+                    }
+                }
             }
 
             snapshot.clickBuffer.clear(0, 0, samplesThisBlock);

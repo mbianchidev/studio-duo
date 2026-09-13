@@ -30,9 +30,27 @@ PluginParameterPanel::PluginParameterPanel(
             return;
         auto& descriptor = descriptors[static_cast<std::size_t>(
             parameter.getSelectedItemIndex())];
+        const auto previousValue = descriptor.value;
+        if (!gestureActive)
+            notify(onGestureStarted, previousValue);
         descriptor.value = static_cast<float>(value.getValue());
-        if (onValueChanged)
-            onValueChanged(id, descriptor.index, descriptor.value);
+        notify(onValueChanged, descriptor.value);
+        if (!gestureActive)
+            notify(onGestureEnded, descriptor.value);
+    };
+    value.onDragStart = [this]
+    {
+        gestureActive = true;
+        notify(
+            onGestureStarted,
+            static_cast<float>(value.getValue()));
+    };
+    value.onDragEnd = [this]
+    {
+        notify(
+            onGestureEnded,
+            static_cast<float>(value.getValue()));
+        gestureActive = false;
     };
     addAndMakeVisible(value);
 
@@ -44,6 +62,26 @@ PluginParameterPanel::PluginParameterPanel(
     if (!descriptors.empty())
         parameter.setSelectedId(1, juce::sendNotificationSync);
     setSize(440, 170);
+}
+
+void PluginParameterPanel::notify(
+    const ParameterCallback& callback,
+    float parameterValue)
+{
+    const auto index = parameter.getSelectedItemIndex();
+    if (!callback
+        || rebuilding
+        || index < 0
+        || index >= static_cast<int>(descriptors.size()))
+        return;
+    const auto& descriptor =
+        descriptors[static_cast<std::size_t>(index)];
+    callback(
+        id,
+        descriptor.id,
+        descriptor.name,
+        descriptor.index,
+        parameterValue);
 }
 
 void PluginParameterPanel::selectParameter()

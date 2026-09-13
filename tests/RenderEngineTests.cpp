@@ -130,6 +130,10 @@ void renderEngineTests()
 
     auto parityProject = studio::Project::createDefault();
     parityProject.metronomeEnabled = false;
+    parityProject.tempoChanges = {
+        { 0.0, 120.0, true },
+        { 0.02, 240.0, false }
+    };
     studio::AudioClip parityClip;
     parityClip.sourceFile = paritySource;
     parityClip.durationSeconds = 2048.0 / 48000.0;
@@ -152,12 +156,14 @@ void renderEngineTests()
     parityAutomation.target.type =
         studio::AutomationTargetType::trackVolume;
     parityAutomation.target.trackId = parityProject.tracks[0].id;
+    parityAutomation.timebase =
+        studio::AutomationTimebase::beats;
     parityAutomation.interpolation =
         studio::AutomationInterpolation::linear;
     parityAutomation.points = {
         { juce::Uuid().toString(), 0.0, 0.5 },
         { juce::Uuid().toString(),
-          parityClip.durationSeconds,
+          parityProject.beatsAt(parityClip.durationSeconds),
           1.0 }
     };
     parityProject.automationLanes.push_back(parityAutomation);

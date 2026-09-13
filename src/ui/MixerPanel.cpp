@@ -512,6 +512,9 @@ void MixerPanel::mouseDown(const juce::MouseEvent& event)
     const auto* track = tracks[static_cast<std::size_t>(index)];
     if (onTrackSelected)
         onTrackSelected(track->id);
+    if (track->type == TrackType::folder
+        || track->type == TrackType::midi)
+        return;
 
     const juce::Rectangle<int> strip(14 + index * (stripWidth + gap),
                                      34,
@@ -519,12 +522,19 @@ void MixerPanel::mouseDown(const juce::MouseEvent& event)
                                      getHeight() - 44);
     draggingVolumeTrack.clear();
     draggingPanTrack.clear();
-    if (event.position.y >= static_cast<float>(strip.getBottom() - 60))
+    if (track->type != TrackType::vca
+        && event.position.y
+            >= static_cast<float>(strip.getBottom() - 60))
     {
         draggingPanTrack = track->id;
         dragStartY = event.position.y;
         dragStartPan = track->pan;
         dragPreviewPan = track->pan;
+        if (onAutomationGestureStarted)
+            onAutomationGestureStarted(
+                track->id,
+                AutomationTargetType::trackPan,
+                (track->pan + 1.0f) * 0.5f);
         return;
     }
 
@@ -538,6 +548,11 @@ void MixerPanel::mouseDown(const juce::MouseEvent& event)
         dragStartVolume = track->volumeDecibels;
         dragPreviewVolume = track->volumeDecibels;
         dragFaderHeight = std::max(1, faderHeight);
+        if (onAutomationGestureStarted)
+            onAutomationGestureStarted(
+                track->id,
+                AutomationTargetType::trackVolume,
+                (track->volumeDecibels + 60.0f) / 72.0f);
     }
 }
 
@@ -616,7 +631,11 @@ void MixerPanel::mouseDoubleClick(const juce::MouseEvent& event)
         return;
     }
 
-    if (event.position.y >= static_cast<float>(strip.getBottom() - 60)
+    if (track->type != TrackType::vca
+        && track->type != TrackType::folder
+        && track->type != TrackType::midi
+        && event.position.y
+            >= static_cast<float>(strip.getBottom() - 60)
         && onPanChanged)
     {
         onPanChanged(track->id, 0.0f);
@@ -625,7 +644,9 @@ void MixerPanel::mouseDoubleClick(const juce::MouseEvent& event)
 
     const auto faderTop = strip.getY() + 46;
     const auto faderHeight = strip.getHeight() - 112;
-    if (event.position.y >= static_cast<float>(faderTop - 8)
+    if (track->type != TrackType::folder
+        && track->type != TrackType::midi
+        && event.position.y >= static_cast<float>(faderTop - 8)
         && event.position.y <= static_cast<float>(faderTop + faderHeight + 8)
         && onVolumeChanged)
         onVolumeChanged(track->id, 0.0f);

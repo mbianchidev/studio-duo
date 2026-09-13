@@ -53,6 +53,7 @@ struct AutomationTarget
     juce::String parameterId;
     int parameterIndex = -1;
 
+    bool operator==(const AutomationTarget& other) const noexcept;
     [[nodiscard]] juce::var toVar() const;
     static std::optional<AutomationTarget> fromVar(const juce::var& value,
                                                    juce::String& error);

@@ -16,6 +16,71 @@ bool hasMainAudioOutput(TrackType type)
         || type == TrackType::aux
         || type == TrackType::bus;
 }
+
+bool validateAutomationTarget(const Project& project,
+                              const AutomationTarget& target,
+                              juce::String& error)
+{
+    const auto* track = project.findTrack(target.trackId);
+    if (track == nullptr)
+    {
+        error = "The automation target track is unavailable.";
+        return false;
+    }
+    if (target.type == AutomationTargetType::vcaVolume
+        && track->type != TrackType::vca)
+    {
+        error = "VCA automation requires a VCA track.";
+        return false;
+    }
+    if (target.type == AutomationTargetType::controlRoomDim
+        && track->type != TrackType::controlRoom)
+    {
+        error = "Control-room dim automation requires a control-room track.";
+        return false;
+    }
+    if (target.type == AutomationTargetType::sendGain
+        || target.type == AutomationTargetType::sendPan
+        || target.type == AutomationTargetType::sendMute)
+    {
+        const auto* route = project.findRoutingConnection(
+            target.routeId);
+        if (route == nullptr
+            || route->sourceTrackId != target.trackId
+            || route->signalType != SignalType::audio
+            || route->kind == RouteKind::mainOutput
+            || route->kind == RouteKind::controlRoom)
+        {
+            error = "The automation target route is unavailable.";
+            return false;
+        }
+    }
+    if (target.type == AutomationTargetType::pluginParameter
+        || target.type == AutomationTargetType::deviceParameter)
+    {
+        const auto insert = std::find_if(
+            track->inserts.cbegin(),
+            track->inserts.cend(),
+            [&target](const auto& candidate)
+            {
+                return candidate.id == target.insertId;
+            });
+        if (insert == track->inserts.cend()
+            || (target.parameterId.isEmpty()
+                && target.parameterIndex < 0))
+        {
+            error = "The automation target insert or parameter is unavailable.";
+            return false;
+        }
+        if (target.type == AutomationTargetType::deviceParameter
+            && !insert->bundledDevice)
+        {
+            error = "Device automation requires a bundled device insert.";
+            return false;
+        }
+    }
+    return true;
+}
 }
 
 bool CommandStack::perform(std::unique_ptr<ProjectCommand> command,
@@ -1469,7 +1534,11 @@ bool SetAutomationLaneCommand::perform(Project& project,
     if (!AutomationLane::fromVar(
             newLane.toVar(),
             validationError)
-             .has_value())
+             .has_value()
+        || !validateAutomationTarget(
+            project,
+            newLane.target,
+            validationError))
     {
         error = validationError;
         return false;
@@ -1484,6 +1553,18 @@ bool SetAutomationLaneCommand::perform(Project& project,
     if (lane == project.automationLanes.end())
     {
         error = "The automation lane no longer exists.";
+        return false;
+    }
+    if (std::any_of(
+            project.automationLanes.cbegin(),
+            project.automationLanes.cend(),
+            [this](const auto& candidate)
+            {
+                return candidate.id != newLane.id
+                    && candidate.target == newLane.target;
+            }))
+    {
+        error = "An automation lane for the same target already exists.";
         return false;
     }
     *lane = newLane;
@@ -1522,19 +1603,23 @@ bool AddAutomationLaneCommand::perform(Project& project,
             project.automationLanes.cend(),
             [this](const auto& candidate)
             {
-                return candidate.id == lane.id;
+                return candidate.id == lane.id
+                    || candidate.target == lane.target;
             }))
     {
-        error = "An automation lane with the same ID already exists.";
+        error = "An automation lane with the same ID or target already exists.";
         return false;
     }
     juce::String validationError;
     if (!AutomationLane::fromVar(lane.toVar(), validationError).has_value()
-        || project.findTrack(lane.target.trackId) == nullptr)
+        || !validateAutomationTarget(
+            project,
+            lane.target,
+            validationError))
     {
         error = validationError.isNotEmpty()
             ? validationError
-            : "The automation target track is unavailable.";
+            : "The automation target is unavailable.";
         return false;
     }
     insertionIndex = std::min(
@@ -1733,12 +1818,14 @@ bool SetTrackOutputCommand::perform(Project& project, juce::String& error)
             [this](const auto& connection)
             {
                 return connection.kind == RouteKind::mainOutput
+                    && connection.signalType == SignalType::audio
                     && connection.sourceTrackId == trackId;
             });
         if (route != project.routingConnections.cend())
             oldRoute = *route;
         newRoute = oldRoute.value_or(RoutingConnection {});
         newRoute.name = "Main output";
+        newRoute.signalType = SignalType::audio;
         newRoute.kind = RouteKind::mainOutput;
         newRoute.tap = RouteTap::postFader;
         newRoute.sourceTrackId = trackId;
@@ -2513,7 +2600,8 @@ bool RemoveTrackCommand::perform(Project& project, juce::String& error)
             continue;
         }
 
-        if (iterator->kind == RouteKind::mainOutput)
+        if (iterator->kind == RouteKind::mainOutput
+            && iterator->signalType == SignalType::audio)
         {
             iterator->destination.type = RouteEndpointType::track;
             iterator->destination.trackId = masterId;
@@ -2526,7 +2614,10 @@ bool RemoveTrackCommand::perform(Project& project, juce::String& error)
         }
     }
     if (!project.validateRoutingGraph(error))
+    {
+        undo(project);
         return false;
+    }
     project.automationLanes.erase(
         std::remove_if(
             project.automationLanes.begin(),
@@ -3175,11 +3266,22 @@ bool RecallToneSnapshotCommand::perform(Project& project, juce::String& error)
         capturedOriginal = true;
     }
 
+    const auto automatedReturnVolume = std::any_of(
+        snapshot.automation.cbegin(),
+        snapshot.automation.cend(),
+        [this](const auto& lane)
+        {
+            return lane.enabled
+                && lane.target.trackId == snapshot.returnTrackId
+                && lane.target.type
+                    == AutomationTargetType::trackVolume;
+        });
     returnTrack->volumeDecibels = juce::jlimit(
         -60.0f,
         12.0f,
         snapshot.returnVolumeDecibels
             + (mode == ToneSnapshotRecallMode::levelMatched
+                   && !automatedReturnVolume
                    ? snapshot.comparisonGainDecibels
                    : 0.0f));
     returnTrack->pan = snapshot.returnPan;
@@ -3216,6 +3318,21 @@ bool RecallToneSnapshotCommand::perform(Project& project, juce::String& error)
         project.automationLanes.end(),
         snapshot.automation.begin(),
         snapshot.automation.end());
+    if (mode == ToneSnapshotRecallMode::levelMatched
+        && automatedReturnVolume)
+    {
+        for (auto& lane : project.automationLanes)
+        {
+            if (lane.enabled
+                && lane.target.trackId == snapshot.returnTrackId
+                && lane.target.type
+                    == AutomationTargetType::trackVolume)
+            {
+                lane.trimOffset +=
+                    snapshot.comparisonGainDecibels / 72.0;
+            }
+        }
+    }
     route->activeSnapshotId = snapshot.id;
     if (!project.validateRoutingGraph(error))
     {

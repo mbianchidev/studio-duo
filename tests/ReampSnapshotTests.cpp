@@ -49,6 +49,17 @@ void reampSnapshotTests()
         0.5
     });
     project.automationLanes.push_back(sourceAutomation);
+    studio::AutomationLane returnAutomation;
+    returnAutomation.name = "Tone volume";
+    returnAutomation.target.type =
+        studio::AutomationTargetType::trackVolume;
+    returnAutomation.target.trackId = returnTrack.id;
+    returnAutomation.points.push_back({
+        juce::Uuid().toString(),
+        0.0,
+        0.5
+    });
+    project.automationLanes.push_back(returnAutomation);
 
     juce::String error;
     const auto snapshot = studio::ReampSnapshotService::capture(
@@ -109,9 +120,23 @@ void reampSnapshotTests()
                project,
                error),
            error.toRawUTF8());
-    expect(std::abs(returnTrack.volumeDecibels + 0.5f) < 0.0001f
-               && returnTrack.inserts.front().stateHash == "state-a",
-           "Level-matched tone recall applies the stored comparison trim.");
+    const auto matchedReturnLane = std::find_if(
+        project.automationLanes.cbegin(),
+        project.automationLanes.cend(),
+        [&returnTrack](const auto& lane)
+        {
+            return lane.target.trackId == returnTrack.id
+                && lane.target.type
+                    == studio::AutomationTargetType::trackVolume;
+        });
+    expect(std::abs(returnTrack.volumeDecibels + 3.0f) < 0.0001f
+               && returnTrack.inserts.front().stateHash == "state-a"
+               && matchedReturnLane != project.automationLanes.cend()
+               && std::abs(
+                      matchedReturnLane->trimOffset
+                      - 2.5 / 72.0)
+                      < 0.0001,
+           "Level-matched tone recall trims automated return faders.");
     expect(studio::ReampSnapshotService::staleReason(
                project,
                matchedSnapshot)
@@ -129,6 +154,18 @@ void reampSnapshotTests()
            error.toRawUTF8());
     expect(std::abs(returnTrack.volumeDecibels + 3.0f) < 0.0001f,
            "Render recall retains the captured level without comparison trim.");
+    const auto rawReturnLane = std::find_if(
+        project.automationLanes.cbegin(),
+        project.automationLanes.cend(),
+        [&returnTrack](const auto& lane)
+        {
+            return lane.target.trackId == returnTrack.id
+                && lane.target.type
+                    == studio::AutomationTargetType::trackVolume;
+        });
+    expect(rawReturnLane != project.automationLanes.cend()
+               && std::abs(rawReturnLane->trimOffset) < 0.0001,
+           "Raw render recall does not apply the comparison trim.");
     expect(studio::ReampSnapshotService::staleReason(
                project,
                matchedSnapshot)

@@ -22,6 +22,9 @@ public:
 
     std::function<void(const juce::String&)> onTrackSelected;
     std::function<void(const juce::String&, juce::Rectangle<int>)> onEditTrack;
+    std::function<void(const juce::String&,
+                       AutomationTargetType,
+                       float)> onAutomationGestureStarted;
     std::function<void(const juce::String&, float)> onVolumeChanged;
     std::function<void(const juce::String&, float)> onPanChanged;
     std::function<void(const juce::String&, const juce::String&)> onPluginOpen;

@@ -54,6 +54,24 @@ private:
         juce::File file;
     };
 
+    struct ActiveAutomationGesture
+    {
+        AutomationTarget target;
+        juce::String laneName;
+        double startSeconds = 0.0;
+        double startValue = 0.0;
+    };
+
+    struct AutomationPreview
+    {
+        AutomationTarget target;
+        juce::String laneName;
+        double startSeconds = 0.0;
+        double endSeconds = 0.0;
+        double startValue = 0.0;
+        double endValue = 0.0;
+    };
+
     void timerCallback() override;
     bool keyPressed(const juce::KeyPress& key) override;
     bool keyPressed(const juce::KeyPress& key, juce::Component*) override;
@@ -176,8 +194,21 @@ private:
     void changeTransportState(const std::function<void(ProjectTransportState&)>& change);
     void changeEditGroups(const std::function<void(std::vector<EditGroup>&)>& change);
     void changeReampRoutes(const std::function<void(std::vector<ReampRoute>&)>& change);
-    void recordTrackAutomation(AutomationTargetType type,
-                               double normalizedValue);
+    void beginAutomationGesture(AutomationTarget target,
+                                juce::String laneName,
+                                double normalizedValue);
+    void endAutomationGesture(const AutomationTarget& target,
+                              juce::String laneName,
+                              double normalizedValue);
+    void commitAutomationPreview();
+    void recordAutomationGesture(const AutomationTarget& target,
+                                 juce::String laneName,
+                                 double startSeconds,
+                                 double endSeconds,
+                                 double startValue,
+                                 double endValue,
+                                 std::optional<AutomationMode> modeOverride =
+                                     std::nullopt);
     [[nodiscard]] LinkedClipSelection linkedClipsAt(
         const juce::String& clipId,
         double seconds) const;
@@ -199,6 +230,8 @@ private:
     CommandStack commandStack;
     juce::File projectPackage;
     std::vector<ActiveRecordingTarget> activeRecordingTargets;
+    std::optional<ActiveAutomationGesture> activeAutomationGesture;
+    std::optional<AutomationPreview> pendingAutomationPreview;
     RecordingPlan activeRecordingPlan;
     double recordingStartSeconds = 0.0;
     juce::String selectedTrackId;
@@ -216,6 +249,8 @@ private:
     bool updatingInputControls = false;
     bool updatingOutputControls = false;
     bool updatingTrackName = false;
+    bool inspectorVolumeGestureActive = false;
+    bool inspectorPanGestureActive = false;
     bool tempoEditActive = false;
     ProjectTransportState tempoEditStart;
     juce::String inputConfigurationSignature;

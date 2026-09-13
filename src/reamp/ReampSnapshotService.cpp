@@ -140,6 +140,18 @@ juce::String ReampSnapshotService::staleReason(
         });
     const auto* returnTrack = project.findTrack(
         snapshot.returnTrackId);
+    const auto snapshotVolumeLane = std::find_if(
+        snapshot.automation.cbegin(),
+        snapshot.automation.cend(),
+        [&snapshot](const auto& lane)
+        {
+            return lane.enabled
+                && lane.target.trackId == snapshot.returnTrackId
+                && lane.target.type
+                    == AutomationTargetType::trackVolume;
+        });
+    const auto automatedReturnVolume =
+        snapshotVolumeLane != snapshot.automation.cend();
     const auto matchedLevel = juce::jlimit(
         -60.0f,
         12.0f,
@@ -147,18 +159,63 @@ juce::String ReampSnapshotService::staleReason(
             + snapshot.comparisonGainDecibels);
     if (route != project.reampRoutes.cend()
         && route->activeSnapshotId == snapshot.id
-        && returnTrack != nullptr
-        && std::abs(returnTrack->volumeDecibels - matchedLevel)
-            < 0.0001f)
+        && returnTrack != nullptr)
     {
-        auto comparisonProject = project;
-        comparisonProject.findTrack(snapshot.returnTrackId)
-            ->volumeDecibels =
-            snapshot.returnVolumeDecibels;
-        if (chainFingerprint(comparisonProject, snapshot.reampRouteId)
-            != snapshot.chainFingerprint)
-            return "Tone chain changed";
-        return {};
+        if (automatedReturnVolume
+            && std::abs(
+                   returnTrack->volumeDecibels
+                   - snapshot.returnVolumeDecibels)
+                < 0.0001f)
+        {
+            const auto activeLane = std::find_if(
+                project.automationLanes.cbegin(),
+                project.automationLanes.cend(),
+                [snapshotVolumeLane](const auto& lane)
+                {
+                    return lane.id == snapshotVolumeLane->id;
+                });
+            const auto matchedTrim =
+                snapshotVolumeLane->trimOffset
+                + snapshot.comparisonGainDecibels / 72.0;
+            if (activeLane != project.automationLanes.cend()
+                && std::abs(activeLane->trimOffset - matchedTrim)
+                    < 0.0001)
+            {
+                auto comparisonProject = project;
+                const auto normalizedLane = std::find_if(
+                    comparisonProject.automationLanes.begin(),
+                    comparisonProject.automationLanes.end(),
+                    [snapshotVolumeLane](const auto& lane)
+                    {
+                        return lane.id == snapshotVolumeLane->id;
+                    });
+                normalizedLane->trimOffset =
+                    snapshotVolumeLane->trimOffset;
+                if (chainFingerprint(
+                        comparisonProject,
+                        snapshot.reampRouteId)
+                    != snapshot.chainFingerprint)
+                    return "Tone chain changed";
+                return {};
+            }
+        }
+        else if (!automatedReturnVolume
+                 && std::abs(
+                        returnTrack->volumeDecibels
+                        - matchedLevel)
+                     < 0.0001f)
+        {
+            auto comparisonProject = project;
+            comparisonProject.findTrack(snapshot.returnTrackId)
+                ->volumeDecibels =
+                snapshot.returnVolumeDecibels;
+            if (chainFingerprint(
+                    comparisonProject,
+                    snapshot.reampRouteId)
+                != snapshot.chainFingerprint)
+                return "Tone chain changed";
+            return {};
+        }
     }
     if (chainFingerprint(project, snapshot.reampRouteId)
         != snapshot.chainFingerprint)

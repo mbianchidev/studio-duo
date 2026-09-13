@@ -109,6 +109,63 @@ void pluginRecoveryTests()
     missing.missing = true;
     project.tracks.front().inserts.push_back(missing);
 
+    studio::RoutingConnection missingSidechain;
+    missingSidechain.name = "Missing sidechain";
+    missingSidechain.kind = studio::RouteKind::sidechain;
+    missingSidechain.sourceTrackId = project.tracks[1].id;
+    missingSidechain.destination.type =
+        studio::RouteEndpointType::pluginSidechain;
+    missingSidechain.destination.trackId =
+        project.tracks.front().id;
+    missingSidechain.destination.insertId = missing.id;
+    project.routingConnections.push_back(missingSidechain);
+    studio::AutomationLane missingAutomation;
+    missingAutomation.name = "Missing gain";
+    missingAutomation.target.type =
+        studio::AutomationTargetType::pluginParameter;
+    missingAutomation.target.trackId =
+        project.tracks.front().id;
+    missingAutomation.target.insertId = missing.id;
+    missingAutomation.target.parameterId = "gain";
+    missingAutomation.target.parameterIndex = 0;
+    missingAutomation.points.push_back({
+        juce::Uuid().toString(),
+        0.0,
+        0.5
+    });
+    project.automationLanes.push_back(missingAutomation);
+    expect(studio::ProjectFile::save(project, root).wasOk(),
+           "Projects with missing plugins can be saved.");
+    const auto restoredProject = studio::ProjectFile::load(
+        root,
+        error);
+    const auto* restoredTrack = restoredProject.has_value()
+        ? restoredProject->findTrack(project.tracks.front().id)
+        : nullptr;
+    juce::MemoryBlock persistedState;
+    expect(restoredTrack != nullptr
+               && restoredTrack->inserts.size() == 1
+               && restoredTrack->inserts.front().id == missing.id
+               && restoredTrack->inserts.front().missing
+               && restoredTrack->inserts.front().stateFile
+                      == missing.stateFile
+               && restoredProject->routingConnections.back()
+                      .destination.insertId
+                      == missing.id
+               && restoredProject->automationLanes.front()
+                      .target.insertId
+                      == missing.id
+               && studio::PluginStateStore::load(
+                   root,
+                   {
+                       restoredTrack->inserts.front().stateFile,
+                       restoredTrack->inserts.front().stateHash
+                   },
+                   persistedState,
+                   error)
+               && persistedState == state,
+           "Missing plugins preserve IDs, routing, automation, and opaque state across save and reopen.");
+
     studio::PluginInsert replacement;
     replacement.pluginIdentifier = "replacement";
     replacement.name = "Replacement";

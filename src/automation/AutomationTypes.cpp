@@ -43,6 +43,18 @@ bool booleanProperty(const juce::DynamicObject& object,
 }
 }
 
+bool AutomationTarget::operator==(
+    const AutomationTarget& other) const noexcept
+{
+    return type == other.type
+        && trackId == other.trackId
+        && routeId == other.routeId
+        && insertId == other.insertId
+        && parameterId == other.parameterId
+        && (parameterId.isNotEmpty()
+            || parameterIndex == other.parameterIndex);
+}
+
 juce::var AutomationTarget::toVar() const
 {
     auto object = std::make_unique<juce::DynamicObject>();

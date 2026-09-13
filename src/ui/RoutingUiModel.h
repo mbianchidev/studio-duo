@@ -22,6 +22,9 @@ public:
     static std::vector<RoutingDestinationItem> sidechainDestinations(
         const Project& project,
         const juce::String& sourceTrackId);
+    static std::vector<RoutingDestinationItem> midiDestinations(
+        const Project& project,
+        const juce::String& sourceTrackId);
     static juce::String summary(const Project& project,
                                 const RoutingConnection& connection);
 };

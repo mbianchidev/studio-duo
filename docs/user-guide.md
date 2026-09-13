@@ -221,6 +221,11 @@ direct hardware outputs. Click a route to change tap, level, mute, enablement,
 or remove it. Aux and bus tracks sum every incoming path. The graph rejects
 cycles across main routes, sends, and sidechains.
 
+**+ TRACK** also creates instrument and MIDI tracks. MIDI and instrument tracks
+can add independent MIDI destinations in the routing panel without replacing an
+instrument track's audio output. MIDI feedback cycles are rejected before the
+route is added. MIDI clip recording and editing remain Phase 4 work.
+
 **TRACK** in the routing panel changes mono/stereo layout, polarity, solo-safe
 state, folder placement, and VCA assignment. Folder mute and solo scope their
 children without hiding summing; use a bus for audio summing. VCAs control the
@@ -241,13 +246,18 @@ Choose **AUTOMATION** to open the lane editor for the selected track.
 - Arm writing with **WRITE ARM**.
 - Add lanes for volume, pan, mute, polarity, sends, bundled devices, or
   automatable plugin parameters.
-- Choose seconds or beat time, and linear or step interpolation.
+- Choose seconds or beat time, and linear or step interpolation. Changing an
+  existing lane's timebase preserves its timeline positions.
 - Add or remove points at the playhead with a normalized value.
 
 Beat lanes follow tempo ramps and abrupt changes. Playback schedules mixer
-changes and plugin events at exact sample offsets. Mixer fader and pan gestures
-write the armed track according to its selected mode. Preview remains
-non-destructive until a lane edit is committed.
+changes and plugin events at exact sample offsets. Mixer fader, pan, mute,
+polarity, send, bundled-device, and plugin-parameter gestures write the armed
+track according to its selected mode. Touch returns to the existing lane after
+release; latch holds until the next existing point; trim applies a relative
+offset. Preview remains non-destructive until **COMMIT PREVIEW** writes the
+captured gesture. Master and control-room volume, pan, mute, polarity, dim, and
+processor automation use the same sample-accurate path.
 
 ## Use plugins
 

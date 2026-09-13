@@ -115,7 +115,8 @@ public:
         bool preservePreviousState = false;
     };
 
-    StudioAudioEngine();
+    explicit StudioAudioEngine(
+        juce::File pluginBridgeWorker = {});
     ~StudioAudioEngine() override;
 
     juce::Result initialise(juce::AudioDeviceManager& manager);
@@ -143,6 +144,8 @@ public:
     [[nodiscard]] juce::AudioBuffer<float>
         renderActiveBlockForTesting(int samples, int outputChannels = 2);
     void processActiveBlockForTesting(int samples);
+    bool simulatePluginCrashForTesting(
+        const juce::String& insertId);
     [[nodiscard]] static std::vector<float>
         delayTransitionForTesting(
             int previousDelay,
@@ -377,9 +380,12 @@ private:
         float masterGain = 1.0f;
         float masterPan = 0.0f;
         bool masterAudible = true;
+        bool masterPolarityInverted = false;
         std::optional<CompiledAutomationLane> masterVolumeAutomation;
         std::optional<CompiledAutomationLane> masterPanAutomation;
         std::optional<CompiledAutomationLane> masterMuteAutomation;
+        std::optional<CompiledAutomationLane>
+            masterPolarityAutomation;
         std::vector<RenderSource::PluginAutomation> masterPluginAutomation;
         bool controlRoomEnabled = false;
         std::uint64_t controlRoomRuntimeKey = 0;
@@ -390,6 +396,19 @@ private:
         bool controlRoomDimmed = false;
         float controlRoomDimGain = 1.0f;
         bool controlRoomMono = false;
+        bool controlRoomPolarityInverted = false;
+        std::optional<CompiledAutomationLane>
+            controlRoomVolumeAutomation;
+        std::optional<CompiledAutomationLane>
+            controlRoomPanAutomation;
+        std::optional<CompiledAutomationLane>
+            controlRoomMuteAutomation;
+        std::optional<CompiledAutomationLane>
+            controlRoomDimAutomation;
+        std::optional<CompiledAutomationLane>
+            controlRoomPolarityAutomation;
+        std::vector<RenderSource::PluginAutomation>
+            controlRoomPluginAutomation;
         std::vector<HardwareSend> hardwareSends;
         std::vector<RenderTrack> tracks;
         juce::AudioBuffer<float> masterBuffer {
@@ -629,6 +648,7 @@ private:
 
     juce::AudioDeviceManager* deviceManager = nullptr;
     juce::AudioFormatManager formatManager;
+    juce::File pluginBridgeWorkerExecutable;
     std::array<RenderSnapshot, 3> snapshots;
     std::atomic<std::uint64_t> activeRenderPair { 0 };
     std::array<std::atomic<std::uint64_t>, 3> snapshotGenerations {};

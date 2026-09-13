@@ -87,6 +87,13 @@ AutomationLane AutomationRecorder::applyGesture(
     }
 
     const auto returnValue = valueAt(lane, gesture.endPosition);
+    const auto resumePoint = std::find_if(
+        lane.points.cbegin(),
+        lane.points.cend(),
+        [&gesture](const auto& point)
+        {
+            return point.position > gesture.endPosition;
+        });
     result.points.erase(
         std::remove_if(
             result.points.begin(),
@@ -105,7 +112,42 @@ AutomationLane AutomationRecorder::applyGesture(
                  gesture.endPosition + 0.000001,
                  returnValue);
     }
+    else if (mode == AutomationMode::latch
+             && resumePoint != lane.points.cend())
+    {
+        addPoint(
+            result,
+            std::max(
+                gesture.endPosition,
+                resumePoint->position - 0.000001),
+            gesture.endValue);
+    }
     normalize(result);
     return result;
+}
+
+std::optional<AutomationLane> AutomationRecorder::writeGesture(
+    const AutomationLane* lane,
+    AutomationTarget target,
+    juce::String name,
+    AutomationMode mode,
+    AutomationGesture gesture)
+{
+    if (mode == AutomationMode::read
+        || mode == AutomationMode::preview)
+        return std::nullopt;
+
+    if (lane != nullptr)
+        return applyGesture(*lane, mode, gesture);
+
+    AutomationLane created;
+    created.name = std::move(name);
+    created.target = std::move(target);
+    created.points.push_back({
+        juce::Uuid().toString(),
+        std::max(0.0, gesture.startPosition),
+        gesture.startValue
+    });
+    return applyGesture(created, mode, gesture);
 }
 }
