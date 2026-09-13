@@ -2498,7 +2498,7 @@ void MainComponent::showAudioSettings()
 
     juce::DialogWindow::LaunchOptions options;
     options.content.setOwned(selector.release());
-    options.dialogTitle = "Studio Duo audio I/O";
+    options.dialogTitle = "Studio Duo audio and MIDI I/O";
     options.dialogBackgroundColour = juce::Colour(StudioColours::panel);
     options.escapeKeyTriggersCloseButton = true;
     options.useNativeTitleBar = true;
