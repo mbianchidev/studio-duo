@@ -177,6 +177,13 @@ target_sources(
         src/plugin_host/PluginScanWorker.h
         src/render/RenderEngine.cpp
         src/render/RenderEngine.h
+        src/update/UpdateInstaller.h
+        src/update/UpdateManifest.cpp
+        src/update/UpdateManifest.h
+        src/update/UpdateService.cpp
+        src/update/UpdateService.h
+        src/update/UpdateSettingsComponent.cpp
+        src/update/UpdateSettingsComponent.h
         src/ui/MainComponent.cpp
         src/ui/MainComponent.h
         src/ui/MainWindowSizing.cpp
@@ -206,6 +213,19 @@ if(APPLE)
         PRIVATE
             src/platform/ApplicationIcon.h
             src/platform/MacApplicationIcon.mm
+            src/update/MacUpdateInstaller.mm
+    )
+elseif(WIN32)
+    target_sources(
+        StudioDuo
+        PRIVATE
+            src/update/WindowsUpdateInstaller.cpp
+    )
+else()
+    target_sources(
+        StudioDuo
+        PRIVATE
+            src/update/UnsupportedUpdateInstaller.cpp
     )
 endif()
 
@@ -228,6 +248,7 @@ target_compile_definitions(
         JUCE_PLUGINHOST_ARA=1
         JUCE_MODAL_LOOPS_PERMITTED=1
         STUDIO_DUO_VERSION="${PROJECT_VERSION}"
+        STUDIO_DUO_UPDATE_MANIFEST_URL="https://github.com/mbianchidev/studio-duo/releases/latest/download/update-manifest.json"
 )
 
 if(WIN32)
@@ -401,6 +422,7 @@ if(STUDIO_DUO_BUILD_TESTS)
             tests/ProjectMigrationTests.cpp
             tests/WindowSizingTests.cpp
             tests/TransportTests.cpp
+            tests/UpdateTests.cpp
             src/ui/RoutingUiModel.cpp
             src/ui/RoutingUiModel.h
             src/ui/MainWindowSizing.cpp
@@ -440,6 +462,8 @@ if(STUDIO_DUO_BUILD_TESTS)
             src/devices/UtilityDeviceProcessor.h
             src/render/RenderEngine.cpp
             src/render/RenderEngine.h
+            src/update/UpdateManifest.cpp
+            src/update/UpdateManifest.h
             ${STUDIO_DUO_MODEL_SOURCES}
     )
 

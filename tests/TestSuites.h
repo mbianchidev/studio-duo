@@ -15,3 +15,4 @@ void pluginCompatibilityTests();
 void projectMigrationTests();
 void windowSizingTests();
 void transportTests();
+void updateTests();

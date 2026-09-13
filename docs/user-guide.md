@@ -36,6 +36,8 @@ exchange, and mastering remain later roadmap phases.
   plugin-inclusive rendering, batch reports, and Scream Forge validation
 - Versioned `.studioduo` packages, generation saves, and recovery points
 - Deterministic 48 kHz, 24-bit stereo WAV export when active plugins are absent
+- In-app update checks, verified background downloads, and user-controlled
+  restart installation on macOS and Windows
 
 ## Essential controls
 
@@ -60,7 +62,8 @@ trackpad scrolling and pinch gestures zoom the same view.
 
 ## Start a session
 
-1. Open **I/O** and enable the required hardware inputs and outputs.
+1. Open **SETTINGS** > **Audio / MIDI** and enable the required hardware inputs
+   and outputs.
 2. Add audio tracks with **+ AUDIO TRACK**, or import WAV, AIFF, FLAC, or MP3
    files with **IMPORT AUDIO**.
 3. Select a track to configure its input, mono or stereo capture, monitoring,
@@ -70,13 +73,14 @@ trackpad scrolling and pinch gestures zoom the same view.
 
 Studio Duo restores the last working audio device shortly after its window
 appears. On macOS, the system may request microphone access at that point. Use
-**I/O** to enable inputs or change the active device. On the first Windows
-launch, Studio Duo prefers a native ASIO driver over generic compatibility
-wrappers, enables every hardware input, and uses the driver's current sample
-rate and default buffer size. If an installed ASIO driver fails to start, Studio
-Duo leaves audio disabled and reports the driver error instead of silently
-opening a different backend; choose another driver in **I/O**. WASAPI remains
-available when no ASIO driver is installed or when selected manually.
+**SETTINGS** > **Audio / MIDI** to enable inputs or change the active device. On
+the first Windows launch, Studio Duo prefers a native ASIO driver over generic
+compatibility wrappers, enables every hardware input, and uses the driver's
+current sample rate and default buffer size. If an installed ASIO driver fails
+to start, Studio Duo leaves audio disabled and reports the driver error instead
+of silently opening a different backend; choose another driver in
+**SETTINGS** > **Audio / MIDI**. WASAPI remains available when no ASIO driver is
+installed or when selected manually.
 
 After a project has been saved once, each edit refreshes its recovery point.
 Opening the package restores newer unsaved recovery state and marks the project
@@ -227,10 +231,11 @@ or remove it. Aux and bus tracks sum every incoming path. The graph rejects
 cycles across main routes, sends, and sidechains.
 
 **+ TRACK** also creates instrument and MIDI tracks. Enable a MIDI input in
-**I/O**, then arm a MIDI or instrument track with **R** to receive it while the
-transport is running or stopped. MIDI and instrument tracks can add independent
-MIDI destinations without replacing an instrument track's audio output. MIDI
-track inserts process events before they are sent downstream; standard and CLAP
+**SETTINGS** > **Audio / MIDI**, then arm a MIDI or instrument track with **R**
+to receive it while the transport is running or stopped. MIDI and instrument
+tracks can add independent MIDI destinations without replacing an instrument
+track's audio output. MIDI track inserts process events before they are sent
+downstream; standard and CLAP
 events cross sandbox workers with their sample offsets intact. MIDI feedback
 cycles are rejected before the route is added. MIDI clip recording and editing
 remain Phase 4 work.
@@ -371,6 +376,27 @@ Stereo WAV export is 48 kHz and 24-bit. Projects without processors use the
 fast deterministic graph. Bundled and trusted processors render offline;
 sandboxed third-party processors use the same one-block pipeline in a real-time
 fallback so processing is never silently omitted.
+
+## Update Studio Duo
+
+Studio Duo checks the official release feed once shortly after launch. When a
+new version is available, the app prompts without interrupting the current
+project. Open **SETTINGS** > **Updates** to check again, download manually, or
+change **Download updates automatically**. Automatic downloads are enabled by
+default.
+
+Every package is downloaded inside the Studio Duo application-data directory
+and must match the release manifest's filename, byte size, and SHA-256 checksum.
+The current app keeps running after the download. Choose **Restart and Update**
+only when convenient; Studio Duo then quits, installs the staged version, and
+reopens.
+
+On macOS, the updater accepts the project's normal ad-hoc-signed application
+bundle and does not require notarization or an Apple update-signing key. The
+installed `.app` and its parent folder must be writable by the current user. On
+Windows, the updater runs the release installer silently and uses its existing
+upgrade identity; it adds no updater-specific certificate, key, service, or
+background process.
 
 ## Logs and diagnostics
 

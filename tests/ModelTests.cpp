@@ -1591,6 +1591,7 @@ int main()
     pluginCompatibilityTests();
     projectMigrationTests();
     windowSizingTests();
+    updateTests();
 
     if (failures == 0)
     {

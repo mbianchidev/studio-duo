@@ -37,7 +37,7 @@ jobs:
           printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
 
   macos:
-    name: Build macOS DMG
+    name: Build macOS packages
     needs: validate
     runs-on: macos-latest
     timeout-minutes: 120
@@ -64,7 +64,7 @@ jobs:
       - name: Test
         run: ctest --test-dir build --build-config Release --output-on-failure
 
-      - name: Package DMG
+      - name: Package macOS release
         shell: bash
         env:
           VERSION: ${{ needs.validate.outputs.version }}
@@ -73,8 +73,12 @@ jobs:
           app="build/StudioDuo_artefacts/Release/Studio Duo.app"
           staging="$RUNNER_TEMP/Studio Duo"
           output="Studio-Duo-${VERSION}-macOS-universal.dmg"
+          update_output="Studio-Duo-${VERSION}-macOS-universal.zip"
 
           test -d "$app"
+          ditto -c -k --sequesterRsrc --keepParent \
+            "$app" \
+            "$update_output"
           rm -rf "$staging"
           mkdir -p "$staging"
           ditto "$app" "$staging/Studio Duo.app"
@@ -90,7 +94,9 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: macos-release
-          path: Studio-Duo-${{ needs.validate.outputs.version }}-macOS-universal.dmg
+          path: |
+            Studio-Duo-${{ needs.validate.outputs.version }}-macOS-universal.dmg
+            Studio-Duo-${{ needs.validate.outputs.version }}-macOS-universal.zip
           if-no-files-found: error
           retention-days: 7
 
@@ -166,6 +172,60 @@ jobs:
       - name: Create checksums
         working-directory: dist
         run: sha256sum Studio-Duo-* > SHA256SUMS.txt
+
+      - name: Create update manifest
+        working-directory: dist
+        shell: bash
+        env:
+          REPOSITORY: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+          mac_asset="Studio-Duo-${VERSION}-macOS-universal.zip"
+          windows_asset="Studio-Duo-${VERSION}-Windows-x64-Setup.exe"
+          test -f "$mac_asset"
+          test -f "$windows_asset"
+
+          mac_sha="$(sha256sum "$mac_asset" | cut -d ' ' -f 1)"
+          windows_sha="$(sha256sum "$windows_asset" | cut -d ' ' -f 1)"
+          mac_size="$(stat -c '%s' "$mac_asset")"
+          windows_size="$(stat -c '%s' "$windows_asset")"
+          published_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          release_base="https://github.com/${REPOSITORY}/releases"
+
+          jq -n \
+            --arg version "$VERSION" \
+            --arg publishedAt "$published_at" \
+            --arg releaseNotesUrl "${release_base}/tag/${TAG}" \
+            --arg macUrl "${release_base}/download/${TAG}/${mac_asset}" \
+            --arg macFileName "$mac_asset" \
+            --arg macSha256 "$mac_sha" \
+            --argjson macSizeBytes "$mac_size" \
+            --arg windowsUrl "${release_base}/download/${TAG}/${windows_asset}" \
+            --arg windowsFileName "$windows_asset" \
+            --arg windowsSha256 "$windows_sha" \
+            --argjson windowsSizeBytes "$windows_size" \
+            '{
+              schemaVersion: 1,
+              version: $version,
+              publishedAt: $publishedAt,
+              releaseNotesUrl: $releaseNotesUrl,
+              platforms: {
+                macos: {
+                  url: $macUrl,
+                  fileName: $macFileName,
+                  sha256: $macSha256,
+                  sizeBytes: $macSizeBytes
+                },
+                windows: {
+                  url: $windowsUrl,
+                  fileName: $windowsFileName,
+                  sha256: $windowsSha256,
+                  sizeBytes: $windowsSizeBytes
+                }
+              }
+            }' > update-manifest.json
 
       - name: Publish release
         shell: bash

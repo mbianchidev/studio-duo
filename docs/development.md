@@ -34,7 +34,7 @@ ctest --test-dir build --build-config Release --output-on-failure
 
 1. Connect an interface with at least two inputs, build Studio Duo, and save a
    new project so recordings are written below its `media/` directory.
-2. Open **I/O** and enable both input channels.
+2. Open **SETTINGS** > **Audio / MIDI** and enable both input channels.
 3. Select two audio parent tracks. Assign different mono inputs in each track's
    inspector and arm both tracks with **R**.
 4. Press **REC**, send signal to both inputs, then press **STOP**.
@@ -290,10 +290,11 @@ context, return routing, and return media. Snapshot recall can apply the
 persisted gated-RMS comparison trim without changing raw batch-render levels.
 
 To test hardware calibration, physically route the configured reamp output back
-to the configured return input, enable both channels in **I/O**, choose
-**Calibrate round-trip latency**, and confirm a positive sample count appears.
-Record a sharp DI transient through the path with pre-roll longer than the
-reported latency; the DI and returned transient should align after capture.
+to the configured return input, enable both channels in
+**SETTINGS** > **Audio / MIDI**, choose **Calibrate round-trip latency**, and
+confirm a positive sample count appears. Record a sharp DI transient through
+the path with pre-roll longer than the reported latency; the DI and returned
+transient should align after capture.
 
 Clip move commands capture the original track, clip index, and timeline
 position. Horizontal drags change time; vertical drags transfer the same clip
@@ -396,6 +397,16 @@ requirement `dev.mbianchi.studioduo`. This keeps the TCC microphone grant tied
 to the app identity instead of the changing binary hash during local rebuilds.
 A release build should replace this development signature with the project
 Developer ID signature.
+
+The updater checks
+`releases/latest/download/update-manifest.json` on a background thread. The
+manifest selects the platform package and supplies its exact filename, byte
+size, and SHA-256 checksum. Downloads are staged below the Studio Duo
+application-data directory. macOS uses a detached helper to verify the bundle
+ID, version, and existing code signature before atomically replacing the
+writable `.app`; Windows starts the existing Inno Setup upgrade package. No
+Apple notarization, separate update-signing key, Windows service, or
+updater-specific credential is required.
 
 The bundle includes the generated ICNS and also embeds the 512 px PNG. Normal
 macOS startup assigns that image to `NSApplication` explicitly so Dock previews

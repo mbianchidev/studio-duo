@@ -58,7 +58,8 @@ Name: "{autoprograms}\Studio Duo"; Filename: "{app}\Studio Duo.exe"; WorkingDir:
 Name: "{autodesktop}\Studio Duo"; Filename: "{app}\Studio Duo.exe"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\Studio Duo.exe"; Description: "Launch Studio Duo"; WorkingDir: "{app}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\Studio Duo.exe"; Description: "Launch Studio Duo"; WorkingDir: "{app}"; Flags: nowait postinstall skipifsilent; Check: not IsAutomaticUpdate
+Filename: "{app}\Studio Duo.exe"; WorkingDir: "{app}"; Flags: nowait skipifdoesntexist; Check: IsAutomaticUpdate
 
 [Code]
 const
@@ -67,6 +68,12 @@ const
 
 var
   VCRuntimeRestartRequired: Boolean;
+
+function IsAutomaticUpdate: Boolean;
+begin
+  Result :=
+    ExpandConstant('{param:STUDIODUOUPDATE|0}') = '1';
+end;
 
 function VCRuntimeNeedsInstall: Boolean;
 var
