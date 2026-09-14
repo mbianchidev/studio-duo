@@ -23,6 +23,37 @@ bool isGenericAsioWrapper(const juce::String& name)
         || name.containsIgnoreCase("flexasio");
 }
 
+#if JUCE_WINDOWS
+std::vector<AudioDeviceTypeAvailability> deviceTypeAvailability(
+    const juce::OwnedArray<juce::AudioIODeviceType>& deviceTypes)
+{
+    std::vector<AudioDeviceTypeAvailability> result;
+    result.reserve(static_cast<std::size_t>(deviceTypes.size()));
+    for (auto* type : deviceTypes)
+    {
+        const auto inputNames = type->getDeviceNames(true);
+        const auto outputNames = type->getDeviceNames(false);
+        result.push_back({
+            type->getTypeName(),
+            !inputNames.isEmpty(),
+            !outputNames.isEmpty()
+        });
+        logDebug(
+            "audio.discovery",
+            type->getTypeName()
+                + " inputs: "
+                + (inputNames.isEmpty()
+                       ? juce::String("none")
+                       : inputNames.joinIntoString(", "))
+                + "; outputs: "
+                + (outputNames.isEmpty()
+                       ? juce::String("none")
+                       : outputNames.joinIntoString(", ")));
+    }
+    return result;
+}
+#endif
+
 juce::Result writeTextAtomically(
     const juce::File& destination,
     const juce::String& text)
@@ -93,13 +124,29 @@ std::unique_ptr<juce::XmlElement> currentSetupXml(
 juce::String preferredAsioDeviceName(
     const juce::StringArray& deviceNames)
 {
+    const auto orderedNames = orderedAsioDeviceNames(deviceNames);
+    return orderedNames.isEmpty() ? juce::String() : orderedNames[0];
+}
+
+juce::StringArray orderedAsioDeviceNames(
+    const juce::StringArray& deviceNames,
+    juce::String deviceNameToTryLast)
+{
+    juce::StringArray result;
     for (const auto& name : deviceNames)
     {
         if (name.isNotEmpty() && !isGenericAsioWrapper(name))
-            return name;
+            result.add(name);
     }
-
-    return deviceNames.isEmpty() ? juce::String() : deviceNames[0];
+    for (const auto& name : deviceNames)
+    {
+        if (name.isNotEmpty() && isGenericAsioWrapper(name))
+            result.add(name);
+    }
+    const auto retryIndex = result.indexOf(deviceNameToTryLast, true);
+    if (retryIndex >= 0)
+        result.move(retryIndex, result.size() - 1);
+    return result;
 }
 
 juce::AudioDeviceManager::AudioDeviceSetup
@@ -116,6 +163,34 @@ preferredAsioDeviceSetup(const juce::String& deviceName)
     setup.useDefaultInputChannels = false;
     setup.useDefaultOutputChannels = false;
     return setup;
+}
+
+juce::String preferredAvailableAudioDeviceType(
+    const juce::String& currentType,
+    const std::vector<AudioDeviceTypeAvailability>& deviceTypes)
+{
+    for (const auto& type : deviceTypes)
+    {
+        if (type.typeName.equalsIgnoreCase(currentType)
+            && type.hasInputDevices)
+        {
+            return type.typeName;
+        }
+    }
+
+    for (const auto& type : deviceTypes)
+    {
+        if (type.hasInputDevices && type.hasOutputDevices)
+            return type.typeName;
+    }
+
+    for (const auto& type : deviceTypes)
+    {
+        if (type.hasInputDevices)
+            return type.typeName;
+    }
+
+    return currentType;
 }
 
 int callbackChannelIndex(
@@ -211,6 +286,44 @@ juce::Result StudioAudioDeviceManager::initialiseStudioAudio()
             logResult(
                 StudioLogLevel::error,
                 "Saved device failed: " + detail);
+#if JUCE_WINDOWS
+            if (saved->getStringAttribute("deviceType")
+                    .equalsIgnoreCase("ASIO"))
+            {
+                juce::StringArray asioDevices;
+                for (auto* type : getAvailableDeviceTypes())
+                {
+                    if (type->getTypeName().equalsIgnoreCase("ASIO"))
+                    {
+                        asioDevices = type->getDeviceNames(false);
+                        break;
+                    }
+                }
+                auto savedAsioDeviceName =
+                    saved->getStringAttribute("audioDeviceName");
+                if (savedAsioDeviceName.isEmpty())
+                {
+                    savedAsioDeviceName = saved->getStringAttribute(
+                        "audioInputDeviceName");
+                }
+                if (savedAsioDeviceName.isEmpty())
+                {
+                    savedAsioDeviceName = saved->getStringAttribute(
+                        "audioOutputDeviceName");
+                }
+                const auto retryResult =
+                    initialiseAsioDevices(
+                        asioDevices,
+                        savedAsioDeviceName);
+                if (retryResult.wasOk())
+                    return retryResult;
+                return initialiseWindowsAudioFallback(
+                    "Saved ASIO setup failed: "
+                    + detail
+                    + ". "
+                    + retryResult.getErrorMessage());
+            }
+#endif
             return juce::Result::fail(
                 "Saved audio device setup failed: "
                 + detail
@@ -242,34 +355,16 @@ juce::Result StudioAudioDeviceManager::initialiseStudioAudio()
         preferredAsioDeviceName(asioDevices);
     if (asioDeviceName.isNotEmpty())
     {
-        const auto setup = preferredAsioDeviceSetup(asioDeviceName);
-        const auto error = juce::AudioDeviceManager::initialise(
-            1,
-            2,
-            nullptr,
-            false,
-            {},
-            &setup);
-        if (error.isNotEmpty())
-        {
-            logResult(
-                StudioLogLevel::error,
-                "ASIO device "
-                + asioDeviceName
-                + " failed: "
-                + error);
-            return juce::Result::fail(
-                "ASIO device "
-                + asioDeviceName
-                + " failed to start: "
-                + error
-                + ". Open I/O to select another driver or reset the device.");
-        }
-
+        const auto asioResult = initialiseAsioDevices(
+            asioDevices,
+            {});
+        if (asioResult.wasOk())
+            return asioResult;
         logResult(
-            StudioLogLevel::info,
-            "Opened ASIO device " + asioDeviceName);
-        return juce::Result::ok();
+            StudioLogLevel::error,
+            asioResult.getErrorMessage());
+        return initialiseWindowsAudioFallback(
+            asioResult.getErrorMessage());
     }
 
     addWindowsFallbackDeviceTypes();
@@ -306,6 +401,123 @@ juce::Result StudioAudioDeviceManager::initialiseStudioAudio()
     return juce::Result::ok();
 }
 
+#if JUCE_WINDOWS
+juce::Result StudioAudioDeviceManager::initialiseAsioDevices(
+    const juce::StringArray& deviceNames,
+    const juce::String& deviceNameToTryLast)
+{
+    juce::StringArray failures;
+    for (const auto& deviceName :
+         orderedAsioDeviceNames(deviceNames, deviceNameToTryLast))
+    {
+        const auto setup = preferredAsioDeviceSetup(deviceName);
+        juce::XmlElement xml("DEVICESETUP");
+        xml.setAttribute("deviceType", "ASIO");
+        xml.setAttribute("audioInputDeviceName", setup.inputDeviceName);
+        xml.setAttribute("audioOutputDeviceName", setup.outputDeviceName);
+        xml.setAttribute(
+            "audioDeviceInChans",
+            setup.inputChannels.toString(2));
+        xml.setAttribute(
+            "audioDeviceOutChans",
+            setup.outputChannels.toString(2));
+
+        const auto error = juce::AudioDeviceManager::initialise(
+            1,
+            2,
+            &xml,
+            false);
+        if (error.isEmpty() && getCurrentAudioDevice() != nullptr)
+        {
+            logInfo(
+                "audio.startup",
+                "Opened ASIO device " + deviceName + ".");
+            return juce::Result::ok();
+        }
+
+        const auto detail = error.isNotEmpty()
+            ? error
+            : juce::String("the device did not open");
+        failures.add(deviceName + ": " + detail);
+        logError(
+            "audio.startup",
+            "ASIO device " + deviceName + " failed: " + detail);
+    }
+
+    return juce::Result::fail(
+        failures.isEmpty()
+            ? juce::String("No ASIO drivers were found.")
+            : "No ASIO driver could start. "
+                + failures.joinIntoString("; "));
+}
+
+juce::Result StudioAudioDeviceManager::initialiseWindowsAudioFallback(
+    const juce::String& asioFailure)
+{
+    addWindowsFallbackDeviceTypes();
+    const auto& deviceTypes = getAvailableDeviceTypes();
+    markDeviceTypesScanned();
+    const auto availability = deviceTypeAvailability(deviceTypes);
+
+    juce::String fallbackType;
+    for (const auto& type : availability)
+    {
+        if (type.typeName.equalsIgnoreCase("Windows Audio")
+            && type.hasInputDevices)
+        {
+            fallbackType = type.typeName;
+            break;
+        }
+    }
+    if (fallbackType.isEmpty())
+    {
+        for (const auto& type : availability)
+        {
+            if (!type.typeName.equalsIgnoreCase("ASIO")
+                && type.hasInputDevices
+                && type.hasOutputDevices)
+            {
+                fallbackType = type.typeName;
+                break;
+            }
+        }
+    }
+    if (fallbackType.isEmpty())
+    {
+        return juce::Result::fail(
+            asioFailure
+            + ". No Windows audio input device was found. "
+              "Check Windows microphone privacy settings and open Settings "
+              "after reconnecting the device.");
+    }
+
+    setCurrentAudioDeviceType(fallbackType, false);
+    const auto fallbackError = initialiseWithDefaultDevices(1, 2);
+    if (fallbackError.isNotEmpty() || getCurrentAudioDevice() == nullptr)
+    {
+        const auto detail = fallbackError.isNotEmpty()
+            ? fallbackError
+            : juce::String("the fallback device did not open");
+        return juce::Result::fail(
+            asioFailure
+            + ". "
+            + fallbackType
+            + " fallback also failed: "
+            + detail
+            + ". Open Settings to select another device.");
+    }
+
+    startupNotice =
+        "ASIO could not start, so Studio Duo opened "
+        + fallbackType
+        + ". Open Settings to retry the preferred ASIO driver.";
+    logInfo(
+        "audio.startup",
+        startupNotice + " ASIO detail: " + asioFailure);
+    return juce::Result::ok();
+}
+#endif
+
 juce::Result StudioAudioDeviceManager::saveCurrentSetup() const
 {
     if (getCurrentAudioDevice() == nullptr)
@@ -328,10 +540,42 @@ juce::Result StudioAudioDeviceManager::saveCurrentSetup() const
     return result;
 }
 
+juce::String StudioAudioDeviceManager::takeStartupNotice()
+{
+    auto notice = startupNotice;
+    startupNotice.clear();
+    return notice;
+}
+
 void StudioAudioDeviceManager::prepareDeviceTypesForSettings()
 {
 #if JUCE_WINDOWS
+    getAvailableDeviceTypes();
+    markDeviceTypesScanned();
     addWindowsFallbackDeviceTypes();
+    const auto& deviceTypes = getAvailableDeviceTypes();
+    for (auto* type : deviceTypes)
+        type->scanForDevices();
+
+    const auto availability = deviceTypeAvailability(deviceTypes);
+    const auto currentType = getCurrentAudioDeviceType();
+    const auto preferredType = preferredAvailableAudioDeviceType(
+        currentType,
+        availability);
+    if (preferredType.isNotEmpty()
+        && !preferredType.equalsIgnoreCase(currentType))
+    {
+        logInfo(
+            "audio.discovery",
+            "The "
+                + (currentType.isEmpty()
+                       ? juce::String("unselected")
+                       : currentType)
+                + " backend has no input devices; selecting "
+                + preferredType
+                + " for Settings.");
+        setCurrentAudioDeviceType(preferredType, false);
+    }
 #endif
 }
 

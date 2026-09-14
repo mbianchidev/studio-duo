@@ -76,11 +76,18 @@ appears. On macOS, the system may request microphone access at that point. Use
 **SETTINGS** > **Audio / MIDI** to enable inputs or change the active device. On
 the first Windows launch, Studio Duo prefers a native ASIO driver over generic
 compatibility wrappers, enables every hardware input, and uses the driver's
-current sample rate and default buffer size. If an installed ASIO driver fails
-to start, Studio Duo leaves audio disabled and reports the driver error instead
-of silently opening a different backend; choose another driver in
-**SETTINGS** > **Audio / MIDI**. WASAPI remains available when no ASIO driver is
-installed or when selected manually.
+current sample rate and default buffer size. It tries each native ASIO driver
+before compatibility wrappers, so an unavailable legacy driver does not hide a
+working interface. If no ASIO driver can start, Studio Duo reports the fallback
+in the status bar and opens shared Windows Audio so recording remains
+available. Opening **SETTINGS** > **Audio / MIDI** rescans all backends and
+selects one with input devices when the current backend is empty.
+Under **Windows Audio**, the Input menu lists active capture endpoints such as
+the Focusrite Windows device, the built-in microphone, and virtual
+microphones. Under **ASIO**, select the Focusrite driver as the combined audio
+device. A track's Input menu shows channels from the active audio device only;
+Studio Duo uses one Windows audio device at a time, so Focusrite ASIO and the
+Realtek microphone cannot appear as simultaneous track inputs.
 
 After a project has been saved once, each edit refreshes its recovery point.
 Opening the package restores newer unsaved recovery state and marks the project
