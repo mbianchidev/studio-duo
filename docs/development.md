@@ -110,6 +110,7 @@ relative opaque-state reference. This lets missing plugins survive project
 exchange and lets sandboxed, trusted, ARA, and bundled runtimes use one model.
 
 The bridge transport maps a fixed-size file into the host and worker processes.
+Workers report ready only after their processing thread is running.
 The audio callback publishes only when the worker has consumed the prior input,
 then reads the previous completed output. It never allocates, locks, waits, or
 uses IPC. A late worker causes the client to reuse the last valid output, or

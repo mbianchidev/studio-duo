@@ -56,6 +56,7 @@ private:
     juce::AudioBuffer<float> processBuffer;
     juce::MidiBuffer midiBuffer;
     std::vector<int> automationBoundaries;
+    juce::WaitableEvent processingThreadStarted;
     std::mutex pluginMutex;
     static constexpr std::uint32_t stateCaptureBit = 1u << 31;
     static constexpr std::uint32_t processingCountMask =
