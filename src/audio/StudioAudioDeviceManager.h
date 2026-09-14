@@ -24,10 +24,13 @@ struct AudioDeviceTypeAvailability
 preferredAsioDeviceSetup(const juce::String& deviceName);
 [[nodiscard]] juce::String preferredAvailableAudioDeviceType(
     const juce::String& currentType,
-    const std::vector<AudioDeviceTypeAvailability>& deviceTypes);
+    const std::vector<AudioDeviceTypeAvailability>& deviceTypes,
+    bool deviceIsOpen = true);
 [[nodiscard]] int callbackChannelIndex(
     const juce::BigInteger& activeChannels,
     int physicalChannel) noexcept;
+[[nodiscard]] juce::Result probeNativeAudioDeviceSetup(
+    const juce::XmlElement& setup);
 
 class StudioAudioDeviceManager final : public juce::AudioDeviceManager
 {
@@ -40,6 +43,8 @@ public:
     void prepareDeviceTypesForSettings();
 
 private:
+    [[nodiscard]] juce::String initialiseCheckedSetup(
+        const juce::XmlElement& setup);
 #if JUCE_WINDOWS
     [[nodiscard]] juce::Result initialiseAsioDevices(
         const juce::StringArray& deviceNames,

@@ -177,15 +177,18 @@ void UpdateSettingsComponent::refresh(
 }
 
 SettingsComponent::SettingsComponent(
-    StudioAudioDeviceManager& deviceManager,
+    StudioAudioDeviceManager* deviceManager,
     UpdateService& updateService,
     std::function<void()> restartRequested,
-    bool showUpdatesInitially)
+    bool showUpdatesInitially,
+    const juce::String& audioUnavailableReason)
 {
-    deviceManager.prepareDeviceTypesForSettings();
-    audioPage =
-        std::make_unique<juce::AudioDeviceSelectorComponent>(
-            deviceManager,
+    juce::Component* audioContent = &audioUnavailableLabel;
+    if (deviceManager != nullptr)
+    {
+        deviceManager->prepareDeviceTypesForSettings();
+        audioPage = std::make_unique<juce::AudioDeviceSelectorComponent>(
+            *deviceManager,
             0,
             maximumHardwareAudioChannels,
             0,
@@ -194,6 +197,20 @@ SettingsComponent::SettingsComponent(
             true,
             false,
             false);
+        audioContent = audioPage.get();
+    }
+    else
+    {
+        audioUnavailableLabel.setText(
+            audioUnavailableReason.isNotEmpty()
+                ? audioUnavailableReason
+                : "Audio is disabled. Close this window and open Settings again "
+                  "to configure audio. Updates remain available.",
+            juce::dontSendNotification);
+        audioUnavailableLabel.setJustificationType(juce::Justification::centred);
+        audioUnavailableLabel.setColour(
+            juce::Label::textColourId, juce::Colour(StudioColours::secondaryText));
+    }
     updatePage = std::make_unique<UpdateSettingsComponent>(
         updateService,
         std::move(restartRequested));
@@ -204,7 +221,7 @@ SettingsComponent::SettingsComponent(
     tabs.addTab(
         "Audio / MIDI",
         juce::Colour(StudioColours::panel),
-        audioPage.get(),
+        audioContent,
         false);
     tabs.addTab(
         "Updates",

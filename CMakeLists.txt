@@ -162,6 +162,8 @@ target_sources(
     StudioDuo
     PRIVATE
         src/Main.cpp
+        src/audio/AudioDeviceProbe.cpp
+        src/audio/AudioDeviceProbe.h
         src/audio/StudioAudioDeviceManager.cpp
         src/audio/StudioAudioDeviceManager.h
         src/audio/StudioAudioEngine.cpp
@@ -219,6 +221,8 @@ elseif(WIN32)
     target_sources(
         StudioDuo
         PRIVATE
+            src/platform/WindowsCrashHandler.cpp
+            src/platform/WindowsCrashHandler.h
             src/update/WindowsUpdateInstaller.cpp
     )
 else()
@@ -415,7 +419,9 @@ if(STUDIO_DUO_BUILD_TESTS)
             tests/PluginRecoveryTests.cpp
             tests/AutomationTests.cpp
             tests/DeviceTests.cpp
+            tests/AudioDeviceProbeTests.cpp
             tests/LoggingTests.cpp
+            tests/WindowsCrashHandlerTests.cpp
             tests/ReampSnapshotTests.cpp
             tests/RenderEngineTests.cpp
             tests/PluginCompatibilityTests.cpp
@@ -429,6 +435,8 @@ if(STUDIO_DUO_BUILD_TESTS)
             src/ui/MainWindowSizing.h
             src/audio/StudioAudioDeviceManager.cpp
             src/audio/StudioAudioDeviceManager.h
+            src/audio/AudioDeviceProbe.cpp
+            src/audio/AudioDeviceProbe.h
             src/audio/StudioAudioEngine.cpp
             src/audio/StudioAudioEngine.h
             src/logging/StudioLogger.cpp
@@ -484,6 +492,12 @@ if(STUDIO_DUO_BUILD_TESTS)
     )
     if(WIN32)
         target_compile_definitions(StudioDuoTests PRIVATE JUCE_ASIO=1)
+        target_sources(
+            StudioDuoTests
+            PRIVATE
+                src/platform/WindowsCrashHandler.cpp
+                src/platform/WindowsCrashHandler.h
+        )
     endif()
     if(APPLE)
         target_compile_definitions(
@@ -536,4 +550,8 @@ if(STUDIO_DUO_BUILD_TESTS)
     )
 
     add_test(NAME StudioDuoTests COMMAND StudioDuoTests)
+    if(WIN32)
+        add_test(NAME StudioDuoStartup COMMAND StudioDuo --startup-self-test)
+        set_tests_properties(StudioDuoStartup PROPERTIES TIMEOUT 30)
+    endif()
 endif()

@@ -51,10 +51,11 @@ class SettingsComponent final : public juce::Component
 {
 public:
     SettingsComponent(
-        StudioAudioDeviceManager& deviceManager,
+        StudioAudioDeviceManager* deviceManager,
         UpdateService& updateService,
         std::function<void()> restartRequested,
-        bool showUpdatesInitially);
+        bool showUpdatesInitially,
+        const juce::String& audioUnavailableReason = {});
 
     void paint(juce::Graphics& graphics) override;
     void resized() override;
@@ -62,6 +63,7 @@ public:
 
 private:
     std::unique_ptr<juce::AudioDeviceSelectorComponent> audioPage;
+    juce::Label audioUnavailableLabel;
     std::unique_ptr<UpdateSettingsComponent> updatePage;
     juce::TabbedComponent tabs {
         juce::TabbedButtonBar::TabsAtTop

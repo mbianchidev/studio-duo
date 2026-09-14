@@ -100,4 +100,6 @@ void logInfo(
 void logDebug(
     const juce::String& category,
     const juce::String& message);
+// Waits for queued entries to reach disk; never call from an audio callback.
+void flushStudioLog();
 }

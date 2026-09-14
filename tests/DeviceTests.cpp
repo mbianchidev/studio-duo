@@ -133,6 +133,22 @@ void deviceTests()
                availableAsioDeviceTypes)
                == "ASIO",
            "Settings retain ASIO when a driver is available.");
+    expect(studio::preferredAvailableAudioDeviceType(
+               "ASIO",
+               availableAsioDeviceTypes,
+               false)
+               == "Windows Audio",
+           "Settings do not automatically reopen ASIO when no device is active.");
+    const std::vector<studio::AudioDeviceTypeAvailability> noWindowsEndpoints {
+        { "ASIO", true, true },
+        { "Windows Audio", false, false }
+    };
+    expect(studio::preferredAvailableAudioDeviceType(
+               {},
+               noWindowsEndpoints,
+               false)
+               == "Windows Audio",
+           "Safe Settings remain usable without loading ASIO when Windows endpoints are absent.");
 
     const std::vector<studio::AudioDeviceTypeAvailability>
         inputOnlyDeviceTypes {

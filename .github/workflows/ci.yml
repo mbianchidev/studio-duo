@@ -101,9 +101,33 @@ jobs:
               -CertificatePassword $passwordText `
               -TimestampUrl "" `
               -SkipTrustVerification
+            & ./packaging/windows/test-installed-startup.ps1 `
+              -Installer "$env:RUNNER_TEMP\studio-duo-windows-packages\Studio-Duo-$version-Windows-x64-Setup.exe"
           } finally {
             if ($null -ne $certificate) {
               $certificate.Dispose()
             }
             $rsa.Dispose()
           }
+
+      - name: Upload Windows test packages
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-test-packages
+          path: |
+            ${{ runner.temp }}/studio-duo-windows-packages/*.exe
+            ${{ runner.temp }}/studio-duo-windows-packages/*.zip
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload Windows startup failure logs
+        if: failure() && runner.os == 'Windows'
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-startup-failure-logs
+          path: |
+            ${{ runner.temp }}/studio-duo-install-smoke-*/**/*.log
+            build/Testing/Temporary/LastTest.log
+          if-no-files-found: ignore
+          retention-days: 7

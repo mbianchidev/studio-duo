@@ -61,6 +61,10 @@ Windows x64 ZIP, and SHA-256 checksums. Installed macOS and Windows builds
 check for releases at launch, download verified updates in the background by
 default, and install them only when the user chooses **Restart and Update**.
 
+Windows checks MIDI discovery and automatic ASIO startup in separate processes.
+If startup still fails, `--safe-audio` opens the app without initializing audio
+or MIDI. See [startup troubleshooting and logs](docs/user-guide.md#logs-and-diagnostics).
+
 ## Documentation
 
 - [Documentation index](docs/README.md)
