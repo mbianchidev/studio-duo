@@ -414,7 +414,8 @@ void StudioLogger::flush()
     entry.kind = EntryKind::flush;
     entry.completion = completed;
     enqueue(std::move(entry));
-    completed->wait(5000);
+    if (!completed->wait(5000))
+        writeInternalError("Timed out waiting for queued log entries to reach disk.");
 }
 
 void StudioLogger::run()
@@ -458,6 +459,8 @@ void StudioLogger::run()
             }
             writeEntry(entry);
         }
+        if (!pending.empty() && output != nullptr)
+            output->flush();
 
         if (flushed)
             continue;
@@ -660,5 +663,12 @@ void logDebug(
         StudioLogLevel::debug,
         category,
         message);
+}
+
+void flushStudioLog()
+{
+    if (auto* logger = dynamic_cast<StudioLogger*>(
+            juce::Logger::getCurrentLogger()))
+        logger->flush();
 }
 }

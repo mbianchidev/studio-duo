@@ -144,6 +144,8 @@ jobs:
             -CertificateBase64 $env:CERTIFICATE_BASE64 `
             -CertificatePassword $env:CERTIFICATE_PASSWORD `
             -SkipTrustVerification
+          & ./packaging/windows/test-installed-startup.ps1 `
+            -Installer "Studio-Duo-$env:VERSION-Windows-x64-Setup.exe"
 
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v7

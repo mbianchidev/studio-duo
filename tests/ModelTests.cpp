@@ -1551,9 +1551,23 @@ void multitrackRecordingCommand()
 }
 }
 
-int main()
+int main(int argc, char* argv[])
 {
+    juce::StringArray arguments;
+    for (int index = 1; index < argc; ++index)
+        arguments.add(juce::String::fromUTF8(argv[index]));
+    if (const auto result = runAudioDeviceProbeFixture(arguments))
+        return *result;
+#if JUCE_WINDOWS
+    if (const auto result = runWindowsCrashHandlerFixture(arguments))
+        return *result;
+#endif
+
     juce::ScopedJuceInitialiser_GUI juceInitialiser;
+    audioDeviceProbeTests();
+#if JUCE_WINDOWS
+    windowsCrashHandlerTests();
+#endif
     serializationRoundTrip();
     legacyProjectMigration();
     commandHistory();

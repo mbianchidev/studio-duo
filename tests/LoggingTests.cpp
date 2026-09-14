@@ -129,6 +129,26 @@ void loggingTests()
             studio::StudioLogLevel::info,
             "test.info",
             "visible info entry");
+        const auto deadline =
+            juce::Time::getMillisecondCounterHiRes() + 2500.0;
+        auto infoWritten = false;
+        while (!infoWritten
+               && juce::Time::getMillisecondCounterHiRes() < deadline)
+        {
+            const auto pendingFiles = outputDirectory.findChildFiles(
+                juce::File::findFiles,
+                false,
+                "studio-duo-*.log");
+            infoWritten = !pendingFiles.isEmpty()
+                && pendingFiles.getFirst()
+                       .loadFileAsString()
+                       .contains("visible info entry");
+            if (!infoWritten)
+                juce::Thread::sleep(10);
+        }
+        expect(
+            infoWritten,
+            "Info logs reach disk without an error, explicit flush, or shutdown.");
         logger.log(
             studio::StudioLogLevel::error,
             "test.error",

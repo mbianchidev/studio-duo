@@ -30,9 +30,10 @@ class MainComponent final : public juce::Component,
                             private UpdateService::Listener
 {
 public:
-    MainComponent();
+    explicit MainComponent(bool startAudioOnLaunch = true);
     ~MainComponent() override;
 
+    [[nodiscard]] bool hasAudioDeviceManager() const noexcept;
     bool prepareForShutdown();
     void paint(juce::Graphics& graphics) override;
     void resized() override;
@@ -79,6 +80,8 @@ private:
     bool keyPressed(const juce::KeyPress& key, juce::Component*) override;
 
     void initialiseAudio();
+    bool ensureAudioDeviceManager();
+    [[nodiscard]] juce::AudioIODevice* currentAudioDevice() const noexcept;
     bool connectAudioEngine();
     void createNewProject();
     void beginOpenProject();
@@ -233,7 +236,8 @@ private:
         STUDIO_DUO_VERSION,
         STUDIO_DUO_UPDATE_MANIFEST_URL
     };
-    StudioAudioDeviceManager deviceManager;
+    std::unique_ptr<StudioAudioDeviceManager> deviceManager;
+    juce::String audioStartupError;
     StudioAudioEngine audioEngine;
     Project project { Project::createDefault() };
     CommandStack commandStack;

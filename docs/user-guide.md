@@ -72,16 +72,26 @@ trackpad scrolling and pinch gestures zoom the same view.
    media is written below its `media/` directory.
 
 Studio Duo restores the last working audio device shortly after its window
-appears. On macOS, the system may request microphone access at that point. Use
+appears. The audio manager and MIDI discovery are deferred until then, rather
+than running during window construction. On Windows, MIDI discovery is checked
+in a separate process before the main app creates its audio manager; a failed
+check leaves the window open with audio disabled and a diagnostic message.
+On macOS, the system may request microphone access at that point. Use
 **SETTINGS** > **Audio / MIDI** to enable inputs or change the active device. On
 the first Windows launch, Studio Duo prefers a native ASIO driver over generic
 compatibility wrappers, enables every hardware input, and uses the driver's
-current sample rate and default buffer size. It tries each native ASIO driver
-before compatibility wrappers, so an unavailable legacy driver does not hide a
-working interface. If no ASIO driver can start, Studio Duo reports the fallback
+current sample rate and default buffer size. Before automatically opening an
+ASIO driver, including a saved setup, a separate worker opens and closes that
+setup with a ten-second deadline. A driver that crashes, hangs, or rejects the
+setup is skipped rather than being loaded into the main app. It tries each
+native ASIO driver before compatibility wrappers, so an unavailable legacy
+driver does not hide a working interface. If no ASIO driver can start, Studio
+Duo reports the fallback
 in the status bar and opens shared Windows Audio so recording remains
 available. Opening **SETTINGS** > **Audio / MIDI** rescans all backends and
-selects one with input devices when the current backend is empty.
+selects one with input devices when the current backend is empty. When no audio
+device is open, Settings starts with shared **Windows Audio** instead of
+automatically retrying a possibly failing ASIO driver.
 Under **Windows Audio**, the Input menu lists active capture endpoints such as
 the Focusrite Windows device, the built-in microphone, and virtual
 microphones. Under **ASIO**, select the Focusrite driver as the combined audio
@@ -412,7 +422,33 @@ Studio Duo writes asynchronous, process-specific daily logs below
 `~/Library/Application Support/Studio Duo/Logs` on macOS and
 `%APPDATA%\Studio Duo\Logs` on Windows. Logs from the last 24 hours remain
 plain text, older logs are gzip-compressed, and files older than seven days are
-deleted.
+deleted. Each batch is flushed while the app is running; startup checkpoints
+are also flushed before window creation and native audio initialization.
+
+On Windows, unhandled native exceptions produce a separate
+`studio-duo-crash-*.log` with the exception code, fault address, module filename,
+and thread ID. The main app displays a native error dialog with the report
+location. Probe and plugin workers do not display blocking crash dialogs.
+Abrupt process termination can bypass an exception handler; an ASIO probe that
+exits without a completed response is still treated as a failure.
+
+If the app closes during startup, run the installed executable from PowerShell:
+
+```powershell
+& "$env:ProgramFiles\Studio Duo\Studio Duo.exe" --safe-audio
+```
+
+Use the actual executable path for a portable or custom installation.
+`--safe-audio` skips automatic audio and MIDI initialization for this launch
+without deleting the saved setup. Open **SETTINGS** > **Audio / MIDI** and
+choose **Windows Audio** or another working driver. Share the newest ordinary
+log and any matching crash report when reporting the problem.
+MIDI discovery failures also leave **Updates** available without loading audio
+devices; fix the reported driver or system error before retrying audio Settings.
+
+The ASIO probe checks startup only: the selected driver still runs in the main
+process during recording and playback. Explicit device changes in Settings
+also run in the main process. This is not runtime driver isolation.
 
 Create `logging.json` beside the `Logs` directory to change retention or enable
 verbose debug logging, then restart Studio Duo:

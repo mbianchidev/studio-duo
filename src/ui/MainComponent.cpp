@@ -1,6 +1,7 @@
 #include "MainComponent.h"
 
 #include "automation/AutomationRecorder.h"
+#include "audio/AudioDeviceProbe.h"
 #include "logging/StudioLogger.h"
 #include "update/UpdateSettingsComponent.h"
 #include "plugin_host/PluginStateStore.h"
@@ -323,7 +324,7 @@ private:
     juce::Point<int> lastScreenPosition;
 };
 
-MainComponent::MainComponent()
+MainComponent::MainComponent(bool startAudioOnLaunch)
 {
     setLookAndFeel(&theme);
     setOpaque(true);
@@ -1605,17 +1606,22 @@ MainComponent::MainComponent()
     selectTrack(selectedTrackId);
     refreshInputControls();
 
-    setStatus("Starting audio...");
+    setStatus(startAudioOnLaunch
+        ? "Starting audio..."
+        : "Safe audio mode: automatic audio/MIDI startup is disabled. Open Settings to choose a device.");
     projectChanged(false);
     startTimerHz(30);
     setSize(1480, 900);
-    juce::Timer::callAfterDelay(
-        250,
-        [safe = juce::Component::SafePointer<MainComponent>(this)]
-        {
-            if (safe != nullptr)
-                safe->initialiseAudio();
-        });
+    if (startAudioOnLaunch)
+    {
+        juce::Timer::callAfterDelay(
+            250,
+            [safe = juce::Component::SafePointer<MainComponent>(this)]
+            {
+                if (safe != nullptr)
+                    safe->initialiseAudio();
+            });
+    }
     juce::Timer::callAfterDelay(
         1200,
         [safe = juce::Component::SafePointer<MainComponent>(this)]
@@ -1628,10 +1634,15 @@ MainComponent::MainComponent()
 
 void MainComponent::initialiseAudio()
 {
-    if (appShutdownPrepared)
+    if (appShutdownPrepared || !ensureAudioDeviceManager())
         return;
 
-    if (const auto result = deviceManager.initialiseStudioAudio();
+    if (currentAudioDevice() != nullptr)
+    {
+        connectAudioEngine();
+        return;
+    }
+    if (const auto result = deviceManager->initialiseStudioAudio();
         result.failed())
     {
         setStatus(result.getErrorMessage(), true);
@@ -1641,12 +1652,53 @@ void MainComponent::initialiseAudio()
     connectAudioEngine();
 }
 
+bool MainComponent::hasAudioDeviceManager() const noexcept
+{
+    return deviceManager != nullptr;
+}
+
+juce::AudioIODevice* MainComponent::currentAudioDevice() const noexcept
+{
+    return deviceManager != nullptr ? deviceManager->getCurrentAudioDevice() : nullptr;
+}
+
+bool MainComponent::ensureAudioDeviceManager()
+{
+    if (deviceManager != nullptr)
+        return true;
+#if JUCE_WINDOWS
+    juce::XmlElement discovery("DEVICESETUP");
+    discovery.setAttribute("deviceType", midiDeviceDiscoveryProbeType);
+    if (const auto result = probeAudioDeviceSetup(discovery); result.failed())
+    {
+        audioStartupError =
+            "Audio/MIDI discovery failed: " + result.getErrorMessage()
+            + " Audio remains disabled. Check the logs and any crash report "
+              "before retrying Settings.";
+        setStatus(audioStartupError, true);
+        return false;
+    }
+#endif
+    logInfo("audio.startup", "Creating the audio and MIDI device manager.");
+    flushStudioLog();
+    deviceManager = std::make_unique<StudioAudioDeviceManager>();
+    audioStartupError.clear();
+    return true;
+}
+
 bool MainComponent::connectAudioEngine()
 {
     if (audioEngineInitialised)
         return true;
+    if (deviceManager == nullptr)
+    {
+        setStatus("Audio is disabled. Open Settings to choose a device.", true);
+        return false;
+    }
 
-    if (const auto result = audioEngine.initialise(deviceManager);
+    logInfo("audio.startup", "Attaching the audio engine to the open device.");
+    flushStudioLog();
+    if (const auto result = audioEngine.initialise(*deviceManager);
         result.failed())
     {
         setStatus(result.getErrorMessage(), true);
@@ -1663,19 +1715,19 @@ bool MainComponent::connectAudioEngine()
         return false;
     }
 
-    const auto saveResult = deviceManager.saveCurrentSetup();
+    const auto saveResult = deviceManager->saveCurrentSetup();
     if (saveResult.failed())
         logError(
             "audio.settings",
             saveResult.getErrorMessage());
 
     refreshInputControls();
-    if (const auto* device = deviceManager.getCurrentAudioDevice())
+    if (const auto* device = currentAudioDevice())
     {
-        const auto startupNotice = deviceManager.takeStartupNotice();
+        const auto startupNotice = deviceManager->takeStartupNotice();
         auto readyMessage =
             juce::String("Ready. ")
-            + deviceManager.getCurrentAudioDeviceType()
+            + deviceManager->getCurrentAudioDeviceType()
             + ": "
             + device->getName()
             + " ("
@@ -2189,17 +2241,17 @@ void MainComponent::timerCallback()
         audioEngine.play();
     }
 
-    if (++inputConfigurationPollTicks >= 30)
+    if (deviceManager != nullptr && ++inputConfigurationPollTicks >= 30)
     {
         inputConfigurationPollTicks = 0;
-        auto* device = deviceManager.getCurrentAudioDevice();
+        auto* device = currentAudioDevice();
         juce::AudioDeviceManager::AudioDeviceSetup audioSetup;
-        deviceManager.getAudioDeviceSetup(audioSetup);
+        deviceManager->getAudioDeviceSetup(audioSetup);
         auto midiInputSignature = juce::String();
         for (const auto& midiInput :
              juce::MidiInput::getAvailableDevices())
         {
-            if (deviceManager.isMidiInputDeviceEnabled(
+            if (deviceManager->isMidiInputDeviceEnabled(
                     midiInput.identifier))
             {
                 midiInputSignature
@@ -2208,7 +2260,7 @@ void MainComponent::timerCallback()
             }
         }
         const auto signature = device != nullptr
-            ? deviceManager.getCurrentAudioDeviceType()
+            ? deviceManager->getCurrentAudioDeviceType()
                 + ":"
                 + audioSetup.inputDeviceName
                 + ":"
@@ -2224,7 +2276,7 @@ void MainComponent::timerCallback()
                 + ":"
                 + midiInputSignature
                 + ":"
-                + deviceManager.getDefaultMidiOutputIdentifier()
+                + deviceManager->getDefaultMidiOutputIdentifier()
             : juce::String();
         if (signature != inputConfigurationSignature)
         {
@@ -2246,7 +2298,7 @@ void MainComponent::timerCallback()
                 if (device != nullptr)
                 {
                     if (const auto result =
-                            deviceManager.saveCurrentSetup();
+                            deviceManager->saveCurrentSetup();
                         result.failed())
                     {
                         setStatus(
@@ -2517,15 +2569,18 @@ void MainComponent::showSettings(bool showUpdates)
         return;
     }
 
+    if (!showUpdates && !ensureAudioDeviceManager())
+        logError("audio.settings", audioStartupError);
     auto settings = std::make_unique<SettingsComponent>(
-        deviceManager,
+        deviceManager.get(),
         updateService,
         [safe = juce::Component::SafePointer<MainComponent>(this)]
         {
             if (safe != nullptr)
                 safe->restartForUpdate();
         },
-        showUpdates);
+        showUpdates,
+        audioStartupError);
     settings->setLookAndFeel(&theme);
 
     juce::DialogWindow::LaunchOptions options;
@@ -4938,11 +4993,11 @@ void MainComponent::refreshInputControls()
     inputSelector.clear(juce::dontSendNotification);
     juce::StringArray outputNames;
 
-    if (auto* device = deviceManager.getCurrentAudioDevice())
+    if (auto* device = currentAudioDevice())
     {
         const auto names = device->getInputChannelNames();
         juce::AudioDeviceManager::AudioDeviceSetup audioSetup;
-        deviceManager.getAudioDeviceSetup(audioSetup);
+        deviceManager->getAudioDeviceSetup(audioSetup);
         const auto configuredInputName = audioSetup.inputDeviceName.trim();
         const auto deviceName = configuredInputName.isNotEmpty()
             ? configuredInputName
@@ -5340,7 +5395,7 @@ void MainComponent::showTrackingMenu()
     menu.addSubMenu(accentLevel.first, accentLevel.second);
 
     juce::PopupMenu clickOutputMenu;
-    if (auto* device = deviceManager.getCurrentAudioDevice())
+    if (auto* device = currentAudioDevice())
     {
         const auto names = device->getOutputChannelNames();
         for (int index = 0; index < names.size(); ++index)
@@ -5681,7 +5736,7 @@ void MainComponent::showTrackingMenu()
         {
             juce::PopupMenu outputMenu;
             juce::PopupMenu inputMenu;
-            if (auto* device = deviceManager.getCurrentAudioDevice())
+            if (auto* device = currentAudioDevice())
             {
                 const auto outputs = device->getOutputChannelNames();
                 for (int index = 0; index < outputs.size(); ++index)

@@ -1,5 +1,6 @@
 #include "StudioAudioDeviceManager.h"
 
+#include "AudioDeviceProbe.h"
 #include "logging/StudioLogger.h"
 
 namespace studio
@@ -167,8 +168,14 @@ preferredAsioDeviceSetup(const juce::String& deviceName)
 
 juce::String preferredAvailableAudioDeviceType(
     const juce::String& currentType,
-    const std::vector<AudioDeviceTypeAvailability>& deviceTypes)
+    const std::vector<AudioDeviceTypeAvailability>& deviceTypes,
+    bool deviceIsOpen)
 {
+    if (!deviceIsOpen)
+        for (const auto& type : deviceTypes)
+            if (type.typeName.equalsIgnoreCase("Windows Audio"))
+                return type.typeName;
+
     for (const auto& type : deviceTypes)
     {
         if (type.typeName.equalsIgnoreCase(currentType)
@@ -207,6 +214,57 @@ int callbackChannelIndex(
     return callbackChannel;
 }
 
+juce::Result probeNativeAudioDeviceSetup(const juce::XmlElement& setup)
+{
+#if JUCE_WINDOWS
+    if (setup.getStringAttribute("deviceType") == midiDeviceDiscoveryProbeType)
+    {
+        logInfo("audio.probe", "Creating the audio manager and enumerating MIDI devices.");
+        flushStudioLog();
+        juce::AudioDeviceManager manager;
+        const auto inputCount = juce::MidiInput::getAvailableDevices().size();
+        const auto outputCount = juce::MidiOutput::getAvailableDevices().size();
+        if (!juce::MessageManager::getInstance()->runDispatchLoopUntil(100))
+            return juce::Result::fail("MIDI discovery stopped the probe event loop.");
+        logInfo(
+            "audio.probe",
+            "MIDI discovery completed: " + juce::String(inputCount)
+                + " inputs, " + juce::String(outputCount) + " outputs.");
+        return juce::Result::ok();
+    }
+    if (!setup.getStringAttribute("deviceType").equalsIgnoreCase("ASIO"))
+        return juce::Result::fail("The isolated audio probe received an unsupported device type.");
+    auto asio = std::unique_ptr<juce::AudioIODeviceType>(
+        juce::AudioIODeviceType::createAudioIODeviceType_ASIO());
+    if (asio == nullptr)
+        return juce::Result::fail("ASIO support is unavailable.");
+
+    juce::AudioDeviceManager manager;
+    manager.addAudioDeviceType(std::move(asio));
+    logInfo("audio.probe", "Opening the requested ASIO setup in the worker.");
+    flushStudioLog();
+    const auto error = manager.initialise(1, 2, &setup, false);
+    auto result = error.isNotEmpty()
+        ? juce::Result::fail(error)
+        : manager.getCurrentAudioDevice() == nullptr
+            ? juce::Result::fail("The ASIO probe did not open a device.")
+            : juce::Result::ok();
+    if (result.wasOk()
+        && !juce::MessageManager::getInstance()->runDispatchLoopUntil(100))
+    {
+        result = juce::Result::fail(
+            "The ASIO driver stopped the probe event loop during startup.");
+    }
+    logInfo("audio.probe", "Closing the ASIO probe device.");
+    flushStudioLog();
+    manager.closeAudioDevice();
+    return result;
+#else
+    juce::ignoreUnused(setup);
+    return juce::Result::fail("Native audio startup checks are supported only on Windows.");
+#endif
+}
+
 StudioAudioDeviceManager::StudioAudioDeviceManager()
     : settingsFile(defaultAudioSettingsFile())
 {
@@ -225,6 +283,8 @@ StudioAudioDeviceManager::StudioAudioDeviceManager()
 
 juce::Result StudioAudioDeviceManager::initialiseStudioAudio()
 {
+    logInfo("audio.startup", "Discovering audio devices and reading the saved setup.");
+    flushStudioLog();
     const auto started = juce::Time::getMillisecondCounterHiRes();
     const auto logResult = [started](
                                StudioLogLevel level,
@@ -264,11 +324,7 @@ juce::Result StudioAudioDeviceManager::initialiseStudioAudio()
 #endif
             getAvailableDeviceTypes();
             markDeviceTypesScanned();
-            const auto error = juce::AudioDeviceManager::initialise(
-                1,
-                2,
-                saved.get(),
-                false);
+            const auto error = initialiseCheckedSetup(*saved);
             if (error.isEmpty() && getCurrentAudioDevice() != nullptr)
             {
                 logResult(
@@ -299,22 +355,10 @@ juce::Result StudioAudioDeviceManager::initialiseStudioAudio()
                         break;
                     }
                 }
-                auto savedAsioDeviceName =
-                    saved->getStringAttribute("audioDeviceName");
-                if (savedAsioDeviceName.isEmpty())
-                {
-                    savedAsioDeviceName = saved->getStringAttribute(
-                        "audioInputDeviceName");
-                }
-                if (savedAsioDeviceName.isEmpty())
-                {
-                    savedAsioDeviceName = saved->getStringAttribute(
-                        "audioOutputDeviceName");
-                }
                 const auto retryResult =
                     initialiseAsioDevices(
                         asioDevices,
-                        savedAsioDeviceName);
+                        audioDeviceSetupName(*saved));
                 if (retryResult.wasOk())
                     return retryResult;
                 return initialiseWindowsAudioFallback(
@@ -401,6 +445,24 @@ juce::Result StudioAudioDeviceManager::initialiseStudioAudio()
     return juce::Result::ok();
 }
 
+juce::String StudioAudioDeviceManager::initialiseCheckedSetup(
+    const juce::XmlElement& setup)
+{
+#if JUCE_WINDOWS
+    if (setup.getStringAttribute("deviceType").equalsIgnoreCase("ASIO"))
+    {
+        if (const auto result = probeAudioDeviceSetup(setup); result.failed())
+            return result.getErrorMessage();
+    }
+#endif
+    logInfo(
+        "audio.startup",
+        "Opening " + setup.getStringAttribute("deviceType")
+            + " device " + audioDeviceSetupName(setup) + ".");
+    flushStudioLog();
+    return juce::AudioDeviceManager::initialise(1, 2, &setup, false);
+}
+
 #if JUCE_WINDOWS
 juce::Result StudioAudioDeviceManager::initialiseAsioDevices(
     const juce::StringArray& deviceNames,
@@ -422,11 +484,7 @@ juce::Result StudioAudioDeviceManager::initialiseAsioDevices(
             "audioDeviceOutChans",
             setup.outputChannels.toString(2));
 
-        const auto error = juce::AudioDeviceManager::initialise(
-            1,
-            2,
-            &xml,
-            false);
+        const auto error = initialiseCheckedSetup(xml);
         if (error.isEmpty() && getCurrentAudioDevice() != nullptr)
         {
             logInfo(
@@ -559,21 +617,22 @@ void StudioAudioDeviceManager::prepareDeviceTypesForSettings()
 
     const auto availability = deviceTypeAvailability(deviceTypes);
     const auto currentType = getCurrentAudioDeviceType();
+    auto* device = getCurrentAudioDevice();
+    const auto deviceIsOpen = device != nullptr && device->isOpen();
     const auto preferredType = preferredAvailableAudioDeviceType(
         currentType,
-        availability);
+        availability,
+        deviceIsOpen);
     if (preferredType.isNotEmpty()
         && !preferredType.equalsIgnoreCase(currentType))
     {
         logInfo(
             "audio.discovery",
-            "The "
-                + (currentType.isEmpty()
-                       ? juce::String("unselected")
-                       : currentType)
-                + " backend has no input devices; selecting "
-                + preferredType
-                + " for Settings.");
+            !deviceIsOpen
+                ? "No audio device is open; selecting " + preferredType + " for Settings."
+                : "The " + currentType + " backend has no input devices; selecting "
+                    + preferredType + " for Settings.");
+        flushStudioLog();
         setCurrentAudioDeviceType(preferredType, false);
     }
 #endif
@@ -585,9 +644,10 @@ void StudioAudioDeviceManager::addWindowsFallbackDeviceTypes()
     if (windowsFallbackDeviceTypesAdded)
         return;
 
-    logDebug(
+    logInfo(
         "audio.discovery",
         "Preparing WASAPI and DirectSound device types.");
+    flushStudioLog();
     const auto addType = [this](juce::AudioIODeviceType* rawType)
     {
         auto type = std::unique_ptr<juce::AudioIODeviceType>(rawType);

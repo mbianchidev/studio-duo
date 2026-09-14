@@ -89,7 +89,10 @@ The workflow rejects a tag when:
 
 Both platform builds must pass the complete test suite before the GitHub Release
 is published. Windows publication also requires successful Authenticode signing
-and verification of both `Studio Duo.exe` and the installer. The installer
+and verification of both `Studio Duo.exe` and the installer. The signed installer
+is then installed into a temporary directory on the disposable runner; the
+installed executable must pass its driver-free main-window startup check before
+the test installation is uninstalled. The installer
 embeds the current Microsoft Visual C++ x64 Redistributable, verifies its
 Microsoft signature while packaging, and installs it only when the installed
 runtime is older. The publication job generates `update-manifest.json` from the

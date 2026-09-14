@@ -7,6 +7,8 @@
 #include "plugin_host/ScreamForgeValidation.h"
 #include "platform/ApplicationIcon.h"
 #include "logging/StudioLogger.h"
+#include "audio/AudioDeviceProbe.h"
+#include "platform/WindowsCrashHandler.h"
 
 #include <juce_gui_extra/juce_gui_extra.h>
 
@@ -38,6 +40,26 @@ public:
     {
         fileLogger = StudioLogger::createDefault();
         juce::Logger::setCurrentLogger(fileLogger.get());
+        logInfo(
+            "app.startup",
+            "Studio Duo " + getApplicationVersion()
+                + " process started on " + juce::SystemStats::getOperatingSystemName());
+        fileLogger->flush();
+#if JUCE_WINDOWS
+        if (const auto result = crashHandler.initialise(StudioLogger::defaultLogDirectory());
+            result.failed())
+        {
+            logError("app.crash", result.getErrorMessage());
+            fileLogger->flush();
+        }
+#endif
+        const auto arguments = getCommandLineParameterArray();
+        if (const auto result = runAudioDeviceProbeWorker(arguments, probeNativeAudioDeviceSetup))
+        {
+            setApplicationReturnValue(*result);
+            quit();
+            return;
+        }
 
         auto bridgeWorker = std::make_unique<PluginBridgeWorker>();
         if (bridgeWorker->initialise(commandLine))
@@ -102,13 +124,45 @@ public:
 #if JUCE_MAC
         applyPlatformApplicationIcon();
 #endif
+        const auto startupSelfTest = arguments.contains("--startup-self-test");
+#if JUCE_WINDOWS
+        if (!startupSelfTest)
+            crashHandler.enableNativeDialog();
+#endif
         logInfo(
             "app.lifecycle",
             "Studio Duo "
                 + getApplicationVersion()
                 + " started on "
                 + juce::SystemStats::getOperatingSystemName());
-        mainWindow = std::make_unique<MainWindow>(getApplicationName());
+        logInfo("app.startup", "Constructing the main window.");
+        fileLogger->flush();
+        mainWindow = std::make_unique<MainWindow>(
+            getApplicationName(),
+            !startupSelfTest && !arguments.contains("--safe-audio"));
+        logInfo("app.startup", "The main window is ready.");
+        fileLogger->flush();
+        if (startupSelfTest)
+        {
+            juce::Timer::callAfterDelay(750, [this]
+            {
+                const auto* content = mainWindow != nullptr
+                    ? dynamic_cast<MainComponent*>(mainWindow->getContentComponent())
+                    : nullptr;
+                const auto ready = mainWindow != nullptr
+                    && mainWindow->getPeer() != nullptr
+                    && mainWindow->isVisible()
+                    && content != nullptr
+                    && !content->hasAudioDeviceManager();
+                setApplicationReturnValue(ready ? 0 : 1);
+                if (ready)
+                    logInfo("app.self-test", "Main-window startup self-test completed.");
+                else
+                    logError("app.self-test", "Safe startup did not create a visible, driver-free window.");
+                fileLogger->flush();
+                systemRequestedQuit();
+            });
+        }
     }
 
     void shutdown() override
@@ -385,13 +439,13 @@ private:
     class MainWindow final : public juce::DocumentWindow
     {
     public:
-        explicit MainWindow(const juce::String& name)
+        MainWindow(const juce::String& name, bool startAudioOnLaunch)
             : juce::DocumentWindow(name,
                                    juce::Colour(StudioColours::window),
                                    juce::DocumentWindow::allButtons)
         {
             setUsingNativeTitleBar(true);
-            setContentOwned(new MainComponent(), true);
+            setContentOwned(new MainComponent(startAudioOnLaunch), true);
             setResizable(true, false);
 
             juce::BorderSize<int> nativeFrame;
@@ -455,6 +509,9 @@ private:
     std::unique_ptr<PluginCatalog> pluginActivationCatalog;
     std::unique_ptr<StudioLogger> fileLogger;
     juce::String validationIdentifier;
+#if JUCE_WINDOWS
+    WindowsCrashHandler crashHandler;
+#endif
 };
 }
 START_JUCE_APPLICATION(studio::StudioDuoApplication)
