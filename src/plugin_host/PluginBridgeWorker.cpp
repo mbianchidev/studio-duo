@@ -259,6 +259,7 @@ void PluginBridgeWorker::handleConnectionLost()
 
 void PluginBridgeWorker::run()
 {
+    processingThreadStarted.signal();
     while (!threadShouldExit()
            && sharedState != nullptr
            && sharedState->shutdownRequested.load(std::memory_order_acquire) == 0)
@@ -667,13 +668,29 @@ void PluginBridgeWorker::startProcessing(std::unique_ptr<juce::AudioPluginInstan
                           true,
                           false);
     processBuffer.clear();
-    sendStatus("ready|"
-               + juce::String(plugin != nullptr ? plugin->getLatencySamples() : 0)
-               + "|"
-               + juce::String(plugin != nullptr ? plugin->getTailLengthSeconds() : 0.0, 6)
-               + "|"
-               + parameterMetadata());
-    startThread(juce::Thread::Priority::high);
+    const auto readyStatus =
+        "ready|"
+        + juce::String(plugin != nullptr ? plugin->getLatencySamples() : 0)
+        + "|"
+        + juce::String(
+            plugin != nullptr ? plugin->getTailLengthSeconds() : 0.0,
+            6)
+        + "|"
+        + parameterMetadata();
+    processingThreadStarted.reset();
+    if (!startThread(juce::Thread::Priority::high))
+    {
+        sendStatus("error:processing-thread-start-failed");
+        return;
+    }
+    if (!processingThreadStarted.wait(5000.0))
+    {
+        signalThreadShouldExit();
+        stopThread(1000);
+        sendStatus("error:processing-thread-start-timeout");
+        return;
+    }
+    sendStatus(readyStatus);
 }
 
 juce::String PluginBridgeWorker::parameterMetadata() const
