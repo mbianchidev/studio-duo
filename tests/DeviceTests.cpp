@@ -47,6 +47,40 @@ void deviceTests()
     expect(studio::preferredAsioDeviceName(asioDrivers)
                == "Focusrite USB ASIO",
            "A native ASIO driver is preferred over compatibility wrappers.");
+    const auto orderedAsioDrivers =
+        studio::orderedAsioDeviceNames(asioDrivers);
+    expect(orderedAsioDrivers.size() == 3
+               && orderedAsioDrivers[0] == "Focusrite USB ASIO"
+               && orderedAsioDrivers[1] == "ASIO4ALL v2"
+               && orderedAsioDrivers[2]
+                    == "Generic Low Latency ASIO Driver",
+           "Native ASIO drivers are tried before compatibility wrappers.");
+
+    const juce::StringArray multipleNativeAsioDrivers {
+        "Focusrite Thunderbolt ASIO",
+        "ASIO4ALL v2",
+        "Focusrite USB ASIO"
+    };
+    const auto orderedNativeAsioDrivers =
+        studio::orderedAsioDeviceNames(multipleNativeAsioDrivers);
+    expect(orderedNativeAsioDrivers.size() == 3
+               && orderedNativeAsioDrivers[0]
+                    == "Focusrite Thunderbolt ASIO"
+               && orderedNativeAsioDrivers[1]
+                    == "Focusrite USB ASIO"
+               && orderedNativeAsioDrivers[2] == "ASIO4ALL v2",
+           "Every native ASIO driver is tried before fallback wrappers.");
+    const auto retryOrderedAsioDrivers =
+        studio::orderedAsioDeviceNames(
+            multipleNativeAsioDrivers,
+            "Focusrite Thunderbolt ASIO");
+    expect(retryOrderedAsioDrivers.size() == 3
+               && retryOrderedAsioDrivers[0]
+                    == "Focusrite USB ASIO"
+               && retryOrderedAsioDrivers[1] == "ASIO4ALL v2"
+               && retryOrderedAsioDrivers[2]
+                    == "Focusrite Thunderbolt ASIO",
+           "A failed saved ASIO driver is retried after other candidates.");
 
     const juce::StringArray wrapperOnly { "ASIO4ALL v2" };
     expect(studio::preferredAsioDeviceName(wrapperOnly) == "ASIO4ALL v2",
@@ -76,6 +110,40 @@ void deviceTests()
                       .countNumberOfSetBits()
                     == 2,
            "ASIO starts with a stereo hardware output.");
+
+    const std::vector<studio::AudioDeviceTypeAvailability>
+        fallbackDeviceTypes {
+            { "ASIO", false, false },
+            { "Windows Audio", true, true },
+            { "Windows Audio (Exclusive Mode)", true, true }
+        };
+    expect(studio::preferredAvailableAudioDeviceType(
+               "ASIO",
+               fallbackDeviceTypes)
+               == "Windows Audio",
+           "Settings switch from empty ASIO to an input-capable backend.");
+
+    const std::vector<studio::AudioDeviceTypeAvailability>
+        availableAsioDeviceTypes {
+            { "ASIO", true, true },
+            { "Windows Audio", true, true }
+        };
+    expect(studio::preferredAvailableAudioDeviceType(
+               "ASIO",
+               availableAsioDeviceTypes)
+               == "ASIO",
+           "Settings retain ASIO when a driver is available.");
+
+    const std::vector<studio::AudioDeviceTypeAvailability>
+        inputOnlyDeviceTypes {
+            { "ASIO", false, false },
+            { "Virtual Microphone", true, false }
+        };
+    expect(studio::preferredAvailableAudioDeviceType(
+               {},
+               inputOnlyDeviceTypes)
+               == "Virtual Microphone",
+           "Settings can select an input-only device type.");
 
     juce::BigInteger sparseChannels;
     sparseChannels.setBit(0);

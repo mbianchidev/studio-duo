@@ -633,7 +633,9 @@ MainComponent::MainComponent()
     inputLabel.setText("INPUT", juce::dontSendNotification);
     inputLabel.setColour(juce::Label::textColourId, juce::Colour(StudioColours::secondaryText));
     addAndMakeVisible(inputSelector);
-    inputSelector.setTooltip("Select the hardware input for this audio track");
+    inputSelector.setTooltip(
+        "Select an input channel from the active audio device; "
+        "change devices in Settings");
     inputSelector.onChange = [this]
     {
         if (updatingInputControls || inputSelector.getSelectedItemIndex() < 0)
@@ -1601,6 +1603,7 @@ MainComponent::MainComponent()
 
     selectedTrackId = project.tracks.front().id;
     selectTrack(selectedTrackId);
+    refreshInputControls();
 
     setStatus("Starting audio...");
     projectChanged(false);
@@ -1669,8 +1672,9 @@ bool MainComponent::connectAudioEngine()
     refreshInputControls();
     if (const auto* device = deviceManager.getCurrentAudioDevice())
     {
-        setStatus(
-            "Ready. "
+        const auto startupNotice = deviceManager.takeStartupNotice();
+        auto readyMessage =
+            juce::String("Ready. ")
             + deviceManager.getCurrentAudioDeviceType()
             + ": "
             + device->getName()
@@ -1682,7 +1686,10 @@ bool MainComponent::connectAudioEngine()
             + juce::String(
                 device->getActiveOutputChannels()
                     .countNumberOfSetBits())
-            + " outputs).");
+            + " outputs).";
+        if (startupNotice.isNotEmpty())
+            readyMessage = startupNotice + " " + readyMessage;
+        setStatus(readyMessage);
     }
     return true;
 }
@@ -4965,7 +4972,7 @@ void MainComponent::refreshInputControls()
     routingPanel->setHardwareOutputs(std::move(outputNames));
 
     if (inputSelector.getNumItems() == 0)
-        inputSelector.addItem("No active input", 1);
+        inputSelector.addItem("No active input - open Settings", 1);
 
     const auto* track = project.findTrack(selectedTrackId);
     const auto requested = track != nullptr ? track->inputChannel : selectedIndex;
