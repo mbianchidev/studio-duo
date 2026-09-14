@@ -14,6 +14,7 @@
 #include "plugin_host/PluginBrowserComponent.h"
 #include "plugin_host/PluginCatalog.h"
 #include "project_io/ProjectFile.h"
+#include "update/UpdateService.h"
 
 #include <juce_audio_utils/juce_audio_utils.h>
 
@@ -25,7 +26,8 @@ namespace studio
 {
 class MainComponent final : public juce::Component,
                             private juce::Timer,
-                            private juce::KeyListener
+                            private juce::KeyListener,
+                            private UpdateService::Listener
 {
 public:
     MainComponent();
@@ -83,7 +85,11 @@ private:
     void beginSaveProject();
     void beginImportAudio();
     void beginExportMix();
-    void showAudioSettings();
+    void showSettings(bool showUpdates = false);
+    void restartForUpdate();
+    void updateStateChanged(
+        const UpdateSnapshot& snapshot) override;
+    void maybePromptForUpdate();
     void saveProjectTo(const juce::File& package);
     bool captureCurrentPluginStates(
         const std::vector<juce::String>& trackIds,
@@ -223,6 +229,10 @@ private:
 
     StudioTheme theme;
     std::unique_ptr<juce::Drawable> brandLogo;
+    UpdateService updateService {
+        STUDIO_DUO_VERSION,
+        STUDIO_DUO_UPDATE_MANIFEST_URL
+    };
     StudioAudioDeviceManager deviceManager;
     StudioAudioEngine audioEngine;
     Project project { Project::createDefault() };
@@ -263,7 +273,7 @@ private:
     juce::TextButton openButton { "OPEN" };
     juce::TextButton saveButton { "SAVE" };
     juce::TextButton exportButton { "EXPORT" };
-    juce::TextButton audioSetupButton { "I/O" };
+    juce::TextButton settingsButton { "SETTINGS" };
     juce::TextButton undoButton { "UNDO" };
     juce::TextButton redoButton { "REDO" };
     juce::TextButton playButton { "PLAY" };
@@ -330,6 +340,11 @@ private:
     std::unique_ptr<PluginInsertPanel> insertPanel;
     juce::Label statusLabel;
     std::unique_ptr<juce::FileChooser> fileChooser;
+    std::unique_ptr<juce::DialogWindow> settingsWindow;
+    UpdateSnapshot latestUpdateSnapshot;
+    juce::String lastAvailabilityPromptVersion;
+    juce::String lastReadyPromptVersion;
+    bool updatePromptVisible = false;
     juce::TooltipWindow tooltipWindow { this, 700 };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainComponent)

@@ -5,9 +5,11 @@ tag starts the GitHub Actions release workflow, which builds and tests the
 application before publishing:
 
 - a universal macOS DMG for Apple Silicon and Intel Macs
+- a universal macOS ZIP used only by the in-app updater
 - a signed Windows x64 Inno Setup installer
 - a portable Windows x64 ZIP containing the signed `Studio Duo.exe`
 - `SHA256SUMS.txt` for download verification
+- `update-manifest.json` for in-app discovery and verified downloads
 
 ## Prerequisites
 
@@ -90,8 +92,18 @@ is published. Windows publication also requires successful Authenticode signing
 and verification of both `Studio Duo.exe` and the installer. The installer
 embeds the current Microsoft Visual C++ x64 Redistributable, verifies its
 Microsoft signature while packaging, and installs it only when the installed
-runtime is older. GitHub automatically generates release notes from the merged
-changes since the previous tag.
+runtime is older. The publication job generates `update-manifest.json` from the
+finished macOS updater ZIP and Windows installer, including their exact release
+URLs, byte sizes, and SHA-256 checksums. GitHub automatically generates release
+notes from the merged changes since the previous tag.
+
+The updater introduces no new release secret or signing system. macOS updates
+use the same ad-hoc-signed bundle produced by the normal build and do not
+require Apple notarization or a separate update-signing key. Windows updates
+reuse the existing installer and its permanent Inno Setup application ID; no
+Windows service or updater-specific credential is required. Portable ZIP
+builds do not update in place; the installed Setup build provides the automatic
+update path.
 
 ## Install released artifacts
 
@@ -101,7 +113,9 @@ Download artifacts from the repository's
 On macOS, open the DMG and drag **Studio Duo** into **Applications**. The current
 pipeline applies an ad hoc application signature but does not use an Apple
 Developer ID or notarization, so macOS may require approval in **System
-Settings > Privacy & Security** on first launch.
+Settings > Privacy & Security** on first launch. Later updates are discovered
+and downloaded inside Studio Duo. **Restart and Update** replaces the installed
+bundle when the `.app` and its parent directory are writable.
 
 On Windows, run
 `Studio-Duo-<version>-Windows-x64-Setup.exe`. It installs to

@@ -2,6 +2,7 @@
 
 #include "automation/AutomationRecorder.h"
 #include "logging/StudioLogger.h"
+#include "update/UpdateSettingsComponent.h"
 #include "plugin_host/PluginStateStore.h"
 #include "reamp/ReampSnapshotService.h"
 #include "render/RenderEngine.h"
@@ -328,6 +329,8 @@ MainComponent::MainComponent()
     setOpaque(true);
     setWantsKeyboardFocus(true);
     addKeyListener(this);
+    updateService.addListener(this);
+    latestUpdateSnapshot = updateService.snapshot();
 
     brandLogo = juce::Drawable::createFromImageData(
         studio_brand::studioduoicon_svg,
@@ -381,7 +384,9 @@ MainComponent::MainComponent()
     configureButton(openButton, "Open a .studioduo project");
     configureButton(saveButton, "Save project (Command/Ctrl+S)");
     configureButton(exportButton, "Export a stereo WAV");
-    configureButton(audioSetupButton, "Configure audio and MIDI devices");
+    configureButton(
+        settingsButton,
+        "Configure audio, MIDI, and automatic updates");
     configureButton(undoButton, "Undo (Command/Ctrl+Z)");
     configureButton(redoButton, "Redo (Command/Ctrl+Shift+Z)");
     configureButton(playButton, "Play or pause (Space)");
@@ -419,7 +424,7 @@ MainComponent::MainComponent()
     openButton.onClick = [this] { beginOpenProject(); };
     saveButton.onClick = [this] { beginSaveProject(); };
     exportButton.onClick = [this] { beginExportMix(); };
-    audioSetupButton.onClick = [this] { showAudioSettings(); };
+    settingsButton.onClick = [this] { showSettings(); };
     undoButton.onClick = [this] { undo(); };
     redoButton.onClick = [this] { redo(); };
     playButton.onClick = [this] { togglePlayback(); };
@@ -1608,6 +1613,14 @@ MainComponent::MainComponent()
             if (safe != nullptr)
                 safe->initialiseAudio();
         });
+    juce::Timer::callAfterDelay(
+        1200,
+        [safe = juce::Component::SafePointer<MainComponent>(this)]
+        {
+            if (safe == nullptr)
+                return;
+            safe->updateService.checkForUpdates();
+        });
 }
 
 void MainComponent::initialiseAudio()
@@ -1676,6 +1689,7 @@ bool MainComponent::connectAudioEngine()
 
 MainComponent::~MainComponent()
 {
+    updateService.removeListener(this);
     prepareForShutdown();
     const auto recoveryPending = std::any_of(
         project.tracks.cbegin(),
@@ -1853,8 +1867,8 @@ void MainComponent::resized()
                 area.removeFromLeft(62).reduced(3, verticalInset));
             exportButton.setBounds(
                 area.removeFromLeft(74).reduced(3, verticalInset));
-            audioSetupButton.setBounds(
-                area.removeFromLeft(48).reduced(3, verticalInset));
+            settingsButton.setBounds(
+                area.removeFromLeft(84).reduced(3, verticalInset));
         };
     const auto layoutEditControls =
         [this](juce::Rectangle<int> area, int verticalInset)
@@ -1890,7 +1904,7 @@ void MainComponent::resized()
         topRow.removeFromTop(4);
         auto secondRow = topRow.removeFromTop(28);
 
-        layoutFileControls(firstRow.removeFromLeft(320), 1);
+        layoutFileControls(firstRow.removeFromLeft(356), 1);
         layoutTempoControls(firstRow.removeFromRight(180), 2);
         metronomeButton.setBounds(
             firstRow.removeFromRight(78).reduced(3, 1));
@@ -1901,7 +1915,7 @@ void MainComponent::resized()
     }
     else
     {
-        layoutFileControls(topRow.removeFromLeft(320), 12);
+        layoutFileControls(topRow.removeFromLeft(356), 12);
         layoutEditControls(topRow.removeFromLeft(128), 12);
         layoutTransportControls(topRow.removeFromLeft(270), 9);
         layoutTempoControls(topRow.removeFromRight(180), 10);
@@ -2481,29 +2495,175 @@ void MainComponent::beginExportMix()
     });
 }
 
-void MainComponent::showAudioSettings()
+void MainComponent::showSettings(bool showUpdates)
 {
-    deviceManager.prepareDeviceTypesForSettings();
-    auto selector = std::make_unique<juce::AudioDeviceSelectorComponent>(
+    if (settingsWindow != nullptr)
+    {
+        if (showUpdates)
+        {
+            if (auto* settings =
+                    dynamic_cast<SettingsComponent*>(
+                        settingsWindow->getContentComponent()))
+                settings->showUpdates();
+        }
+        settingsWindow->toFront(true);
+        return;
+    }
+
+    auto settings = std::make_unique<SettingsComponent>(
         deviceManager,
-        0,
-        maximumHardwareAudioChannels,
-        0,
-        maximumHardwareAudioChannels,
-        true,
-        true,
-        false,
-        false);
-    selector->setSize(560, 460);
+        updateService,
+        [safe = juce::Component::SafePointer<MainComponent>(this)]
+        {
+            if (safe != nullptr)
+                safe->restartForUpdate();
+        },
+        showUpdates);
+    settings->setLookAndFeel(&theme);
 
     juce::DialogWindow::LaunchOptions options;
-    options.content.setOwned(selector.release());
-    options.dialogTitle = "Studio Duo audio and MIDI I/O";
+    options.content.setOwned(settings.release());
+    options.dialogTitle = "Studio Duo Settings";
     options.dialogBackgroundColour = juce::Colour(StudioColours::panel);
+    options.componentToCentreAround = this;
     options.escapeKeyTriggersCloseButton = true;
     options.useNativeTitleBar = true;
     options.resizable = true;
-    options.launchAsync();
+    settingsWindow.reset(options.create());
+    settingsWindow->enterModalState(
+        true,
+        juce::ModalCallbackFunction::create(
+            [safe = juce::Component::SafePointer<MainComponent>(this)](
+                int)
+            {
+                if (safe != nullptr)
+                    safe->settingsWindow.reset();
+            }),
+        false);
+}
+
+void MainComponent::restartForUpdate()
+{
+    if (exportInProgress)
+    {
+        showError(
+            "Update cannot start yet",
+            "Wait for the current save or render to finish, then restart "
+            "to install the update.");
+        return;
+    }
+
+    const auto result = updateService.launchReadyUpdate();
+    if (result.failed())
+    {
+        showError(
+            "Update could not start",
+            result.getErrorMessage());
+        return;
+    }
+
+    if (auto* application =
+            juce::JUCEApplication::getInstance())
+        application->systemRequestedQuit();
+}
+
+void MainComponent::updateStateChanged(
+    const UpdateSnapshot& snapshot)
+{
+    latestUpdateSnapshot = snapshot;
+    maybePromptForUpdate();
+}
+
+void MainComponent::maybePromptForUpdate()
+{
+    if (appShutdownPrepared
+        || updatePromptVisible
+        || latestUpdateSnapshot.availableVersion.isEmpty())
+        return;
+
+    const auto version =
+        latestUpdateSnapshot.availableVersion;
+    if ((latestUpdateSnapshot.phase == UpdatePhase::available
+         || latestUpdateSnapshot.phase == UpdatePhase::downloading
+         || latestUpdateSnapshot.phase == UpdatePhase::failed)
+        && lastAvailabilityPromptVersion != version)
+    {
+        lastAvailabilityPromptVersion = version;
+        updatePromptVisible = true;
+        const auto message =
+            "Studio Duo "
+            + version
+            + " is available. "
+            + (latestUpdateSnapshot.phase == UpdatePhase::failed
+                   ? "The automatic download did not finish: "
+                         + latestUpdateSnapshot.message
+                         + " Open Settings to retry."
+                   : latestUpdateSnapshot.automaticDownloads
+                   ? "It is downloading in the background. "
+                     "Open Settings to view progress or change this preference."
+                   : "Open Settings to download it without leaving the app.");
+        juce::AlertWindow::showAsync(
+            juce::MessageBoxOptions()
+                .withIconType(
+                    juce::MessageBoxIconType::InfoIcon)
+                .withTitle("Studio Duo update available")
+                .withMessage(message)
+                .withButton("Open Settings")
+                .withButton("Later")
+                .withAssociatedComponent(this),
+            [safe = juce::Component::SafePointer<MainComponent>(this)](
+                int result)
+            {
+                if (safe == nullptr)
+                    return;
+                safe->updatePromptVisible = false;
+                if (result == 1)
+                {
+                    safe->showSettings(true);
+                    return;
+                }
+                juce::Timer::callAfterDelay(
+                    5000,
+                    [safe]
+                    {
+                        if (safe != nullptr)
+                            safe->maybePromptForUpdate();
+                    });
+            });
+        return;
+    }
+
+    if (latestUpdateSnapshot.phase == UpdatePhase::ready
+        && lastReadyPromptVersion != version)
+    {
+        lastReadyPromptVersion = version;
+        updatePromptVisible = true;
+        juce::AlertWindow::showAsync(
+            juce::MessageBoxOptions()
+                .withIconType(
+                    juce::MessageBoxIconType::InfoIcon)
+                .withTitle("Studio Duo update ready")
+                .withMessage(
+                    "Studio Duo "
+                    + version
+                    + " is downloaded and verified. Restart now to install "
+                      "it, or keep working and restart later.")
+                .withButton("Restart and Update")
+                .withButton("Settings")
+                .withButton("Later")
+                .withAssociatedComponent(this),
+            [safe = juce::Component::SafePointer<MainComponent>(this)](
+                int result)
+            {
+                if (safe == nullptr)
+                    return;
+                safe->updatePromptVisible = false;
+                if (result == 1)
+                    safe->restartForUpdate();
+                else if (result == 2)
+                    safe->showSettings(true);
+            });
+    }
 }
 
 void MainComponent::saveProjectTo(const juce::File& package)
