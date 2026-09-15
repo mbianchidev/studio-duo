@@ -51,6 +51,7 @@ bool AutomationTarget::operator==(
         && routeId == other.routeId
         && insertId == other.insertId
         && parameterId == other.parameterId
+        && midiChannel == other.midiChannel
         && (parameterId.isNotEmpty()
             || parameterIndex == other.parameterIndex);
 }
@@ -64,6 +65,7 @@ juce::var AutomationTarget::toVar() const
     object->setProperty("insertId", insertId);
     object->setProperty("parameterId", parameterId);
     object->setProperty("parameterIndex", parameterIndex);
+    object->setProperty("midiChannel", midiChannel);
     return juce::var(object.release());
 }
 
@@ -88,9 +90,14 @@ std::optional<AutomationTarget> AutomationTarget::fromVar(
     target.insertId = object->getProperty("insertId").toString();
     target.parameterId = object->getProperty("parameterId").toString();
     target.parameterIndex = integerProperty(*object, "parameterIndex", -1);
-    if (target.trackId.isEmpty())
+    target.midiChannel = integerProperty(*object, "midiChannel", -1);
+    if (target.trackId.isEmpty()
+        || (target.type == AutomationTargetType::midiChannelPressure
+            && (target.midiChannel < 1 || target.midiChannel > 16))
+        || (target.type != AutomationTargetType::midiChannelPressure
+            && target.midiChannel != -1))
     {
-        error = "Automation targets require a track ID.";
+        error = "Automation targets require a track ID and valid target-specific fields.";
         return std::nullopt;
     }
     return target;
@@ -195,7 +202,19 @@ std::optional<AutomationLane> AutomationLane::fromVar(
         });
     if (lane.id.isEmpty()
         || lane.name.trim().isEmpty()
-        || !std::isfinite(lane.trimOffset))
+        || !std::isfinite(lane.trimOffset)
+        || (lane.target.type
+                == AutomationTargetType::midiChannelPressure
+            && std::any_of(
+                lane.points.cbegin(),
+                lane.points.cend(),
+                [&lane](const auto& point)
+                {
+                    const auto effectiveValue =
+                        point.value + lane.trimOffset;
+                    return effectiveValue < 0.0
+                        || effectiveValue > 1.0;
+                })))
     {
         error = "Automation lanes require valid IDs, names, and trim values.";
         return std::nullopt;
@@ -269,6 +288,8 @@ juce::String automationTargetTypeToString(AutomationTargetType value)
         case AutomationTargetType::sendPan: return "sendPan";
         case AutomationTargetType::sendMute: return "sendMute";
         case AutomationTargetType::controlRoomDim: return "controlRoomDim";
+        case AutomationTargetType::midiChannelPressure:
+            return "midiChannelPressure";
         case AutomationTargetType::pluginParameter: return "pluginParameter";
         case AutomationTargetType::deviceParameter: return "deviceParameter";
     }
@@ -287,6 +308,8 @@ std::optional<AutomationTargetType> automationTargetTypeFromString(
     if (value == "sendPan") return AutomationTargetType::sendPan;
     if (value == "sendMute") return AutomationTargetType::sendMute;
     if (value == "controlRoomDim") return AutomationTargetType::controlRoomDim;
+    if (value == "midiChannelPressure")
+        return AutomationTargetType::midiChannelPressure;
     if (value == "pluginParameter") return AutomationTargetType::pluginParameter;
     if (value == "deviceParameter") return AutomationTargetType::deviceParameter;
     return std::nullopt;

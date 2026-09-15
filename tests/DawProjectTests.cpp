@@ -109,6 +109,51 @@ bool reportContains(const studio::CompatibilityReport& report,
         });
 }
 
+const studio::AutomationLane* pluginAutomation(
+    const studio::Project& project,
+    int parameterIndex)
+{
+    const auto lane = std::find_if(
+        project.automationLanes.cbegin(),
+        project.automationLanes.cend(),
+        [parameterIndex](const auto& candidate)
+        {
+            return candidate.target.type
+                    == studio::AutomationTargetType::pluginParameter
+                && candidate.target.parameterIndex == parameterIndex;
+        });
+    return lane == project.automationLanes.cend()
+        ? nullptr
+        : &*lane;
+}
+
+const juce::XmlElement* findElementWithAttribute(
+    const juce::XmlElement& parent,
+    const juce::String& tag,
+    const juce::String& attribute,
+    const juce::String& value)
+{
+    for (auto* child = parent.getFirstChildElement();
+         child != nullptr;
+         child = child->getNextElement())
+    {
+        if (child->hasTagName(tag)
+            && child->getStringAttribute(attribute) == value)
+        {
+            return child;
+        }
+        if (const auto* found = findElementWithAttribute(
+                *child,
+                tag,
+                attribute,
+                value))
+        {
+            return found;
+        }
+    }
+    return nullptr;
+}
+
 std::uint32_t littleEndian32(const std::uint8_t* bytes)
 {
     return static_cast<std::uint32_t>(
@@ -153,6 +198,76 @@ bool patchCentralUncompressedSize(juce::MemoryBlock& archive,
         return true;
     }
     return false;
+}
+
+bool corruptStoredArchiveEntry(const juce::File& archive,
+                               const juce::String& suffix)
+{
+    juce::MemoryBlock data;
+    if (!archive.loadFileAsData(data))
+        return false;
+    auto* bytes = static_cast<std::uint8_t*>(data.getData());
+    for (std::size_t position = 0;
+         position + 30 <= data.getSize();
+         ++position)
+    {
+        if (littleEndian32(bytes + position) != 0x04034b50u)
+            continue;
+        const auto compressedSize =
+            littleEndian32(bytes + position + 18);
+        const auto nameLength = static_cast<std::uint16_t>(
+            bytes[position + 26]
+            | (static_cast<std::uint16_t>(
+                   bytes[position + 27])
+               << 8));
+        const auto extraLength = static_cast<std::uint16_t>(
+            bytes[position + 28]
+            | (static_cast<std::uint16_t>(
+                   bytes[position + 29])
+               << 8));
+        const auto payloadOffset =
+            position + 30 + nameLength + extraLength;
+        if (payloadOffset + compressedSize > data.getSize())
+            return false;
+        const auto name = juce::String::fromUTF8(
+            reinterpret_cast<const char*>(bytes + position + 30),
+            nameLength);
+        if (!name.endsWithIgnoreCase(suffix) || compressedSize == 0)
+            continue;
+        bytes[payloadOffset] ^= 0x01;
+        return archive.replaceWithData(
+            data.getData(),
+            data.getSize());
+    }
+    return false;
+}
+
+bool writeDawProjectFixture(const juce::File& archive,
+                            const juce::String& projectXml)
+{
+    const auto projectUtf8 = projectXml.toStdString();
+    constexpr auto metadataXml = "<MetaData/>";
+    juce::ZipFile::Builder builder;
+    const auto fixedTime = juce::Time(1980, 0, 1, 0, 0);
+    builder.addEntry(
+        std::make_unique<juce::MemoryInputStream>(
+            projectUtf8.data(),
+            projectUtf8.size(),
+            false),
+        9,
+        "project.xml",
+        fixedTime);
+    builder.addEntry(
+        std::make_unique<juce::MemoryInputStream>(
+            metadataXml,
+            std::strlen(metadataXml),
+            false),
+        9,
+        "metadata.xml",
+        fixedTime);
+    auto output = archive.createOutputStream();
+    return output != nullptr
+        && builder.writeToStream(*output, nullptr);
 }
 
 void nativeSceneAndReportPersistence()
@@ -661,6 +776,11 @@ void completeArchiveRoundTrip()
           0.1,
           0.75,
           -1 },
+        { "expression-channel-pressure",
+          studio::MidiExpressionType::channelPressure,
+          0.2,
+          0.6,
+          -1 },
         { "expression-pitch",
           studio::MidiExpressionType::pitchBend,
           0.25,
@@ -790,6 +910,8 @@ void completeArchiveRoundTrip()
                && projectXml.contains("<BuiltinDevice")
                && projectXml.contains("<Points")
                && projectXml.contains("expression=\"pressure\"")
+               && projectXml.contains(
+                   "expression=\"channelPressure\"")
                && archiveContainsPrefix(archive, "media/")
                && archiveContainsPrefix(archive, "plugin-state/"),
            "Export includes transport maps, scenes, warps, devices, automation, note expressions, media, and plugin state.");
@@ -870,8 +992,22 @@ void completeArchiveRoundTrip()
                    && importedMidi->midiClips.front()
                           .notes.front()
                           .expressions.size()
-                          == 3,
-               "Audio warps/fades and MIDI notes/expressions survive import.");
+                          == 4
+                   && std::count_if(
+                          importedMidi->midiClips.front()
+                              .notes.front()
+                              .expressions.cbegin(),
+                          importedMidi->midiClips.front()
+                              .notes.front()
+                              .expressions.cend(),
+                          [](const auto& expression)
+                          {
+                              return expression.type
+                                  == studio::MidiExpressionType::
+                                      channelPressure;
+                          })
+                          == 1,
+               "Audio warps/fades and distinct MIDI pressure expressions survive import.");
         expect(importedMidi != nullptr
                    && importedMidi->inserts.size() == 1
                    && importedMidi->inserts.front().format
@@ -1467,6 +1603,640 @@ void unitAndChannelHierarchyImport()
     root.deleteRecursively();
 }
 
+void externalChannelPressureAutomationImport()
+{
+    const auto root = juce::File::getSpecialLocation(
+                          juce::File::tempDirectory)
+                          .getNonexistentChildFile(
+                              "StudioDuoDawProjectChannelPressure",
+                              {},
+                              false);
+    expect(root.createDirectory(),
+           "DAWproject channel-pressure fixture directory can be created.");
+    const auto projectXml = juce::File(STUDIO_DUO_SOURCE_DIR)
+                                .getChildFile("tests")
+                                .getChildFile("fixtures")
+                                .getChildFile("dawproject")
+                                .getChildFile(
+                                    "channel-pressure-track.xml")
+                                .loadFileAsString();
+    const auto archive =
+        root.getChildFile("channel-pressure-track.dawproject");
+    expect(projectXml.isNotEmpty()
+               && writeDawProjectFixture(archive, projectXml),
+           "External DAWproject channel-pressure fixture can be written.");
+
+    const auto package =
+        root.getChildFile("channel-pressure-track.studioduo");
+    const auto imported =
+        studio::DawProjectIO::importProject(archive, package);
+    expect(imported.succeeded(),
+           imported.result.getErrorMessage().toRawUTF8());
+    const auto channelPressureLane =
+        imported.project.has_value()
+        ? std::find_if(
+              imported.project->automationLanes.cbegin(),
+              imported.project->automationLanes.cend(),
+              [](const auto& lane)
+              {
+                  return lane.target.type
+                      == studio::AutomationTargetType::
+                          midiChannelPressure;
+              })
+        : std::vector<studio::AutomationLane>::const_iterator {};
+    const auto hasImportedLane =
+        imported.project.has_value()
+        && channelPressureLane
+            != imported.project->automationLanes.cend();
+    expect(hasImportedLane
+               && channelPressureLane->target.midiChannel == 3
+               && channelPressureLane->timebase
+                      == studio::AutomationTimebase::beats
+               && channelPressureLane->interpolation
+                      == studio::AutomationInterpolation::step
+               && channelPressureLane->points.size() == 2
+               && std::abs(
+                      channelPressureLane->points[0].position - 0.5)
+                      < 0.0001
+               && std::abs(
+                      channelPressureLane->points[0].value - 0.25)
+                      < 0.0001
+               && std::abs(
+                      channelPressureLane->points[1].value - 0.75)
+                      < 0.0001,
+           "External track-level channel pressure imports as channel-scoped MIDI automation.");
+
+    juce::String loadError;
+    const auto reloaded = studio::ProjectFile::load(package, loadError);
+    const auto persistedLane =
+        reloaded.has_value()
+        ? std::find_if(
+              reloaded->automationLanes.cbegin(),
+              reloaded->automationLanes.cend(),
+              [](const auto& lane)
+              {
+                  return lane.target.type
+                      == studio::AutomationTargetType::
+                          midiChannelPressure;
+              })
+        : std::vector<studio::AutomationLane>::const_iterator {};
+    expect(reloaded.has_value()
+               && persistedLane != reloaded->automationLanes.cend()
+               && persistedLane->target.midiChannel == 3,
+           loadError.toRawUTF8());
+
+    if (imported.project.has_value())
+    {
+        const auto exportedArchive =
+            root.getChildFile("channel-pressure-export.dawproject");
+        const auto exported = studio::DawProjectIO::exportProject(
+            *imported.project,
+            package,
+            exportedArchive);
+        const auto exportedXml =
+            archiveEntryText(exportedArchive, "project.xml");
+        juce::XmlDocument exportedDocument(exportedXml);
+        const auto exportedRoot =
+            exportedDocument.getDocumentElement();
+        const auto* exportedTarget =
+            exportedRoot != nullptr
+            ? findElementWithAttribute(
+                  *exportedRoot,
+                  "Target",
+                  "expression",
+                  "channelPressure")
+            : nullptr;
+        expect(exported.succeeded()
+                   && exportedTarget != nullptr
+                   && exportedTarget->getIntAttribute("channel", -1)
+                          == 2,
+               "Channel-scoped pressure exports through a DAWproject expression target without becoming per-note pressure.");
+    }
+    root.deleteRecursively();
+}
+
+void deviceAutomationDomainImport()
+{
+    const auto root = juce::File::getSpecialLocation(
+                          juce::File::tempDirectory)
+                          .getNonexistentChildFile(
+                              "StudioDuoDawProjectDeviceDomain",
+                              {},
+                              false);
+    expect(root.createDirectory(),
+           "DAWproject device-domain test directory can be created.");
+    const auto projectXml =
+        R"(<Project version="1.0"><Application name="Fixture" version="1"/><Structure><Track id="plugin-track" name="Plugin" contentType="audio automation"><Channel id="plugin-channel" destination="master-channel" role="regular" audioChannels="2"><Devices><Vst3Plugin id="plugin-device" deviceID="fixture.device" deviceName="Fixture Device" deviceRole="audioFX" loaded="false"><Parameters><RealParameter id="frequency-parameter" name="Frequency" parameterID="42" unit="hertz" min="20" max="2020" value="1020"/></Parameters><Enabled value="true"/></Vst3Plugin></Devices></Channel></Track><Track id="master-track" name="Master" contentType="audio"><Channel id="master-channel" role="master" audioChannels="2"/></Track></Structure><Arrangement><Lanes timeUnit="beats"><Points track="plugin-track"><Target parameter="frequency-parameter"/><RealPoint time="0" value="20" interpolation="linear"/><RealPoint time="1" value="1020" interpolation="linear"/><RealPoint time="2" value="2020" interpolation="linear"/></Points></Lanes></Arrangement></Project>)";
+    const auto archive = root.getChildFile("device-domain.dawproject");
+    expect(writeDawProjectFixture(archive, projectXml),
+           "DAWproject device-domain fixture can be written.");
+
+    const auto package = root.getChildFile("device-domain.studioduo");
+    const auto imported =
+        studio::DawProjectIO::importProject(archive, package);
+    expect(imported.succeeded(),
+           imported.result.getErrorMessage().toRawUTF8());
+    if (imported.project.has_value())
+    {
+        const auto* lane =
+            pluginAutomation(*imported.project, 42);
+        expect(lane != nullptr
+                   && lane->points.size() == 3
+                   && std::abs(lane->points[0].value) < 0.0001
+                   && std::abs(lane->points[1].value - 0.5) < 0.0001
+                   && std::abs(lane->points[2].value - 1.0) < 0.0001,
+               "Device automation values normalize from the declared raw parameter domain.");
+
+        const auto roundTripArchive =
+            root.getChildFile("device-domain-roundtrip.dawproject");
+        const auto exported = studio::DawProjectIO::exportProject(
+            *imported.project,
+            package,
+            roundTripArchive);
+        const auto exportedXml =
+            archiveEntryText(roundTripArchive, "project.xml");
+        juce::XmlDocument exportedDocument(exportedXml);
+        const auto exportedRoot =
+            exportedDocument.getDocumentElement();
+        const auto* exportedParameter =
+            exportedRoot != nullptr
+            ? findElementWithAttribute(
+                  *exportedRoot,
+                  "RealParameter",
+                  "parameterID",
+                  "42")
+            : nullptr;
+        expect(exported.succeeded()
+                   && exportedParameter != nullptr
+                   && exportedParameter->getStringAttribute("unit")
+                          == "normalized"
+                   && exportedParameter->getDoubleAttribute("min")
+                          == 0.0
+                   && exportedParameter->getDoubleAttribute("max")
+                          == 1.0,
+               "Normalized device automation exports with an explicit normalized domain.");
+
+        const auto roundTrip = studio::DawProjectIO::importProject(
+            roundTripArchive,
+            root.getChildFile("device-domain-roundtrip.studioduo"));
+        const auto* roundTripLane =
+            roundTrip.project.has_value()
+            ? pluginAutomation(*roundTrip.project, 42)
+            : nullptr;
+        expect(roundTrip.succeeded()
+                   && roundTripLane != nullptr
+                   && roundTripLane->points.size() == 3
+                   && std::abs(roundTripLane->points[1].value - 0.5)
+                          < 0.0001,
+               "Exported normalized device automation re-imports without changing values.");
+    }
+    root.deleteRecursively();
+}
+
+void invalidDeviceAutomationDomainImport()
+{
+    const auto root = juce::File::getSpecialLocation(
+                          juce::File::tempDirectory)
+                          .getNonexistentChildFile(
+                              "StudioDuoDawProjectBadDeviceDomain",
+                              {},
+                              false);
+    expect(root.createDirectory(),
+           "DAWproject invalid device-domain directory can be created.");
+    const auto projectXml =
+        R"(<Project version="1.0"><Application name="Fixture" version="1"/><Structure><Track id="plugin-track" name="Plugin" contentType="audio automation"><Channel id="plugin-channel" destination="master-channel" role="regular" audioChannels="2"><Devices><Vst3Plugin id="plugin-device" deviceID="fixture.device" deviceName="Fixture Device" deviceRole="audioFX" loaded="false"><Parameters><RealParameter id="frequency-parameter" name="Frequency" parameterID="42" unit="hertz" min="1000" max="1000"/></Parameters><Enabled value="true"/></Vst3Plugin></Devices></Channel></Track><Track id="master-track" name="Master" contentType="audio"><Channel id="master-channel" role="master" audioChannels="2"/></Track></Structure><Arrangement><Lanes><Points track="plugin-track"><Target parameter="frequency-parameter"/><RealPoint time="0" value="1000"/></Points></Lanes></Arrangement></Project>)";
+    const auto archive = root.getChildFile("bad-device-domain.dawproject");
+    expect(writeDawProjectFixture(archive, projectXml),
+           "DAWproject invalid device-domain fixture can be written.");
+    const auto destination =
+        root.getChildFile("bad-device-domain.studioduo");
+    const auto imported =
+        studio::DawProjectIO::importProject(archive, destination);
+    expect(!imported.succeeded()
+               && reportContains(
+                   imported.report,
+                   "import.parameter-domain",
+                   "/RealParameter[1]")
+               && !destination.exists(),
+           "Zero-width device parameter domains fail explicitly before publication.");
+
+    const auto nonFiniteProjectXml =
+        juce::String(projectXml).replace(
+            R"(min="1000" max="1000")",
+            R"(min="inf" max="2000")");
+    const auto nonFiniteArchive =
+        root.getChildFile("non-finite-device-domain.dawproject");
+    expect(
+        writeDawProjectFixture(
+            nonFiniteArchive,
+            nonFiniteProjectXml),
+        "DAWproject non-finite device-domain fixture can be written.");
+    const auto nonFiniteDestination =
+        root.getChildFile("non-finite-device-domain.studioduo");
+    const auto nonFinite = studio::DawProjectIO::importProject(
+        nonFiniteArchive,
+        nonFiniteDestination);
+    expect(!nonFinite.succeeded()
+               && reportContains(
+                   nonFinite.report,
+                   "semantic.parameter-domain",
+                   "/RealParameter[1]/@min")
+               && !nonFiniteDestination.exists(),
+           "Non-finite device parameter domains fail with the exact attribute path.");
+
+    const auto incompleteProjectXml =
+        juce::String(projectXml).replace(
+            R"(min="1000" max="1000")",
+            R"(min="20")");
+    const auto incompleteArchive =
+        root.getChildFile("incomplete-device-domain.dawproject");
+    expect(
+        writeDawProjectFixture(
+            incompleteArchive,
+            incompleteProjectXml),
+        "DAWproject incomplete device-domain fixture can be written.");
+    const auto incompleteDestination =
+        root.getChildFile("incomplete-device-domain.studioduo");
+    const auto incomplete = studio::DawProjectIO::importProject(
+        incompleteArchive,
+        incompleteDestination);
+    expect(!incomplete.succeeded()
+               && reportContains(
+                   incomplete.report,
+                   "import.parameter-domain",
+                   "/RealParameter[1]")
+               && !incompleteDestination.exists(),
+           "Physical device parameter domains without both bounds fail explicitly.");
+    root.deleteRecursively();
+}
+
+void inheritedNoteExpressionUnitsImport()
+{
+    const auto root = juce::File::getSpecialLocation(
+                          juce::File::tempDirectory)
+                          .getNonexistentChildFile(
+                              "StudioDuoDawProjectNoteExpressionUnits",
+                              {},
+                              false);
+    expect(root.createDirectory(),
+           "DAWproject note-expression unit directory can be created.");
+    const auto projectXml =
+        R"(<Project version="1.0"><Application name="Fixture" version="1"/><Transport><Tempo id="tempo" unit="bpm" min="20" max="400" value="60"/></Transport><Structure><Track id="note-track" name="Notes" contentType="notes"><Channel id="note-channel" role="regular" audioChannels="2"/></Track><Track id="master-track" name="Master" contentType="audio"><Channel id="master-channel" role="master" audioChannels="2"/></Track></Structure><Arrangement><Lanes timeUnit="seconds"><Lanes track="note-track"><Clips><Clip time="1" duration="4" contentTimeUnit="seconds"><Notes><Note time="1" duration="2" channel="0" key="60" vel="1"><Lanes><Points unit="percent"><Target expression="pressure"/><RealPoint time="0.75" value="25" interpolation="linear"/></Points><Lanes timeUnit="beats"><Points unit="normalized"><Target expression="timbre"/><RealPoint time="0.5" value="0.6" interpolation="linear"/></Points></Lanes><Points unit="linear"><Target expression="channelController" controller="74"/><RealPoint time="0.25" value="0.75" interpolation="linear"/></Points><Points unit="normalized"><Target expression="pitchBend"/><RealPoint time="1" value="-0.5" interpolation="linear"/></Points></Lanes></Note></Notes></Clip></Clips></Lanes></Lanes><TempoAutomation timeUnit="seconds"><Target parameter="tempo"/><RealPoint time="0" value="60" interpolation="hold"/><RealPoint time="2" value="120" interpolation="hold"/></TempoAutomation></Arrangement></Project>)";
+    const auto archive =
+        root.getChildFile("note-expression-units.dawproject");
+    expect(writeDawProjectFixture(archive, projectXml),
+           "DAWproject note-expression unit fixture can be written.");
+
+    const auto imported = studio::DawProjectIO::importProject(
+        archive,
+        root.getChildFile("note-expression-units.studioduo"));
+    expect(imported.succeeded(),
+           imported.result.getErrorMessage().toRawUTF8());
+    if (imported.project.has_value())
+    {
+        const auto track = std::find_if(
+            imported.project->tracks.cbegin(),
+            imported.project->tracks.cend(),
+            [](const auto& candidate)
+            {
+                return candidate.name == "Notes";
+            });
+        const studio::MidiNote* note = nullptr;
+        if (track != imported.project->tracks.cend()
+            && !track->midiClips.empty()
+            && !track->midiClips.front().notes.empty())
+        {
+            note = &track->midiClips.front().notes.front();
+        }
+        const auto expression =
+            [note](studio::MidiExpressionType type)
+                -> const studio::MidiExpressionPoint*
+        {
+            if (note == nullptr)
+                return nullptr;
+            const auto found = std::find_if(
+                note->expressions.cbegin(),
+                note->expressions.cend(),
+                [type](const auto& point)
+                {
+                    return point.type == type;
+                });
+            return found == note->expressions.cend()
+                ? nullptr
+                : &*found;
+        };
+        const auto* pressure =
+            expression(studio::MidiExpressionType::pressure);
+        const auto* timbre =
+            expression(studio::MidiExpressionType::timbre);
+        const auto* controller =
+            expression(studio::MidiExpressionType::controller);
+        const auto* pitch =
+            expression(studio::MidiExpressionType::pitchBend);
+        expect(note != nullptr
+                   && note->expressions.size() == 4
+                   && pressure != nullptr
+                   && std::abs(pressure->offsetBeats - 1.5) < 0.0001
+                   && std::abs(pressure->value - 0.25) < 0.0001
+                   && timbre != nullptr
+                   && std::abs(timbre->offsetBeats - 0.5) < 0.0001
+                   && std::abs(timbre->value - 0.6) < 0.0001
+                   && controller != nullptr
+                   && controller->controller == 74
+                   && std::abs(controller->offsetBeats - 0.5)
+                          < 0.0001
+                   && std::abs(controller->value - 0.75) < 0.0001
+                   && pitch != nullptr
+                   && std::abs(pitch->offsetBeats - 2.0) < 0.0001
+                   && std::abs(pitch->value + 0.5) < 0.0001,
+               "Note expressions inherit seconds through nested timelines and convert supported value units.");
+    }
+
+    const auto unsupportedXml =
+        juce::String(projectXml).replace(
+            R"(unit="percent")",
+            R"(unit="hertz")");
+    const auto unsupportedArchive =
+        root.getChildFile("unsupported-note-expression-unit.dawproject");
+    expect(
+        writeDawProjectFixture(
+            unsupportedArchive,
+            unsupportedXml),
+        "DAWproject unsupported note-expression unit fixture can be written.");
+    const auto unsupported = studio::DawProjectIO::importProject(
+        unsupportedArchive,
+        root.getChildFile(
+            "unsupported-note-expression-unit.studioduo"));
+    expect(unsupported.succeeded()
+               && reportContains(
+                   unsupported.report,
+                   "unsupported.note-expression-unit",
+                   "/Note[1]/Lanes[1]/Points[1]"),
+           "Unsupported note-expression units are reported against their exact Points object.");
+    root.deleteRecursively();
+}
+
+void trimmedInheritedSecondNoteExpressionsImport()
+{
+    const auto root = juce::File::getSpecialLocation(
+                          juce::File::tempDirectory)
+                          .getNonexistentChildFile(
+                              "StudioDuoDawProjectTrimmedExpressions",
+                              {},
+                              false);
+    expect(root.createDirectory(),
+           "DAWproject trimmed-expression fixture directory can be created.");
+    const auto projectXml =
+        R"(<Project version="1.0"><Application name="Fixture" version="1"/><Transport><Tempo id="tempo" unit="bpm" min="20" max="400" value="60"/></Transport><Structure><Track id="note-track" name="Trimmed Notes" contentType="notes"><Channel id="note-channel" role="regular" audioChannels="2"/></Track><Track id="master-track" name="Master" contentType="audio"><Channel id="master-channel" role="master" audioChannels="2"/></Track></Structure><Arrangement><Lanes timeUnit="seconds"><Lanes track="note-track"><Clips><Clip time="3" duration="2" contentTimeUnit="seconds" playStart="2" playStop="4"><Notes><Note time="0.5" duration="4" channel="0" key="60" vel="1"><Lanes><Points unit="normalized"><Target expression="pressure"/><RealPoint time="1" value="0.1" interpolation="linear"/><RealPoint time="2" value="0.2" interpolation="linear"/><RealPoint time="3.5" value="0.3" interpolation="linear"/><RealPoint time="3.75" value="0.4" interpolation="linear"/></Points></Lanes></Note></Notes></Clip></Clips></Lanes></Lanes><TempoAutomation timeUnit="seconds"><Target parameter="tempo"/><RealPoint time="0" value="60" interpolation="hold"/><RealPoint time="2" value="120" interpolation="hold"/></TempoAutomation></Arrangement></Project>)";
+    const auto archive =
+        root.getChildFile("trimmed-expressions.dawproject");
+    expect(writeDawProjectFixture(archive, projectXml),
+           "DAWproject trimmed-expression fixture can be written.");
+
+    const auto imported = studio::DawProjectIO::importProject(
+        archive,
+        root.getChildFile("trimmed-expressions.studioduo"));
+    expect(imported.succeeded(),
+           imported.result.getErrorMessage().toRawUTF8());
+    if (imported.project.has_value())
+    {
+        const auto track = std::find_if(
+            imported.project->tracks.cbegin(),
+            imported.project->tracks.cend(),
+            [](const auto& candidate)
+            {
+                return candidate.name == "Trimmed Notes";
+            });
+        const studio::MidiNote* note = nullptr;
+        if (track != imported.project->tracks.cend()
+            && !track->midiClips.empty()
+            && !track->midiClips.front().notes.empty())
+        {
+            note = &track->midiClips.front().notes.front();
+        }
+        expect(note != nullptr
+                   && std::abs(note->startBeats) < 0.0001
+                   && std::abs(note->durationBeats - 4.0) < 0.0001
+                   && note->expressions.size() == 2
+                   && std::abs(
+                          note->expressions[0].offsetBeats - 1.0)
+                          < 0.0001
+                   && std::abs(
+                          note->expressions[0].value - 0.2)
+                          < 0.0001
+                   && std::abs(
+                          note->expressions[1].offsetBeats - 4.0)
+                          < 0.0001
+                   && std::abs(
+                          note->expressions[1].value - 0.3)
+                          < 0.0001,
+               "Inherited second-based expressions convert at their absolute times, subtract leading playStart trim, and stay inside the final note duration.");
+    }
+    root.deleteRecursively();
+}
+
+void exportPayloadSnapshotAndVerification()
+{
+    const auto root = juce::File::getSpecialLocation(
+                          juce::File::tempDirectory)
+                          .getNonexistentChildFile(
+                              "StudioDuoDawProjectExportSnapshot",
+                              {},
+                              false);
+    expect(root.createDirectory(),
+           "DAWproject export snapshot directory can be created.");
+    const auto sourceAudio = createAudioFixture(root);
+    juce::MemoryBlock originalAudio;
+    expect(sourceAudio.loadFileAsData(originalAudio),
+           "DAWproject export snapshot source can be read.");
+
+    auto project = studio::Project::createDefault();
+    auto& track = project.tracks.front();
+    studio::AudioClip clip;
+    clip.id = "snapshot-clip";
+    clip.name = "Snapshot clip";
+    clip.sourceFile = sourceAudio;
+    clip.durationSeconds = 0.1;
+    clip.sourceLengthSeconds = 0.1;
+    clip.sourceRangeEndSeconds = 0.1;
+    track.clips.push_back(clip);
+    const auto package = root.getChildFile("source.studioduo");
+    expect(package.createDirectory(),
+           "DAWproject export snapshot package can be created.");
+    const auto stagingArtifactsRemain = [&root]()
+    {
+        return !root.findChildFiles(
+                        juce::File::findFilesAndDirectories,
+                        false,
+                        "*.payload-staging-*")
+                    .isEmpty();
+    };
+
+    auto sourceChanged = false;
+    auto fileBackedSnapshot = false;
+    juce::File stagedSnapshot;
+    studio::DawProjectIO::setExportTestHookForTesting(
+        [&sourceAudio,
+         &sourceChanged,
+         &fileBackedSnapshot,
+         &stagedSnapshot](
+            studio::DawProjectIO::ExportTestPhase phase,
+            const juce::File& file)
+        {
+            if (phase
+                == studio::DawProjectIO::ExportTestPhase::
+                    afterPayloadSnapshot)
+            {
+                stagedSnapshot = file;
+                fileBackedSnapshot =
+                    file != sourceAudio
+                    && file.existsAsFile()
+                    && file.getSize() == sourceAudio.getSize();
+                sourceChanged = sourceAudio.deleteFile();
+            }
+        });
+    const auto snapshotArchive =
+        root.getChildFile("snapshot.dawproject");
+    const auto snapshotResult =
+        studio::DawProjectIO::exportProject(
+            project,
+            package,
+            snapshotArchive);
+    studio::DawProjectIO::setExportTestHookForTesting({});
+    expect(sourceChanged
+               && fileBackedSnapshot
+               && snapshotResult.succeeded()
+               && archiveEntryDataWithSuffix(
+                      snapshotArchive,
+                      ".wav")
+                      == originalAudio
+               && !stagedSnapshot.exists()
+               && !stagingArtifactsRemain(),
+           "Export streams from a bounded file-backed snapshot, writes its exact bytes after the source disappears, and removes staging.");
+
+    expect(sourceAudio.replaceWithData(
+               originalAudio.getData(),
+               originalAudio.getSize()),
+           "DAWproject snapshot source can be restored.");
+    const auto removedSnapshotDestination =
+        root.getChildFile("removed-snapshot.dawproject");
+    expect(removedSnapshotDestination.replaceWithText(
+               "existing destination"),
+           "DAWproject removed-snapshot destination can be created.");
+    auto stagedSnapshotRemoved = false;
+    studio::DawProjectIO::setExportTestHookForTesting(
+        [&sourceAudio, &stagedSnapshotRemoved](
+            studio::DawProjectIO::ExportTestPhase phase,
+            const juce::File& file)
+        {
+            if (phase
+                    == studio::DawProjectIO::ExportTestPhase::
+                        afterPayloadSnapshot
+                && file != sourceAudio)
+            {
+                stagedSnapshotRemoved = file.deleteFile();
+            }
+        });
+    const auto removedSnapshotResult =
+        studio::DawProjectIO::exportProject(
+            project,
+            package,
+            removedSnapshotDestination);
+    studio::DawProjectIO::setExportTestHookForTesting({});
+    expect(stagedSnapshotRemoved
+               && !removedSnapshotResult.succeeded()
+               && removedSnapshotResult.result.getErrorMessage()
+                      .containsIgnoreCase("snapshot")
+               && removedSnapshotDestination.loadFileAsString()
+                      == "existing destination"
+               && !stagingArtifactsRemain()
+               && root.findChildFiles(
+                          juce::File::findFiles,
+                          false,
+                          "removed-snapshot.dawproject.tmp-*")
+                      .isEmpty(),
+           "Missing immutable snapshots fail explicitly without replacing the destination or leaving staging artifacts.");
+
+    const auto protectedDestination =
+        root.getChildFile("tampered.dawproject");
+    expect(protectedDestination.replaceWithText(
+               "existing destination"),
+           "DAWproject protected destination can be created.");
+    auto archiveTampered = false;
+    studio::DawProjectIO::setExportTestHookForTesting(
+        [&archiveTampered](
+            studio::DawProjectIO::ExportTestPhase phase,
+            const juce::File& file)
+        {
+            if (phase
+                == studio::DawProjectIO::ExportTestPhase::
+                    beforeArchiveVerification)
+            {
+                archiveTampered =
+                    corruptStoredArchiveEntry(file, ".wav");
+            }
+        });
+    const auto tamperedResult =
+        studio::DawProjectIO::exportProject(
+            project,
+            package,
+            protectedDestination);
+    studio::DawProjectIO::setExportTestHookForTesting({});
+    expect(archiveTampered
+               && !tamperedResult.succeeded()
+               && tamperedResult.result.getErrorMessage()
+                      .containsIgnoreCase("CRC")
+               && protectedDestination.loadFileAsString()
+                      == "existing destination"
+               && root.findChildFiles(
+                          juce::File::findFiles,
+                          false,
+                          "tampered.dawproject.tmp-*")
+                      .isEmpty()
+               && !stagingArtifactsRemain(),
+           "Full staged-entry CRC verification blocks publication and cleans staging files.");
+
+    auto payloadRemoved = false;
+    studio::DawProjectIO::setExportTestHookForTesting(
+        [&sourceAudio, &payloadRemoved](
+            studio::DawProjectIO::ExportTestPhase phase,
+            const juce::File& file)
+        {
+            if (phase
+                    == studio::DawProjectIO::ExportTestPhase::
+                        beforePayloadSnapshot
+                && file == sourceAudio)
+            {
+                payloadRemoved = sourceAudio.deleteFile();
+            }
+        });
+    const auto missingDestination =
+        root.getChildFile("missing-payload.dawproject");
+    const auto missingResult =
+        studio::DawProjectIO::exportProject(
+            project,
+            package,
+            missingDestination);
+    studio::DawProjectIO::setExportTestHookForTesting({});
+    expect(payloadRemoved
+               && !missingResult.succeeded()
+               && missingResult.result.getErrorMessage()
+                      .containsIgnoreCase("snapshot")
+               && reportContains(
+                   missingResult.report,
+                   "export.payload-snapshot",
+                   clip.id)
+               && !missingDestination.existsAsFile()
+               && root.findChildFiles(
+                          juce::File::findFiles,
+                          false,
+                          "missing-payload.dawproject.tmp-*")
+                      .isEmpty()
+               && !stagingArtifactsRemain(),
+           "Payload disappearance before snapshot fails explicitly without publishing or leaving staging files.");
+    root.deleteRecursively();
+}
+
 void nativePluginStateContainerRoundTrip()
 {
     const auto root = juce::File::getSpecialLocation(
@@ -1802,6 +2572,12 @@ void dawProjectTests()
     invalidArchiveIsTransactional();
     externalMediaImport();
     unitAndChannelHierarchyImport();
+    externalChannelPressureAutomationImport();
+    deviceAutomationDomainImport();
+    invalidDeviceAutomationDomainImport();
+    inheritedNoteExpressionUnitsImport();
+    trimmedInheritedSecondNoteExpressionsImport();
+    exportPayloadSnapshotAndVerification();
     nativePluginStateContainerRoundTrip();
     unsupportedDataIsReported();
 }

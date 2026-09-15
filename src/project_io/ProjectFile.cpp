@@ -195,6 +195,7 @@ juce::Result ProjectFile::save(const Project& project, const juce::File& request
             "toneSnapshotsV1",
             "renderReportsV1",
             "midiCompositionV1",
+            "midiChannelPressureV1",
             "scenesV1",
             "compatibilityReportsV1",
             "dawprojectV1"

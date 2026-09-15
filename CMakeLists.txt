@@ -608,6 +608,8 @@ if(STUDIO_DUO_BUILD_TESTS)
             src/ui/RoutingUiModel.h
             src/ui/MainWindowSizing.cpp
             src/ui/MainWindowSizing.h
+            src/ui/MidiEditorComponent.cpp
+            src/ui/MidiEditorComponent.h
             src/audio/StudioAudioDeviceManager.cpp
             src/audio/StudioAudioDeviceManager.h
             src/audio/AudioDeviceProbe.cpp

@@ -10,6 +10,10 @@ namespace studio
 namespace
 {
 constexpr auto ticksPerBeat = 960.0;
+constexpr auto openHiHatFootControl = 0;
+constexpr auto closedHiHatFootControl = 127;
+constexpr auto pedalHiHatFootControl =
+    closedHiHatFootControl - 32;
 
 std::uint64_t fnv1a(const juce::String& value) noexcept
 {
@@ -74,11 +78,11 @@ void applyDrumMetadata(MidiNote& note,
     if (entry->footControlCC >= 0)
     {
         if (entry->cymbalState == CymbalState::open)
-            note.footControlValue = 127;
+            note.footControlValue = openHiHatFootControl;
         else if (entry->cymbalState == CymbalState::closed)
-            note.footControlValue = 0;
+            note.footControlValue = closedHiHatFootControl;
         else if (entry->cymbalState == CymbalState::pedal)
-            note.footControlValue = 32;
+            note.footControlValue = pedalHiHatFootControl;
     }
     if (!entry->roundRobinNotes.empty())
     {
@@ -146,10 +150,7 @@ void addRecordedExpression(MidiNote& note,
     MidiExpressionPoint point;
     point.type = type;
     point.controller = controller;
-    point.offsetBeats = juce::jlimit(
-        0.0,
-        note.durationBeats,
-        offsetBeats);
+    point.offsetBeats = std::max(0.0, offsetBeats);
     point.value = type == MidiExpressionType::pitchBend
         ? juce::jlimit(-1.0, 1.0, value)
         : juce::jlimit(0.0, 1.0, value);
@@ -471,7 +472,8 @@ void applyDrumMapMetadata(MidiNote& note,
 bool moveMidiNotes(MidiClip& clip,
                    const std::vector<juce::String>& noteIds,
                    double deltaBeats,
-                   int deltaPitch)
+                   int deltaPitch,
+                   const DrumMap* drumMap)
 {
     const auto indices = selectedIndices(clip, noteIds);
     if (indices.empty())
@@ -495,16 +497,35 @@ bool moveMidiNotes(MidiClip& clip,
     deltaPitch = juce::jlimit(-minimumPitch, 127 - maximumPitch, deltaPitch);
     if (std::abs(deltaBeats) < 0.0000001 && deltaPitch == 0)
         return false;
+    const auto* validDrumMap =
+        clip.editorMode == MidiEditorMode::drums
+            && drumMap != nullptr
+            && drumMap->id == clip.drumMapId
+        ? drumMap
+        : nullptr;
     for (const auto index : indices)
     {
-        clip.notes[index].startBeats += deltaBeats;
-        clip.notes[index].pitch += deltaPitch;
-        clip.notes[index].drumMapEntryId.clear();
-        clip.notes[index].articulation.clear();
-        clip.notes[index].chokeGroup.clear();
-        clip.notes[index].cymbalState = CymbalState::none;
-        clip.notes[index].footControlValue = -1;
-        clip.notes[index].roundRobinHint = -1;
+        auto& note = clip.notes[index];
+        note.startBeats += deltaBeats;
+        if (deltaPitch == 0)
+            continue;
+
+        const auto previousRoundRobinHint = note.roundRobinHint;
+        note.pitch += deltaPitch;
+        const auto* entry = validDrumMap != nullptr
+            ? validDrumMap->entryForPitch(note.pitch)
+            : nullptr;
+        const auto retainedRoundRobin =
+            entry != nullptr
+                && previousRoundRobinHint >= 0
+                && static_cast<std::size_t>(previousRoundRobinHint)
+                    <= entry->roundRobinNotes.size()
+            ? static_cast<std::size_t>(previousRoundRobinHint)
+            : std::size_t { 0 };
+        applyDrumMapMetadata(
+            note,
+            validDrumMap,
+            retainedRoundRobin);
     }
     sortMidiNotes(clip);
     return true;
@@ -764,6 +785,11 @@ std::optional<MidiCaptureConversion> convertCapturedMidiToClip(
             beatAtEvent(event));
         if (message.isNoteOn())
         {
+            if (relativeBeat >= result.clip.durationBeats)
+            {
+                ++result.ignoredEvents;
+                continue;
+            }
             MidiNote note;
             note.pitch = message.getNoteNumber();
             note.channel = channel;
@@ -858,7 +884,7 @@ std::optional<MidiCaptureConversion> convertCapturedMidiToClip(
         {
             addRecordedExpression(
                 note,
-                MidiExpressionType::pressure,
+                MidiExpressionType::channelPressure,
                 -1,
                 expressionOffset,
                 static_cast<double>(message.getChannelPressureValue())
@@ -892,11 +918,16 @@ std::optional<MidiCaptureConversion> convertCapturedMidiToClip(
         }
     }
 
-    for (const auto& note : result.clip.notes)
+    for (const auto& channelNotes : activeByChannel)
     {
-        result.clip.durationBeats = std::max(
-            result.clip.durationBeats,
-            note.actualStartBeats() + 1.0 / 128.0);
+        for (const auto noteIndex : channelNotes)
+        {
+            auto& note = result.clip.notes[noteIndex];
+            note.durationBeats = std::max(
+                1.0 / 128.0,
+                result.clip.durationBeats
+                    - note.actualStartBeats());
+        }
     }
     for (auto& note : result.clip.notes)
     {
@@ -906,9 +937,17 @@ std::optional<MidiCaptureConversion> convertCapturedMidiToClip(
         if (note.durationBeats <= 0.0)
             note.durationBeats = 1.0 / 128.0;
         for (auto& expression : note.expressions)
-            expression.offsetBeats = std::min(
-                expression.offsetBeats,
-                note.durationBeats);
+            expression.offsetBeats = juce::jlimit(
+                0.0,
+                note.durationBeats,
+                expression.offsetBeats);
+        std::stable_sort(
+            note.expressions.begin(),
+            note.expressions.end(),
+            [](const auto& left, const auto& right)
+            {
+                return left.offsetBeats < right.offsetBeats;
+            });
     }
     if (result.clip.notes.empty())
     {

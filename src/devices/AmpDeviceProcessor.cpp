@@ -10,6 +10,9 @@
 #include <complex>
 #include <cstdint>
 #include <limits>
+#if STUDIO_DUO_TESTING
+#include <thread>
+#endif
 
 namespace studio
 {
@@ -173,11 +176,33 @@ public:
 
     void process(juce::AudioBuffer<float>& audio) noexcept
     {
-        const auto slotIndex =
-            activeSlot.load(std::memory_order_acquire);
-        readers[static_cast<std::size_t>(slotIndex)].fetch_add(
-            1,
-            std::memory_order_acq_rel);
+        auto slotIndex = 0;
+        for (;;)
+        {
+            slotIndex = activeSlot.load(std::memory_order_acquire);
+#if STUDIO_DUO_TESTING
+            if (auto* barrier = readerBarrier.exchange(
+                    nullptr,
+                    std::memory_order_acq_rel))
+            {
+                barrier->slotLoaded.store(
+                    true,
+                    std::memory_order_release);
+                while (!barrier->resume.load(
+                    std::memory_order_acquire))
+                    std::this_thread::yield();
+            }
+#endif
+            readers[static_cast<std::size_t>(slotIndex)].fetch_add(
+                1,
+                std::memory_order_acq_rel);
+            if (activeSlot.load(std::memory_order_acquire)
+                == slotIndex)
+                break;
+            readers[static_cast<std::size_t>(slotIndex)].fetch_sub(
+                1,
+                std::memory_order_release);
+        }
         const auto& kernel = slots[static_cast<std::size_t>(slotIndex)];
         if (appliedGeneration != kernel.generation)
         {
@@ -370,6 +395,14 @@ public:
         const juce::ScopedLock lock(assetLock);
         lastError = error;
     }
+
+#if STUDIO_DUO_TESTING
+    void setReaderBarrierForTesting(
+        AmpDeviceProcessor::CabinetReaderBarrierForTesting* barrier) noexcept
+    {
+        readerBarrier.store(barrier, std::memory_order_release);
+    }
+#endif
 
 private:
     struct KernelSlot
@@ -656,6 +689,10 @@ private:
     std::atomic<int> activeSlot { 0 };
     std::atomic<std::uint64_t> generation { 0 };
     std::atomic<double> currentTailSeconds { 0.0 };
+#if STUDIO_DUO_TESTING
+    std::atomic<AmpDeviceProcessor::CabinetReaderBarrierForTesting*>
+        readerBarrier { nullptr };
+#endif
     std::array<ChannelState, 2> states;
     std::uint64_t appliedGeneration = 0;
     mutable juce::CriticalSection assetLock;
@@ -1392,4 +1429,12 @@ juce::String AmpDeviceProcessor::cabinetDescription() const
 {
     return cabinet->description();
 }
+
+#if STUDIO_DUO_TESTING
+void AmpDeviceProcessor::setCabinetReaderBarrierForTesting(
+    CabinetReaderBarrierForTesting* barrier) noexcept
+{
+    cabinet->setReaderBarrierForTesting(barrier);
+}
+#endif
 }

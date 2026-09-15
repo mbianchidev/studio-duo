@@ -18,6 +18,24 @@ bool hasMainAudioOutput(TrackType type)
         || type == TrackType::bus;
 }
 
+void appendStableIdComponent(juce::String& id,
+                             const juce::String& component)
+{
+    id << ":" << component.length() << ":" << component;
+}
+
+juce::String generatedMidiRoutingDestinationId(
+    const juce::String& sourceTrackId,
+    const juce::String& routingTemplateId,
+    const juce::String& outputId)
+{
+    juce::String id { "midi-routing-destination" };
+    appendStableIdComponent(id, sourceTrackId);
+    appendStableIdComponent(id, routingTemplateId);
+    appendStableIdComponent(id, outputId);
+    return id;
+}
+
 bool validateAutomationTarget(const Project& project,
                               const AutomationTarget& target,
                               juce::String& error)
@@ -1159,11 +1177,37 @@ bool SetMidiClipStateCommand::perform(Project& project,
         error = "The edited MIDI clip is invalid: " + validationError;
         return false;
     }
-    if (newClip.drumMapId.isNotEmpty()
-        && project.findDrumMap(newClip.drumMapId) == nullptr)
+    const auto* drumMap = newClip.drumMapId.isNotEmpty()
+        ? project.findDrumMap(newClip.drumMapId)
+        : nullptr;
+    if (newClip.drumMapId.isNotEmpty() && drumMap == nullptr)
     {
-        error = "The edited MIDI clip references an unavailable drum map.";
+        error = "The edited MIDI clip references unavailable drum map '"
+            + newClip.drumMapId
+            + "'. Select an available drum map or clear the clip's drum-map assignment.";
         return false;
+    }
+    for (const auto& note : newClip.notes)
+    {
+        if (note.drumMapEntryId.isEmpty())
+            continue;
+        if (drumMap == nullptr)
+        {
+            error = "MIDI note '" + note.id
+                + "' references drum-map entry '"
+                + note.drumMapEntryId
+                + "', but the edited clip has no drum map. Select a drum map for the clip or clear the note's drum metadata.";
+            return false;
+        }
+        if (drumMap->entryForId(note.drumMapEntryId) == nullptr)
+        {
+            error = "MIDI note '" + note.id
+                + "' references unavailable drum-map entry '"
+                + note.drumMapEntryId + "' in drum map '"
+                + drumMap->id
+                + "'. Remap the note or clear its drum metadata.";
+            return false;
+        }
     }
     *clip = newClip;
     return true;
@@ -1308,7 +1352,7 @@ juce::String ApplyMidiRoutingTemplateCommand::name() const
 bool ApplyMidiRoutingTemplateCommand::perform(Project& project,
                                               juce::String& error)
 {
-    auto* source = project.findTrack(trackId);
+    const auto* source = project.findTrack(trackId);
     if (source == nullptr
         || source->parentTrackId.isNotEmpty()
         || (source->type != TrackType::midi
@@ -1331,58 +1375,75 @@ bool ApplyMidiRoutingTemplateCommand::perform(Project& project,
             return false;
         }
 
-        oldClips = source->midiClips;
-        newClips = oldClips;
+        auto candidate = project;
+        auto plannedClips = source->midiClips;
         const auto master = std::find_if(
-            project.tracks.cbegin(),
-            project.tracks.cend(),
+            candidate.tracks.cbegin(),
+            candidate.tracks.cend(),
             [](const auto& track)
             {
                 return track.type == TrackType::master;
             });
-        insertionIndex = static_cast<std::size_t>(
-            std::distance(project.tracks.cbegin(), master));
+        const auto insertionIndex = static_cast<std::size_t>(
+            std::distance(candidate.tracks.cbegin(), master));
+        auto addedTrackCount = std::size_t { 0 };
 
         for (const auto& output : routing.outputs)
         {
             juce::String destinationId = output.destinationTrackId;
-            if (destinationId.isNotEmpty())
+            if (destinationId.isEmpty())
             {
-                const auto* destination = project.findTrack(destinationId);
-                if (destination == nullptr
-                    || destination->parentTrackId.isNotEmpty()
-                    || (destination->type != TrackType::midi
-                        && destination->type != TrackType::instrument)
-                    || destination->id == trackId)
+                destinationId = generatedMidiRoutingDestinationId(
+                    trackId,
+                    routing.id,
+                    output.id);
+                if (candidate.findTrack(destinationId) == nullptr)
                 {
-                    error = "A MIDI routing-template destination is unavailable.";
-                    return false;
+                    Track destination;
+                    destination.id = destinationId;
+                    destination.name = output.name;
+                    destination.type = TrackType::midi;
+                    destination.colour = source->colour;
+                    const auto index = std::min(
+                        insertionIndex + addedTrackCount,
+                        candidate.tracks.size());
+                    candidate.tracks.insert(
+                        candidate.tracks.begin()
+                            + static_cast<std::ptrdiff_t>(index),
+                        std::move(destination));
+                    ++addedTrackCount;
                 }
             }
-            else
+
+            const auto* destination =
+                candidate.findTrack(destinationId);
+            if (destination == nullptr
+                || destination->parentTrackId.isNotEmpty()
+                || (destination->type != TrackType::midi
+                    && destination->type != TrackType::instrument)
+                || destination->id == trackId)
             {
-                Track destination;
-                destination.name = output.name;
-                destination.type = TrackType::midi;
-                destination.colour = source->colour;
-                destinationId = destination.id;
-                addedTracks.push_back(std::move(destination));
+                error = "MIDI routing-template output '"
+                    + output.name
+                    + "' references an unavailable destination track.";
+                return false;
             }
 
-            const auto routeExists = std::any_of(
-                project.routingConnections.cbegin(),
-                project.routingConnections.cend(),
-                [&destinationId, this](const auto& connection)
+            const auto route = std::find_if(
+                candidate.routingConnections.begin(),
+                candidate.routingConnections.end(),
+                [&destinationId, &output, this](const auto& connection)
                 {
-                    return connection.enabled
-                        && connection.signalType == SignalType::midi
+                    return connection.signalType == SignalType::midi
                         && connection.sourceTrackId == trackId
                         && connection.destination.type
                             == RouteEndpointType::track
                         && connection.destination.trackId
-                            == destinationId;
+                            == destinationId
+                        && connection.midiChannel
+                            == output.midiChannel;
                 });
-            if (!routeExists)
+            if (route == candidate.routingConnections.end())
             {
                 RoutingConnection connection;
                 connection.name = output.name;
@@ -1392,10 +1453,17 @@ bool ApplyMidiRoutingTemplateCommand::perform(Project& project,
                 connection.sourceTrackId = trackId;
                 connection.destination.type = RouteEndpointType::track;
                 connection.destination.trackId = destinationId;
-                addedConnections.push_back(std::move(connection));
+                candidate.routingConnections.push_back(
+                    std::move(connection));
+            }
+            else
+            {
+                route->name = output.name;
+                route->kind = RouteKind::send;
+                route->enabled = true;
             }
 
-            for (auto& clip : newClips)
+            for (auto& clip : plannedClips)
             {
                 for (auto& note : clip.notes)
                 {
@@ -1408,79 +1476,40 @@ bool ApplyMidiRoutingTemplateCommand::perform(Project& project,
                 }
             }
         }
+
+        auto* plannedSource = candidate.findTrack(trackId);
+        if (plannedSource == nullptr)
+        {
+            error =
+                "The MIDI routing source disappeared while planning the template.";
+            return false;
+        }
+        plannedSource->midiClips = std::move(plannedClips);
+        if (!candidate.validateRoutingGraph(error))
+            return false;
+
+        oldTracks = project.tracks;
+        newTracks = std::move(candidate.tracks);
+        oldConnections = project.routingConnections;
+        newConnections = std::move(candidate.routingConnections);
         prepared = true;
     }
 
-    if (std::any_of(
-            addedTracks.cbegin(),
-            addedTracks.cend(),
-            [&project](const auto& track)
-            {
-                return project.findTrack(track.id) != nullptr;
-            }))
-    {
-        error = "A MIDI routing-template destination already exists.";
+    auto candidate = project;
+    candidate.tracks = newTracks;
+    candidate.routingConnections = newConnections;
+    if (!candidate.validateRoutingGraph(error))
         return false;
-    }
-    const auto index = std::min(insertionIndex, project.tracks.size());
-    project.tracks.insert(
-        project.tracks.begin() + static_cast<std::ptrdiff_t>(index),
-        addedTracks.begin(),
-        addedTracks.end());
-    source = project.findTrack(trackId);
-    if (source == nullptr)
-    {
-        undo(project);
-        error = "The MIDI routing source disappeared while applying the template.";
-        return false;
-    }
-    source->midiClips = newClips;
-    project.routingConnections.insert(
-        project.routingConnections.end(),
-        addedConnections.begin(),
-        addedConnections.end());
-    if (!project.validateRoutingGraph(error))
-    {
-        undo(project);
-        return false;
-    }
+
+    project.tracks = newTracks;
+    project.routingConnections = newConnections;
     return true;
 }
 
 void ApplyMidiRoutingTemplateCommand::undo(Project& project)
 {
-    if (auto* source = project.findTrack(trackId))
-        source->midiClips = oldClips;
-    project.routingConnections.erase(
-        std::remove_if(
-            project.routingConnections.begin(),
-            project.routingConnections.end(),
-            [this](const auto& connection)
-            {
-                return std::any_of(
-                    addedConnections.cbegin(),
-                    addedConnections.cend(),
-                    [&connection](const auto& added)
-                    {
-                        return added.id == connection.id;
-                    });
-            }),
-        project.routingConnections.end());
-    project.tracks.erase(
-        std::remove_if(
-            project.tracks.begin(),
-            project.tracks.end(),
-            [this](const auto& track)
-            {
-                return std::any_of(
-                    addedTracks.cbegin(),
-                    addedTracks.cend(),
-                    [&track](const auto& added)
-                    {
-                        return added.id == track.id;
-                    });
-            }),
-        project.tracks.end());
+    project.tracks = oldTracks;
+    project.routingConnections = oldConnections;
 }
 
 SetActiveTakeCommand::SetActiveTakeCommand(juce::String parentTrackId,

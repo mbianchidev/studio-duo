@@ -839,6 +839,8 @@ juce::String midiExpressionTypeToString(MidiExpressionType type)
     {
         case MidiExpressionType::pitchBend: return "pitchBend";
         case MidiExpressionType::pressure: return "pressure";
+        case MidiExpressionType::channelPressure:
+            return "channelPressure";
         case MidiExpressionType::timbre: return "timbre";
         case MidiExpressionType::controller: return "controller";
     }
@@ -850,6 +852,8 @@ std::optional<MidiExpressionType> midiExpressionTypeFromString(
 {
     if (value == "pitchBend") return MidiExpressionType::pitchBend;
     if (value == "pressure") return MidiExpressionType::pressure;
+    if (value == "channelPressure")
+        return MidiExpressionType::channelPressure;
     if (value == "timbre") return MidiExpressionType::timbre;
     if (value == "controller") return MidiExpressionType::controller;
     return std::nullopt;

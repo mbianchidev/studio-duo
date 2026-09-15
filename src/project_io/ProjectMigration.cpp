@@ -120,6 +120,35 @@ bool addVersionThreeRouting(juce::DynamicObject& project, juce::String& error)
     project.setProperty("routingConnections", juce::var(routes));
     return true;
 }
+
+bool addVersionEightMidiChannelMetadata(
+    juce::DynamicObject& project,
+    juce::String& error)
+{
+    const auto lanesValue = project.getProperty("automationLanes");
+    if (lanesValue.isVoid())
+        return true;
+    if (!lanesValue.isArray())
+    {
+        error = "Project automation lanes must be a JSON array before MIDI channel migration.";
+        return false;
+    }
+    for (auto& laneValue : *lanesValue.getArray())
+    {
+        auto* lane = laneValue.getDynamicObject();
+        auto* target = lane != nullptr
+            ? lane->getProperty("target").getDynamicObject()
+            : nullptr;
+        if (target == nullptr)
+        {
+            error = "Project automation lanes must contain target objects before MIDI channel migration.";
+            return false;
+        }
+        if (target->getProperty("midiChannel").isVoid())
+            target->setProperty("midiChannel", -1);
+    }
+    return true;
+}
 }
 
 std::optional<juce::var> ProjectMigration::migrateToCurrent(
@@ -148,6 +177,9 @@ std::optional<juce::var> ProjectMigration::migrateToCurrent(
         return std::nullopt;
     if (version < 5
         && !addVersionFiveMidi(*object, error))
+        return std::nullopt;
+    if (version < 8
+        && !addVersionEightMidiChannelMetadata(*object, error))
         return std::nullopt;
 
     addEmptyArray(*object, "routingConnections");

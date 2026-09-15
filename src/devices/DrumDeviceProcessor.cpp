@@ -9,14 +9,23 @@ namespace studio
 namespace
 {
 constexpr auto stateSchema = 1;
+constexpr auto hiHatFootController = 4;
+constexpr auto hiHatClosedThreshold = 0.85f;
+constexpr auto voiceSilenceThreshold = 0.00003f;
+constexpr auto maximumVoiceLifetimeSeconds = 3.8;
+constexpr auto roomTailAllowanceSeconds = 0.2;
+constexpr auto reportedTailSeconds =
+    maximumVoiceLifetimeSeconds + roomTailAllowanceSeconds;
 
-float decayFor(float seconds, double sampleRate)
+float decayForLifetime(float seconds, double sampleRate)
 {
+    const auto lifetimeSamples = std::max(
+        1.0,
+        static_cast<double>(seconds) * sampleRate);
     return static_cast<float>(
         std::exp(
-            -1.0
-            / (std::max(0.001f, seconds)
-               * static_cast<float>(sampleRate))));
+            std::log(static_cast<double>(voiceSilenceThreshold))
+            / lifetimeSamples));
 }
 
 float wrapPhase(float phase) noexcept
@@ -196,13 +205,14 @@ void DrumDeviceProcessor::handleMidiMessage(
     {
         startVoice(message.getNoteNumber(), message.getFloatVelocity());
     }
-    else if (message.isController() && message.getControllerNumber() == 4)
+    else if (message.isController()
+             && message.getControllerNumber() == hiHatFootController)
     {
         hiHatFootControl = juce::jlimit(
             0.0f,
             1.0f,
             static_cast<float>(message.getControllerValue()) / 127.0f);
-        if (hiHatFootControl > 0.85f)
+        if (hiHatFootControl > hiHatClosedThreshold)
             chokeVoices(1, 96);
     }
 }
@@ -330,7 +340,8 @@ DrumDeviceProcessor::describeHit(int note) const noexcept
             hit.roundRobinFamily = 7;
             hit.explicitVariant = note == 53 ? 1 : -1;
             hit.frequency = 430.0f;
-            hit.durationSeconds = 3.8f;
+            hit.durationSeconds = static_cast<float>(
+                maximumVoiceLifetimeSeconds);
             hit.brightness = 0.58f;
             break;
         case 56:
@@ -398,7 +409,9 @@ void DrumDeviceProcessor::startVoice(int note, float velocity) noexcept
         const auto openness = 1.0f - hiHatFootControl;
         duration *= 0.35f + openness * 1.65f;
     }
-    voice.decayMultiplier = decayFor(duration, currentSampleRate);
+    voice.decayMultiplier = decayForLifetime(
+        duration,
+        currentSampleRate);
     voice.pan = (variant == 0 ? -1.0f : 1.0f)
         * (hit.kind == VoiceKind::cymbal ? 0.16f : 0.035f);
     voice.brightness = hit.brightness;
@@ -526,7 +539,7 @@ void DrumDeviceProcessor::renderSamples(
                     * voice.frequencyTwo
                     / static_cast<float>(currentSampleRate));
             voice.envelope *= voice.decayMultiplier;
-            if (voice.envelope < 0.00003f
+            if (voice.envelope < voiceSilenceThreshold
                 || !std::isfinite(voice.envelope))
             {
                 voice.active = false;
@@ -637,8 +650,21 @@ float DrumDeviceProcessor::parameter(ParameterSlot slot) const noexcept
 
 double DrumDeviceProcessor::getTailLengthSeconds() const
 {
-    return 4.0;
+    return reportedTailSeconds;
 }
+
+#if STUDIO_DUO_TESTING
+int DrumDeviceProcessor::activeVoiceCountForTesting() const noexcept
+{
+    return static_cast<int>(std::count_if(
+        voices.cbegin(),
+        voices.cend(),
+        [](const auto& voice)
+        {
+            return voice.active;
+        }));
+}
+#endif
 
 bool DrumDeviceProcessor::acceptsMidi() const
 {

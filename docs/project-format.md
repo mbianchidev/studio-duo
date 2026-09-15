@@ -1,6 +1,6 @@
 # Studio Duo native project format
 
-Studio Duo format version 7 is a directory package with immutable generation
+Studio Duo format version 8 is a directory package with immutable generation
 files and content-addressed processor state.
 
 ```text
@@ -39,11 +39,11 @@ The prior manifest and generation remain valid until step 5 succeeds.
 - generation number and save time
 - `requiredCapabilities`
 
-Version 7 manifests include `midiCompositionV1`,
-`bundledCompositionDevicesV1`, `scenesV1`, `compatibilityReportsV1`, and
-`dawprojectV1`. Readers must reject a manifest version newer than they support
-rather than silently dropping MIDI, bundled output/cabinet state, scenes, or
-interchange diagnostics.
+Version 8 manifests include `midiCompositionV1`,
+`midiChannelPressureV1`, `bundledCompositionDevicesV1`, `scenesV1`,
+`compatibilityReportsV1`, and `dawprojectV1`. Readers must reject a manifest
+version newer than they support rather than silently dropping MIDI, bundled
+output/cabinet state, scenes, or interchange diagnostics.
 
 Paths must be relative children of the package and cannot contain `..`.
 
@@ -92,8 +92,10 @@ ordinary MIDI note; no bundled instrument is required to interpret the clip.
 
 The note `expressions` array contains stable point IDs, an `offsetBeats` within
 the note, and a value. Supported `type` values are `pitchBend`, `pressure`,
-`timbre`, and `controller`; controller points also store a MIDI controller
-number. Pitch values use `-1.0..1.0`; other expression values use `0.0..1.0`.
+`channelPressure`, `timbre`, and `controller`. `pressure` is polyphonic key
+pressure, while `channelPressure` applies to the whole MIDI channel; controller
+points also store a MIDI controller number. Pitch values use `-1.0..1.0`;
+other expression values use `0.0..1.0`.
 
 All persisted MIDI object IDs are unique. Loading rejects invalid ranges,
 duplicate IDs, unsupported enum values, MIDI clips on incompatible tracks, and
@@ -184,7 +186,10 @@ and persist on the next save.
 
 The automation generation stores stable lanes, targets, points, timebase,
 interpolation, trim offset, and enablement. Targets can address track controls,
-routes, bundled-device parameters, or external plugin parameters.
+routes, bundled-device parameters, external plugin parameters, or
+channel-pressure messages on a specific MIDI channel. MIDI channel-pressure
+targets use `type: "midiChannelPressure"` and persist `midiChannel` in the
+internal `1..16` range.
 
 ## Recovery
 
@@ -205,7 +210,9 @@ disabled until explicit reload. Clean shutdown removes the marker.
   source insert IDs and bus index zero for every existing route.
 - Version 6 gains version 7 empty metadata, scenes, and compatibility-report
   collections.
+- Version 7 gains version 8 `midiChannel: -1` defaults on existing automation
+  targets; channel-pressure targets require `1..16`.
 - The manifest and referenced session format versions must agree.
 
-[`schema/project-v7.schema.json`](schema/project-v7.schema.json) documents the
+[`schema/project-v8.schema.json`](schema/project-v8.schema.json) documents the
 current public session envelope; older schema files remain historical.

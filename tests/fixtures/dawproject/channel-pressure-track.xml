@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Project version="1.0">
+  <Application name="External Fixture" version="1"/>
+  <Structure>
+    <Track id="pressure-track" name="Pressure" contentType="notes automation">
+      <Channel id="pressure-channel" role="regular" audioChannels="2"/>
+    </Track>
+    <Track id="master-track" name="Master" contentType="audio">
+      <Channel id="master-channel" role="master" audioChannels="2"/>
+    </Track>
+  </Structure>
+  <Arrangement>
+    <Lanes timeUnit="beats">
+      <Points id="pressure-points" name="Channel pressure" track="pressure-track" unit="normalized">
+        <Target expression="channelPressure" channel="2"/>
+        <RealPoint time="0.5" value="0.25" interpolation="hold"/>
+        <RealPoint time="1.5" value="0.75" interpolation="hold"/>
+      </Points>
+    </Lanes>
+  </Arrangement>
+</Project>

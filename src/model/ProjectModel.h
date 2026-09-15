@@ -440,7 +440,7 @@ struct RenderReport
 class Project
 {
 public:
-    static constexpr int currentFormatVersion = 7;
+    static constexpr int currentFormatVersion = 8;
 
     juce::String id { juce::Uuid().toString() };
     juce::String name { "Untitled" };

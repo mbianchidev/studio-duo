@@ -79,10 +79,11 @@ MidiEditorComponent::MidiEditorComponent()
         repaint();
     };
 
-    expressionSelector.addItem("Pressure", 1);
+    expressionSelector.addItem("Poly pressure", 1);
     expressionSelector.addItem("Timbre", 2);
     expressionSelector.addItem("Pitch", 3);
     expressionSelector.addItem("Expression CC", 4);
+    expressionSelector.addItem("Channel pressure", 5);
     expressionSelector.setSelectedId(1, juce::dontSendNotification);
     expressionSelector.setTooltip("Select per-note expression data");
 
@@ -664,16 +665,8 @@ void MidiEditorComponent::mouseDrag(const juce::MouseEvent& event)
             *dragPreview,
             selectedNoteIds,
             deltaBeats,
-            pitch - dragStartPitch));
-        if (dragPreview->editorMode == MidiEditorMode::drums)
-        {
-            for (auto& note : dragPreview->notes)
-                if (containsId(selectedNoteIds, note.id))
-                    applyDrumMapMetadata(
-                        note,
-                        currentDrumMap(),
-                        0);
-        }
+            pitch - dragStartPitch,
+            currentDrumMap()));
         cursorBeat = juce::jlimit(
             0.0,
             dragPreview->durationBeats,
@@ -888,7 +881,8 @@ bool MidiEditorComponent::keyPressed(const juce::KeyPress& key)
             after,
             selectedNoteIds,
             0.0,
-            deltaPitch);
+            deltaPitch,
+            currentDrumMap());
     }
     else if (key.getKeyCode() == juce::KeyPress::downKey)
     {
@@ -925,17 +919,12 @@ bool MidiEditorComponent::keyPressed(const juce::KeyPress& key)
             after,
             selectedNoteIds,
             0.0,
-            deltaPitch);
+            deltaPitch,
+            currentDrumMap());
     }
     else
     {
         return false;
-    }
-    if (changed && after.editorMode == MidiEditorMode::drums)
-    {
-        for (auto& note : after.notes)
-            if (containsId(selectedNoteIds, note.id))
-                applyDrumMapMetadata(note, currentDrumMap(), 0);
     }
     if (changed)
         commitEdit(*clip, std::move(after), commandName);
@@ -969,11 +958,12 @@ const MidiClip& MidiEditorComponent::displayedClip() const
 const DrumMap* MidiEditorComponent::currentDrumMap() const
 {
     const auto* clip = currentClip();
-    if (project == nullptr || clip == nullptr)
+    if (project == nullptr
+        || clip == nullptr
+        || clip->editorMode != MidiEditorMode::drums
+        || clip->drumMapId.isEmpty())
         return nullptr;
-    if (const auto* map = project->findDrumMap(clip->drumMapId))
-        return map;
-    return project->drumMaps.empty() ? nullptr : &project->drumMaps.front();
+    return project->findDrumMap(clip->drumMapId);
 }
 
 juce::Rectangle<int> MidiEditorComponent::noteArea() const
@@ -1189,6 +1179,7 @@ MidiEditorComponent::selectedExpressionType() const noexcept
         case 2: return MidiExpressionType::timbre;
         case 3: return MidiExpressionType::pitchBend;
         case 4: return MidiExpressionType::controller;
+        case 5: return MidiExpressionType::channelPressure;
         case 1:
         default: return MidiExpressionType::pressure;
     }

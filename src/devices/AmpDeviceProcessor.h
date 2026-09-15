@@ -55,6 +55,17 @@ public:
     juce::Result useEmbeddedDefaultCabinet();
     [[nodiscard]] juce::String cabinetDescription() const;
 
+#if STUDIO_DUO_TESTING
+    struct CabinetReaderBarrierForTesting
+    {
+        std::atomic<bool> slotLoaded { false };
+        std::atomic<bool> resume { false };
+    };
+
+    void setCabinetReaderBarrierForTesting(
+        CabinetReaderBarrierForTesting* barrier) noexcept;
+#endif
+
 private:
     class CabinetConvolver;
 

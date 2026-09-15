@@ -17,7 +17,9 @@ The instrument responds to normal MIDI:
   round-robin timbre and pan changes;
 - saved round-robin hints are converted to the map's ordinary variant notes by
   the scheduler;
-- closed, pedal, and open hi-hat notes use CC4 foot-control state;
+- closed, pedal, and open hi-hat notes use the MIDI CC4 foot-controller
+  convention: 0 is fully open, 127 is fully closed, and pedal state uses an
+  intermediate value;
 - crash, china, ride, and hi-hat groups respond to mapped choke notes and
   later hits in the same group.
 

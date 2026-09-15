@@ -29,7 +29,8 @@ exchange are implemented. Mastering remains later roadmap work.
   buses, folders, VCAs, control room, hardware outputs, graph-routed input
   monitoring, and solo-safe routing
 - Live, recorded, and retrospective MIDI with persisted notes and per-note
-  pitch, pressure, timbre, and controller expression
+  pitch bend, poly pressure, channel pressure, timbre, and controller
+  expression
 - Piano-roll and metal drum lower editors with velocity, timing, duration,
   probability, and expression lanes
 - Editable/importable drum maps, choke and cymbal metadata, foot control,
@@ -310,8 +311,8 @@ the mixer:
   `Delete`/`Backspace` to remove selected notes.
 - Choose **Velocity**, **Timing**, **Duration**, **Probability**, or
   **Expression** in the lower lane. Drag lane values, or use `Alt+Up/Down` for
-  a keyboard-only adjustment. Expression supports pressure, timbre, pitch
-  bend, and a saved per-note controller.
+  a keyboard-only adjustment. Expression supports poly pressure, channel
+  pressure, timbre, pitch bend, and a saved per-note controller.
 - Choose a grid from quarter notes through 32nd notes or 16th-note triplets.
 
 Use **PIANO/DRUMS** to switch the same ordinary MIDI clip between editors. The
@@ -491,12 +492,12 @@ Studio Duo projects are versioned `.studioduo` directory packages. A save writes
 a new session generation before atomically replacing `manifest.json`; the latest
 complete state is also copied to `recovery/latest.json`.
 
-Project format version 7 stores the typed routing graph, separate automation
+Project format version 8 stores the typed routing graph, separate automation
 generations, content-addressed plugin state, compatibility policy, tone and
 mixer snapshots, render reports, ordinary MIDI clips and expressions, drum
 maps, pattern aliases, humanization state, MIDI routing templates, project
-metadata, scenes, and persisted interchange reports. Versions 1-6 migrate on
-load.
+metadata, scenes, persisted interchange reports, and channel-scoped MIDI
+pressure automation. Versions 1-7 migrate on load.
 See [project-format.md](project-format.md).
 
 Stereo WAV export is 48 kHz and 24-bit. Projects without processors use the

@@ -33,6 +33,11 @@ void MidiCaptureBuffer::push(const juce::MidiBuffer& messages,
             packed |= static_cast<std::uint32_t>(bytes[index])
                 << static_cast<unsigned int>(index * 8);
 
+        // Mark the slot as being rewritten before any payload becomes visible.
+        const auto previousSequence = slot.sequence.fetch_add(
+            1,
+            std::memory_order_acq_rel);
+        slot.ordinal.store(ordinal, std::memory_order_relaxed);
         slot.streamSample.store(
             streamBlockStart + metadata.samplePosition,
             std::memory_order_relaxed);
@@ -43,13 +48,30 @@ void MidiCaptureBuffer::push(const juce::MidiBuffer& messages,
         slot.size.store(
             static_cast<std::uint8_t>(size),
             std::memory_order_relaxed);
-        slot.sequence.store(ordinal + 1, std::memory_order_release);
+#if defined(STUDIO_DUO_TESTING)
+        if (publicationEnteredForTesting != nullptr
+            && publicationReleaseForTesting != nullptr)
+        {
+            publicationEnteredForTesting->store(
+                true,
+                std::memory_order_release);
+            while (!publicationReleaseForTesting->load(
+                std::memory_order_acquire))
+            {
+                std::atomic_signal_fence(std::memory_order_seq_cst);
+            }
+        }
+#endif
+        slot.sequence.store(
+            previousSequence + 2,
+            std::memory_order_release);
+        publishedOrdinal.store(ordinal + 1, std::memory_order_release);
     }
 }
 
 std::uint64_t MidiCaptureBuffer::writeOrdinal() const noexcept
 {
-    return nextOrdinal.load(std::memory_order_acquire);
+    return publishedOrdinal.load(std::memory_order_acquire);
 }
 
 std::uint64_t MidiCaptureBuffer::unsupportedEventCount() const noexcept
@@ -117,21 +139,38 @@ bool MidiCaptureBuffer::readOne(std::uint64_t ordinal,
                                 CapturedMidiEvent& event) const noexcept
 {
     const auto& slot = slots[ordinal % capacity];
-    const auto expected = ordinal + 1;
-    if (slot.sequence.load(std::memory_order_acquire) != expected)
+    const auto sequenceBefore = slot.sequence.load(
+        std::memory_order_acquire);
+    if ((sequenceBefore & 1u) != 0u)
         return false;
 
-    event.ordinal = ordinal;
+    const auto storedOrdinal = slot.ordinal.load(
+        std::memory_order_relaxed);
     event.streamSample = slot.streamSample.load(std::memory_order_relaxed);
     event.timelineSample = slot.timelineSample.load(std::memory_order_relaxed);
     const auto packed = slot.packedData.load(std::memory_order_relaxed);
     event.size = slot.size.load(std::memory_order_relaxed);
-    if (slot.sequence.load(std::memory_order_acquire) != expected)
+    const auto sequenceAfter = slot.sequence.load(
+        std::memory_order_acquire);
+    if (sequenceBefore != sequenceAfter
+        || (sequenceAfter & 1u) != 0u
+        || storedOrdinal != ordinal)
         return false;
 
+    event.ordinal = ordinal;
     for (std::size_t index = 0; index < event.data.size(); ++index)
         event.data[index] = static_cast<std::uint8_t>(
             (packed >> static_cast<unsigned int>(index * 8)) & 0xffu);
     return event.size >= 1 && event.size <= event.data.size();
 }
+
+#if defined(STUDIO_DUO_TESTING)
+void MidiCaptureBuffer::setPublicationPauseForTesting(
+    std::atomic<bool>* entered,
+    const std::atomic<bool>* release) noexcept
+{
+    publicationEnteredForTesting = entered;
+    publicationReleaseForTesting = release;
+}
+#endif
 }

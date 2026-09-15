@@ -64,8 +64,13 @@ rejected rather than temporarily moved or replaced. A failure leaves both the
 currently open project and destination unchanged.
 
 Export builds and validates both XML documents before writing a sibling
-temporary archive. It verifies the staged ZIP and only then atomically replaces
-the destination. Failed exports do not leave a partial destination.
+temporary archive. Referenced media bytes are streamed once into bounded,
+per-export immutable staging files within the existing classic-ZIP size bound;
+archive names, hashes, sizes, CRCs, and payload writes use only those snapshots.
+The staged ZIP is then reopened and every entry is fully read to verify its
+uncompressed size and CRC before the destination is atomically replaced.
+Failed exports remove archive and payload staging files and do not leave or
+publish partial output.
 
 For reproducible archives, Studio Duo uses:
 
@@ -95,8 +100,9 @@ With identical input bytes and model state, repeated exports are byte-identical.
 | Audio clips, offsets, fades, gain | `Clip`, `Audio`, and gain expression points |
 | Stretch mode/rate and warp markers | Audio algorithm and `Warps` |
 | MIDI clips and notes | `Clip` and `Notes` |
-| Pitch, pressure, timbre, controller expression | Note-level `Points` |
+| Pitch bend, poly pressure, channel pressure, timbre, controller expression | Note-level `Points` |
 | Track/send/device automation | Parameter-targeted `Points` |
+| Channel-scoped MIDI pressure automation | Track-level `Points` with `Target expression="channelPressure"` |
 | Scenes and per-track stop/clip slots | `Scenes`, `Scene`, and `ClipSlot` |
 | Embedded or external source media on import | Copied into native `media/` |
 
@@ -104,6 +110,25 @@ Imported DAWproject IDs are deterministically mapped to native IDs. Channel,
 track, parameter, route, scene, and slot aliases are registered explicitly so
 all reconstructed relationships stay stable across repeated imports and native
 save/reopen.
+
+Timeline `timeUnit` values are inherited through nested note-expression
+timelines. Expression times in seconds are interpreted relative to the note's
+absolute timeline position and converted through the imported tempo map to
+note-relative beat offsets. When `playStart` trims a note, expression offsets
+are shifted by the same leading duration; points outside the retained note
+range are discarded and retained points are bounded by the final duration.
+Studio Duo accepts `normalized`, `linear`, and `percent` value units for its
+supported note-expression targets; other units produce an issue on the exact
+`Points` object.
+
+External and built-in device automation is stored internally as normalized
+`[0, 1]` plug-in values. Import converts the DAWproject parameter's declared
+unit and finite `min`/`max` domain before assigning automation. Physical units
+without a complete domain, non-finite bounds, reversed or zero-width domains,
+and out-of-domain points stop the affected import with an object-specific
+error. Export declares device parameters and their point timelines as an
+explicit `normalized` `0` to `1` domain, so values round-trip without being
+interpreted as raw plug-in units.
 
 ## Compatibility reports
 
@@ -133,8 +158,10 @@ The current reported compatibility boundary is:
 - MIDI probability, editor mode, drum-map/articulation/choke/cymbal/foot-control,
   round-robin, and saved humanization parameters; rendered note timing,
   velocity, duration, channel, and supported expressions still export
-- Track-level generic MIDI/expression automation and unsupported parameter
-  targets
+- Track-level MIDI/expression automation other than channel-scoped pressure,
+  and unsupported parameter targets
+- Note-expression value units outside `normalized`, `linear`, and `percent`;
+  each is reported on its own `Points` timeline
 - Video, arbitrary scene timelines, duplicate slots per track, unresolved
   shared clip references, and nested clip/marker constructs that cannot be
   flattened without changing meaning
@@ -156,6 +183,7 @@ defaults.
 schema order/types/IDREFs, semantic numeric checks, unsafe archives, complete
 supported round trips, metadata, hierarchy, routing, clips, notes, note
 expressions, automation, devices, scenes, warps, embedded/external media,
-plug-in state, source immutability, deterministic archive bytes, transactional
-failure, compatibility reports, report JSON, stable IDs, native persistence,
-and migration.
+plug-in state, raw device-parameter domains, inherited note-expression
+time/value units, exact payload snapshots, full staged-entry CRC checks, source
+immutability, deterministic archive bytes, transactional failure, compatibility
+reports, report JSON, stable IDs, native persistence, and migration.

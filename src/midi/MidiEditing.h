@@ -87,7 +87,8 @@ void applyDrumMapMetadata(MidiNote& note,
     MidiClip& clip,
     const std::vector<juce::String>& noteIds,
     double deltaBeats,
-    int deltaPitch);
+    int deltaPitch,
+    const DrumMap* drumMap = nullptr);
 [[nodiscard]] bool resizeMidiNotes(
     MidiClip& clip,
     const std::vector<juce::String>& noteIds,

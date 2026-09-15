@@ -55,6 +55,64 @@
               "type",
               "trackId"
             ],
+            "properties": {
+              "type": {
+                "enum": [
+                  "trackVolume",
+                  "trackPan",
+                  "trackMute",
+                  "trackPolarity",
+                  "vcaVolume",
+                  "sendGain",
+                  "sendPan",
+                  "sendMute",
+                  "controlRoomDim",
+                  "midiChannelPressure",
+                  "pluginParameter",
+                  "deviceParameter"
+                ]
+              },
+              "trackId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "midiChannel": {
+                "type": "integer",
+                "minimum": -1,
+                "maximum": 16
+              }
+            },
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "type": {
+                      "const": "midiChannelPressure"
+                    }
+                  },
+                  "required": [
+                    "type"
+                  ]
+                },
+                "then": {
+                  "required": [
+                    "midiChannel"
+                  ],
+                  "properties": {
+                    "midiChannel": {
+                      "minimum": 1
+                    }
+                  }
+                },
+                "else": {
+                  "properties": {
+                    "midiChannel": {
+                      "const": -1
+                    }
+                  }
+                }
+              }
+            ],
             "additionalProperties": true
           },
           "points": {

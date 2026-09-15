@@ -12,7 +12,7 @@
   validation, deterministic archives, transactions, and compatibility reports
 - [Releasing](releasing.md): versioning, release minting, CI artifacts, and
   installation
-- [Native project format](project-format.md): version 7 package layout,
+- [Native project format](project-format.md): version 8 package layout,
   generations, schemas, state hashes, recovery, and migrations
 - [Contributing](contributing.md): coding expectations and pull-request workflow
 

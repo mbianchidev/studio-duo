@@ -270,6 +270,10 @@ Project format version 7 adds general project metadata, persisted launch scenes,
 and structured interchange compatibility reports. Version 6 projects migrate
 with empty values for those collections.
 
+Project format version 8 adds channel-scoped MIDI pressure automation targets.
+Version 7 automation targets migrate with `midiChannel: -1`; channel-pressure
+targets persist channels in the internal `1..16` range.
+
 `src/dawproject_io/` is an explicit translation boundary:
 
 - `DawProjectIdMapper` produces stable, kind-specific XML IDs and deterministic
@@ -320,14 +324,21 @@ preallocated short MIDI events off the audio thread. The callback performs only
 binary lookup, fixed-message construction, and writes into already reserved
 `MidiBuffer` storage. Probability is resolved deterministically from the clip
 seed and note ID. Choke groups shorten the preceding event at the next mapped
-hit; foot control emits the mapped CC before its note; pressure, timbre, pitch,
-and controller expression retain exact sample offsets.
+hit; foot control emits the mapped CC before its note; poly pressure, channel
+pressure, timbre, pitch-bend, and controller expression retain exact sample
+offsets.
 
 Incoming MIDI is copied once into `MidiCaptureBuffer`, a fixed 65,536-event
-single-writer ring whose slots use lock-free atomics. The callback performs no
-allocation, locks, I/O, or logging. Normal recording stores ordinal/sample
-boundaries while leaving the existing live fan-out untouched. Stop converts
-the captured channel messages into ordinary notes outside the callback.
+single-writer ring whose slots use a per-slot publication sequence and a
+separate completed ordinal. The callback performs no allocation, locks, I/O,
+or logging. Normal recording stores quiesced ordinal/sample boundaries while
+leaving the existing live fan-out untouched. Stop converts the captured
+channel messages into ordinary notes outside the callback.
+
+Scheduled note state uses fixed per-track/channel/key counters in the published
+snapshot. Pause, seek, loop wrap, and automatic transport end inject note-offs
+plus channel all-notes-off messages through the same MIDI routing graph before
+the state is cleared.
 Retrospective capture reads the same ring, trims leading/trailing silence, and
 reports overwritten or unsupported long system-exclusive events.
 

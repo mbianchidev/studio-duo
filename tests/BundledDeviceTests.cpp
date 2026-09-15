@@ -5,11 +5,15 @@
 #include "devices/AmpDeviceProcessor.h"
 #include "devices/DeviceRegistry.h"
 #include "devices/DrumDeviceProcessor.h"
+#include "midi/MidiEditing.h"
 #include "model/ProjectCommands.h"
 #include "model/ProjectModel.h"
 
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <cmath>
+#include <thread>
 
 namespace
 {
@@ -61,6 +65,15 @@ bool waitForRuntime(studio::StudioAudioEngine& engine)
          ++attempt)
         juce::Thread::sleep(10);
     return !engine.pluginRuntimeTransitionPending();
+}
+
+bool waitForFlag(const std::atomic<bool>& flag)
+{
+    for (int attempt = 0;
+         attempt < 2000 && !flag.load(std::memory_order_acquire);
+         ++attempt)
+        juce::Thread::sleep(1);
+    return flag.load(std::memory_order_acquire);
 }
 
 studio::StudioAudioEngine::PluginRuntimeRequest requestFor(
@@ -342,6 +355,37 @@ void drumProcessor()
                < magnitude(crashBlock, cymbalChannel, 128, 384) * 0.2f,
            "Mapped cymbal choke notes terminate the matching cymbal state.");
 
+    const auto map = studio::createDefaultMetalDrumMap();
+    studio::MidiClip mappedClip;
+    mappedClip.editorMode = studio::MidiEditorMode::drums;
+    mappedClip.drumMapId = map.id;
+    const auto openHat = studio::createMidiNote(
+        mappedClip,
+        0.0,
+        46,
+        0.25,
+        110,
+        &map);
+    const auto closedHat = studio::createMidiNote(
+        mappedClip,
+        0.0,
+        42,
+        0.25,
+        110,
+        &map);
+    const auto pedalHat = studio::createMidiNote(
+        mappedClip,
+        0.0,
+        44,
+        0.25,
+        110,
+        &map);
+    expect(openHat.footControlValue == 0
+               && closedHat.footControlValue == 127
+               && pedalHat.footControlValue > 0
+               && pedalHat.footControlValue < 127,
+           "Hi-hat metadata follows the MIDI CC4 convention: 0 is open and 127 is closed.");
+
     const auto renderHatTail = [](int footValue)
     {
         auto instrument = studio::DeviceRegistry::create(
@@ -376,7 +420,43 @@ void drumProcessor()
                 0));
     };
     expect(renderHatTail(0) > renderHatTail(127) * 2.0f,
-           "Hi-hat foot control changes the open-cymbal decay.");
+           "CC4 value 0 produces a longer open hi-hat decay than closed value 127.");
+
+    const auto renderHatAfterControl = [](int footValue)
+    {
+        auto instrument = studio::DeviceRegistry::create(
+            "studio.device.drum-composer");
+        instrument->prepareToPlay(48000.0, 1024);
+        juce::AudioBuffer<float> renderedHat(
+            instrument->getTotalNumOutputChannels(),
+            1024);
+        renderedHat.clear();
+        juce::MidiBuffer hit;
+        hit.addEvent(
+            juce::MidiMessage::controllerEvent(1, 4, 0),
+            0);
+        hit.addEvent(
+            juce::MidiMessage::noteOn(1, 46, (juce::uint8) 110),
+            0);
+        instrument->processBlock(renderedHat, hit);
+        renderedHat.clear();
+        juce::MidiBuffer control;
+        control.addEvent(
+            juce::MidiMessage::controllerEvent(1, 4, footValue),
+            0);
+        instrument->processBlock(renderedHat, control);
+        return magnitude(
+            renderedHat,
+            outputChannel(
+                *instrument,
+                studio::DrumDeviceProcessor::cymbalsOutput,
+                0),
+            512,
+            512);
+    };
+    expect(renderHatAfterControl(127)
+               < renderHatAfterControl(0) * 0.1f,
+           "Closing CC4 to 127 rapidly chokes an already-open hi-hat.");
 
     juce::MemoryBlock state;
     drum->getStateInformation(state);
@@ -391,6 +471,100 @@ void drumProcessor()
                       static_cast<int>(state.getSize()))
                       .wasOk(),
            "Drum device parameters restore through validated state.");
+}
+
+void drumTailAndVoiceReuse()
+{
+    constexpr auto sampleRate = 8000.0;
+    constexpr auto blockSamples = 256;
+    studio::DrumDeviceProcessor drum;
+    drum.prepareToPlay(sampleRate, blockSamples);
+    expect(setParameter(drum, "room", 1.0f),
+           "The drum tail fixture enables the maximum room amount.");
+
+    const auto declaredTailSamples = static_cast<int>(
+        std::ceil(drum.getTailLengthSeconds() * sampleRate));
+    auto renderedSamples = 0;
+    while (renderedSamples < declaredTailSamples)
+    {
+        const auto samples = std::min(
+            blockSamples,
+            declaredTailSamples - renderedSamples);
+        juce::AudioBuffer<float> audio(
+            drum.getTotalNumOutputChannels(),
+            samples);
+        audio.clear();
+        juce::MidiBuffer midi;
+        if (renderedSamples == 0)
+        {
+            midi.addEvent(
+                juce::MidiMessage::noteOn(
+                    1,
+                    51,
+                    static_cast<juce::uint8>(127)),
+                0);
+        }
+        drum.processBlock(audio, midi);
+        renderedSamples += samples;
+    }
+
+    juce::AudioBuffer<float> afterTail(
+        drum.getTotalNumOutputChannels(),
+        blockSamples);
+    afterTail.clear();
+    juce::MidiBuffer empty;
+    drum.processBlock(afterTail, empty);
+    const auto mainChannel = outputChannel(
+        drum,
+        studio::DrumDeviceProcessor::mainOutput,
+        0);
+    const auto cymbalChannel = outputChannel(
+        drum,
+        studio::DrumDeviceProcessor::cymbalsOutput,
+        0);
+    expect(std::max(
+               magnitude(afterTail, mainChannel),
+               magnitude(afterTail, cymbalChannel))
+               < 0.0001f,
+           "The longest cymbal and room output are near silence at the declared drum tail.");
+
+    drum.reset();
+    constexpr auto repeatedHitSeconds = 10;
+    const auto totalSamples =
+        static_cast<int>(sampleRate) * repeatedHitSeconds;
+    const auto hitIntervalSamples =
+        static_cast<int>(sampleRate) / 32;
+    constexpr std::array repeatedPattern { 36, 38, 41, 49 };
+    auto nextHitSample = 0;
+    auto nextPatternNote = std::size_t { 0 };
+    for (int blockStart = 0;
+         blockStart < totalSamples;
+         blockStart += blockSamples)
+    {
+        const auto samples = std::min(
+            blockSamples,
+            totalSamples - blockStart);
+        juce::AudioBuffer<float> audio(
+            drum.getTotalNumOutputChannels(),
+            samples);
+        audio.clear();
+        juce::MidiBuffer midi;
+        while (nextHitSample < blockStart + samples)
+        {
+            midi.addEvent(
+                juce::MidiMessage::noteOn(
+                    1,
+                    repeatedPattern[nextPatternNote],
+                    static_cast<juce::uint8>(110)),
+                nextHitSample - blockStart);
+            nextPatternNote =
+                (nextPatternNote + 1) % repeatedPattern.size();
+            nextHitSample += hitIntervalSamples;
+        }
+        drum.processBlock(audio, midi);
+    }
+    expect(drum.activeVoiceCountForTesting() < 40,
+           "A dense repeated kit pattern with eight cymbal hits per second reuses expired voices without exhausting the fixed pool.");
 }
 
 void drumEngineRoutingAndRender()
@@ -570,6 +744,95 @@ void drumEngineRoutingAndRender()
            "Offline rendering instantiates the bundled MIDI instrument.");
     expect(magnitude(rendered, 0, 0, 4096) > 0.01f,
            "Offline rendering schedules persisted drum notes into audio.");
+}
+
+void ampCabinetPublicationRace()
+{
+    const auto cabinetIr =
+        juce::File::getCurrentWorkingDirectory()
+            .getNonexistentChildFile(
+                "StudioDuoPublicationRaceCabinet",
+                ".wav",
+                false);
+    expect(writeCabinetIr(cabinetIr, 512),
+           "The cabinet publication race fixture writes.");
+
+    studio::AmpDeviceProcessor processing(
+        studio::AmpDeviceType::guitar);
+    studio::AmpDeviceProcessor reference(
+        studio::AmpDeviceType::guitar);
+    processing.prepareToPlay(48000.0, 2048);
+    reference.prepareToPlay(48000.0, 2048);
+
+    auto publicationsSucceeded = true;
+    auto readersUsedPublishedKernel = true;
+    auto currentIsCustom = false;
+    for (int iteration = 0; iteration < 12; ++iteration)
+    {
+        const auto publishCustom = !currentIsCustom;
+        currentIsCustom = publishCustom;
+        const auto referenceResult = publishCustom
+            ? reference.loadCabinetFile(cabinetIr)
+            : reference.useEmbeddedDefaultCabinet();
+        if (referenceResult.failed())
+        {
+            publicationsSucceeded = false;
+            break;
+        }
+
+        processing.reset();
+        reference.reset();
+        auto actual = sineInput(
+            2048,
+            90.0 + static_cast<double>(iteration));
+        auto expected = actual;
+        studio::AmpDeviceProcessor::CabinetReaderBarrierForTesting
+            barrier;
+        processing.setCabinetReaderBarrierForTesting(&barrier);
+        juce::MidiBuffer actualMidi;
+        std::thread audioThread(
+            [&processing, &actual, &actualMidi]
+            {
+                processing.processBlock(actual, actualMidi);
+            });
+
+        const auto readerPaused = waitForFlag(barrier.slotLoaded);
+        const auto publicationResult = publishCustom
+            ? processing.loadCabinetFile(cabinetIr)
+            : processing.useEmbeddedDefaultCabinet();
+        barrier.resume.store(true, std::memory_order_release);
+        audioThread.join();
+        processing.setCabinetReaderBarrierForTesting(nullptr);
+        if (!readerPaused || publicationResult.failed())
+        {
+            publicationsSucceeded = false;
+            break;
+        }
+
+        juce::MidiBuffer expectedMidi;
+        reference.processBlock(expected, expectedMidi);
+        auto difference = 0.0f;
+        for (int channel = 0; channel < actual.getNumChannels(); ++channel)
+        {
+            for (int sample = 0; sample < actual.getNumSamples(); ++sample)
+            {
+                difference = std::max(
+                    difference,
+                    std::abs(
+                        actual.getSample(channel, sample)
+                        - expected.getSample(channel, sample)));
+            }
+        }
+        readersUsedPublishedKernel =
+            readersUsedPublishedKernel
+            && difference < 0.00001f;
+    }
+
+    expect(publicationsSucceeded,
+           "Repeated cabinet publication succeeds while processing is paused in reader acquisition.");
+    expect(readersUsedPublishedKernel,
+           "Cabinet readers retry acquisition when publication changes the active slot.");
+    cabinetIr.deleteFile();
 }
 
 void ampProcessorAndCabinetState()
@@ -808,7 +1071,9 @@ void bundledDeviceTests()
 {
     registryMetadata();
     drumProcessor();
+    drumTailAndVoiceReuse();
     drumEngineRoutingAndRender();
+    ampCabinetPublicationRace();
     ampProcessorAndCabinetState();
     ampRuntimeStateAndAutomation();
 }

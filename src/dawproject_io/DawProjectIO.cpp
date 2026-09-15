@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <limits>
 #include <map>
+#include <new>
 #include <set>
 
 namespace studio
@@ -289,9 +290,25 @@ std::optional<StretchMode> stretchModeForAlgorithm(
 
 struct Payload
 {
-    juce::File file;
-    juce::MemoryBlock data;
+    juce::File snapshot;
+    juce::int64 size = 0;
+    std::uint32_t crc = 0;
 };
+
+#if STUDIO_DUO_TESTING
+DawProjectIO::ExportTestHook& exportTestHook()
+{
+    static DawProjectIO::ExportTestHook hook;
+    return hook;
+}
+
+void runExportTestHook(DawProjectIO::ExportTestPhase phase,
+                       const juce::File& file)
+{
+    if (exportTestHook())
+        exportTestHook()(phase, file);
+}
+#endif
 
 struct AudioFileInfo
 {
@@ -315,6 +332,12 @@ public:
         formats.registerBasicFormats();
     }
 
+    ~Exporter()
+    {
+        if (payloadStagingDirectory.exists())
+            payloadStagingDirectory.deleteRecursively();
+    }
+
     DawProjectExportResult run()
     {
         DawProjectExportResult output;
@@ -328,8 +351,7 @@ public:
                 firstError.isNotEmpty()
                     ? firstError
                     : juce::String("DAWproject export failed."));
-            output.report = std::move(report);
-            return output;
+            return finishRun(std::move(output));
         }
 
         const auto metadataString = xmlText(*metadata);
@@ -350,8 +372,7 @@ public:
         {
             output.result = juce::Result::fail(
                 "Generated DAWproject XML failed official schema validation.");
-            output.report = std::move(report);
-            return output;
+            return finishRun(std::move(output));
         }
 
         const auto writeResult = writeArchive(
@@ -367,10 +388,7 @@ public:
                 writeResult.getErrorMessage());
         }
         output.result = writeResult;
-        output.report = std::move(report);
-        if (writeResult.failed())
-            output.archive = juce::File();
-        return output;
+        return finishRun(std::move(output));
     }
 
 private:
@@ -382,6 +400,9 @@ private:
     juce::AudioFormatManager formats;
     std::map<juce::String, Payload> payloads;
     std::map<juce::String, AudioFileInfo> audioInfo;
+    juce::File payloadStagingDirectory;
+    juce::int64 stagedPayloadBytes = 0;
+    std::uint32_t nextPayloadSnapshot = 0;
     bool fatal = false;
     juce::String firstError;
 
@@ -410,6 +431,131 @@ private:
             code,
             path,
             message);
+    }
+
+    std::optional<juce::File> createPayloadSnapshot(
+        const juce::String& path)
+    {
+        if (payloadStagingDirectory == juce::File())
+        {
+            payloadStagingDirectory =
+                destinationArchive.getSiblingFile(
+                    destinationArchive.getFileName()
+                    + ".payload-staging-"
+                    + juce::Uuid().toString());
+            if (!payloadStagingDirectory.createDirectory())
+            {
+                fail(
+                    "export.payload-staging",
+                    path,
+                    "Could not create the immutable payload staging directory.");
+                return std::nullopt;
+            }
+        }
+        const auto snapshot = payloadStagingDirectory.getChildFile(
+            "payload-"
+            + juce::String(++nextPayloadSnapshot).paddedLeft('0', 8)
+            + ".bin");
+        if (snapshot.exists())
+            snapshot.deleteRecursively();
+        return snapshot;
+    }
+
+    bool stageMemoryPayload(const juce::String& archivePath,
+                            const juce::MemoryBlock& data,
+                            const juce::String& objectPath)
+    {
+        const auto size =
+            static_cast<juce::int64>(data.getSize());
+        if (size < 0
+            || size > maxArchiveBytes
+            || stagedPayloadBytes > maxArchiveBytes - size)
+        {
+            fail(
+                "export.payload-snapshot-too-large",
+                objectPath,
+                "The immutable payload snapshots exceed the current 2 GiB classic-ZIP limit.");
+            return false;
+        }
+        const auto snapshot = createPayloadSnapshot(objectPath);
+        if (!snapshot.has_value())
+            return false;
+        auto output = snapshot->createOutputStream();
+        if (output == nullptr
+            || !output->write(data.getData(), data.getSize()))
+        {
+            if (output != nullptr)
+                output.reset();
+            snapshot->deleteFile();
+            fail(
+                "export.payload-snapshot",
+                objectPath,
+                "Could not write an immutable payload snapshot.");
+            return false;
+        }
+        output->flush();
+        const auto status = output->getStatus();
+        output.reset();
+        if (status.failed()
+            || !snapshot->existsAsFile()
+            || snapshot->getSize() != size)
+        {
+            snapshot->deleteFile();
+            fail(
+                "export.payload-snapshot",
+                objectPath,
+                "The immutable payload snapshot could not be completed.");
+            return false;
+        }
+        Crc32 crc;
+        crc.update(data.getData(), data.getSize());
+        payloads[archivePath] = {
+            *snapshot,
+            size,
+            crc.result()
+        };
+        stagedPayloadBytes += size;
+        return true;
+    }
+
+    juce::Result cleanupPayloadStaging()
+    {
+        if (payloadStagingDirectory == juce::File()
+            || !payloadStagingDirectory.exists())
+        {
+            payloadStagingDirectory = juce::File();
+            return juce::Result::ok();
+        }
+        const auto path =
+            payloadStagingDirectory.getFullPathName();
+        if (!payloadStagingDirectory.deleteRecursively())
+        {
+            return juce::Result::fail(
+                "Could not remove immutable payload staging directory "
+                + path + ".");
+        }
+        payloadStagingDirectory = juce::File();
+        return juce::Result::ok();
+    }
+
+    DawProjectExportResult finishRun(
+        DawProjectExportResult output)
+    {
+        if (const auto cleanup = cleanupPayloadStaging();
+            cleanup.failed())
+        {
+            addIssue(
+                report,
+                CompatibilitySeverity::error,
+                "export.payload-staging-cleanup",
+                "/Archive",
+                cleanup.getErrorMessage());
+            output.result = cleanup;
+        }
+        output.report = std::move(report);
+        if (output.result.failed())
+            output.archive = juce::File();
+        return output;
     }
 
     void appendSchemaIssues(const DawProjectValidationResult& validation,
@@ -820,14 +966,27 @@ private:
                 parameter->setAttribute(
                     "parameterID",
                     lane->target.parameterIndex);
-            parameter->setAttribute("unit", "linear");
+            parameter->setAttribute("unit", "normalized");
+            parameter->setAttribute("min", "0");
+            parameter->setAttribute("max", "1");
             if (!lane->points.empty())
             {
+                const auto value =
+                    lane->points.front().value
+                    + lane->trimOffset;
+                if (!std::isfinite(value)
+                    || value < 0.0
+                    || value > 1.0)
+                {
+                    fail(
+                        "export.device-automation-value",
+                        automationPath(*lane),
+                        "Device automation values must be normalized between 0 and 1.");
+                    continue;
+                }
                 parameter->setAttribute(
                     "value",
-                    formatNumber(
-                        lane->points.front().value
-                        + lane->trimOffset));
+                    formatNumber(value));
             }
         }
     }
@@ -871,7 +1030,13 @@ private:
             "plugin-state/"
             + ids.externalId("device-state", insert.id)
             + stateExtension(insert);
-        payloads[path].data = std::move(state);
+        if (!stageMemoryPayload(
+                path,
+                state,
+                devicePath(track, insert)))
+        {
+            return;
+        }
         auto* stateReference = addElement(device, "State");
         stateReference->setAttribute("path", path);
         stateReference->setAttribute("external", "false");
@@ -1008,12 +1173,137 @@ private:
                 "The audio file exceeds the current 2 GiB classic-ZIP limit.");
             return std::nullopt;
         }
+        const auto initialSize = clip.sourceFile.getSize();
+        const auto initialModificationTime =
+            clip.sourceFile.getLastModificationTime();
+#if STUDIO_DUO_TESTING
+        runExportTestHook(
+            DawProjectIO::ExportTestPhase::beforePayloadSnapshot,
+            clip.sourceFile);
+#endif
+        if (!clip.sourceFile.existsAsFile()
+            || clip.sourceFile.getSize() != initialSize
+            || clip.sourceFile.getLastModificationTime()
+                   != initialModificationTime)
+        {
+            fail(
+                "export.payload-snapshot",
+                clipPath(track, clip),
+                "The audio payload changed or disappeared before it could be snapshotted.");
+            return std::nullopt;
+        }
+        if (initialSize < 0
+            || initialSize > maxArchiveBytes
+            || stagedPayloadBytes > maxArchiveBytes - initialSize)
+        {
+            fail(
+                "export.payload-snapshot-too-large",
+                clipPath(track, clip),
+                "The external payload snapshots exceed the current 2 GiB classic-ZIP limit.");
+            return std::nullopt;
+        }
+        const auto snapshot =
+            createPayloadSnapshot(clipPath(track, clip));
+        if (!snapshot.has_value())
+            return std::nullopt;
+        auto input = clip.sourceFile.createInputStream();
+        auto output = snapshot->createOutputStream();
+        if (input == nullptr || output == nullptr)
+        {
+            input.reset();
+            output.reset();
+            snapshot->deleteFile();
+            fail(
+                "export.payload-snapshot",
+                clipPath(track, clip),
+                "Could not open the audio payload or immutable snapshot.");
+            return std::nullopt;
+        }
+        Crc32 snapshotCrc;
+        std::array<std::uint8_t, 64 * 1024> buffer {};
+        auto remaining = initialSize;
+        while (remaining > 0)
+        {
+            const auto requested = static_cast<int>(
+                std::min<juce::int64>(
+                    remaining,
+                    static_cast<juce::int64>(buffer.size())));
+            const auto read = input->read(
+                buffer.data(),
+                requested);
+            if (read <= 0
+                || !output->write(
+                    buffer.data(),
+                    static_cast<std::size_t>(read)))
+            {
+                input.reset();
+                output.reset();
+                snapshot->deleteFile();
+                fail(
+                    "export.payload-snapshot",
+                    clipPath(track, clip),
+                    "The audio payload became unreadable while it was being snapshotted.");
+                return std::nullopt;
+            }
+            snapshotCrc.update(
+                buffer.data(),
+                static_cast<std::size_t>(read));
+            remaining -= read;
+        }
+        std::uint8_t extraByte = 0;
+        if (input->read(&extraByte, 1) > 0
+            || !clip.sourceFile.existsAsFile()
+            || clip.sourceFile.getSize() != initialSize
+            || clip.sourceFile.getLastModificationTime()
+                   != initialModificationTime)
+        {
+            input.reset();
+            output.reset();
+            snapshot->deleteFile();
+            fail(
+                "export.payload-snapshot",
+                clipPath(track, clip),
+                "The audio payload changed while it was being snapshotted.");
+            return std::nullopt;
+        }
+        input.reset();
+        output->flush();
+        const auto snapshotStatus = output->getStatus();
+        output.reset();
+        if (snapshotStatus.failed()
+            || !snapshot->existsAsFile()
+            || snapshot->getSize() != initialSize)
+        {
+            snapshot->deleteFile();
+            fail(
+                "export.payload-snapshot",
+                clipPath(track, clip),
+                "The immutable audio payload snapshot could not be completed.");
+            return std::nullopt;
+        }
+#if STUDIO_DUO_TESTING
+        runExportTestHook(
+            DawProjectIO::ExportTestPhase::afterPayloadSnapshot,
+            *snapshot);
+#endif
+        if (!snapshot->existsAsFile()
+            || snapshot->getSize() != initialSize)
+        {
+            snapshot->deleteFile();
+            fail(
+                "export.payload-snapshot",
+                clipPath(track, clip),
+                "The immutable audio payload snapshot was removed or changed after capture.");
+            return std::nullopt;
+        }
         std::unique_ptr<juce::AudioFormatReader> reader(
-            formats.createReaderFor(clip.sourceFile));
+            formats.createReaderFor(
+                snapshot->createInputStream()));
         if (reader == nullptr
             || reader->sampleRate <= 0.0
             || reader->numChannels == 0)
         {
+            snapshot->deleteFile();
             fail(
                 "export.media-invalid",
                 clipPath(track, clip),
@@ -1029,7 +1319,7 @@ private:
             extension = ".bin";
         }
         const auto hash =
-            juce::SHA256(clip.sourceFile).toHexString().toLowerCase();
+            juce::SHA256(*snapshot).toHexString().toLowerCase();
         AudioFileInfo info;
         info.archivePath = "media/" + hash + extension;
         info.durationSeconds =
@@ -1038,7 +1328,13 @@ private:
         info.channels = static_cast<int>(reader->numChannels);
         info.sampleRate =
             static_cast<int>(std::round(reader->sampleRate));
-        payloads[info.archivePath].file = clip.sourceFile;
+        reader.reset();
+        payloads[info.archivePath] = {
+            *snapshot,
+            initialSize,
+            snapshotCrc.result()
+        };
+        stagedPayloadBytes += initialSize;
         audioInfo.emplace(key, info);
         return info;
     }
@@ -1255,6 +1551,8 @@ private:
                     return juce::String("pitchBend");
                 case MidiExpressionType::pressure:
                     return juce::String("pressure");
+                case MidiExpressionType::channelPressure:
+                    return juce::String("channelPressure");
                 case MidiExpressionType::timbre:
                     return juce::String("timbre");
                 case MidiExpressionType::controller:
@@ -1301,8 +1599,10 @@ private:
         const AutomationLane& lane)
     {
         auto parameter = juce::String();
+        auto expression = juce::String();
         auto unit = juce::String("linear");
         auto booleanPoints = false;
+        auto normalizedPoints = false;
         switch (lane.target.type)
         {
             case AutomationTargetType::trackVolume:
@@ -1358,6 +1658,22 @@ private:
                     return nullptr;
                 }
                 parameter = deviceParameterId(lane);
+                unit = "normalized";
+                normalizedPoints = true;
+                break;
+            case AutomationTargetType::midiChannelPressure:
+                if (lane.target.midiChannel < 1
+                    || lane.target.midiChannel > 16)
+                {
+                    fail(
+                        "export.channel-pressure-channel",
+                        automationPath(lane),
+                        "Channel-pressure automation requires a MIDI channel from 1 through 16.");
+                    return nullptr;
+                }
+                expression = "channelPressure";
+                unit = "normalized";
+                normalizedPoints = true;
                 break;
             case AutomationTargetType::trackPolarity:
             case AutomationTargetType::sendMute:
@@ -1383,7 +1699,17 @@ private:
         if (!booleanPoints)
             points->setAttribute("unit", unit);
         auto* target = addElement(*points, "Target");
-        target->setAttribute("parameter", parameter);
+        if (expression.isNotEmpty())
+        {
+            target->setAttribute("expression", expression);
+            target->setAttribute(
+                "channel",
+                lane.target.midiChannel - 1);
+        }
+        else
+        {
+            target->setAttribute("parameter", parameter);
+        }
         for (const auto& sourcePoint : lane.points)
         {
             auto* point = addElement(
@@ -1401,10 +1727,26 @@ private:
             }
             else
             {
+                const auto value =
+                    sourcePoint.value + lane.trimOffset;
+                if (normalizedPoints
+                    && (!std::isfinite(value)
+                        || value < 0.0
+                        || value > 1.0))
+                {
+                    fail(
+                        expression.isNotEmpty()
+                            ? "export.channel-pressure-value"
+                            : "export.device-automation-value",
+                        automationPath(lane),
+                        expression.isNotEmpty()
+                            ? "Channel-pressure automation values must be normalized between 0 and 1."
+                            : "Device automation values must be normalized between 0 and 1.");
+                    return nullptr;
+                }
                 point->setAttribute(
                     "value",
-                    formatNumber(
-                        sourcePoint.value + lane.trimOffset));
+                    formatNumber(value));
                 point->setAttribute(
                     "interpolation",
                     lane.interpolation
@@ -1851,7 +2193,8 @@ private:
         struct PreparedEntry
         {
             juce::String path;
-            Payload payload;
+            juce::MemoryBlock inlinePayload;
+            juce::File snapshot;
             std::uint32_t size = 0;
             std::uint32_t crc = 0;
             std::uint32_t offset = 0;
@@ -1864,6 +2207,16 @@ private:
             destinationArchive.getSiblingFile(
                 destinationArchive.getFileName()
                 + ".tmp-" + juce::Uuid().toString());
+        struct StagingCleanup
+        {
+            juce::File file;
+
+            ~StagingCleanup()
+            {
+                if (file.existsAsFile())
+                    file.deleteFile();
+            }
+        } stagingCleanup { temporary };
 
         std::vector<PreparedEntry> entries;
         const auto addString = [&entries](const juce::String& text,
@@ -1872,63 +2225,102 @@ private:
             const auto utf8 = text.toStdString();
             PreparedEntry entry;
             entry.path = path;
-            entry.payload.data =
+            entry.inlinePayload =
                 juce::MemoryBlock(utf8.data(), utf8.size());
             entries.push_back(std::move(entry));
         };
         addString(metadataXml, metadataEntryName);
         addString(projectXml, projectEntryName);
         for (const auto& [path, payload] : payloads)
-            entries.push_back({ path, payload });
+        {
+            PreparedEntry entry;
+            entry.path = path;
+            entry.snapshot = payload.snapshot;
+            entry.size =
+                static_cast<std::uint32_t>(payload.size);
+            entry.crc = payload.crc;
+            entries.push_back(std::move(entry));
+        }
         if (entries.size() > 65535)
         {
             return juce::Result::fail(
                 "The DAWproject archive contains too many entries for the classic ZIP container.");
         }
 
-        const auto prepareEntry = [](PreparedEntry& entry)
+        juce::int64 totalPayloadBytes = 0;
+        const auto prepareEntry =
+            [&totalPayloadBytes](PreparedEntry& entry)
         {
-            const auto size = entry.payload.file.existsAsFile()
-                ? entry.payload.file.getSize()
+            const auto fileBacked =
+                entry.snapshot != juce::File();
+            const auto size = fileBacked
+                ? static_cast<juce::int64>(entry.size)
                 : static_cast<juce::int64>(
-                      entry.payload.data.getSize());
-            if (size < 0 || size > maxArchiveBytes)
+                      entry.inlinePayload.getSize());
+            if (size < 0
+                || size > maxArchiveBytes
+                || totalPayloadBytes > maxArchiveBytes - size)
                 return juce::Result::fail(
                     "Archive payload exceeds the supported classic ZIP size: "
                     + entry.path);
-            entry.size = static_cast<std::uint32_t>(size);
             Crc32 crc;
-            if (entry.payload.file.existsAsFile())
+            if (fileBacked)
             {
-                auto input = entry.payload.file.createInputStream();
-                if (input == nullptr)
+                if (!entry.snapshot.existsAsFile()
+                    || entry.snapshot.getSize() != size)
+                {
                     return juce::Result::fail(
-                        "Could not open archive payload " + entry.path + ".");
+                        "The immutable payload snapshot is missing or has changed: "
+                        + entry.path);
+                }
+                auto input = entry.snapshot.createInputStream();
+                if (input == nullptr)
+                {
+                    return juce::Result::fail(
+                        "Could not open immutable payload snapshot "
+                        + entry.path + ".");
+                }
                 std::array<std::uint8_t, 64 * 1024> buffer {};
-                juce::int64 remaining = size;
+                auto remaining = size;
                 while (remaining > 0)
                 {
                     const auto requested = static_cast<int>(
                         std::min<juce::int64>(
                             remaining,
-                            static_cast<juce::int64>(buffer.size())));
+                            static_cast<juce::int64>(
+                                buffer.size())));
                     const auto read = input->read(
                         buffer.data(),
                         requested);
                     if (read <= 0)
+                    {
                         return juce::Result::fail(
-                            "Archive payload is truncated: " + entry.path);
-                    crc.update(buffer.data(), static_cast<std::size_t>(read));
+                            "The immutable payload snapshot is truncated: "
+                            + entry.path);
+                    }
+                    crc.update(
+                        buffer.data(),
+                        static_cast<std::size_t>(read));
                     remaining -= read;
+                }
+                std::uint8_t extra = 0;
+                if (input->read(&extra, 1) > 0
+                    || crc.result() != entry.crc)
+                {
+                    return juce::Result::fail(
+                        "The immutable payload snapshot changed before archive staging: "
+                        + entry.path);
                 }
             }
             else
             {
+                entry.size = static_cast<std::uint32_t>(size);
                 crc.update(
-                    entry.payload.data.getData(),
-                    entry.payload.data.getSize());
+                    entry.inlinePayload.getData(),
+                    entry.inlinePayload.getSize());
+                entry.crc = crc.result();
             }
-            entry.crc = crc.result();
+            totalPayloadBytes += size;
             return juce::Result::ok();
         };
         for (auto& entry : entries)
@@ -1947,33 +2339,41 @@ private:
         const auto writePayload = [](juce::OutputStream& output,
                                      const PreparedEntry& entry)
         {
-            if (!entry.payload.file.existsAsFile())
+            if (entry.snapshot == juce::File())
             {
                 return output.write(
-                    entry.payload.data.getData(),
-                    entry.payload.data.getSize());
+                    entry.inlinePayload.getData(),
+                    entry.inlinePayload.getSize());
             }
-            auto input = entry.payload.file.createInputStream();
+            auto input = entry.snapshot.createInputStream();
             if (input == nullptr)
                 return false;
             std::array<std::uint8_t, 64 * 1024> buffer {};
-            juce::int64 remaining = entry.size;
+            auto remaining =
+                static_cast<juce::int64>(entry.size);
             while (remaining > 0)
             {
                 const auto requested = static_cast<int>(
                     std::min<juce::int64>(
                         remaining,
-                        static_cast<juce::int64>(buffer.size())));
-                const auto read = input->read(buffer.data(), requested);
+                        static_cast<juce::int64>(
+                            buffer.size())));
+                const auto read = input->read(
+                    buffer.data(),
+                    requested);
                 if (read <= 0
                     || !output.write(
                         buffer.data(),
                         static_cast<std::size_t>(read)))
+                {
                     return false;
+                }
                 remaining -= read;
             }
-            return true;
+            std::uint8_t extra = 0;
+            return input->read(&extra, 1) == 0;
         };
+        juce::int64 directoryOffset = -1;
         {
             auto output = temporary.createOutputStream();
             if (output == nullptr)
@@ -2022,7 +2422,7 @@ private:
                         "Could not write archive payload " + entry.path + ".");
                 }
             }
-            const auto directoryOffset = output->getPosition();
+            directoryOffset = output->getPosition();
             if (directoryOffset < 0
                 || directoryOffset > maxArchiveBytes)
             {
@@ -2091,13 +2491,209 @@ private:
                 return status;
             }
         }
+#if STUDIO_DUO_TESTING
+        runExportTestHook(
+            DawProjectIO::ExportTestPhase::beforeArchiveVerification,
+            temporary);
+#endif
+        auto headerInput = temporary.createInputStream();
+        if (headerInput == nullptr)
+        {
+            temporary.deleteFile();
+            return juce::Result::fail(
+                "Could not reopen the staged DAWproject archive headers.");
+        }
+        for (const auto& entry : entries)
+        {
+            std::array<std::uint8_t, 30> header {};
+            if (!headerInput->setPosition(entry.offset)
+                || headerInput->read(
+                       header.data(),
+                       static_cast<int>(header.size()))
+                       != static_cast<int>(header.size()))
+            {
+                temporary.deleteFile();
+                return juce::Result::fail(
+                    "The staged DAWproject archive contains a truncated local header.");
+            }
+            const auto nameLength =
+                readLittleEndian16(header.data() + 26);
+            const auto extraLength =
+                readLittleEndian16(header.data() + 28);
+            if (readLittleEndian32(header.data()) != 0x04034b50u
+                || readLittleEndian16(header.data() + 6)
+                       != (1u << 11)
+                || readLittleEndian16(header.data() + 8) != 0
+                || readLittleEndian32(header.data() + 14)
+                       != entry.crc
+                || readLittleEndian32(header.data() + 18)
+                       != entry.size
+                || readLittleEndian32(header.data() + 22)
+                       != entry.size
+                || extraLength != 0)
+            {
+                temporary.deleteFile();
+                return juce::Result::fail(
+                    "The staged DAWproject archive local size or CRC metadata is inconsistent.");
+            }
+            juce::MemoryBlock name(nameLength, false);
+            if (headerInput->read(
+                    name.getData(),
+                    static_cast<int>(name.getSize()))
+                    != static_cast<int>(name.getSize())
+                || juce::String::fromUTF8(
+                       static_cast<const char*>(name.getData()),
+                       static_cast<int>(name.getSize()))
+                       != entry.path)
+            {
+                temporary.deleteFile();
+                return juce::Result::fail(
+                    "The staged DAWproject archive local entry name is inconsistent.");
+            }
+        }
+        if (!headerInput->setPosition(directoryOffset))
+        {
+            temporary.deleteFile();
+            return juce::Result::fail(
+                "The staged DAWproject archive directory is unreadable.");
+        }
+        for (const auto& entry : entries)
+        {
+            std::array<std::uint8_t, 46> header {};
+            if (headerInput->read(
+                    header.data(),
+                    static_cast<int>(header.size()))
+                    != static_cast<int>(header.size()))
+            {
+                temporary.deleteFile();
+                return juce::Result::fail(
+                    "The staged DAWproject archive contains a truncated directory entry.");
+            }
+            const auto nameLength =
+                readLittleEndian16(header.data() + 28);
+            const auto extraLength =
+                readLittleEndian16(header.data() + 30);
+            const auto commentLength =
+                readLittleEndian16(header.data() + 32);
+            if (readLittleEndian32(header.data()) != 0x02014b50u
+                || readLittleEndian16(header.data() + 8)
+                       != (1u << 11)
+                || readLittleEndian16(header.data() + 10) != 0
+                || readLittleEndian32(header.data() + 16)
+                       != entry.crc
+                || readLittleEndian32(header.data() + 20)
+                       != entry.size
+                || readLittleEndian32(header.data() + 24)
+                       != entry.size
+                || readLittleEndian32(header.data() + 42)
+                       != entry.offset
+                || extraLength != 0
+                || commentLength != 0)
+            {
+                temporary.deleteFile();
+                return juce::Result::fail(
+                    "The staged DAWproject archive directory size or CRC metadata is inconsistent.");
+            }
+            juce::MemoryBlock name(nameLength, false);
+            if (headerInput->read(
+                    name.getData(),
+                    static_cast<int>(name.getSize()))
+                    != static_cast<int>(name.getSize())
+                || juce::String::fromUTF8(
+                       static_cast<const char*>(name.getData()),
+                       static_cast<int>(name.getSize()))
+                       != entry.path)
+            {
+                temporary.deleteFile();
+                return juce::Result::fail(
+                    "The staged DAWproject archive directory entry name is inconsistent.");
+            }
+        }
+        headerInput.reset();
         juce::ZipFile verification(temporary);
-        if (verification.getIndexOfFileName(projectEntryName, false) < 0
-            || verification.getIndexOfFileName(metadataEntryName, false) < 0)
+        if (verification.getNumEntries()
+            != static_cast<int>(entries.size()))
         {
             temporary.deleteFile();
             return juce::Result::fail(
                 "The staged DAWproject archive failed verification.");
+        }
+        for (auto index = 0;
+             index < verification.getNumEntries();
+             ++index)
+        {
+            const auto* verifiedEntry =
+                verification.getEntry(index);
+            if (verifiedEntry == nullptr)
+            {
+                temporary.deleteFile();
+                return juce::Result::fail(
+                    "The staged DAWproject archive contains unreadable entry metadata.");
+            }
+            const auto& prepared =
+                entries[static_cast<std::size_t>(index)];
+            if (verifiedEntry->filename != prepared.path
+                || verifiedEntry->uncompressedSize
+                       != prepared.size)
+            {
+                temporary.deleteFile();
+                return juce::Result::fail(
+                    "The staged DAWproject archive entry has an unexpected uncompressed size: "
+                    + verifiedEntry->filename);
+            }
+            std::unique_ptr<juce::InputStream> input(
+                verification.createStreamForEntry(index));
+            if (input == nullptr)
+            {
+                temporary.deleteFile();
+                return juce::Result::fail(
+                    "Could not reopen staged archive entry "
+                    + verifiedEntry->filename + ".");
+            }
+            Crc32 crc;
+            juce::int64 totalRead = 0;
+            std::array<std::uint8_t, 64 * 1024> buffer {};
+            for (;;)
+            {
+                const auto read = input->read(
+                    buffer.data(),
+                    static_cast<int>(buffer.size()));
+                if (read <= 0)
+                    break;
+                if (totalRead
+                    > static_cast<juce::int64>(prepared.size)
+                        - read)
+                {
+                    temporary.deleteFile();
+                    return juce::Result::fail(
+                        "Staged archive entry expands beyond its declared size: "
+                        + verifiedEntry->filename);
+                }
+                crc.update(
+                    buffer.data(),
+                    static_cast<std::size_t>(read));
+                totalRead += read;
+            }
+            if (totalRead != prepared.size)
+            {
+                temporary.deleteFile();
+                return juce::Result::fail(
+                    "Staged archive entry size verification failed: "
+                    + verifiedEntry->filename);
+            }
+            if (crc.result() != prepared.crc)
+            {
+                temporary.deleteFile();
+                return juce::Result::fail(
+                    "Staged archive entry failed CRC verification: "
+                    + verifiedEntry->filename);
+            }
+        }
+        if (const auto cleanup = cleanupPayloadStaging();
+            cleanup.failed())
+        {
+            temporary.deleteFile();
+            return cleanup;
         }
         const auto published = destinationArchive.existsAsFile()
             ? temporary.replaceFileIn(destinationArchive)
@@ -2109,6 +2705,7 @@ private:
                 "Could not atomically publish "
                 + destinationArchive.getFullPathName() + ".");
         }
+        stagingCleanup.file = juce::File();
         return juce::Result::ok();
     }
 };
@@ -2606,6 +3203,9 @@ struct ParameterBinding
     juce::String unit;
     double minimum = 0.0;
     double maximum = 1.0;
+    juce::String path;
+    bool validDomain = true;
+    juce::String domainError;
 };
 
 struct PendingMainRoute
@@ -3168,8 +3768,21 @@ private:
         else if (element.hasTagName("RealParameter"))
         {
             finiteAttribute("value", false, false);
-            finiteAttribute("min", false, false);
-            finiteAttribute("max", false, false);
+            for (const auto* name : { "min", "max" })
+            {
+                if (!element.hasAttribute(name))
+                    continue;
+                double value = 0.0;
+                if (!parseFiniteNumber(
+                        element.getStringAttribute(name),
+                        value))
+                {
+                    fail(
+                        "semantic.parameter-domain",
+                        path + "/@" + name,
+                        "Parameter domain bounds must be finite numbers.");
+                }
+            }
             if (element.getStringAttribute("unit") == "bpm"
                 && element.hasAttribute("value"))
             {
@@ -3564,6 +4177,51 @@ private:
             element.getStringAttribute("id");
         if (externalId.isEmpty())
             return;
+        const auto unit = element.getStringAttribute(
+            "unit",
+            domain == ParameterDomain::gainDecibels
+                ? "linear"
+                : domain == ParameterDomain::pan
+                    ? "normalized"
+                    : "linear");
+        auto minimum =
+            domain == ParameterDomain::pan && unit == "normalized"
+            ? 0.0
+            : -1.0;
+        auto maximum = 1.0;
+        auto validDomain = true;
+        auto domainError = juce::String();
+        if (domain == ParameterDomain::raw)
+        {
+            const auto hasNaturalDomain =
+                unit == "linear"
+                || unit == "normalized"
+                || unit == "percent";
+            if ((!element.hasAttribute("min")
+                 || !element.hasAttribute("max"))
+                && !hasNaturalDomain)
+            {
+                validDomain = false;
+                domainError =
+                    "Device parameter unit '" + unit
+                    + "' requires finite min and max values before automation can be normalized.";
+            }
+            minimum = 0.0;
+            maximum = unit == "percent" ? 100.0 : 1.0;
+        }
+        if (element.hasAttribute("min"))
+            minimum = element.getDoubleAttribute("min");
+        if (element.hasAttribute("max"))
+            maximum = element.getDoubleAttribute("max");
+        if (domain == ParameterDomain::raw
+            && (!std::isfinite(minimum)
+                || !std::isfinite(maximum)
+                || maximum <= minimum))
+        {
+            validDomain = false;
+            domainError =
+                "Device parameter automation requires a finite, ordered, non-zero-width min/max domain.";
+        }
         if (!parameterBindings
                  .emplace(
                      externalId,
@@ -3574,23 +4232,12 @@ private:
                              "name",
                              fallbackName),
                          domain,
-                         element.getStringAttribute(
-                             "unit",
-                             domain == ParameterDomain::gainDecibels
-                                 ? "linear"
-                                 : domain == ParameterDomain::pan
-                                     ? "normalized"
-                                     : "linear"),
-                         element.getDoubleAttribute(
-                             "min",
-                             domain == ParameterDomain::pan
-                                     && element.getStringAttribute(
-                                            "unit",
-                                            "normalized")
-                                            == "normalized"
-                                 ? 0.0
-                                 : -1.0),
-                         element.getDoubleAttribute("max", 1.0)
+                         unit,
+                         minimum,
+                         maximum,
+                         path,
+                         validDomain,
+                         domainError
                      })
                  .second)
         {
@@ -4611,7 +5258,11 @@ private:
         const auto playStartBeats = contentTimeUnit == "beats"
             ? playStart
             : project.beatsAt(clipStartSeconds + playStart)
-                - project.beatsAt(clipStartSeconds);
+                - result.startBeats;
+        const auto playStartSeconds = contentTimeUnit == "seconds"
+            ? playStart
+            : project.secondsAtBeat(result.startBeats + playStart)
+                - clipStartSeconds;
         auto noteIndex = 0;
         for (const auto* note : xmlChildren(notes))
         {
@@ -4627,24 +5278,26 @@ private:
                 note->getDoubleAttribute("time");
             const auto noteDuration =
                 note->getDoubleAttribute("duration");
+            double absoluteNoteSeconds = 0.0;
             if (noteTimeUnit == "beats")
             {
                 imported.startBeats =
                     noteTime - playStartBeats;
                 imported.durationBeats = noteDuration;
+                absoluteNoteSeconds = project.secondsAtBeat(
+                    result.startBeats + imported.startBeats);
             }
             else
             {
-                const auto absoluteStart =
-                    clipStartSeconds
-                    + noteTime;
+                absoluteNoteSeconds =
+                    clipStartSeconds + noteTime - playStartSeconds;
                 imported.startBeats =
-                    project.beatsAt(absoluteStart)
-                    - result.startBeats
-                    - playStartBeats;
+                    project.beatsAt(absoluteNoteSeconds)
+                    - result.startBeats;
                 imported.durationBeats =
-                    project.beatsAt(absoluteStart + noteDuration)
-                    - project.beatsAt(absoluteStart);
+                    project.beatsAt(
+                        absoluteNoteSeconds + noteDuration)
+                    - project.beatsAt(absoluteNoteSeconds);
             }
             imported.pitch =
                 note->getIntAttribute("key", 60);
@@ -4662,9 +5315,13 @@ private:
                 127,
                 static_cast<int>(std::round(
                     note->getDoubleAttribute("rel", 0.5) * 127.0)));
+            const auto leadingTrimBeats =
+                std::max(0.0, -imported.startBeats);
             translateNoteExpressions(
                 *note,
                 imported,
+                noteTimeUnit,
+                absoluteNoteSeconds,
                 path + "/Note[" + juce::String(noteIndex) + "]");
             if (imported.endBeats() <= 0.0
                 || (result.durationBeats > 0.0
@@ -4679,13 +5336,45 @@ private:
             }
             if (imported.startBeats < 0.0)
             {
-                imported.durationBeats += imported.startBeats;
+                imported.durationBeats -= leadingTrimBeats;
                 imported.startBeats = 0.0;
             }
             if (result.durationBeats > 0.0
                 && imported.endBeats() > result.durationBeats)
                 imported.durationBeats =
                     result.durationBeats - imported.startBeats;
+            if (imported.durationBeats <= 0.0000001)
+            {
+                warn(
+                    "unsupported.note-outside-play-range",
+                    path + "/Note[" + juce::String(noteIndex) + "]",
+                    "The note falls outside the clip play range and was not imported.");
+                continue;
+            }
+            imported.expressions.erase(
+                std::remove_if(
+                    imported.expressions.begin(),
+                    imported.expressions.end(),
+                    [leadingTrimBeats,
+                     finalDuration = imported.durationBeats](
+                        auto& expression)
+                    {
+                        const auto adjusted =
+                            expression.offsetBeats
+                            - leadingTrimBeats;
+                        if (adjusted < -0.0000001
+                            || adjusted
+                                > finalDuration + 0.0000001)
+                        {
+                            return true;
+                        }
+                        expression.offsetBeats = juce::jlimit(
+                            0.0,
+                            finalDuration,
+                            adjusted);
+                        return false;
+                    }),
+                imported.expressions.end());
             result.notes.push_back(std::move(imported));
         }
         if (result.durationBeats <= 0.0)
@@ -4700,27 +5389,64 @@ private:
 
     void translateNoteExpressions(const juce::XmlElement& noteElement,
                                   MidiNote& note,
+                                  const juce::String& inheritedTimeUnit,
+                                  double absoluteNoteSeconds,
                                   const juce::String& path)
     {
-        std::vector<const juce::XmlElement*> pointTimelines;
+        struct ExpressionTimeline
+        {
+            const juce::XmlElement* points = nullptr;
+            juce::String timeUnit;
+            juce::String path;
+        };
+        std::vector<ExpressionTimeline> pointTimelines;
         const auto collect =
             [&pointTimelines](
                 const auto& self,
-                const juce::XmlElement& parent) -> void
+                const juce::XmlElement& parent,
+                const juce::String& parentTimeUnit,
+                const juce::String& parentPath) -> void
         {
-            for (const auto* child : xmlChildren(parent))
+            const auto children = xmlChildren(parent);
+            for (std::size_t index = 0; index < children.size(); ++index)
             {
+                const auto* child = children[index];
+                const auto childPath =
+                    xmlChildPath(parentPath, children, index);
+                const auto childTimeUnit =
+                    child->getStringAttribute(
+                        "timeUnit",
+                        parentTimeUnit.isNotEmpty()
+                            ? parentTimeUnit
+                            : juce::String("beats"));
                 if (child->hasTagName("Points"))
-                    pointTimelines.push_back(child);
-                else if (child->hasTagName("Lanes"))
-                    self(self, *child);
+                {
+                    pointTimelines.push_back({
+                        child,
+                        childTimeUnit,
+                        childPath
+                    });
+                }
+                else if (isTimelineContent(*child))
+                {
+                    self(
+                        self,
+                        *child,
+                        childTimeUnit,
+                        childPath);
+                }
             }
         };
-        collect(collect, noteElement);
+        collect(
+            collect,
+            noteElement,
+            inheritedTimeUnit,
+            path);
         auto expressionIndex = 0;
-        for (const auto* points : pointTimelines)
+        for (const auto& timeline : pointTimelines)
         {
-            const auto* target = points->getChildByName("Target");
+            const auto& points = *timeline.points;
+            const auto* target = points.getChildByName("Target");
             if (target == nullptr
                 || !target->hasAttribute("expression"))
                 continue;
@@ -4730,9 +5456,10 @@ private:
             if (expression == "pitchBend")
                 type = MidiExpressionType::pitchBend;
             else if (expression == "pressure"
-                     || expression == "polyPressure"
-                     || expression == "channelPressure")
+                     || expression == "polyPressure")
                 type = MidiExpressionType::pressure;
+            else if (expression == "channelPressure")
+                type = MidiExpressionType::channelPressure;
             else if (expression == "timbre")
                 type = MidiExpressionType::timbre;
             else if (expression == "channelController")
@@ -4741,28 +5468,70 @@ private:
             {
                 warn(
                     "unsupported.note-expression",
-                    path,
+                    timeline.path,
                     "Note expression '" + expression
                         + "' has no Studio Duo note-expression equivalent.");
                 continue;
             }
-            for (const auto* point : xmlChildren(*points))
+            const auto unit =
+                points.getStringAttribute("unit", "normalized");
+            const auto supportedUnit =
+                unit == "normalized"
+                || unit == "linear"
+                || unit == "percent";
+            if (!supportedUnit)
             {
+                warn(
+                    "unsupported.note-expression-unit",
+                    timeline.path,
+                    "Note expression unit '" + unit
+                        + "' has no Studio Duo conversion.");
+                continue;
+            }
+            const auto children = xmlChildren(points);
+            for (std::size_t index = 0; index < children.size(); ++index)
+            {
+                const auto* point = children[index];
                 if (!point->hasTagName("RealPoint"))
                     continue;
                 ++expressionIndex;
+                const auto pointPath =
+                    xmlChildPath(timeline.path, children, index);
                 MidiExpressionPoint imported;
                 juce::String mappingError;
                 imported.id = ids.importedId(
                     "note-expression",
-                    path + "/Expression["
+                    pointPath + "/Expression["
                         + juce::String(expressionIndex) + "]",
                     mappingError);
                 imported.type = type;
-                imported.offsetBeats =
+                const auto sourceTime =
                     point->getDoubleAttribute("time");
-                imported.value =
+                imported.offsetBeats =
+                    timeline.timeUnit == "seconds"
+                    ? project.beatsAt(
+                          absoluteNoteSeconds + sourceTime)
+                        - project.beatsAt(absoluteNoteSeconds)
+                    : sourceTime;
+                const auto sourceValue =
                     point->getDoubleAttribute("value");
+                imported.value = unit == "percent"
+                    ? sourceValue / 100.0
+                    : sourceValue;
+                const auto minimum =
+                    type == MidiExpressionType::pitchBend
+                    ? -1.0
+                    : 0.0;
+                if (imported.offsetBeats < 0.0
+                    || imported.value < minimum
+                    || imported.value > 1.0)
+                {
+                    fail(
+                        "import.note-expression-value",
+                        pointPath,
+                        "Note expression time or value is outside Studio Duo's supported domain.");
+                    continue;
+                }
                 imported.controller = type
                         == MidiExpressionType::controller
                     ? target->getIntAttribute("controller", -1)
@@ -5182,10 +5951,142 @@ private:
             return;
         if (target->hasAttribute("expression"))
         {
-            warn(
-                "unsupported.track-expression",
-                path,
-                "Track-level MIDI or expression automation has no Studio Duo automation target.");
+            const auto expression =
+                target->getStringAttribute("expression");
+            if (expression != "channelPressure")
+            {
+                warn(
+                    "unsupported.track-expression",
+                    path,
+                    "Track-level expression '" + expression
+                        + "' has no Studio Duo automation target.");
+                return;
+            }
+            if (trackIdValue.isEmpty())
+            {
+                fail(
+                    "import.channel-pressure-track",
+                    path,
+                    "Channel-pressure automation requires a valid track.");
+                return;
+            }
+            const auto externalChannel =
+                target->getIntAttribute("channel", -1);
+            if (externalChannel < 0 || externalChannel > 15)
+            {
+                fail(
+                    "import.channel-pressure-channel",
+                    path + "/Target[1]/@channel",
+                    "Channel-pressure automation requires a zero-based MIDI channel from 0 through 15.");
+                return;
+            }
+            const auto pointUnit =
+                points.getStringAttribute("unit", "normalized");
+            if (pointUnit != "normalized"
+                && pointUnit != "linear"
+                && pointUnit != "percent")
+            {
+                warn(
+                    "unsupported.track-expression-unit",
+                    path,
+                    "Channel-pressure unit '" + pointUnit
+                        + "' has no Studio Duo conversion.");
+                return;
+            }
+            AutomationLane lane;
+            juce::String mappingError;
+            lane.id = ids.importedId(
+                "automation",
+                externalOrPathId(points, path),
+                mappingError);
+            lane.name = points.getStringAttribute(
+                "name",
+                "Channel pressure");
+            lane.target.type =
+                AutomationTargetType::midiChannelPressure;
+            lane.target.trackId = trackIdValue;
+            lane.target.midiChannel = externalChannel + 1;
+            lane.timebase =
+                points.getStringAttribute(
+                    "timeUnit",
+                    inheritedTimeUnit.isNotEmpty()
+                        ? inheritedTimeUnit
+                        : juce::String("beats"))
+                        == "seconds"
+                ? AutomationTimebase::seconds
+                : AutomationTimebase::beats;
+            auto pointIndex = 0;
+            std::optional<AutomationInterpolation>
+                importedInterpolation;
+            const auto children = xmlChildren(points);
+            for (std::size_t childIndex = 0;
+                 childIndex < children.size();
+                 ++childIndex)
+            {
+                const auto* point = children[childIndex];
+                if (point->hasTagName("Target"))
+                    continue;
+                const auto pointPath =
+                    xmlChildPath(path, children, childIndex);
+                if (!point->hasTagName("RealPoint"))
+                {
+                    warn(
+                        "unsupported.automation-point-type",
+                        pointPath,
+                        "Channel-pressure automation supports RealPoint values.");
+                    continue;
+                }
+                ++pointIndex;
+                AutomationPoint imported;
+                imported.id = ids.importedId(
+                    "automation-point",
+                    path + "/Point["
+                        + juce::String(pointIndex) + "]",
+                    mappingError);
+                imported.position =
+                    point->getDoubleAttribute("time");
+                const auto sourceValue =
+                    point->getDoubleAttribute("value");
+                imported.value = pointUnit == "percent"
+                    ? sourceValue / 100.0
+                    : sourceValue;
+                if (!std::isfinite(imported.position)
+                    || imported.position < 0.0
+                    || !std::isfinite(imported.value)
+                    || imported.value < 0.0
+                    || imported.value > 1.0)
+                {
+                    fail(
+                        "import.channel-pressure-value",
+                        pointPath,
+                        "Channel-pressure time or value is outside Studio Duo's supported domain.");
+                    continue;
+                }
+                const auto pointInterpolation =
+                    point->getStringAttribute(
+                        "interpolation",
+                        "hold") == "linear"
+                    ? AutomationInterpolation::linear
+                    : AutomationInterpolation::step;
+                if (importedInterpolation.has_value()
+                    && *importedInterpolation
+                        != pointInterpolation)
+                {
+                    warn(
+                        "unsupported.automation-interpolation",
+                        path,
+                        "Mixed per-point interpolation is imported using the first point's lane interpolation.");
+                }
+                else if (!importedInterpolation.has_value())
+                {
+                    importedInterpolation =
+                        pointInterpolation;
+                    lane.interpolation =
+                        pointInterpolation;
+                }
+                lane.points.push_back(std::move(imported));
+            }
+            project.automationLanes.push_back(std::move(lane));
             return;
         }
         const auto parameter =
@@ -5212,6 +6113,44 @@ private:
         lane.target = binding->second.target;
         if (trackIdValue.isNotEmpty())
             lane.target.trackId = trackIdValue;
+        if (binding->second.domain == ParameterDomain::raw
+            && !binding->second.validDomain)
+        {
+            fail(
+                "import.parameter-domain",
+                binding->second.path,
+                binding->second.domainError);
+            return;
+        }
+        const auto pointUnit = points.getStringAttribute(
+            "unit",
+            binding->second.unit);
+        auto pointMinimum = binding->second.minimum;
+        auto pointMaximum = binding->second.maximum;
+        if (binding->second.domain == ParameterDomain::raw
+            && pointUnit != binding->second.unit)
+        {
+            if (pointUnit == "normalized")
+            {
+                pointMinimum = 0.0;
+                pointMaximum = 1.0;
+            }
+            else if (pointUnit == "percent")
+            {
+                pointMinimum = 0.0;
+                pointMaximum = 100.0;
+            }
+            else
+            {
+                fail(
+                    "import.automation-unit",
+                    path,
+                    "Device automation unit '" + pointUnit
+                        + "' cannot be converted from parameter unit '"
+                        + binding->second.unit + "'.");
+                return;
+            }
+        }
         lane.timebase =
             points.getStringAttribute(
                 "timeUnit",
@@ -5223,10 +6162,16 @@ private:
             : AutomationTimebase::beats;
         auto pointIndex = 0;
         std::optional<AutomationInterpolation> importedInterpolation;
-        for (const auto* point : xmlChildren(points))
+        const auto children = xmlChildren(points);
+        for (std::size_t childIndex = 0;
+             childIndex < children.size();
+             ++childIndex)
         {
+            const auto* point = children[childIndex];
             if (point->hasTagName("Target"))
                 continue;
+            const auto pointPath =
+                xmlChildPath(path, children, childIndex);
             if (point->hasTagName("TimeSignaturePoint"))
             {
                 warn(
@@ -5252,14 +6197,33 @@ private:
             }
             else
             {
-                imported.value = convertDawValue(
-                    point->getDoubleAttribute("value"),
-                    binding->second.domain,
-                    points.getStringAttribute(
-                        "unit",
-                        binding->second.unit),
-                    binding->second.minimum,
-                    binding->second.maximum);
+                const auto sourceValue =
+                    point->getDoubleAttribute("value");
+                if (binding->second.domain == ParameterDomain::raw)
+                {
+                    imported.value =
+                        (sourceValue - pointMinimum)
+                        / (pointMaximum - pointMinimum);
+                    if (!std::isfinite(imported.value)
+                        || imported.value < 0.0
+                        || imported.value > 1.0)
+                    {
+                        fail(
+                            "import.automation-value",
+                            pointPath,
+                            "Device automation value is outside its declared parameter domain.");
+                        continue;
+                    }
+                }
+                else
+                {
+                    imported.value = convertDawValue(
+                        sourceValue,
+                        binding->second.domain,
+                        pointUnit,
+                        pointMinimum,
+                        pointMaximum);
+                }
             }
             const auto pointInterpolation =
                 point->hasTagName("RealPoint")
@@ -5665,6 +6629,13 @@ juce::File DawProjectIO::normaliseArchivePath(
     return requestedPath.withFileExtension("dawproject");
 }
 
+#if STUDIO_DUO_TESTING
+void DawProjectIO::setExportTestHookForTesting(ExportTestHook hook)
+{
+    exportTestHook() = std::move(hook);
+}
+#endif
+
 DawProjectExportResult DawProjectIO::exportProject(
     const Project& project,
     const juce::File& sourcePackage,
@@ -5672,8 +6643,28 @@ DawProjectExportResult DawProjectIO::exportProject(
 {
     const auto destination =
         normaliseArchivePath(requestedDestination);
-    Exporter exporter(project, sourcePackage, destination);
-    return exporter.run();
+    try
+    {
+        Exporter exporter(project, sourcePackage, destination);
+        return exporter.run();
+    }
+    catch (const std::bad_alloc&)
+    {
+        DawProjectExportResult result;
+        result.result = juce::Result::fail(
+            "DAWproject export ran out of memory while preparing bounded metadata; no archive was published.");
+        result.report = makeReport(
+            "export",
+            sourcePackage,
+            destination);
+        addIssue(
+            result.report,
+            CompatibilitySeverity::error,
+            "export.memory",
+            "/Archive",
+            result.result.getErrorMessage());
+        return result;
+    }
 }
 
 DawProjectImportResult DawProjectIO::importProject(

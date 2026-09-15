@@ -2,6 +2,9 @@
 
 #include "model/ProjectModel.h"
 
+#if STUDIO_DUO_TESTING
+#include <functional>
+#endif
 #include <optional>
 
 namespace studio
@@ -38,6 +41,20 @@ struct DawProjectImportResult
 class DawProjectIO
 {
 public:
+#if STUDIO_DUO_TESTING
+    enum class ExportTestPhase
+    {
+        beforePayloadSnapshot,
+        afterPayloadSnapshot,
+        beforeArchiveVerification
+    };
+
+    using ExportTestHook =
+        std::function<void(ExportTestPhase, const juce::File&)>;
+
+    static void setExportTestHookForTesting(ExportTestHook hook);
+#endif
+
     static juce::File normaliseArchivePath(
         const juce::File& requestedPath);
     static DawProjectExportResult exportProject(

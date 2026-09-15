@@ -338,11 +338,10 @@ public:
 private:
     juce::String trackId;
     MidiRoutingTemplate routing;
-    std::vector<MidiClip> oldClips;
-    std::vector<MidiClip> newClips;
-    std::vector<Track> addedTracks;
-    std::vector<RoutingConnection> addedConnections;
-    std::size_t insertionIndex = 0;
+    std::vector<Track> oldTracks;
+    std::vector<Track> newTracks;
+    std::vector<RoutingConnection> oldConnections;
+    std::vector<RoutingConnection> newConnections;
     bool prepared = false;
 };
 

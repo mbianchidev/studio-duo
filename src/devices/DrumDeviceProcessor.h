@@ -54,6 +54,10 @@ public:
 
     static juce::String outputBusName(int index);
 
+#if STUDIO_DUO_TESTING
+    [[nodiscard]] int activeVoiceCountForTesting() const noexcept;
+#endif
+
 private:
     enum class ParameterSlot
     {

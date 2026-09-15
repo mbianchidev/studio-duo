@@ -12,6 +12,7 @@ enum class MidiExpressionType
 {
     pitchBend,
     pressure,
+    channelPressure,
     timbre,
     controller
 };
