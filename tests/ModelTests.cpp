@@ -1564,51 +1564,60 @@ int main(int argc, char* argv[])
 #endif
 
     juce::ScopedJuceInitialiser_GUI juceInitialiser;
-    audioDeviceProbeTests();
+#define RUN_SUITE(suite)                                                     \
+    do                                                                       \
+    {                                                                        \
+        std::cout << "RUN: " #suite << std::endl;                            \
+        suite();                                                             \
+    } while (false)
+
+    RUN_SUITE(audioDeviceProbeTests);
 #if JUCE_WINDOWS
-    windowsCrashHandlerTests();
+    RUN_SUITE(windowsCrashHandlerTests);
 #endif
-    serializationRoundTrip();
-    legacyProjectMigration();
-    commandHistory();
-    splitClipBoundaries();
-    busRouting();
-    transportMaps();
-    playlistsAndComping();
-    linkedMultitrackEditing();
-    linkedEditTargeting();
-    audioProcessingTools();
-    reampWorkflow();
-    packagePersistence();
-    projectRecovery();
-    rejectsInvalidBaseMeter();
-    pluginAwareExportGuard();
-    pluginCatalogFiltering();
-    pluginBridgeProtocol();
-    liveRecordingWaveform();
-    synchronizedRecordingCapture();
-    recordingStopPreservesPlayhead();
-    multitrackRecordingTargets();
-    multitrackRecordingCommand();
-    transportTests();
-    routingModelTests();
-    routingEngineTests();
-    routingUiModelTests();
-    pluginFormatTests();
-    pluginSearchPathTests();
-    pluginRecoveryTests();
-    automationTests();
-    deviceTests();
-    bundledDeviceTests();
-    loggingTests();
-    reampSnapshotTests();
-    renderEngineTests();
-    pluginCompatibilityTests();
-    projectMigrationTests();
-    windowSizingTests();
-    updateTests();
-    midiTests();
-    dawProjectTests();
+    RUN_SUITE(serializationRoundTrip);
+    RUN_SUITE(legacyProjectMigration);
+    RUN_SUITE(commandHistory);
+    RUN_SUITE(splitClipBoundaries);
+    RUN_SUITE(busRouting);
+    RUN_SUITE(transportMaps);
+    RUN_SUITE(playlistsAndComping);
+    RUN_SUITE(linkedMultitrackEditing);
+    RUN_SUITE(linkedEditTargeting);
+    RUN_SUITE(audioProcessingTools);
+    RUN_SUITE(reampWorkflow);
+    RUN_SUITE(packagePersistence);
+    RUN_SUITE(projectRecovery);
+    RUN_SUITE(rejectsInvalidBaseMeter);
+    RUN_SUITE(pluginAwareExportGuard);
+    RUN_SUITE(pluginCatalogFiltering);
+    RUN_SUITE(pluginBridgeProtocol);
+    RUN_SUITE(liveRecordingWaveform);
+    RUN_SUITE(synchronizedRecordingCapture);
+    RUN_SUITE(recordingStopPreservesPlayhead);
+    RUN_SUITE(multitrackRecordingTargets);
+    RUN_SUITE(multitrackRecordingCommand);
+    RUN_SUITE(transportTests);
+    RUN_SUITE(routingModelTests);
+    RUN_SUITE(routingEngineTests);
+    RUN_SUITE(routingUiModelTests);
+    RUN_SUITE(pluginFormatTests);
+    RUN_SUITE(pluginSearchPathTests);
+    RUN_SUITE(pluginRecoveryTests);
+    RUN_SUITE(automationTests);
+    RUN_SUITE(deviceTests);
+    RUN_SUITE(bundledDeviceTests);
+    RUN_SUITE(loggingTests);
+    RUN_SUITE(reampSnapshotTests);
+    RUN_SUITE(renderEngineTests);
+    RUN_SUITE(pluginCompatibilityTests);
+    RUN_SUITE(projectMigrationTests);
+    RUN_SUITE(windowSizingTests);
+    RUN_SUITE(updateTests);
+    RUN_SUITE(midiTests);
+    RUN_SUITE(dawProjectTests);
+
+#undef RUN_SUITE
 
     if (failures == 0)
     {
