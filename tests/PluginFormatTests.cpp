@@ -13,6 +13,13 @@
 
 void pluginFormatTests()
 {
+    const auto checkpoint =
+        [](const char* name)
+        {
+            std::cout << "STEP: pluginFormatTests/" << name << std::endl;
+        };
+
+    checkpoint("format-registration");
     juce::AudioPluginFormatManager manager;
     studio::PluginFormats::addSupportedFormats(manager);
 
@@ -106,6 +113,7 @@ void pluginFormatTests()
                < 0.0001f,
            "Destination delay progress merges a final source advance made after preparation but before publication.");
 
+    checkpoint("clap-scan");
     studio::ClapPluginFormat clapFormat;
     juce::OwnedArray<juce::PluginDescription> descriptions;
     clapFormat.findAllTypesForFile(descriptions,
@@ -131,6 +139,7 @@ void pluginFormatTests()
     expect(validatedState != nullptr,
            "CLAP instances expose validated state errors.");
 
+    checkpoint("clap-basic-processing");
     instance->prepareToPlay(48000.0, 64);
     juce::AudioBuffer<float> audio(2, 64);
     for (int channel = 0; channel < audio.getNumChannels(); ++channel)
@@ -255,6 +264,8 @@ void pluginFormatTests()
                       : -1.0f)
             + ").")
                .toRawUTF8());
+
+    checkpoint("clap-automation");
     auto* exactAutomation =
         dynamic_cast<studio::SampleAccurateAutomationTarget*>(
             instance.get());
@@ -465,6 +476,7 @@ void pluginFormatTests()
            "Process-only CLAP parameters receive a silent process block and persist while stopped.");
     instance->releaseResources();
 
+    checkpoint("clap-sandbox-state");
     studio::PluginBridgeClient sandbox(
         juce::File(STUDIO_DUO_BRIDGE_WORKER_PATH));
     const auto sandboxStart = sandbox.startPlugin(
@@ -512,6 +524,7 @@ void pluginFormatTests()
                 : juce::String()))
             .toRawUTF8());
 
+    checkpoint("clap-offline-render");
     const auto monoSource = juce::File::getSpecialLocation(
                                 juce::File::tempDirectory)
                                 .getNonexistentChildFile(
@@ -606,6 +619,8 @@ void pluginFormatTests()
                            - monoRender.getSample(0, 33))
                       < 0.0001f,
            "CLAP automation is sample-exact in one process call and mono output duplicates to stereo.");
+
+    checkpoint("clap-live-refresh");
     studio::Track dryTrack;
     dryTrack.name = "PDC reference";
     dryTrack.clips.push_back(monoClip);
@@ -853,6 +868,7 @@ void pluginFormatTests()
             + ").")
                .toRawUTF8());
 
+    checkpoint("clap-sandbox-crash");
     auto crashProject = studio::Project::createDefault();
     crashProject.metronomeEnabled = false;
     crashProject.loopEnabled = true;
@@ -970,6 +986,7 @@ void pluginFormatTests()
     crashEngine.shutdown();
     monoSource.deleteFile();
 
+    checkpoint("ara-model");
     auto project = studio::Project::createDefault();
     studio::PluginInsert insert;
     insert.pluginIdentifier = "ara-mode-test";
@@ -1063,6 +1080,7 @@ void pluginFormatTests()
            "ARA and processor state share one content-addressed state blob.");
     araSourceFile.deleteFile();
 
+    checkpoint("trusted-runtime");
     studio::StudioAudioEngine engine;
     studio::StudioAudioEngine::PluginRuntimeRequest request;
     request.trackId = project.tracks.front().id;
@@ -1106,4 +1124,5 @@ void pluginFormatTests()
                && captures.front().result.wasOk()
                && !captures.front().state.isEmpty(),
            "Active plugin state can be captured for project persistence.");
+    checkpoint("complete");
 }
