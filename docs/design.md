@@ -1,6 +1,6 @@
 # Studio Duo product and technical design
 
-Status: accepted product direction; Phase 4 implemented except DAWproject
+Status: accepted product direction; Phase 4 complete
 
 Date: 2026-08-30
 
@@ -512,7 +512,7 @@ Completed in the working application:
 - Public-standard Scream Forge VST3, Audio Unit, and ARA-capability validation
   without proprietary source or license-service integration
 
-### Phase 4: MIDI and composition
+### Phase 4: MIDI and composition — complete
 
 - MIDI recording and editing
 - Piano roll

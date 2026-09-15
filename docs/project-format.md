@@ -1,6 +1,6 @@
 # Studio Duo native project format
 
-Studio Duo format version 6 is a directory package with immutable generation
+Studio Duo format version 7 is a directory package with immutable generation
 files and content-addressed processor state.
 
 ```text
@@ -39,10 +39,11 @@ The prior manifest and generation remain valid until step 5 succeeds.
 - generation number and save time
 - `requiredCapabilities`
 
-Version 6 manifests include `midiCompositionV1` and
-`bundledCompositionDevicesV1`. Readers must reject a manifest version newer
-than they support rather than silently dropping MIDI or bundled output/cabinet
-state.
+Version 7 manifests include `midiCompositionV1`,
+`bundledCompositionDevicesV1`, `scenesV1`, `compatibilityReportsV1`, and
+`dawprojectV1`. Readers must reject a manifest version newer than they support
+rather than silently dropping MIDI, bundled output/cabinet state, scenes, or
+interchange diagnostics.
 
 Paths must be relative children of the package and cannot contain `..`.
 
@@ -51,12 +52,16 @@ Paths must be relative children of the package and cannot contain `..`.
 The session document stores transport, tempo and meter maps, tracks, audio and
 MIDI clips, take/comp state, edit groups, reamp routes, the typed routing graph,
 processor records, tone snapshots, mixer snapshots, render reports, drum maps,
-pattern aliases, and MIDI routing templates. Automation lanes are stored
+pattern aliases, MIDI routing templates, general project metadata, launch
+scenes, and structured compatibility reports. Automation lanes are stored
 separately.
 
 External and bundled processor records retain a stable insert ID, format,
 vendor, version, architecture, isolation mode, state path/hash, latency, tail,
-ARA capability, missing state, and recovery-disabled state.
+ARA capability, missing state, recovery-disabled state, and `stateFormat`.
+State format distinguishes Studio Duo host-opaque bytes from preserved generic,
+VST2, VST3, CLAP, and Audio Unit preset containers so interchange never
+mislabels one encoding as another.
 
 Bundled guitar and bass amp state includes normalized automatable parameters
 and either the documented embedded cabinet identity or validated mono/stereo
@@ -148,6 +153,33 @@ Humanization uses saved integer parameters and stores the exact resulting note
 velocity/timing values. Its fixed integer generator and mapping do not depend
 on a platform standard-library random engine or distribution.
 
+### Project metadata
+
+The `metadata` object stores artist, album, original artist, composer,
+songwriter, producer, arranger, year, genre, copyright, website, and comment.
+The project `name` remains the title. These fields are native Studio Duo data
+and map to DAWproject metadata only at the interchange boundary.
+
+### Scenes
+
+The `scenes` array exists before the live session view. Each scene has a stable
+ID, name, color, and at most one slot per track. A slot stores its own stable
+ID, track relationship, stop behavior, and either an ordinary audio clip or an
+ordinary MIDI clip. Scene clips use the same internal clip and note types as
+the arrangement, but remain independent scene content.
+
+Scene, slot, clip, note, and expression IDs are validated on load. Dangling
+track or drum-map references, duplicate scene tracks, and a slot containing
+both clip types are rejected.
+
+### Compatibility reports
+
+The `compatibilityReports` array stores interchange format, operation, source,
+destination, creation time, and typed issues. Every issue has a severity,
+stable code, affected object path, and message. Import reports are saved in the
+new native package. Export reports enter the normal project/recovery lifecycle
+and persist on the next save.
+
 ## Automation document
 
 The automation generation stores stable lanes, targets, points, timebase,
@@ -171,7 +203,9 @@ disabled until explicit reload. Clean shutdown removes the marker.
   stable before and after the first version 5 save.
 - Version 5 gains version 6 bundled processor-output route fields with empty
   source insert IDs and bus index zero for every existing route.
+- Version 6 gains version 7 empty metadata, scenes, and compatibility-report
+  collections.
 - The manifest and referenced session format versions must agree.
 
-[`schema/project-v6.schema.json`](schema/project-v6.schema.json) documents the
+[`schema/project-v7.schema.json`](schema/project-v7.schema.json) documents the
 current public session envelope; older schema files remain historical.

@@ -326,6 +326,9 @@ juce::var PluginInsert::toVar() const
     object->setProperty("fileOrIdentifier", fileOrIdentifier);
     object->setProperty("stateFile", stateFile);
     object->setProperty("stateHash", stateHash);
+    object->setProperty(
+        "stateFormat",
+        pluginStateFormatToString(stateFormat));
     object->setProperty("bridgeMode", pluginBridgeModeToString(bridgeMode));
     object->setProperty("latencySamples", latencySamples);
     object->setProperty("tailSeconds", tailSeconds);
@@ -354,6 +357,14 @@ std::optional<PluginInsert> PluginInsert::fromVar(const juce::var& value, juce::
     insert.fileOrIdentifier = object->getProperty("fileOrIdentifier").toString();
     insert.stateFile = object->getProperty("stateFile").toString();
     insert.stateHash = object->getProperty("stateHash").toString();
+    const auto stateFormat = pluginStateFormatFromString(
+        object->getProperty("stateFormat").toString());
+    if (!stateFormat.has_value())
+    {
+        error = "Plugin insert contains an unsupported state format.";
+        return std::nullopt;
+    }
+    insert.stateFormat = *stateFormat;
     insert.latencySamples = juce::jmax(0, integerProperty(*object, "latencySamples", 0));
     insert.tailSeconds = std::max(0.0, numberProperty(*object, "tailSeconds", 0.0));
     insert.bypassed = booleanProperty(*object, "bypassed", false);
@@ -887,6 +898,289 @@ std::optional<Track> Track::fromVar(const juce::var& value, juce::String& error)
     }
 
     return track;
+}
+
+juce::var ProjectMetadata::toVar() const
+{
+    auto object = std::make_unique<juce::DynamicObject>();
+    object->setProperty("artist", artist);
+    object->setProperty("album", album);
+    object->setProperty("originalArtist", originalArtist);
+    object->setProperty("composer", composer);
+    object->setProperty("songwriter", songwriter);
+    object->setProperty("producer", producer);
+    object->setProperty("arranger", arranger);
+    object->setProperty("year", year);
+    object->setProperty("genre", genre);
+    object->setProperty("copyright", copyright);
+    object->setProperty("website", website);
+    object->setProperty("comment", comment);
+    return juce::var(object.release());
+}
+
+std::optional<ProjectMetadata> ProjectMetadata::fromVar(
+    const juce::var& value,
+    juce::String& error)
+{
+    const auto* object = requireObject(value, error, "Project metadata");
+    if (object == nullptr)
+        return std::nullopt;
+
+    ProjectMetadata metadata;
+    metadata.artist = object->getProperty("artist").toString();
+    metadata.album = object->getProperty("album").toString();
+    metadata.originalArtist =
+        object->getProperty("originalArtist").toString();
+    metadata.composer = object->getProperty("composer").toString();
+    metadata.songwriter = object->getProperty("songwriter").toString();
+    metadata.producer = object->getProperty("producer").toString();
+    metadata.arranger = object->getProperty("arranger").toString();
+    metadata.year = object->getProperty("year").toString();
+    metadata.genre = object->getProperty("genre").toString();
+    metadata.copyright = object->getProperty("copyright").toString();
+    metadata.website = object->getProperty("website").toString();
+    metadata.comment = object->getProperty("comment").toString();
+    return metadata;
+}
+
+juce::var SceneSlot::toVar() const
+{
+    auto object = std::make_unique<juce::DynamicObject>();
+    object->setProperty("id", id);
+    object->setProperty("trackId", trackId);
+    object->setProperty("stopTrack", stopTrack);
+    if (audioClip.has_value())
+        object->setProperty("audioClip", audioClip->toVar());
+    if (midiClip.has_value())
+        object->setProperty("midiClip", midiClip->toVar());
+    return juce::var(object.release());
+}
+
+std::optional<SceneSlot> SceneSlot::fromVar(const juce::var& value,
+                                            juce::String& error)
+{
+    const auto* object = requireObject(value, error, "Scene slot");
+    if (object == nullptr)
+        return std::nullopt;
+
+    SceneSlot slot;
+    slot.id = object->getProperty("id").toString();
+    slot.trackId = object->getProperty("trackId").toString();
+    slot.stopTrack = booleanProperty(*object, "stopTrack", false);
+    const auto audioValue = object->getProperty("audioClip");
+    if (!audioValue.isVoid())
+    {
+        auto clip = AudioClip::fromVar(audioValue, error);
+        if (!clip.has_value())
+            return std::nullopt;
+        slot.audioClip = std::move(*clip);
+    }
+    const auto midiValue = object->getProperty("midiClip");
+    if (!midiValue.isVoid())
+    {
+        auto clip = MidiClip::fromVar(midiValue, error);
+        if (!clip.has_value())
+            return std::nullopt;
+        slot.midiClip = std::move(*clip);
+    }
+    if (slot.id.isEmpty()
+        || slot.trackId.isEmpty()
+        || (slot.audioClip.has_value() && slot.midiClip.has_value()))
+    {
+        error =
+            "Scene slots require IDs and tracks and may contain only one clip type.";
+        return std::nullopt;
+    }
+    return slot;
+}
+
+juce::var ProjectScene::toVar() const
+{
+    auto object = std::make_unique<juce::DynamicObject>();
+    object->setProperty("id", id);
+    object->setProperty("name", name);
+    object->setProperty("colour", colour.toString());
+    juce::Array<juce::var> slotValues;
+    slotValues.ensureStorageAllocated(static_cast<int>(slots.size()));
+    for (const auto& slot : slots)
+        slotValues.add(slot.toVar());
+    object->setProperty("slots", juce::var(slotValues));
+    return juce::var(object.release());
+}
+
+std::optional<ProjectScene> ProjectScene::fromVar(const juce::var& value,
+                                                  juce::String& error)
+{
+    const auto* object = requireObject(value, error, "Scene");
+    if (object == nullptr)
+        return std::nullopt;
+
+    ProjectScene scene;
+    scene.id = object->getProperty("id").toString();
+    scene.name = object->getProperty("name").toString().trim();
+    scene.colour = colourProperty(
+        *object,
+        "colour",
+        juce::Colour(0xff5d7fa3));
+    const auto slotValues = object->getProperty("slots");
+    if (!slotValues.isArray())
+    {
+        error = "Scene slots must be a JSON array.";
+        return std::nullopt;
+    }
+    std::vector<juce::String> slotIds;
+    std::vector<juce::String> trackIds;
+    for (const auto& slotValue : *slotValues.getArray())
+    {
+        auto slot = SceneSlot::fromVar(slotValue, error);
+        if (!slot.has_value())
+            return std::nullopt;
+        if (std::find(slotIds.cbegin(), slotIds.cend(), slot->id)
+                != slotIds.cend()
+            || std::find(trackIds.cbegin(), trackIds.cend(), slot->trackId)
+                != trackIds.cend())
+        {
+            error = "Scene slots require unique IDs and tracks.";
+            return std::nullopt;
+        }
+        slotIds.push_back(slot->id);
+        trackIds.push_back(slot->trackId);
+        scene.slots.push_back(std::move(*slot));
+    }
+    if (scene.id.isEmpty() || scene.name.isEmpty())
+    {
+        error = "Scenes require an ID and name.";
+        return std::nullopt;
+    }
+    return scene;
+}
+
+juce::var CompatibilityIssue::toVar() const
+{
+    auto object = std::make_unique<juce::DynamicObject>();
+    object->setProperty("severity", compatibilitySeverityToString(severity));
+    object->setProperty("code", code);
+    object->setProperty("objectPath", objectPath);
+    object->setProperty("message", message);
+    return juce::var(object.release());
+}
+
+std::optional<CompatibilityIssue> CompatibilityIssue::fromVar(
+    const juce::var& value,
+    juce::String& error)
+{
+    const auto* object = requireObject(value, error, "Compatibility issue");
+    if (object == nullptr)
+        return std::nullopt;
+
+    CompatibilityIssue issue;
+    const auto severity = compatibilitySeverityFromString(
+        object->getProperty("severity").toString());
+    if (!severity.has_value())
+    {
+        error = "Compatibility issue contains an unsupported severity.";
+        return std::nullopt;
+    }
+    issue.severity = *severity;
+    issue.code = object->getProperty("code").toString().trim();
+    issue.objectPath = object->getProperty("objectPath").toString().trim();
+    issue.message = object->getProperty("message").toString().trim();
+    if (issue.code.isEmpty()
+        || issue.objectPath.isEmpty()
+        || issue.message.isEmpty())
+    {
+        error =
+            "Compatibility issues require a code, object path, and message.";
+        return std::nullopt;
+    }
+    return issue;
+}
+
+bool CompatibilityReport::hasErrors() const noexcept
+{
+    return std::any_of(
+        issues.cbegin(),
+        issues.cend(),
+        [](const auto& issue)
+        {
+            return issue.severity == CompatibilitySeverity::error;
+        });
+}
+
+juce::String CompatibilityReport::toText() const
+{
+    juce::String text;
+    text << format << " " << operation << " compatibility report\n";
+    text << "Source: " << (source.isNotEmpty() ? source : "(none)") << "\n";
+    text << "Destination: "
+         << (destination.isNotEmpty() ? destination : "(none)") << "\n";
+    text << "Created: " << (createdAt.isNotEmpty() ? createdAt : "(unknown)")
+         << "\n";
+    text << "Issues: " << juce::String(static_cast<int>(issues.size()))
+         << "\n";
+    for (const auto& issue : issues)
+    {
+        text << "\n[" << compatibilitySeverityToString(issue.severity)
+             << "] " << issue.code << "\n";
+        text << issue.objectPath << "\n";
+        text << issue.message << "\n";
+    }
+    return text;
+}
+
+juce::var CompatibilityReport::toVar() const
+{
+    auto object = std::make_unique<juce::DynamicObject>();
+    object->setProperty("id", id);
+    object->setProperty("format", format);
+    object->setProperty("operation", operation);
+    object->setProperty("source", source);
+    object->setProperty("destination", destination);
+    object->setProperty("createdAt", createdAt);
+    juce::Array<juce::var> issueValues;
+    issueValues.ensureStorageAllocated(static_cast<int>(issues.size()));
+    for (const auto& issue : issues)
+        issueValues.add(issue.toVar());
+    object->setProperty("issues", juce::var(issueValues));
+    return juce::var(object.release());
+}
+
+std::optional<CompatibilityReport> CompatibilityReport::fromVar(
+    const juce::var& value,
+    juce::String& error)
+{
+    const auto* object = requireObject(value, error, "Compatibility report");
+    if (object == nullptr)
+        return std::nullopt;
+
+    CompatibilityReport report;
+    report.id = object->getProperty("id").toString();
+    report.format = object->getProperty("format").toString().trim();
+    report.operation = object->getProperty("operation").toString().trim();
+    report.source = object->getProperty("source").toString();
+    report.destination = object->getProperty("destination").toString();
+    report.createdAt = object->getProperty("createdAt").toString();
+    const auto issueValues = object->getProperty("issues");
+    if (!issueValues.isArray())
+    {
+        error = "Compatibility report issues must be a JSON array.";
+        return std::nullopt;
+    }
+    for (const auto& issueValue : *issueValues.getArray())
+    {
+        auto issue = CompatibilityIssue::fromVar(issueValue, error);
+        if (!issue.has_value())
+            return std::nullopt;
+        report.issues.push_back(std::move(*issue));
+    }
+    if (report.id.isEmpty()
+        || report.format.isEmpty()
+        || report.operation.isEmpty())
+    {
+        error = "Compatibility reports require an ID, format, and operation.";
+        return std::nullopt;
+    }
+    return report;
 }
 
 juce::var ToneSnapshot::toVar() const
@@ -1957,6 +2251,7 @@ juce::var Project::toVar() const
     object->setProperty("formatVersion", currentFormatVersion);
     object->setProperty("id", id);
     object->setProperty("name", name);
+    object->setProperty("metadata", metadata.toVar());
     object->setProperty("tempo", tempo);
     object->setProperty("timeSignatureNumerator", timeSignatureNumerator);
     object->setProperty("timeSignatureDenominator", timeSignatureDenominator);
@@ -2028,6 +2323,16 @@ juce::var Project::toVar() const
     object->setProperty(
         "midiRoutingTemplates",
         juce::var(midiRoutingTemplateValues));
+    juce::Array<juce::var> sceneValues;
+    for (const auto& scene : scenes)
+        sceneValues.add(scene.toVar());
+    object->setProperty("scenes", juce::var(sceneValues));
+    juce::Array<juce::var> compatibilityReportValues;
+    for (const auto& report : compatibilityReports)
+        compatibilityReportValues.add(report.toVar());
+    object->setProperty(
+        "compatibilityReports",
+        juce::var(compatibilityReportValues));
 
     juce::Array<juce::var> trackValues;
     trackValues.ensureStorageAllocated(static_cast<int>(tracks.size()));
@@ -2058,6 +2363,12 @@ std::optional<Project> Project::fromVar(const juce::var& value, juce::String& er
     Project project;
     project.id = object->getProperty("id").toString();
     project.name = object->getProperty("name").toString();
+    auto metadata = ProjectMetadata::fromVar(
+        object->getProperty("metadata"),
+        error);
+    if (!metadata.has_value())
+        return std::nullopt;
+    project.metadata = std::move(*metadata);
     project.tempo = numberProperty(*object, "tempo", 120.0);
     project.timeSignatureNumerator = integerProperty(*object, "timeSignatureNumerator", 4);
     project.timeSignatureDenominator = integerProperty(*object, "timeSignatureDenominator", 4);
@@ -2258,6 +2569,33 @@ std::optional<Project> Project::fromVar(const juce::var& value, juce::String& er
             project.midiRoutingTemplates.push_back(std::move(*routing));
         }
     }
+    const auto sceneValues = object->getProperty("scenes");
+    if (!sceneValues.isArray())
+    {
+        error = "Project scenes must be a JSON array.";
+        return std::nullopt;
+    }
+    for (const auto& sceneValue : *sceneValues.getArray())
+    {
+        auto scene = ProjectScene::fromVar(sceneValue, error);
+        if (!scene.has_value())
+            return std::nullopt;
+        project.scenes.push_back(std::move(*scene));
+    }
+    const auto compatibilityReportValues =
+        object->getProperty("compatibilityReports");
+    if (!compatibilityReportValues.isArray())
+    {
+        error = "Project compatibility reports must be a JSON array.";
+        return std::nullopt;
+    }
+    for (const auto& reportValue : *compatibilityReportValues.getArray())
+    {
+        auto report = CompatibilityReport::fromVar(reportValue, error);
+        if (!report.has_value())
+            return std::nullopt;
+        project.compatibilityReports.push_back(std::move(*report));
+    }
 
     const auto trackValues = object->getProperty("tracks");
     if (!trackValues.isArray())
@@ -2317,6 +2655,99 @@ std::optional<Project> Project::fromVar(const juce::var& value, juce::String& er
                 return std::nullopt;
             }
         }
+    }
+    std::vector<juce::String> sceneIds;
+    std::vector<juce::String> sceneObjectIds;
+    const auto addSceneObjectId = [&sceneObjectIds](
+                                      const juce::String& objectId)
+    {
+        if (objectId.isEmpty()
+            || std::find(
+                   sceneObjectIds.cbegin(),
+                   sceneObjectIds.cend(),
+                   objectId)
+                != sceneObjectIds.cend())
+            return false;
+        sceneObjectIds.push_back(objectId);
+        return true;
+    };
+    for (const auto& scene : project.scenes)
+    {
+        if (std::find(sceneIds.cbegin(), sceneIds.cend(), scene.id)
+                != sceneIds.cend()
+            || !addSceneObjectId(scene.id))
+        {
+            error = "Scene IDs must be unique.";
+            return std::nullopt;
+        }
+        sceneIds.push_back(scene.id);
+        for (const auto& slot : scene.slots)
+        {
+            const auto* track = project.findTrack(slot.trackId);
+            if (track == nullptr || !addSceneObjectId(slot.id))
+            {
+                error =
+                    "Scene slots require unique IDs and available tracks.";
+                return std::nullopt;
+            }
+            if (slot.audioClip.has_value())
+            {
+                if (!addSceneObjectId(slot.audioClip->id))
+                {
+                    error = "Scene clip IDs must be unique.";
+                    return std::nullopt;
+                }
+            }
+            if (slot.midiClip.has_value())
+            {
+                const auto& clip = *slot.midiClip;
+                if (!addSceneObjectId(clip.id)
+                    || (clip.drumMapId.isNotEmpty()
+                        && project.findDrumMap(clip.drumMapId) == nullptr))
+                {
+                    error =
+                        "Scene MIDI clips require unique IDs and available drum maps.";
+                    return std::nullopt;
+                }
+                const auto* map = project.findDrumMap(clip.drumMapId);
+                for (const auto& note : clip.notes)
+                {
+                    if (!addSceneObjectId(note.id)
+                        || (note.drumMapEntryId.isNotEmpty()
+                            && (map == nullptr
+                                || map->entryForId(note.drumMapEntryId)
+                                    == nullptr)))
+                    {
+                        error =
+                            "Scene MIDI notes require unique IDs and available drum-map entries.";
+                        return std::nullopt;
+                    }
+                    for (const auto& expression : note.expressions)
+                    {
+                        if (!addSceneObjectId(expression.id))
+                        {
+                            error =
+                                "Scene MIDI expression IDs must be unique.";
+                            return std::nullopt;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    std::vector<juce::String> compatibilityReportIds;
+    for (const auto& report : project.compatibilityReports)
+    {
+        if (std::find(
+                compatibilityReportIds.cbegin(),
+                compatibilityReportIds.cend(),
+                report.id)
+            != compatibilityReportIds.cend())
+        {
+            error = "Compatibility report IDs must be unique.";
+            return std::nullopt;
+        }
+        compatibilityReportIds.push_back(report.id);
     }
     if (!project.routingOrder(error).has_value())
         return std::nullopt;
@@ -2670,6 +3101,33 @@ std::optional<PluginBridgeMode> pluginBridgeModeFromString(const juce::String& v
     return std::nullopt;
 }
 
+juce::String pluginStateFormatToString(PluginStateFormat format)
+{
+    switch (format)
+    {
+        case PluginStateFormat::hostOpaque: return "hostOpaque";
+        case PluginStateFormat::generic: return "generic";
+        case PluginStateFormat::vst2Preset: return "vst2Preset";
+        case PluginStateFormat::vst3Preset: return "vst3Preset";
+        case PluginStateFormat::clapPreset: return "clapPreset";
+        case PluginStateFormat::auPreset: return "auPreset";
+    }
+    return "hostOpaque";
+}
+
+std::optional<PluginStateFormat> pluginStateFormatFromString(
+    const juce::String& value)
+{
+    if (value.isEmpty() || value == "hostOpaque")
+        return PluginStateFormat::hostOpaque;
+    if (value == "generic") return PluginStateFormat::generic;
+    if (value == "vst2Preset") return PluginStateFormat::vst2Preset;
+    if (value == "vst3Preset") return PluginStateFormat::vst3Preset;
+    if (value == "clapPreset") return PluginStateFormat::clapPreset;
+    if (value == "auPreset") return PluginStateFormat::auPreset;
+    return std::nullopt;
+}
+
 juce::String stretchModeToString(StretchMode mode)
 {
     switch (mode)
@@ -2705,6 +3163,26 @@ std::optional<TonePathType> tonePathTypeFromString(const juce::String& value)
 {
     if (value == "hardware" || value.isEmpty()) return TonePathType::hardware;
     if (value == "plugin") return TonePathType::plugin;
+    return std::nullopt;
+}
+
+juce::String compatibilitySeverityToString(CompatibilitySeverity severity)
+{
+    switch (severity)
+    {
+        case CompatibilitySeverity::info: return "info";
+        case CompatibilitySeverity::warning: return "warning";
+        case CompatibilitySeverity::error: return "error";
+    }
+    return "warning";
+}
+
+std::optional<CompatibilitySeverity> compatibilitySeverityFromString(
+    const juce::String& value)
+{
+    if (value == "info") return CompatibilitySeverity::info;
+    if (value == "warning") return CompatibilitySeverity::warning;
+    if (value == "error") return CompatibilitySeverity::error;
     return std::nullopt;
 }
 

@@ -194,7 +194,10 @@ juce::Result ProjectFile::save(const Project& project, const juce::File& request
             "bundledCompositionDevicesV1",
             "toneSnapshotsV1",
             "renderReportsV1",
-            "midiCompositionV1"
+            "midiCompositionV1",
+            "scenesV1",
+            "compatibilityReportsV1",
+            "dawprojectV1"
         }));
     manifest->setProperty("savedAt", juce::Time::getCurrentTime().toISO8601(true));
 

@@ -3,8 +3,8 @@
 Studio Duo is under active development. The current application includes the
 Phase 1 vertical slice, Phase 2 professional tracking and editing workflows, and
 the complete Phase 3 mixer and plugin platform. Phase 4 MIDI recording, piano
-roll, metal drum editing, and bundled drum/guitar/bass devices are implemented.
-DAWproject exchange and mastering remain later roadmap work.
+roll, metal drum editing, bundled drum/guitar/bass devices, and DAWproject 1.0
+exchange are implemented. Mastering remains later roadmap work.
 
 ## Current capabilities
 
@@ -47,6 +47,8 @@ DAWproject exchange and mastering remain later roadmap work.
 - Tone and mixer snapshots, level-matched A/B, stale detection, freeze, print,
   plugin-inclusive rendering, batch reports, and Scream Forge validation
 - Versioned `.studioduo` packages, generation saves, and recovery points
+- DAWproject 1.0 import/export with embedded media and plug-in state,
+  official schema validation, scene preservation, and compatibility reports
 - Deterministic 48 kHz, 24-bit stereo WAV export when active plugins are absent
 - In-app update checks, verified background downloads, and user-controlled
   restart installation on macOS and Windows
@@ -489,17 +491,43 @@ Studio Duo projects are versioned `.studioduo` directory packages. A save writes
 a new session generation before atomically replacing `manifest.json`; the latest
 complete state is also copied to `recovery/latest.json`.
 
-Project format version 6 stores the typed routing graph, separate automation
+Project format version 7 stores the typed routing graph, separate automation
 generations, content-addressed plugin state, compatibility policy, tone and
 mixer snapshots, render reports, ordinary MIDI clips and expressions, drum
-maps, pattern aliases, humanization state, and MIDI routing templates. Versions
-1-4 migrate on load.
+maps, pattern aliases, humanization state, MIDI routing templates, project
+metadata, scenes, and persisted interchange reports. Versions 1-6 migrate on
+load.
 See [project-format.md](project-format.md).
 
 Stereo WAV export is 48 kHz and 24-bit. Projects without processors use the
 fast deterministic graph. Bundled and trusted processors render offline;
 sandboxed third-party processors use the same one-block pipeline in a real-time
 fallback so processing is never silently omitted.
+
+Use **DAWPROJECT** in the main header to:
+
+- Import a `.dawproject` archive into a newly created `.studioduo` project
+- Export the open project as a deterministic `.dawproject` archive
+- View the latest structured compatibility report
+- Save the report as JSON
+
+Import validates `project.xml` and `metadata.xml` against the embedded official
+DAWproject 1.0 schemas before creating a staging project. The open project is
+not replaced until the archive, media, plug-in state, translated model, native
+save, and reopen verification all succeed. The source archive and external
+media are read-only. Choose a new destination path; an existing `.studioduo`
+package is never moved or replaced. Export also stages and verifies the complete ZIP before
+atomically publishing it, so a failed export does not leave a partial success
+file.
+
+Studio Duo embeds referenced audio and captured plug-in state. Track/channel
+hierarchy, mixer routing, audio and MIDI clips, notes, note expressions,
+automation, devices, scenes, warps, markers, metadata, tempo, and time
+signatures are translated through the dedicated interchange layer. Unsupported
+source or destination details remain listed by object path in the compatibility
+report instead of disappearing silently. See
+[dawproject.md](dawproject.md) for the exact mapping and current compatibility
+boundary.
 
 ## Update Studio Duo
 

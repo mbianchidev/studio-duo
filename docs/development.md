@@ -6,7 +6,9 @@ already installed. It also fetches the MIT-licensed Signalsmith Stretch 1.1.0
 headers used for pitch-preserving elastic audio, CLAP 1.2.10 and clap-helpers
 for CLAP hosting, and the Apache-2.0 ARA SDK 2.3.0 for ARA compatibility mode.
 Phase 4 MIDI/editor workflows and bundled drum/guitar/bass devices are
-implemented. DAWproject translation remains intentionally out of scope.
+implemented. The dedicated DAWproject 1.0 translation, schema-validation, ZIP,
+scene, and compatibility-report layer is also implemented without runtime
+network access.
 
 ## Prerequisites
 
@@ -255,7 +257,7 @@ from the active generation, marks it unsaved, and can fall back to that point
 when the saved session is damaged. Stale or corrupt recovery data never
 replaces a valid saved generation and is reported to the user.
 
-Project format version 6 includes the typed routing graph, separate automation
+Project format version 6 introduced the typed routing graph, separate automation
 generations, processor policy/state metadata, tone and mixer snapshots, render
 reports, MIDI clips/notes/expressions, drum maps, pattern aliases, and MIDI
 routing templates, plus bundled processor-output bus routes. Ordered
@@ -263,6 +265,35 @@ migrations preserve version 1 direct-master
 behavior, convert version 2 `outputTrackId` values into explicit main-output
 routes, and add empty MIDI clips plus fixed-ID default editor resources to
 versions 1-4.
+
+Project format version 7 adds general project metadata, persisted launch scenes,
+and structured interchange compatibility reports. Version 6 projects migrate
+with empty values for those collections.
+
+`src/dawproject_io/` is an explicit translation boundary:
+
+- `DawProjectIdMapper` produces stable, kind-specific XML IDs and deterministic
+  internal IDs for imports.
+- `DawProjectSchemaValidator` parses the vendored official XSDs and enforces
+  element sequences, choices, required attributes, simple types,
+  enumerations, XML IDs, and IDREFs. A semantic pass validates string-encoded
+  numbers, ranges, target consistency, warp mappings, and safe file
+  references.
+- `DawProjectIO` translates the internal model, stages ZIP/native packages,
+  materializes embedded or external media, preserves opaque plug-in state, and
+  publishes only after validation and reopen verification.
+
+Exports set fixed ZIP timestamps, stable entry order, stable identifiers, and
+locale-independent numeric formatting. Tests compare complete archive hashes
+to catch ordering or byte drift. The XSDs, upstream example, hashes, and MIT
+license are pinned under `third_party/dawproject/v1.0.0/` and embedded by
+CMake, so application validation never performs network access.
+
+DAWproject tests generate audio/state fixtures and cover both official schemas,
+the upstream XML example, complete supported round trips, source immutability,
+external and embedded media, plug-in state, scenes, invalid archives, semantic
+validation, compatibility reports, deterministic output, and native migration.
+See [dawproject.md](dawproject.md).
 
 Routing snapshots compile main outputs, arbitrary pre/post-fader sends,
 per-insert sidechains, parallel paths, hardware maps, folders, VCAs, solo-safe

@@ -79,7 +79,23 @@ juce_add_binary_data(
         assets/branding/studio-duo-icon-512.png
 )
 
+juce_add_binary_data(
+    StudioDuoDawProjectSchemaData
+    HEADER_NAME StudioDuoDawProjectSchemaData.h
+    NAMESPACE studio_dawproject_schema
+    SOURCES
+        third_party/dawproject/v1.0.0/Project.xsd
+        third_party/dawproject/v1.0.0/MetaData.xsd
+        third_party/dawproject/v1.0.0/LICENSE
+)
+
 set(STUDIO_DUO_MODEL_SOURCES
+    src/dawproject_io/DawProjectIdMapper.cpp
+    src/dawproject_io/DawProjectIdMapper.h
+    src/dawproject_io/DawProjectIO.cpp
+    src/dawproject_io/DawProjectIO.h
+    src/dawproject_io/DawProjectSchemaValidator.cpp
+    src/dawproject_io/DawProjectSchemaValidator.h
     src/automation/AutomationRecorder.cpp
     src/automation/AutomationRecorder.h
     src/automation/AutomationScheduler.cpp
@@ -290,6 +306,7 @@ target_link_libraries(
         clap
         clap-helpers
         StudioDuoBrandData
+        StudioDuoDawProjectSchemaData
     PUBLIC
         juce::juce_recommended_config_flags
         juce::juce_recommended_lto_flags
@@ -586,6 +603,7 @@ if(STUDIO_DUO_BUILD_TESTS)
             tests/WindowSizingTests.cpp
             tests/TransportTests.cpp
             tests/UpdateTests.cpp
+            tests/DawProjectTests.cpp
             src/ui/RoutingUiModel.cpp
             src/ui/RoutingUiModel.h
             src/ui/MainWindowSizing.cpp
@@ -650,6 +668,7 @@ if(STUDIO_DUO_BUILD_TESTS)
             JUCE_MODAL_LOOPS_PERMITTED=1
             STUDIO_DUO_TESTING=1
             STUDIO_DUO_VERSION="${PROJECT_VERSION}"
+            STUDIO_DUO_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
     )
     if(WIN32)
         target_compile_definitions(StudioDuoTests PRIVATE JUCE_ASIO=1)
@@ -705,6 +724,7 @@ if(STUDIO_DUO_BUILD_TESTS)
             juce::juce_graphics
             clap
             clap-helpers
+            StudioDuoDawProjectSchemaData
         PUBLIC
             juce::juce_recommended_config_flags
             juce::juce_recommended_warning_flags

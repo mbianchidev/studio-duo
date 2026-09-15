@@ -32,6 +32,16 @@ enum class PluginBridgeMode
     trustedInProcess
 };
 
+enum class PluginStateFormat
+{
+    hostOpaque,
+    generic,
+    vst2Preset,
+    vst3Preset,
+    clapPreset,
+    auPreset
+};
+
 enum class StretchMode
 {
     drums,
@@ -176,6 +186,7 @@ struct PluginInsert
     juce::String fileOrIdentifier;
     juce::String stateFile;
     juce::String stateHash;
+    PluginStateFormat stateFormat = PluginStateFormat::hostOpaque;
     PluginBridgeMode bridgeMode = PluginBridgeMode::sandboxed;
     int latencySamples = 0;
     double tailSeconds = 0.0;
@@ -264,6 +275,89 @@ struct Track
     static std::optional<Track> fromVar(const juce::var& value, juce::String& error);
 };
 
+struct ProjectMetadata
+{
+    juce::String artist;
+    juce::String album;
+    juce::String originalArtist;
+    juce::String composer;
+    juce::String songwriter;
+    juce::String producer;
+    juce::String arranger;
+    juce::String year;
+    juce::String genre;
+    juce::String copyright;
+    juce::String website;
+    juce::String comment;
+
+    [[nodiscard]] juce::var toVar() const;
+    static std::optional<ProjectMetadata> fromVar(const juce::var& value,
+                                                  juce::String& error);
+};
+
+struct SceneSlot
+{
+    juce::String id { juce::Uuid().toString() };
+    juce::String trackId;
+    bool stopTrack = false;
+    std::optional<AudioClip> audioClip;
+    std::optional<MidiClip> midiClip;
+
+    [[nodiscard]] juce::var toVar() const;
+    static std::optional<SceneSlot> fromVar(const juce::var& value,
+                                            juce::String& error);
+};
+
+struct ProjectScene
+{
+    juce::String id { juce::Uuid().toString() };
+    juce::String name { "Scene" };
+    juce::Colour colour { 0xff5d7fa3 };
+    std::vector<SceneSlot> slots;
+
+    [[nodiscard]] juce::var toVar() const;
+    static std::optional<ProjectScene> fromVar(const juce::var& value,
+                                               juce::String& error);
+};
+
+enum class CompatibilitySeverity
+{
+    info,
+    warning,
+    error
+};
+
+struct CompatibilityIssue
+{
+    CompatibilitySeverity severity = CompatibilitySeverity::warning;
+    juce::String code;
+    juce::String objectPath;
+    juce::String message;
+
+    [[nodiscard]] juce::var toVar() const;
+    static std::optional<CompatibilityIssue> fromVar(
+        const juce::var& value,
+        juce::String& error);
+};
+
+struct CompatibilityReport
+{
+    juce::String id { juce::Uuid().toString() };
+    juce::String format;
+    juce::String operation;
+    juce::String source;
+    juce::String destination;
+    juce::String createdAt;
+    std::vector<CompatibilityIssue> issues;
+
+    [[nodiscard]] bool hasErrors() const noexcept;
+    [[nodiscard]] juce::String toText() const;
+    [[nodiscard]] juce::var toVar() const;
+    static std::optional<CompatibilityReport> fromVar(
+        const juce::var& value,
+        juce::String& error);
+};
+
 struct ToneSnapshot
 {
     juce::String id { juce::Uuid().toString() };
@@ -346,10 +440,11 @@ struct RenderReport
 class Project
 {
 public:
-    static constexpr int currentFormatVersion = 6;
+    static constexpr int currentFormatVersion = 7;
 
     juce::String id { juce::Uuid().toString() };
     juce::String name { "Untitled" };
+    ProjectMetadata metadata;
     double tempo = 120.0;
     int timeSignatureNumerator = 4;
     int timeSignatureDenominator = 4;
@@ -380,6 +475,8 @@ public:
     std::vector<DrumMap> drumMaps;
     std::vector<MidiPatternAlias> midiPatterns;
     std::vector<MidiRoutingTemplate> midiRoutingTemplates;
+    std::vector<ProjectScene> scenes;
+    std::vector<CompatibilityReport> compatibilityReports;
     std::vector<Track> tracks;
 
     static Project createDefault();
@@ -443,10 +540,16 @@ juce::String trackTypeToString(TrackType type);
 std::optional<TrackType> trackTypeFromString(const juce::String& value);
 juce::String pluginBridgeModeToString(PluginBridgeMode mode);
 std::optional<PluginBridgeMode> pluginBridgeModeFromString(const juce::String& value);
+juce::String pluginStateFormatToString(PluginStateFormat format);
+std::optional<PluginStateFormat> pluginStateFormatFromString(
+    const juce::String& value);
 juce::String stretchModeToString(StretchMode mode);
 std::optional<StretchMode> stretchModeFromString(const juce::String& value);
 juce::String tonePathTypeToString(TonePathType type);
 std::optional<TonePathType> tonePathTypeFromString(const juce::String& value);
+juce::String compatibilitySeverityToString(CompatibilitySeverity severity);
+std::optional<CompatibilitySeverity> compatibilitySeverityFromString(
+    const juce::String& value);
 std::vector<CompRegion> replaceCompRegion(const std::vector<CompRegion>& existing,
                                           CompRegion replacement);
 std::vector<RecordingPass> recordingPasses(double capturedDurationSeconds,

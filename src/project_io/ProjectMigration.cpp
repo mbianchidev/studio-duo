@@ -160,6 +160,10 @@ std::optional<juce::var> ProjectMigration::migrateToCurrent(
     addEmptyArray(*object, "drumMaps");
     addEmptyArray(*object, "midiPatterns");
     addEmptyArray(*object, "midiRoutingTemplates");
+    addEmptyArray(*object, "scenes");
+    addEmptyArray(*object, "compatibilityReports");
+    if (object->getProperty("metadata").isVoid())
+        object->setProperty("metadata", ProjectMetadata {}.toVar());
     object->setProperty("formatVersion", Project::currentFormatVersion);
     return migrated;
 }

@@ -10,6 +10,7 @@
 #include "TimelineComponent.h"
 #include "audio/StudioAudioDeviceManager.h"
 #include "audio/StudioAudioEngine.h"
+#include "dawproject_io/DawProjectIO.h"
 #include "model/LinkedEditModel.h"
 #include "model/ProjectCommands.h"
 #include "plugin_host/PluginBrowserComponent.h"
@@ -89,6 +90,20 @@ private:
     void beginSaveProject();
     void beginImportAudio();
     void beginExportMix();
+    void showDawProjectMenu();
+    void beginImportDawProject();
+    void chooseDawProjectImportDestination(
+        const juce::File& sourceArchive);
+    void importDawProjectTo(const juce::File& sourceArchive,
+                            const juce::File& destinationPackage);
+    void beginExportDawProject();
+    void exportDawProjectTo(const juce::File& destinationArchive);
+    void showLatestCompatibilityReport();
+    void beginSaveCompatibilityReport();
+    [[nodiscard]] const CompatibilityReport*
+        latestCompatibilityReport() const noexcept;
+    void recordCompatibilityReport(
+        const CompatibilityReport& report);
     void showSettings(bool showUpdates = false);
     void restartForUpdate();
     void updateStateChanged(
@@ -287,11 +302,13 @@ private:
     juce::String calibratingReampRouteId;
     std::uint64_t lastRuntimeCatalogRevision = 0;
     juce::String reducedIsolationMarkerSignature;
+    std::optional<CompatibilityReport> transientCompatibilityReport;
     juce::ThreadPool compatibilityValidator { 1 };
 
     juce::TextButton newButton { "NEW" };
     juce::TextButton openButton { "OPEN" };
     juce::TextButton saveButton { "SAVE" };
+    juce::TextButton dawProjectButton { "DAWPROJECT" };
     juce::TextButton exportButton { "EXPORT" };
     juce::TextButton settingsButton { "SETTINGS" };
     juce::TextButton undoButton { "UNDO" };

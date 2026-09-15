@@ -28,3 +28,4 @@ void windowSizingTests();
 void transportTests();
 void updateTests();
 void midiTests();
+void dawProjectTests();

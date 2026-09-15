@@ -386,6 +386,9 @@ MainComponent::MainComponent(bool startAudioOnLaunch)
     configureButton(newButton, "Create a new project");
     configureButton(openButton, "Open a .studioduo project");
     configureButton(saveButton, "Save project (Command/Ctrl+S)");
+    configureButton(
+        dawProjectButton,
+        "Import, export, view, or save a DAWproject 1.0 compatibility report");
     configureButton(exportButton, "Export a stereo WAV");
     configureButton(
         settingsButton,
@@ -431,6 +434,7 @@ MainComponent::MainComponent(bool startAudioOnLaunch)
     newButton.onClick = [this] { createNewProject(); };
     openButton.onClick = [this] { beginOpenProject(); };
     saveButton.onClick = [this] { beginSaveProject(); };
+    dawProjectButton.onClick = [this] { showDawProjectMenu(); };
     exportButton.onClick = [this] { beginExportMix(); };
     settingsButton.onClick = [this] { showSettings(); };
     undoButton.onClick = [this] { undo(); };
@@ -1988,6 +1992,8 @@ void MainComponent::resized()
                 area.removeFromLeft(62).reduced(3, verticalInset));
             saveButton.setBounds(
                 area.removeFromLeft(62).reduced(3, verticalInset));
+            dawProjectButton.setBounds(
+                area.removeFromLeft(108).reduced(3, verticalInset));
             exportButton.setBounds(
                 area.removeFromLeft(74).reduced(3, verticalInset));
             settingsButton.setBounds(
@@ -2027,7 +2033,7 @@ void MainComponent::resized()
         topRow.removeFromTop(4);
         auto secondRow = topRow.removeFromTop(28);
 
-        layoutFileControls(firstRow.removeFromLeft(356), 1);
+        layoutFileControls(firstRow.removeFromLeft(464), 1);
         layoutTempoControls(firstRow.removeFromRight(180), 2);
         metronomeButton.setBounds(
             firstRow.removeFromRight(78).reduced(3, 1));
@@ -2038,7 +2044,7 @@ void MainComponent::resized()
     }
     else
     {
-        layoutFileControls(topRow.removeFromLeft(356), 12);
+        layoutFileControls(topRow.removeFromLeft(464), 12);
         layoutEditControls(topRow.removeFromLeft(128), 12);
         layoutTransportControls(topRow.removeFromLeft(270), 9);
         layoutTempoControls(topRow.removeFromRight(180), 10);
@@ -2529,6 +2535,7 @@ void MainComponent::createNewProject()
         ProjectFile::clearReducedIsolationMarker(projectPackage);
     project = Project::createDefault();
     projectPackage = juce::File();
+    transientCompatibilityReport.reset();
     reducedIsolationMarkerSignature.clear();
     activeAutomationGesture.reset();
     pendingAutomationPreview.reset();
@@ -2647,6 +2654,472 @@ void MainComponent::beginExportMix()
                                   : result.withFileExtension("wav"));
         safe->fileChooser.reset();
     });
+}
+
+void MainComponent::showDawProjectMenu()
+{
+    const auto hasReport = latestCompatibilityReport() != nullptr;
+    juce::PopupMenu menu;
+    menu.addItem(
+        "Import DAWproject 1.0...",
+        !exportInProgress,
+        false,
+        [this] { beginImportDawProject(); });
+    menu.addItem(
+        "Export DAWproject 1.0...",
+        !exportInProgress,
+        false,
+        [this] { beginExportDawProject(); });
+    menu.addSeparator();
+    menu.addItem(
+        "View latest compatibility report",
+        hasReport,
+        false,
+        [this] { showLatestCompatibilityReport(); });
+    menu.addItem(
+        "Save latest compatibility report...",
+        hasReport,
+        false,
+        [this] { beginSaveCompatibilityReport(); });
+    menu.showMenuAsync(
+        juce::PopupMenu::Options().withTargetComponent(
+            dawProjectButton));
+}
+
+void MainComponent::beginImportDawProject()
+{
+    if (hasActiveRecordingTargets() || recordingFinalizationInProgress)
+    {
+        setStatus(
+            "Stop and finalize recording before importing a DAWproject.",
+            true);
+        return;
+    }
+    if (exportInProgress)
+    {
+        setStatus(
+            "Another save, import, or export is already in progress.",
+            true);
+        return;
+    }
+    fileChooser = std::make_unique<juce::FileChooser>(
+        "Import DAWproject 1.0",
+        juce::File::getSpecialLocation(
+            juce::File::userMusicDirectory),
+        "*.dawproject",
+        true,
+        false,
+        this);
+    const auto flags = juce::FileBrowserComponent::openMode
+        | juce::FileBrowserComponent::canSelectFiles;
+    fileChooser->launchAsync(
+        flags,
+        [safe = juce::Component::SafePointer<MainComponent>(this)](
+            const auto& chooser)
+        {
+            if (safe == nullptr)
+                return;
+            const auto source = chooser.getResult();
+            safe->fileChooser.reset();
+            if (source.existsAsFile())
+                safe->chooseDawProjectImportDestination(source);
+        });
+}
+
+void MainComponent::chooseDawProjectImportDestination(
+    const juce::File& sourceArchive)
+{
+    const auto initial = sourceArchive.getSiblingFile(
+        sourceArchive.getFileNameWithoutExtension()
+        + ".studioduo");
+    fileChooser = std::make_unique<juce::FileChooser>(
+        "Create Studio Duo project from DAWproject",
+        initial,
+        "*.studioduo",
+        true,
+        true,
+        this);
+    const auto flags = juce::FileBrowserComponent::saveMode
+        | juce::FileBrowserComponent::canSelectFiles;
+    fileChooser->launchAsync(
+        flags,
+        [safe = juce::Component::SafePointer<MainComponent>(this),
+         sourceArchive](const auto& chooser)
+        {
+            if (safe == nullptr)
+                return;
+            const auto destination = chooser.getResult();
+            safe->fileChooser.reset();
+            if (destination != juce::File())
+                safe->importDawProjectTo(
+                    sourceArchive,
+                    destination);
+        });
+}
+
+void MainComponent::importDawProjectTo(
+    const juce::File& sourceArchive,
+    const juce::File& destinationPackage)
+{
+    exportInProgress = true;
+    stopTimer();
+    exportInputBlocker.setVisible(true);
+    exportInputBlocker.toFront(false);
+    exportInputBlocker.grabKeyboardFocus();
+    const auto result = DawProjectIO::importProject(
+        sourceArchive,
+        destinationPackage);
+    exportInputBlocker.setVisible(false);
+    startTimerHz(30);
+    exportInProgress = false;
+    transientCompatibilityReport = result.report;
+    if (!result.succeeded())
+    {
+        setStatus(result.result.getErrorMessage(), true);
+        showLatestCompatibilityReport();
+        return;
+    }
+
+    openProjectFrom(result.package);
+    transientCompatibilityReport = result.report;
+    const auto notices =
+        static_cast<int>(result.report.issues.size());
+    setStatus(
+        "Imported "
+            + sourceArchive.getFullPathName()
+            + " into "
+            + result.package.getFullPathName()
+            + (notices > 0
+                   ? " with " + juce::String(notices)
+                       + " compatibility notice"
+                       + (notices == 1 ? "." : "s.")
+                   : juce::String(".")),
+        result.report.hasErrors());
+}
+
+void MainComponent::beginExportDawProject()
+{
+    if (hasActiveRecordingTargets() || recordingFinalizationInProgress)
+    {
+        setStatus(
+            "Stop and finalize recording before exporting DAWproject.",
+            true);
+        return;
+    }
+    if (exportInProgress)
+    {
+        setStatus(
+            "Another save, import, or export is already in progress.",
+            true);
+        return;
+    }
+
+    const auto initial =
+        (projectPackage.exists()
+             ? projectPackage.getParentDirectory()
+             : juce::File::getSpecialLocation(
+                   juce::File::userMusicDirectory))
+            .getChildFile(project.name + ".dawproject");
+    fileChooser = std::make_unique<juce::FileChooser>(
+        "Export DAWproject 1.0",
+        initial,
+        "*.dawproject",
+        true,
+        false,
+        this);
+    const auto flags = juce::FileBrowserComponent::saveMode
+        | juce::FileBrowserComponent::canSelectFiles;
+    fileChooser->launchAsync(
+        flags,
+        [safe = juce::Component::SafePointer<MainComponent>(this)](
+            const auto& chooser)
+        {
+            if (safe == nullptr)
+                return;
+            const auto destination = chooser.getResult();
+            safe->fileChooser.reset();
+            if (destination != juce::File())
+                safe->exportDawProjectTo(destination);
+        });
+}
+
+void MainComponent::exportDawProjectTo(
+    const juce::File& destinationArchive)
+{
+    exportInProgress = true;
+    stopTimer();
+    exportInputBlocker.setVisible(true);
+    exportInputBlocker.toFront(false);
+    exportInputBlocker.grabKeyboardFocus();
+    const auto normalisedDestination =
+        DawProjectIO::normaliseArchivePath(destinationArchive);
+    const auto statePackage =
+        normalisedDestination.getSiblingFile(
+            normalisedDestination.getFileNameWithoutExtension()
+            + ".export-state-" + juce::Uuid().toString()
+            + ".studioduo");
+    const auto resumePlayback = audioEngine.isPlaying();
+    if (resumePlayback)
+        audioEngine.pause();
+    const auto finishExport = [&]
+    {
+        if (statePackage.exists())
+            statePackage.deleteRecursively();
+        if (resumePlayback)
+            audioEngine.play();
+        exportInputBlocker.setVisible(false);
+        startTimerHz(30);
+        exportInProgress = false;
+    };
+    const auto failPreparation =
+        [&](const juce::String& code,
+            const juce::String& objectPath,
+            const juce::String& message)
+    {
+        CompatibilityReport report;
+        report.format = "DAWproject 1.0";
+        report.operation = "export";
+        report.source = projectPackage.exists()
+            ? projectPackage.getFullPathName()
+            : juce::String("(unsaved Studio Duo project)");
+        report.destination =
+            normalisedDestination.getFullPathName();
+        report.createdAt =
+            juce::Time::getCurrentTime().toISO8601(true);
+        report.issues.push_back({
+            CompatibilitySeverity::error,
+            code,
+            objectPath,
+            message
+        });
+        finishExport();
+        recordCompatibilityReport(report);
+        setStatus(message, true);
+        showLatestCompatibilityReport();
+    };
+    auto exportProject = project;
+    juce::String materializeWarning;
+    juce::String error;
+    if (!statePackage.createDirectory()
+        || !materializePluginStateReferences(
+            exportProject,
+            projectPackage,
+            statePackage,
+            materializeWarning,
+            error))
+    {
+        failPreparation(
+            "export.state-staging",
+            "/Project",
+            error.isNotEmpty()
+                ? error
+                : juce::String(
+                      "Could not create the temporary export state package."));
+        return;
+    }
+
+    std::vector<CompatibilityIssue> preparationIssues;
+    for (auto& capture : audioEngine.capturePluginStates(2000))
+    {
+        if (capture.insertId.isEmpty())
+        {
+            failPreparation(
+                "export.device-state-capture",
+                "/Project/Devices",
+                capture.result.getErrorMessage());
+            return;
+        }
+        auto* track = exportProject.findTrack(capture.trackId);
+        if (track == nullptr)
+            continue;
+        const auto insert = std::find_if(
+            track->inserts.begin(),
+            track->inserts.end(),
+            [&capture](const auto& candidate)
+            {
+                return candidate.id == capture.insertId;
+            });
+        if (insert == track->inserts.end())
+            continue;
+        if (capture.result.failed())
+        {
+            if (capture.preservePreviousState)
+            {
+                preparationIssues.push_back({
+                    CompatibilitySeverity::warning,
+                    "export.device-state-preserved",
+                    "/Project/Structure/Track[" + capture.trackId
+                        + "]/Device[" + capture.insertId + "]",
+                    capture.result.getErrorMessage()
+                });
+                continue;
+            }
+            failPreparation(
+                "export.device-state-capture",
+                "/Project/Structure/Track[" + capture.trackId
+                    + "]/Device[" + capture.insertId + "]",
+                capture.name + ": "
+                    + capture.result.getErrorMessage());
+            return;
+        }
+        if (capture.state.isEmpty())
+            continue;
+        const auto reference = PluginStateStore::store(
+            statePackage,
+            capture.state,
+            error);
+        if (!reference.has_value())
+        {
+            failPreparation(
+                "export.device-state-store",
+                "/Project/Structure/Track[" + capture.trackId
+                    + "]/Device[" + capture.insertId + "]",
+                error);
+            return;
+        }
+        insert->stateFile = reference->relativePath;
+        insert->stateHash = reference->hash;
+        insert->stateFormat =
+            insert->format.containsIgnoreCase("CLAP")
+            ? PluginStateFormat::clapPreset
+            : PluginStateFormat::hostOpaque;
+    }
+
+    auto result = DawProjectIO::exportProject(
+        exportProject,
+        statePackage,
+        normalisedDestination);
+    result.report.source = projectPackage.exists()
+        ? projectPackage.getFullPathName()
+        : juce::String("(unsaved Studio Duo project)");
+    if (materializeWarning.isNotEmpty())
+    {
+        result.report.issues.push_back({
+            CompatibilitySeverity::warning,
+            "export.device-state-materialization",
+            "/Project",
+            materializeWarning
+        });
+    }
+    result.report.issues.insert(
+        result.report.issues.end(),
+        preparationIssues.begin(),
+        preparationIssues.end());
+    finishExport();
+    recordCompatibilityReport(result.report);
+    if (!result.succeeded())
+    {
+        setStatus(result.result.getErrorMessage(), true);
+        showLatestCompatibilityReport();
+        return;
+    }
+    const auto notices =
+        static_cast<int>(result.report.issues.size());
+    setStatus(
+        "Exported "
+            + result.archive.getFullPathName()
+            + (notices > 0
+                   ? " with " + juce::String(notices)
+                       + " compatibility notice"
+                       + (notices == 1 ? "." : "s.")
+                   : juce::String(".")));
+}
+
+const CompatibilityReport*
+MainComponent::latestCompatibilityReport() const noexcept
+{
+    if (transientCompatibilityReport.has_value())
+        return &*transientCompatibilityReport;
+    return project.compatibilityReports.empty()
+        ? nullptr
+        : &project.compatibilityReports.back();
+}
+
+void MainComponent::recordCompatibilityReport(
+    const CompatibilityReport& report)
+{
+    transientCompatibilityReport = report;
+    project.compatibilityReports.push_back(report);
+    constexpr auto maximumReports = std::size_t { 50 };
+    if (project.compatibilityReports.size() > maximumReports)
+    {
+        project.compatibilityReports.erase(
+            project.compatibilityReports.begin(),
+            project.compatibilityReports.begin()
+                + static_cast<std::ptrdiff_t>(
+                    project.compatibilityReports.size()
+                    - maximumReports));
+    }
+    projectChanged();
+}
+
+void MainComponent::showLatestCompatibilityReport()
+{
+    const auto* report = latestCompatibilityReport();
+    if (report == nullptr)
+    {
+        setStatus("No DAWproject compatibility report is available.", true);
+        return;
+    }
+    juce::AlertWindow::showMessageBoxAsync(
+        report->hasErrors()
+            ? juce::MessageBoxIconType::WarningIcon
+            : juce::MessageBoxIconType::InfoIcon,
+        "DAWproject compatibility report",
+        report->toText());
+}
+
+void MainComponent::beginSaveCompatibilityReport()
+{
+    const auto* report = latestCompatibilityReport();
+    if (report == nullptr)
+    {
+        setStatus("No DAWproject compatibility report is available.", true);
+        return;
+    }
+    const auto reportCopy = *report;
+    const auto directory = projectPackage.exists()
+        ? projectPackage.getParentDirectory()
+        : juce::File::getSpecialLocation(
+              juce::File::userDocumentsDirectory);
+    fileChooser = std::make_unique<juce::FileChooser>(
+        "Save DAWproject compatibility report",
+        directory.getChildFile(
+            project.name + "-dawproject-report.json"),
+        "*.json",
+        true,
+        false,
+        this);
+    const auto flags = juce::FileBrowserComponent::saveMode
+        | juce::FileBrowserComponent::canSelectFiles;
+    fileChooser->launchAsync(
+        flags,
+        [safe = juce::Component::SafePointer<MainComponent>(this),
+         reportCopy](const auto& chooser)
+        {
+            if (safe == nullptr)
+                return;
+            auto destination = chooser.getResult();
+            safe->fileChooser.reset();
+            if (destination == juce::File())
+                return;
+            if (!destination.hasFileExtension("json"))
+                destination = destination.withFileExtension("json");
+            const auto result =
+                DawProjectIO::saveCompatibilityReport(
+                    reportCopy,
+                    destination);
+            if (result.failed())
+            {
+                safe->showError(
+                    "Compatibility report save failed",
+                    result.getErrorMessage());
+                return;
+            }
+            safe->setStatus(
+                "Saved compatibility report to "
+                + destination.getFullPathName() + ".");
+        });
 }
 
 void MainComponent::showSettings(bool showUpdates)
@@ -2912,6 +3385,10 @@ void MainComponent::saveProjectTo(const juce::File& package)
         }
         insert->stateFile = reference->relativePath;
         insert->stateHash = reference->hash;
+        insert->stateFormat =
+            insert->format.containsIgnoreCase("CLAP")
+            ? PluginStateFormat::clapPreset
+            : PluginStateFormat::hostOpaque;
     }
 
     juce::String materializeError;
@@ -3036,6 +3513,10 @@ bool MainComponent::captureCurrentPluginStates(
             return false;
         insert->stateFile = reference->relativePath;
         insert->stateHash = reference->hash;
+        insert->stateFormat =
+            insert->format.containsIgnoreCase("CLAP")
+            ? PluginStateFormat::clapPreset
+            : PluginStateFormat::hostOpaque;
     }
     return true;
 }
@@ -3146,6 +3627,7 @@ void MainComponent::openProjectFrom(const juce::File& package)
         }
     }
     project = std::move(opened->project);
+    transientCompatibilityReport.reset();
     activeAutomationGesture.reset();
     pendingAutomationPreview.reset();
     commandStack.clear();

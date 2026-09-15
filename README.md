@@ -13,8 +13,8 @@ modern metal production faster.
 The working C++20 and JUCE 9 application includes the Phase 1 vertical slice,
 Phase 2 professional tracking and editing, and the complete Phase 3 mixer and
 plugin platform. Phase 4 MIDI recording/editing and the bundled drum, guitar
-amp, and bass amp devices are complete. DAWproject interchange is still
-pending, so this is not yet the complete 1.0 DAW described in the
+amp, bass amp, and DAWproject 1.0 interchange work are complete. Mastering and
+release workflows remain before the complete 1.0 DAW described in the
 [accepted design](docs/design.md).
 
 ## Highlights
@@ -39,6 +39,9 @@ pending, so this is not yet the complete 1.0 DAW described in the
 - Bundled guitar and bass amps with nonlinear tone stages, embedded cabinets,
   validated user cabinet IR loading, persistent state, and fixed-latency
   partitioned convolution
+- Transactional DAWproject 1.0 import/export with official embedded schema
+  validation, deterministic ZIP output, media and plug-in state transfer,
+  preserved scenes, and object-specific compatibility reports
 - Sample-accurate mixer and plugin automation with read, touch, latch, write,
   trim, and preview modes
 - Sandboxed VST3, Audio Unit, and CLAP processing plus explicit ARA 2
@@ -85,6 +88,7 @@ or MIDI. See [startup troubleshooting and logs](docs/user-guide.md#logs-and-diag
 - [Product, roadmap, and technical design](docs/design.md)
 - [Development and architecture](docs/development.md)
 - [Bundled devices](docs/devices.md)
+- [DAWproject interchange](docs/dawproject.md)
 - [Contributing](docs/contributing.md)
 - [Releasing](docs/releasing.md)
 
@@ -95,3 +99,4 @@ Studio Duo is licensed under the
 option. On Windows, Studio Duo uses JUCE's dual-licensed Steinberg ASIO SDK
 headers under their GPLv3 option. Signalsmith Stretch 1.1.0, CLAP 1.2.10, and
 clap-helpers are MIT licensed. ARA SDK 2.3.0 is Apache-2.0 licensed.
+The vendored DAWproject 1.0 schemas and upstream XML example are MIT licensed.

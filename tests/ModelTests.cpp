@@ -1608,6 +1608,7 @@ int main(int argc, char* argv[])
     windowSizingTests();
     updateTests();
     midiTests();
+    dawProjectTests();
 
     if (failures == 0)
     {

@@ -29,6 +29,9 @@ void projectMigrationTests()
     const auto* manifestObject = manifest.getDynamicObject();
     auto hasMidiCapability = false;
     auto hasBundledCompositionCapability = false;
+    auto hasDawProjectCapability = false;
+    auto hasSceneCapability = false;
+    auto hasCompatibilityReportCapability = false;
     if (manifestObject != nullptr)
     {
         const auto required =
@@ -43,6 +46,14 @@ void projectMigrationTests()
                     hasBundledCompositionCapability
                     || capability.toString()
                         == "bundledCompositionDevicesV1";
+                hasDawProjectCapability = hasDawProjectCapability
+                    || capability.toString() == "dawprojectV1";
+                hasSceneCapability = hasSceneCapability
+                    || capability.toString() == "scenesV1";
+                hasCompatibilityReportCapability =
+                    hasCompatibilityReportCapability
+                    || capability.toString()
+                        == "compatibilityReportsV1";
             }
         }
     }
@@ -51,14 +62,32 @@ void projectMigrationTests()
                && manifestObject->getProperty("activeAutomation").toString()
                       .isNotEmpty()
                && hasMidiCapability
-               && hasBundledCompositionCapability,
-           "Version 6 manifest declares MIDI, bundled-device, and automation capabilities.");
+               && hasBundledCompositionCapability
+               && hasDawProjectCapability
+               && hasSceneCapability
+               && hasCompatibilityReportCapability,
+           "Version 7 manifest declares MIDI, bundled-device, scene, report, DAWproject, and automation capabilities.");
 
     juce::String error;
     const auto loaded = studio::ProjectFile::load(package, error);
     expect(loaded.has_value()
                && loaded->automationLanes.size() == 1,
-           "Version 6 automation generation loads.");
+           "Version 7 automation generation loads.");
+
+    auto versionSix = project.toVar();
+    auto* versionSixObject = versionSix.getDynamicObject();
+    versionSixObject->setProperty("formatVersion", 6);
+    versionSixObject->removeProperty("metadata");
+    versionSixObject->removeProperty("scenes");
+    versionSixObject->removeProperty("compatibilityReports");
+    error.clear();
+    const auto migratedVersionSix =
+        studio::Project::fromVar(versionSix, error);
+    expect(migratedVersionSix.has_value()
+               && migratedVersionSix->scenes.empty()
+               && migratedVersionSix->compatibilityReports.empty()
+               && migratedVersionSix->metadata.artist.isEmpty(),
+           "Version 6 projects migrate with empty metadata, scenes, and compatibility reports.");
 
     auto versionFive = project.toVar();
     versionFive.getDynamicObject()->setProperty("formatVersion", 5);
@@ -79,7 +108,7 @@ void projectMigrationTests()
                       ->getProperty("formatVersion")
                       == juce::var(
                           studio::Project::currentFormatVersion),
-           "Version 5 projects migrate to version 6 with ordinary track-route sources.");
+           "Version 5 projects migrate to version 7 with ordinary track-route sources.");
 
     auto mismatchedManifest = manifest.clone();
     mismatchedManifest.getDynamicObject()->setProperty("formatVersion", 2);
