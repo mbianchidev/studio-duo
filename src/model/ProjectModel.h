@@ -2,6 +2,7 @@
 
 #include "mix/RoutingTypes.h"
 #include "automation/AutomationTypes.h"
+#include "midi/MidiModel.h"
 
 #include <juce_data_structures/juce_data_structures.h>
 #include <juce_graphics/juce_graphics.h>
@@ -257,6 +258,7 @@ struct Track
     juce::Colour colour { 0xffdd5b3f };
     std::vector<PluginInsert> inserts;
     std::vector<AudioClip> clips;
+    std::vector<MidiClip> midiClips;
 
     [[nodiscard]] juce::var toVar() const;
     static std::optional<Track> fromVar(const juce::var& value, juce::String& error);
@@ -344,7 +346,7 @@ struct RenderReport
 class Project
 {
 public:
-    static constexpr int currentFormatVersion = 4;
+    static constexpr int currentFormatVersion = 5;
 
     juce::String id { juce::Uuid().toString() };
     juce::String name { "Untitled" };
@@ -375,6 +377,9 @@ public:
     std::vector<ToneSnapshot> toneSnapshots;
     std::vector<MixerSnapshot> mixerSnapshots;
     std::vector<RenderReport> renderReports;
+    std::vector<DrumMap> drumMaps;
+    std::vector<MidiPatternAlias> midiPatterns;
+    std::vector<MidiRoutingTemplate> midiRoutingTemplates;
     std::vector<Track> tracks;
 
     static Project createDefault();
@@ -387,8 +392,22 @@ public:
         const juce::String& connectionId) const;
     [[nodiscard]] AudioClip* findClip(const juce::String& clipId);
     [[nodiscard]] const AudioClip* findClip(const juce::String& clipId) const;
+    [[nodiscard]] MidiClip* findMidiClip(const juce::String& clipId);
+    [[nodiscard]] const MidiClip* findMidiClip(
+        const juce::String& clipId) const;
     [[nodiscard]] Track* findTrackContainingClip(const juce::String& clipId);
     [[nodiscard]] const Track* findTrackContainingClip(const juce::String& clipId) const;
+    [[nodiscard]] Track* findTrackContainingMidiClip(
+        const juce::String& clipId);
+    [[nodiscard]] const Track* findTrackContainingMidiClip(
+        const juce::String& clipId) const;
+    [[nodiscard]] DrumMap* findDrumMap(const juce::String& drumMapId);
+    [[nodiscard]] const DrumMap* findDrumMap(
+        const juce::String& drumMapId) const;
+    [[nodiscard]] const MidiPatternAlias* findMidiPattern(
+        const juce::String& patternId) const;
+    [[nodiscard]] const MidiRoutingTemplate* findMidiRoutingTemplate(
+        const juce::String& templateId) const;
     [[nodiscard]] std::vector<juce::String> armedAudioParentTrackIds() const;
     [[nodiscard]] juce::String activeTakeTrackId(const juce::String& parentTrackId) const;
     [[nodiscard]] juce::String rootTrackId(const juce::String& trackId) const;

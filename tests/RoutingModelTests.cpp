@@ -39,7 +39,7 @@ void routingModelTests()
                       == studio::RouteTap::preFader
                && decoded->routingConnections.back().destination.trackId
                       == aux.id,
-           "Version 3 projects persist typed routing connections.");
+           "Current projects persist typed routing connections.");
 
     studio::CommandStack outputHistory;
     error.clear();

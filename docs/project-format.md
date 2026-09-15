@@ -1,6 +1,6 @@
 # Studio Duo native project format
 
-Studio Duo format version 3 is a directory package with immutable generation
+Studio Duo format version 5 is a directory package with immutable generation
 files and content-addressed processor state.
 
 ```text
@@ -39,18 +39,99 @@ The prior manifest and generation remain valid until step 5 succeeds.
 - generation number and save time
 - `requiredCapabilities`
 
+Version 5 manifests include `midiCompositionV1`. Readers must reject a manifest
+version newer than they support rather than silently dropping MIDI data.
+
 Paths must be relative children of the package and cannot contain `..`.
 
 ## Session document
 
-The session document stores transport, tempo and meter maps, tracks, clips,
-take/comp state, edit groups, reamp routes, the typed routing graph, processor
-records, tone snapshots, mixer snapshots, and render reports. Automation lanes
-are stored separately.
+The session document stores transport, tempo and meter maps, tracks, audio and
+MIDI clips, take/comp state, edit groups, reamp routes, the typed routing graph,
+processor records, tone snapshots, mixer snapshots, render reports, drum maps,
+pattern aliases, and MIDI routing templates. Automation lanes are stored
+separately.
 
 External and bundled processor records retain a stable insert ID, format,
 vendor, version, architecture, isolation mode, state path/hash, latency, tail,
 ARA capability, missing state, and recovery-disabled state.
+
+### MIDI clips and notes
+
+Every MIDI or instrument track has a `midiClips` array. Other track types and
+version lanes cannot own MIDI clips. A clip contains:
+
+- stable `id` and `name`
+- musical `startBeats` and `durationBeats`
+- `editorMode`: `pianoRoll` or `drums`
+- optional `drumMapId`
+- decimal-string `humanizeSeed`, `humanizeTimingTicks`, and
+  `humanizeVelocity`
+- `muted`
+- ordinary `notes`
+
+Each note stores a stable `id`, MIDI `pitch` and `channel`, grid
+`startBeats`, saved `timingOffsetBeats`, `durationBeats`, `velocity`,
+`releaseVelocity`, and `probability`. Drum-aware notes can additionally retain
+`drumMapEntryId`, `articulation`, `chokeGroup`, `cymbalState`,
+`footControlValue`, and `roundRobinHint`. These fields are metadata on an
+ordinary MIDI note; no bundled instrument is required to interpret the clip.
+
+The note `expressions` array contains stable point IDs, an `offsetBeats` within
+the note, and a value. Supported `type` values are `pitchBend`, `pressure`,
+`timbre`, and `controller`; controller points also store a MIDI controller
+number. Pitch values use `-1.0..1.0`; other expression values use `0.0..1.0`.
+
+All persisted MIDI object IDs are unique. Loading rejects invalid ranges,
+duplicate IDs, unsupported enum values, MIDI clips on incompatible tracks, and
+dangling drum-map or drum-map-entry references.
+
+### Drum maps
+
+The project-level `drumMaps` array is also the import format accepted by the
+drum editor one object at a time:
+
+```json
+{
+  "id": "stable-map-id",
+  "name": "Example metal kit",
+  "source": "optional source description",
+  "entries": [
+    {
+      "id": "stable-entry-id",
+      "noteNumber": 46,
+      "name": "Hi-hat open",
+      "articulation": "edge",
+      "chokeGroup": "hihat",
+      "cymbalState": "open",
+      "footControlCC": 4,
+      "roundRobinNotes": [],
+      "outputGroup": "Cymbals"
+    }
+  ]
+}
+```
+
+`cymbalState` is one of `none`, `edge`, `bow`, `bell`, `choke`, `open`,
+`closed`, `pedal`. Base note numbers are unique within a map. Round-robin note
+numbers are hints/variants and the expanded note keeps its actual MIDI pitch.
+
+### Pattern aliases and routing templates
+
+`midiPatterns` contains stable aliases with `lengthBeats` and ordinary pattern
+events (`pitch`, map-entry reference, offset, duration, velocity, and
+probability). Expansion always creates fresh note and expression IDs in a
+normal clip; the clip does not retain an opaque alias instance.
+
+`midiRoutingTemplates` contains named outputs with stable IDs, destination
+track IDs when pre-bound, a `midiChannel`, and pitch lists. Applying an
+unbound output creates a named MIDI destination track. The resulting
+`RoutingConnection` records use `signalType: "midi"` and `midiChannel` `1..16`;
+`0` means no channel filter for ordinary manually-created routes.
+
+Humanization uses saved integer parameters and stores the exact resulting note
+velocity/timing values. Its fixed integer generator and mapping do not depend
+on a platform standard-library random engine or distribution.
 
 ## Automation document
 
@@ -70,6 +151,9 @@ disabled until explicit reload. Clean shutdown removes the marker.
 - Version 1 projects gain direct-to-master routes.
 - Version 2 `outputTrackId` values become version 3 main-output connections.
 - Versions 1 and 2 gain empty automation, snapshot, and report collections.
+- Versions 1-4 gain empty per-track `midiClips` plus the deterministic default
+  metal map, pattern aliases, and routing template. Their fixed IDs remain
+  stable before and after the first version 5 save.
 - The manifest and referenced session format versions must agree.
 
 The schemas in [`schema/`](schema/) document the current public envelope.

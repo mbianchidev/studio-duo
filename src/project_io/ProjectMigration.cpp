@@ -20,6 +20,47 @@ void addEmptyArray(juce::DynamicObject& object, const juce::Identifier& name)
         object.setProperty(name, juce::var(juce::Array<juce::var> {}));
 }
 
+bool addVersionFiveMidi(juce::DynamicObject& project,
+                        juce::String& error)
+{
+    const auto tracksValue = project.getProperty("tracks");
+    if (!tracksValue.isArray())
+    {
+        error = "Project tracks must be a JSON array before MIDI migration.";
+        return false;
+    }
+    for (auto& trackValue : *tracksValue.getArray())
+    {
+        auto* track = trackValue.getDynamicObject();
+        if (track == nullptr)
+        {
+            error = "Project tracks must contain JSON objects before MIDI migration.";
+            return false;
+        }
+        addEmptyArray(*track, "midiClips");
+    }
+    if (project.getProperty("drumMaps").isVoid()
+        || project.getProperty("midiPatterns").isVoid()
+        || project.getProperty("midiRoutingTemplates").isVoid())
+    {
+        const auto map = createDefaultMetalDrumMap();
+        juce::Array<juce::var> maps;
+        maps.add(map.toVar());
+        project.setProperty("drumMaps", juce::var(maps));
+        juce::Array<juce::var> patterns;
+        for (const auto& pattern : createDefaultMetalPatterns(map))
+            patterns.add(pattern.toVar());
+        project.setProperty("midiPatterns", juce::var(patterns));
+        juce::Array<juce::var> routingTemplates;
+        routingTemplates.add(
+            createDefaultMetalRoutingTemplate(map).toVar());
+        project.setProperty(
+            "midiRoutingTemplates",
+            juce::var(routingTemplates));
+    }
+    return true;
+}
+
 bool addVersionThreeRouting(juce::DynamicObject& project, juce::String& error)
 {
     const auto tracksValue = project.getProperty("tracks");
@@ -105,6 +146,9 @@ std::optional<juce::var> ProjectMigration::migrateToCurrent(
     if (version < 3
         && !addVersionThreeRouting(*object, error))
         return std::nullopt;
+    if (version < 5
+        && !addVersionFiveMidi(*object, error))
+        return std::nullopt;
 
     addEmptyArray(*object, "routingConnections");
     addEmptyArray(*object, "reampRoutes");
@@ -113,6 +157,9 @@ std::optional<juce::var> ProjectMigration::migrateToCurrent(
     addEmptyArray(*object, "toneSnapshots");
     addEmptyArray(*object, "mixerSnapshots");
     addEmptyArray(*object, "renderReports");
+    addEmptyArray(*object, "drumMaps");
+    addEmptyArray(*object, "midiPatterns");
+    addEmptyArray(*object, "midiRoutingTemplates");
     object->setProperty("formatVersion", Project::currentFormatVersion);
     return migrated;
 }

@@ -192,7 +192,8 @@ juce::Result ProjectFile::save(const Project& project, const juce::File& request
             "araCompatibilityV1",
             "bundledDevicesV1",
             "toneSnapshotsV1",
-            "renderReportsV1"
+            "renderReportsV1",
+            "midiCompositionV1"
         }));
     manifest->setProperty("savedAt", juce::Time::getCurrentTime().toISO8601(true));
 
@@ -256,7 +257,7 @@ std::optional<Project> ProjectFile::load(const juce::File& requestedPackageDirec
     if (manifestVersion >= 3
         && !manifest->getProperty("requiredCapabilities").isArray())
     {
-        error = "The version 3 manifest does not declare required capabilities.";
+        error = "The project manifest does not declare required capabilities.";
         return std::nullopt;
     }
 

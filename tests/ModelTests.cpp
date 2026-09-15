@@ -1606,6 +1606,7 @@ int main(int argc, char* argv[])
     projectMigrationTests();
     windowSizingTests();
     updateTests();
+    midiTests();
 
     if (failures == 0)
     {

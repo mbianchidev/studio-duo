@@ -4,6 +4,7 @@
 #include "RecordingWaveform.h"
 #include "StudioAudioDeviceManager.h"
 #include "automation/AutomationScheduler.h"
+#include "midi/MidiCaptureBuffer.h"
 #include "model/ProjectModel.h"
 #include "plugin_host/PluginBridgeClient.h"
 #include "plugin_host/AraDocumentHost.h"
@@ -48,6 +49,17 @@ public:
     {
         double durationSeconds = 0.0;
         std::vector<float> waveform;
+    };
+
+    struct MidiRecordingResult
+    {
+        juce::Result result { juce::Result::ok() };
+        CapturedMidiWindow captured;
+        std::int64_t captureStartStreamSample = 0;
+        double timelineStartSeconds = 0.0;
+        double durationSeconds = 0.0;
+        double sampleRate = 48000.0;
+        juce::String warning;
     };
 
     struct LatencyCalibrationResult
@@ -194,9 +206,14 @@ public:
         juce::String insertId = {});
 
     juce::Result startRecording(const std::vector<RecordingRequest>& requests,
-                                const RecordingPlan& plan);
+                                const RecordingPlan& plan,
+                                bool captureMidi = false);
     std::vector<RecordingResult> stopRecording();
     void stopRecordingAsync(std::function<void(std::vector<RecordingResult>)> completion);
+    [[nodiscard]] MidiRecordingResult stopMidiRecording();
+    [[nodiscard]] MidiRecordingResult captureRetrospectiveMidi(
+        double durationSeconds) const;
+    [[nodiscard]] double midiRecordingDurationSeconds() const noexcept;
     std::optional<double> audioFileDuration(const juce::File& source, juce::String& error);
     std::vector<double> analyseTransients(const AudioClip& clip, juce::String& error);
     juce::Result renderClipToWav(const AudioClip& clip,
@@ -375,10 +392,25 @@ private:
     {
         struct MidiTrack
         {
+            struct Event
+            {
+                std::int64_t sample = 0;
+                std::array<std::uint8_t, 3> data {};
+                std::uint8_t size = 0;
+                std::uint8_t priority = 0;
+            };
+
+            struct Destination
+            {
+                int trackIndex = -1;
+                int midiChannel = 0;
+            };
+
             std::uint64_t runtimeKey = 0;
             int audioTrackIndex = -1;
             bool inputArmed = false;
-            std::vector<int> destinationIndices;
+            std::vector<Destination> destinations;
+            std::vector<Event> events;
             juce::AudioBuffer<float> processingBuffer {
                 2,
                 PluginBridgeSharedState::maxBlockSize
@@ -593,6 +625,11 @@ private:
                                   bool loopEnabled,
                                   std::int64_t loopStartSample,
                                   std::int64_t loopEndSample) noexcept;
+    static void addMidiClipEvents(
+        const RenderSnapshot::MidiTrack& track,
+        std::int64_t timelineSample,
+        int samples,
+        juce::MidiBuffer& destination) noexcept;
     static bool readRenderClipSample(const RenderClip& clip,
                                     std::int64_t relativeSample,
                                     float& left,
@@ -702,6 +739,14 @@ private:
     std::atomic<bool> midiInputEnabled { false };
     juce::MidiMessageCollector midiCollector;
     juce::MidiBuffer incomingMidi;
+    MidiCaptureBuffer midiCapture;
+    std::atomic<std::int64_t> streamSampleClock { 0 };
+    std::atomic<bool> midiRecordingActive { false };
+    std::atomic<std::uint64_t> midiRecordingFirstOrdinal { 0 };
+    std::atomic<std::uint64_t> midiRecordingUnsupportedAtStart { 0 };
+    std::atomic<std::int64_t> midiRecordingCaptureStartStreamSample { 0 };
+    std::atomic<std::int64_t> midiRecordingCaptureEndStreamSample { -1 };
+    std::atomic<double> midiRecordingTimelineStartSeconds { 0.0 };
     std::atomic<float> outputLeftPeak { 0.0f };
     std::atomic<float> outputRightPeak { 0.0f };
     std::array<int, maximumHardwareAudioChannels>

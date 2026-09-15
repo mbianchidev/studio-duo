@@ -242,6 +242,110 @@ private:
     bool capturedOriginal = false;
 };
 
+class AddMidiClipCommand final : public ProjectCommand
+{
+public:
+    AddMidiClipCommand(juce::String destinationTrackId,
+                       MidiClip clipToAdd);
+
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    juce::String trackId;
+    MidiClip clip;
+    std::size_t insertionIndex = 0;
+};
+
+class SetMidiClipStateCommand final : public ProjectCommand
+{
+public:
+    SetMidiClipStateCommand(juce::String destinationTrackId,
+                            MidiClip before,
+                            MidiClip after,
+                            juce::String commandName);
+
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    MidiClip* find(Project& project) const;
+
+    juce::String trackId;
+    MidiClip oldClip;
+    MidiClip newClip;
+    juce::String commandName;
+};
+
+class DeleteMidiClipCommand final : public ProjectCommand
+{
+public:
+    explicit DeleteMidiClipCommand(juce::String clipToDelete);
+
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    juce::String clipId;
+    juce::String trackId;
+    MidiClip deletedClip;
+    std::size_t clipIndex = 0;
+    bool capturedOriginal = false;
+};
+
+struct ProjectMidiResources
+{
+    std::vector<DrumMap> drumMaps;
+    std::vector<MidiPatternAlias> patterns;
+    std::vector<MidiRoutingTemplate> routingTemplates;
+
+    static ProjectMidiResources fromProject(const Project& project);
+};
+
+class SetProjectMidiResourcesCommand final : public ProjectCommand
+{
+public:
+    SetProjectMidiResourcesCommand(ProjectMidiResources before,
+                                   ProjectMidiResources after,
+                                   juce::String commandName);
+
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    static void apply(Project& project,
+                      const ProjectMidiResources& resources);
+
+    ProjectMidiResources oldResources;
+    ProjectMidiResources newResources;
+    juce::String commandName;
+};
+
+class ApplyMidiRoutingTemplateCommand final : public ProjectCommand
+{
+public:
+    ApplyMidiRoutingTemplateCommand(juce::String sourceTrackId,
+                                    MidiRoutingTemplate routingTemplate);
+
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    juce::String trackId;
+    MidiRoutingTemplate routing;
+    std::vector<MidiClip> oldClips;
+    std::vector<MidiClip> newClips;
+    std::vector<Track> addedTracks;
+    std::vector<RoutingConnection> addedConnections;
+    std::size_t insertionIndex = 0;
+    bool prepared = false;
+};
+
 class SetActiveTakeCommand final : public ProjectCommand
 {
 public:

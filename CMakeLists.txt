@@ -96,6 +96,12 @@ set(STUDIO_DUO_MODEL_SOURCES
     src/mix/RoutingGraphCompiler.h
     src/mix/SoloResolver.cpp
     src/mix/SoloResolver.h
+    src/midi/MidiCaptureBuffer.cpp
+    src/midi/MidiCaptureBuffer.h
+    src/midi/MidiEditing.cpp
+    src/midi/MidiEditing.h
+    src/midi/MidiModel.cpp
+    src/midi/MidiModel.h
     src/model/LinkedEditModel.cpp
     src/model/LinkedEditModel.h
     src/model/ProjectCommands.cpp
@@ -190,6 +196,8 @@ target_sources(
         src/ui/MainComponent.h
         src/ui/MainWindowSizing.cpp
         src/ui/MainWindowSizing.h
+        src/ui/MidiEditorComponent.cpp
+        src/ui/MidiEditorComponent.h
         src/ui/AutomationPanel.cpp
         src/ui/AutomationPanel.h
         src/ui/MixerPanel.cpp
@@ -411,6 +419,7 @@ if(STUDIO_DUO_BUILD_TESTS)
         StudioDuoTests
         PRIVATE
             tests/ModelTests.cpp
+            tests/MidiTests.cpp
             tests/RoutingModelTests.cpp
             tests/RoutingEngineTests.cpp
             tests/RoutingUiModelTests.cpp

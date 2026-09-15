@@ -2,8 +2,9 @@
 
 Studio Duo is under active development. The current application includes the
 Phase 1 vertical slice, Phase 2 professional tracking and editing workflows, and
-the complete Phase 3 mixer and plugin platform. MIDI composition, DAWproject
-exchange, and mastering remain later roadmap phases.
+the complete Phase 3 mixer and plugin platform. Phase 4 MIDI recording, piano
+roll, and metal drum editing are implemented. Bundled drum/amp devices,
+DAWproject exchange, and mastering remain later roadmap work.
 
 ## Current capabilities
 
@@ -27,8 +28,15 @@ exchange, and mastering remain later roadmap phases.
 - Pre/post-fader sends, per-insert sidechains, parallel paths, auxes, nested
   buses, folders, VCAs, control room, hardware outputs, graph-routed input
   monitoring, and solo-safe routing
-- Live MIDI input and cycle-safe MIDI routes through in-process and sandboxed
-  instrument and MIDI-effect plugins
+- Live, recorded, and retrospective MIDI with persisted notes and per-note
+  pitch, pressure, timbre, and controller expression
+- Piano-roll and metal drum lower editors with velocity, timing, duration,
+  probability, and expression lanes
+- Editable/importable drum maps, choke and cymbal metadata, foot control,
+  round-robin hints, deterministic metal entry tools, pattern aliases,
+  seeded humanization, and channel-filtered multi-output routing templates
+- Cycle-safe MIDI routes through in-process and sandboxed instrument and
+  MIDI-effect plugins
 - Sample-accurate mixer, send, bundled-device, and plugin automation
 - Parametric EQ, compressor, true-peak limiter, reverb, gate, gain, polarity,
   delay, tuner, and signal generator devices
@@ -47,6 +55,8 @@ exchange, and mastering remain later roadmap phases.
 | Save | `Command/Ctrl+S` |
 | Open | `Command/Ctrl+O` |
 | Import audio | `Command/Ctrl+I` |
+| Create MIDI clip at playhead | `Command/Ctrl+Shift+N` |
+| Capture recent MIDI | `Command/Ctrl+Shift+M` |
 | Undo | `Command/Ctrl+Z` |
 | Redo | `Command/Ctrl+Shift+Z` |
 | Copy and duplicate selected clip | `Command/Ctrl+C`, then `Command/Ctrl+V` |
@@ -54,6 +64,11 @@ exchange, and mastering remain later roadmap phases.
 | Trim selected clip start to playhead | `[` |
 | Trim selected clip end to playhead | `]` |
 | Delete selected clip | `Delete` or `Backspace` |
+| Piano-roll note create | `Enter` |
+| Piano-roll note move | Arrow keys |
+| Piano-roll note resize | `Shift+Left/Right` |
+| Edit selected MIDI lane | `Alt+Up/Down` |
+| Select all notes | `Command/Ctrl+A` while the editor is focused |
 | Zoom timeline out or in | `Command/Ctrl+-` or `Command/Ctrl++` |
 | Reset timeline zoom | `Command/Ctrl+0` |
 
@@ -64,8 +79,9 @@ trackpad scrolling and pinch gestures zoom the same view.
 
 1. Open **SETTINGS** > **Audio / MIDI** and enable the required hardware inputs
    and outputs.
-2. Add audio tracks with **+ AUDIO TRACK**, or import WAV, AIFF, FLAC, or MP3
-   files with **IMPORT AUDIO**.
+2. Add audio, instrument, or MIDI tracks with **+ TRACK**. Import WAV, AIFF,
+   FLAC, or MP3 files with **IMPORT AUDIO**, or select a MIDI/instrument track
+   and use **NEW MIDI CLIP**.
 3. Select a track to configure its input, mono or stereo capture, monitoring,
    volume, pan, color, inserts, and output.
 4. Save the project as a `.studioduo` directory package before recording so new
@@ -254,8 +270,64 @@ tracks can add independent MIDI destinations without replacing an instrument
 track's audio output. MIDI track inserts process events before they are sent
 downstream; standard and CLAP
 events cross sandbox workers with their sample offsets intact. MIDI feedback
-cycles are rejected before the route is added. MIDI clip recording and editing
-remain Phase 4 work.
+cycles are rejected before the route is added. A MIDI route can also filter one
+of channels 1-16; the metal multi-output template uses those filters.
+
+## Record and edit MIDI
+
+Arm any combination of root MIDI and instrument tracks, then press **REC**.
+Studio Duo records the same enabled hardware MIDI input delivered to live
+routing while audio tracks can record in the same pass. Stopping creates
+ordinary beat-based MIDI clips through one undoable command. Loop passes become
+separate clips at the loop position. Notes keep their channel, velocity,
+release velocity, duration, probability, timing offset, drum metadata, and
+per-note expression points.
+
+The engine also keeps a bounded lock-free history of short MIDI messages.
+Choose **CAPTURE** in the MIDI editor or press `Command/Ctrl+Shift+M` to recover
+the recent performance on the selected MIDI/instrument track. The result is
+trimmed to the captured performance and remains fully editable. Channel voice
+messages, poly pressure, channel pressure, pitch bend, and controllers are
+converted into notes and expression. Long system-exclusive messages continue
+through live routing but are not stored as note data; overflow or ignored data
+is reported in the status bar.
+
+Create an empty one-bar clip with **NEW MIDI CLIP**,
+`Command/Ctrl+Shift+N`, or by double-clicking empty arrangement space on a MIDI
+or instrument track. Selecting a MIDI clip opens the lower editor in place of
+the mixer:
+
+- Click empty grid space or press `Enter` to create a note.
+- Click a note to select it; `Command/Ctrl`-click toggles selection.
+- Drag notes to move them and drag the right edge to resize.
+- Use arrow keys to move, `Shift+Left/Right` to resize, and
+  `Delete`/`Backspace` to remove selected notes.
+- Choose **Velocity**, **Timing**, **Duration**, **Probability**, or
+  **Expression** in the lower lane. Drag lane values, or use `Alt+Up/Down` for
+  a keyboard-only adjustment. Expression supports pressure, timbre, pitch
+  bend, and a saved per-note controller.
+- Choose a grid from quarter notes through 32nd notes or 16th-note triplets.
+
+Use **PIANO/DRUMS** to switch the same ordinary MIDI clip between editors. The
+drum view reads named kit pieces and articulations from the selected drum map
+and shows choke groups, cymbal edge/bow/bell/open/closed/pedal/choke states,
+foot-control CCs, and round-robin hints. **IMPORT MAP** accepts the documented
+JSON drum-map object. **EDIT MAP** changes the selected row without replacing
+its stable ID.
+
+The **FLAM**, **ROLL**, **GRAVITY**, **BLAST**, and **DOUBLE KICK** tools insert
+fixed grid-derived notes, never opaque generated regions. Saved pattern aliases
+expand with **EXPAND** into new ordinary notes. **HUMANIZE** accepts an explicit
+seed plus timing-tick and velocity ranges. Studio Duo uses its own integer
+generator rather than a standard-library distribution, stores both the seed
+and the resulting values, and reproduces the exact project JSON after reopen on
+supported platforms.
+
+The default metal routing template separates kick, snare, tom, and cymbal note
+groups onto MIDI channels 1-4, creates named destination tracks, and adds
+channel-filtered routes. Applying it is one undoable command. Add a third-party
+drum instrument to the source or destination tracks as needed; this phase does
+not yet include a bundled drum instrument.
 
 **TRACK** in the routing panel changes mono/stereo layout, polarity, solo-safe
 state, folder placement, and VCA assignment. Folder mute and solo scope their
@@ -384,9 +456,11 @@ Studio Duo projects are versioned `.studioduo` directory packages. A save writes
 a new session generation before atomically replacing `manifest.json`; the latest
 complete state is also copied to `recovery/latest.json`.
 
-Project format version 3 stores a typed routing graph, separate automation
+Project format version 5 stores the typed routing graph, separate automation
 generations, content-addressed plugin state, compatibility policy, tone and
-mixer snapshots, and render reports. Version 1 and 2 projects migrate on load.
+mixer snapshots, render reports, ordinary MIDI clips and expressions, drum
+maps, pattern aliases, humanization state, and MIDI routing templates. Versions
+1-4 migrate on load.
 See [project-format.md](project-format.md).
 
 Stereo WAV export is 48 kHz and 24-bit. Projects without processors use the

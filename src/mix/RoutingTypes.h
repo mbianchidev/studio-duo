@@ -65,6 +65,7 @@ struct RoutingConnection
     RouteEndpoint destination;
     float gainDecibels = 0.0f;
     float pan = 0.0f;
+    int midiChannel = 0;
     bool muted = false;
     bool enabled = true;
 

@@ -136,6 +136,8 @@ bool validateConnection(const Project& project,
         || connection.name.trim().isEmpty()
         || source == nullptr
         || source->parentTrackId.isNotEmpty()
+        || connection.midiChannel < 0
+        || connection.midiChannel > 16
         || !std::isfinite(connection.gainDecibels)
         || !std::isfinite(connection.pan))
     {
@@ -159,6 +161,12 @@ bool validateConnection(const Project& project,
             return false;
         }
         return true;
+    }
+
+    if (connection.midiChannel != 0)
+    {
+        error = "Audio routes cannot use a MIDI channel filter.";
+        return false;
     }
 
     if (!isAudioNode(*source) && source->type != TrackType::master)

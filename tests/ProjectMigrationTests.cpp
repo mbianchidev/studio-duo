@@ -23,21 +23,32 @@ void projectMigrationTests()
                                  ".studioduo",
                                  false);
     expect(studio::ProjectFile::save(project, package).wasOk(),
-           "Version 3 project package can be saved.");
+           "Current project package can be saved.");
     const auto manifest = juce::JSON::parse(
         package.getChildFile("manifest.json").loadFileAsString());
     const auto* manifestObject = manifest.getDynamicObject();
+    auto hasMidiCapability = false;
+    if (manifestObject != nullptr)
+    {
+        const auto required =
+            manifestObject->getProperty("requiredCapabilities");
+        if (required.isArray())
+            for (const auto& capability : *required.getArray())
+                hasMidiCapability = hasMidiCapability
+                    || capability.toString() == "midiCompositionV1";
+    }
     expect(manifestObject != nullptr
                && manifestObject->getProperty("requiredCapabilities").isArray()
                && manifestObject->getProperty("activeAutomation").toString()
-                      .isNotEmpty(),
-           "Version 3 manifest declares capabilities and automation generation.");
+                      .isNotEmpty()
+               && hasMidiCapability,
+           "Version 5 manifest declares MIDI capability and automation generation.");
 
     juce::String error;
     const auto loaded = studio::ProjectFile::load(package, error);
     expect(loaded.has_value()
                && loaded->automationLanes.size() == 1,
-           "Version 3 automation generation loads.");
+           "Version 5 automation generation loads.");
 
     auto mismatchedManifest = manifest.clone();
     mismatchedManifest.getDynamicObject()->setProperty("formatVersion", 2);

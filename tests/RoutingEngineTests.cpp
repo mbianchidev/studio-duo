@@ -720,6 +720,91 @@ void routingEngineTests()
                 + ").")
                    .toRawUTF8());
 
+        auto storedMidiProject = midiRuntimeProject;
+        auto* storedSource = storedMidiProject.findTrack(midiSourceId);
+        storedSource->armed = false;
+        studio::MidiClip storedClip;
+        storedClip.name = "Stored MIDI";
+        storedClip.durationBeats = 1.0;
+        studio::MidiNote storedNote;
+        storedNote.pitch = 61;
+        storedNote.startBeats = storedMidiProject.beatsAt(
+            12.0 / 48000.0);
+        storedNote.durationBeats = 0.25;
+        storedNote.velocity = 96;
+        storedClip.notes.push_back(storedNote);
+        storedSource->midiClips.push_back(storedClip);
+        expect(midiRuntimeEngine.updateProject(
+                   storedMidiProject,
+                   { instrumentRequest })
+                   .wasOk(),
+               "Persisted MIDI clips publish into the existing MIDI routing graph.");
+        midiRuntimeEngine.seekSeconds(0.0);
+        midiRuntimeEngine.play();
+        const auto storedMidiOutput =
+            midiRuntimeEngine.renderActiveBlockForTesting(64);
+        expect(storedMidiOutput.getSample(0, 12) > 0.7f,
+               "Persisted MIDI notes retain exact sample scheduling through instrument routing.");
+        midiRuntimeEngine.pause();
+
+        auto filteredMidiProject = storedMidiProject;
+        filteredMidiProject.routingConnections.back().midiChannel = 2;
+        filteredMidiProject.findTrack(midiSourceId)
+            ->midiClips.front()
+            .notes.front()
+            .channel = 1;
+        expect(midiRuntimeEngine.updateProject(
+                   filteredMidiProject,
+                   { instrumentRequest })
+                   .wasOk(),
+               "MIDI channel-filtered routes publish.");
+        midiRuntimeEngine.seekSeconds(0.0);
+        midiRuntimeEngine.play();
+        const auto filteredOut =
+            midiRuntimeEngine.renderActiveBlockForTesting(64);
+        expect(filteredOut.getMagnitude(
+                   0,
+                   0,
+                   filteredOut.getNumSamples())
+                   < 0.001f,
+               "Multi-output MIDI routes exclude notes assigned to other channels.");
+        filteredMidiProject.findTrack(midiSourceId)
+            ->midiClips.front()
+            .notes.front()
+            .channel = 2;
+        expect(midiRuntimeEngine.updateProject(
+                   filteredMidiProject,
+                   { instrumentRequest })
+                   .wasOk(),
+               "A matching channel-filtered MIDI route publishes.");
+        midiRuntimeEngine.seekSeconds(0.0);
+        midiRuntimeEngine.play();
+        const auto filteredIn =
+            midiRuntimeEngine.renderActiveBlockForTesting(64);
+        expect(filteredIn.getSample(0, 12) > 0.7f,
+               "Multi-output MIDI routes deliver notes assigned to their channel.");
+        midiRuntimeEngine.pause();
+        filteredMidiProject.findTrack(midiSourceId)
+            ->midiClips.front()
+            .notes.front()
+            .probability = 0.0;
+        expect(midiRuntimeEngine.updateProject(
+                   filteredMidiProject,
+                   { instrumentRequest })
+                   .wasOk(),
+               "A zero-probability MIDI note publishes.");
+        midiRuntimeEngine.seekSeconds(0.0);
+        midiRuntimeEngine.play();
+        const auto probabilityOutput =
+            midiRuntimeEngine.renderActiveBlockForTesting(64);
+        expect(probabilityOutput.getMagnitude(
+                   0,
+                   0,
+                   probabilityOutput.getNumSamples())
+                   < 0.001f,
+               "Persisted MIDI probability deterministically suppresses playback.");
+        midiRuntimeEngine.pause();
+
         auto sandboxMidiProject = midiRuntimeProject;
         auto* sandboxInstrument =
             sandboxMidiProject.findTrack(

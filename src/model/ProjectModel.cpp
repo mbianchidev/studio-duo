@@ -726,6 +726,12 @@ juce::var Track::toVar() const
 
     object->setProperty("clips", juce::var(clipValues));
 
+    juce::Array<juce::var> midiClipValues;
+    midiClipValues.ensureStorageAllocated(static_cast<int>(midiClips.size()));
+    for (const auto& clip : midiClips)
+        midiClipValues.add(clip.toVar());
+    object->setProperty("midiClips", juce::var(midiClipValues));
+
     juce::Array<juce::var> compValues;
     compValues.ensureStorageAllocated(static_cast<int>(compRegions.size()));
     for (const auto& region : compRegions)
@@ -841,6 +847,20 @@ std::optional<Track> Track::fromVar(const juce::var& value, juce::String& error)
             return std::nullopt;
 
         track.clips.push_back(std::move(*clip));
+    }
+
+    const auto midiClipValues = object->getProperty("midiClips");
+    if (!midiClipValues.isArray())
+    {
+        error = "Track MIDI clips must be a JSON array.";
+        return std::nullopt;
+    }
+    for (const auto& midiClipValue : *midiClipValues.getArray())
+    {
+        auto clip = MidiClip::fromVar(midiClipValue, error);
+        if (!clip.has_value())
+            return std::nullopt;
+        track.midiClips.push_back(std::move(*clip));
     }
 
     const auto compValues = object->getProperty("compRegions");
@@ -1182,6 +1202,13 @@ Project Project::createDefault()
 {
     Project project;
 
+    auto drumMap = createDefaultMetalDrumMap();
+    project.midiPatterns = createDefaultMetalPatterns(drumMap);
+    project.midiRoutingTemplates = {
+        createDefaultMetalRoutingTemplate(drumMap)
+    };
+    project.drumMaps.push_back(std::move(drumMap));
+
     Track rhythmLeft;
     rhythmLeft.name = "Rhythm L";
     rhythmLeft.colour = juce::Colour(0xffdd5b3f);
@@ -1278,6 +1305,34 @@ const AudioClip* Project::findClip(const juce::String& clipId) const
     return nullptr;
 }
 
+MidiClip* Project::findMidiClip(const juce::String& clipId)
+{
+    for (auto& track : tracks)
+    {
+        const auto iterator = std::find_if(
+            track.midiClips.begin(),
+            track.midiClips.end(),
+            [&clipId](const auto& clip) { return clip.id == clipId; });
+        if (iterator != track.midiClips.end())
+            return &*iterator;
+    }
+    return nullptr;
+}
+
+const MidiClip* Project::findMidiClip(const juce::String& clipId) const
+{
+    for (const auto& track : tracks)
+    {
+        const auto iterator = std::find_if(
+            track.midiClips.cbegin(),
+            track.midiClips.cend(),
+            [&clipId](const auto& clip) { return clip.id == clipId; });
+        if (iterator != track.midiClips.cend())
+            return &*iterator;
+    }
+    return nullptr;
+}
+
 Track* Project::findTrackContainingClip(const juce::String& clipId)
 {
     const auto iterator = std::find_if(tracks.begin(), tracks.end(), [&clipId](const auto& track)
@@ -1300,6 +1355,78 @@ const Track* Project::findTrackContainingClip(const juce::String& clipId) const
         });
     });
     return iterator == tracks.cend() ? nullptr : &*iterator;
+}
+
+Track* Project::findTrackContainingMidiClip(const juce::String& clipId)
+{
+    const auto iterator = std::find_if(
+        tracks.begin(),
+        tracks.end(),
+        [&clipId](const auto& track)
+        {
+            return std::any_of(
+                track.midiClips.cbegin(),
+                track.midiClips.cend(),
+                [&clipId](const auto& clip) { return clip.id == clipId; });
+        });
+    return iterator == tracks.end() ? nullptr : &*iterator;
+}
+
+const Track* Project::findTrackContainingMidiClip(
+    const juce::String& clipId) const
+{
+    const auto iterator = std::find_if(
+        tracks.cbegin(),
+        tracks.cend(),
+        [&clipId](const auto& track)
+        {
+            return std::any_of(
+                track.midiClips.cbegin(),
+                track.midiClips.cend(),
+                [&clipId](const auto& clip) { return clip.id == clipId; });
+        });
+    return iterator == tracks.cend() ? nullptr : &*iterator;
+}
+
+DrumMap* Project::findDrumMap(const juce::String& drumMapId)
+{
+    const auto iterator = std::find_if(
+        drumMaps.begin(),
+        drumMaps.end(),
+        [&drumMapId](const auto& map) { return map.id == drumMapId; });
+    return iterator == drumMaps.end() ? nullptr : &*iterator;
+}
+
+const DrumMap* Project::findDrumMap(const juce::String& drumMapId) const
+{
+    const auto iterator = std::find_if(
+        drumMaps.cbegin(),
+        drumMaps.cend(),
+        [&drumMapId](const auto& map) { return map.id == drumMapId; });
+    return iterator == drumMaps.cend() ? nullptr : &*iterator;
+}
+
+const MidiPatternAlias* Project::findMidiPattern(
+    const juce::String& patternId) const
+{
+    const auto iterator = std::find_if(
+        midiPatterns.cbegin(),
+        midiPatterns.cend(),
+        [&patternId](const auto& pattern) { return pattern.id == patternId; });
+    return iterator == midiPatterns.cend() ? nullptr : &*iterator;
+}
+
+const MidiRoutingTemplate* Project::findMidiRoutingTemplate(
+    const juce::String& templateId) const
+{
+    const auto iterator = std::find_if(
+        midiRoutingTemplates.cbegin(),
+        midiRoutingTemplates.cend(),
+        [&templateId](const auto& routing)
+        {
+            return routing.id == templateId;
+        });
+    return iterator == midiRoutingTemplates.cend() ? nullptr : &*iterator;
 }
 
 std::vector<juce::String> Project::armedAudioParentTrackIds() const
@@ -1789,8 +1916,12 @@ double Project::lengthSeconds() const noexcept
     for (const auto& section : sections)
         length = std::max(length, section.timeSeconds);
     for (const auto& track : tracks)
+    {
         for (const auto& clip : track.clips)
             length = std::max(length, clip.endSeconds());
+        for (const auto& clip : track.midiClips)
+            length = std::max(length, secondsAtBeat(clip.endBeats()));
+    }
 
     return length;
 }
@@ -1883,6 +2014,20 @@ juce::var Project::toVar() const
     for (const auto& report : renderReports)
         reportValues.add(report.toVar());
     object->setProperty("renderReports", juce::var(reportValues));
+    juce::Array<juce::var> drumMapValues;
+    for (const auto& map : drumMaps)
+        drumMapValues.add(map.toVar());
+    object->setProperty("drumMaps", juce::var(drumMapValues));
+    juce::Array<juce::var> patternValues;
+    for (const auto& pattern : midiPatterns)
+        patternValues.add(pattern.toVar());
+    object->setProperty("midiPatterns", juce::var(patternValues));
+    juce::Array<juce::var> midiRoutingTemplateValues;
+    for (const auto& routing : midiRoutingTemplates)
+        midiRoutingTemplateValues.add(routing.toVar());
+    object->setProperty(
+        "midiRoutingTemplates",
+        juce::var(midiRoutingTemplateValues));
 
     juce::Array<juce::var> trackValues;
     trackValues.ensureStorageAllocated(static_cast<int>(tracks.size()));
@@ -2076,6 +2221,43 @@ std::optional<Project> Project::fromVar(const juce::var& value, juce::String& er
             project.renderReports.push_back(std::move(*report));
         }
     }
+    const auto drumMapValues = object->getProperty("drumMaps");
+    if (drumMapValues.isArray())
+    {
+        for (const auto& drumMapValue : *drumMapValues.getArray())
+        {
+            auto map = DrumMap::fromVar(drumMapValue, error);
+            if (!map.has_value())
+                return std::nullopt;
+            project.drumMaps.push_back(std::move(*map));
+        }
+    }
+    const auto patternValues = object->getProperty("midiPatterns");
+    if (patternValues.isArray())
+    {
+        for (const auto& patternValue : *patternValues.getArray())
+        {
+            auto pattern = MidiPatternAlias::fromVar(patternValue, error);
+            if (!pattern.has_value())
+                return std::nullopt;
+            project.midiPatterns.push_back(std::move(*pattern));
+        }
+    }
+    const auto midiRoutingTemplateValues =
+        object->getProperty("midiRoutingTemplates");
+    if (midiRoutingTemplateValues.isArray())
+    {
+        for (const auto& templateValue :
+             *midiRoutingTemplateValues.getArray())
+        {
+            auto routing = MidiRoutingTemplate::fromVar(
+                templateValue,
+                error);
+            if (!routing.has_value())
+                return std::nullopt;
+            project.midiRoutingTemplates.push_back(std::move(*routing));
+        }
+    }
 
     const auto trackValues = object->getProperty("tracks");
     if (!trackValues.isArray())
@@ -2101,6 +2283,14 @@ std::optional<Project> Project::fromVar(const juce::var& value, juce::String& er
 
     for (const auto& track : project.tracks)
     {
+        if (!track.midiClips.empty()
+            && (track.parentTrackId.isNotEmpty()
+                || (track.type != TrackType::midi
+                    && track.type != TrackType::instrument)))
+        {
+            error = "MIDI clips require a root MIDI or instrument track.";
+            return std::nullopt;
+        }
         if ((track.parentTrackId.isNotEmpty() || track.type == TrackType::master)
             && track.outputTrackId.isNotEmpty())
         {
@@ -2280,6 +2470,149 @@ std::optional<Project> Project::fromVar(const juce::var& value, juce::String& er
             return std::nullopt;
         }
         reportIds.push_back(report.id);
+    }
+
+    std::vector<juce::String> drumMapIds;
+    for (const auto& map : project.drumMaps)
+    {
+        if (std::find(
+                drumMapIds.cbegin(),
+                drumMapIds.cend(),
+                map.id)
+            != drumMapIds.cend())
+        {
+            error = "Drum-map IDs must be unique.";
+            return std::nullopt;
+        }
+        drumMapIds.push_back(map.id);
+    }
+    std::vector<juce::String> patternIds;
+    for (const auto& pattern : project.midiPatterns)
+    {
+        if (std::find(patternIds.cbegin(), patternIds.cend(), pattern.id)
+            != patternIds.cend())
+        {
+            error = "MIDI pattern IDs must be unique.";
+            return std::nullopt;
+        }
+        patternIds.push_back(pattern.id);
+    }
+    std::vector<juce::String> routingTemplateIds;
+    for (const auto& routing : project.midiRoutingTemplates)
+    {
+        if (std::find(
+                routingTemplateIds.cbegin(),
+                routingTemplateIds.cend(),
+                routing.id)
+            != routingTemplateIds.cend())
+        {
+            error = "MIDI routing-template IDs must be unique.";
+            return std::nullopt;
+        }
+        routingTemplateIds.push_back(routing.id);
+    }
+    std::vector<juce::String> midiClipIds;
+    std::vector<juce::String> midiObjectIds;
+    const auto addMidiObjectId = [&midiObjectIds](
+                                     const juce::String& objectId)
+    {
+        if (objectId.isEmpty()
+            || std::find(
+                   midiObjectIds.cbegin(),
+                   midiObjectIds.cend(),
+                   objectId)
+                != midiObjectIds.cend())
+            return false;
+        midiObjectIds.push_back(objectId);
+        return true;
+    };
+    for (const auto& map : project.drumMaps)
+    {
+        if (!addMidiObjectId(map.id))
+        {
+            error = "Persisted MIDI object IDs must be unique.";
+            return std::nullopt;
+        }
+        for (const auto& entry : map.entries)
+        {
+            if (!addMidiObjectId(entry.id))
+            {
+                error = "Persisted MIDI object IDs must be unique.";
+                return std::nullopt;
+            }
+        }
+    }
+    for (const auto& pattern : project.midiPatterns)
+    {
+        if (!addMidiObjectId(pattern.id))
+        {
+            error = "Persisted MIDI object IDs must be unique.";
+            return std::nullopt;
+        }
+        for (const auto& event : pattern.events)
+        {
+            if (!addMidiObjectId(event.id))
+            {
+                error = "Persisted MIDI object IDs must be unique.";
+                return std::nullopt;
+            }
+        }
+    }
+    for (const auto& routing : project.midiRoutingTemplates)
+    {
+        if (!addMidiObjectId(routing.id))
+        {
+            error = "Persisted MIDI object IDs must be unique.";
+            return std::nullopt;
+        }
+        for (const auto& output : routing.outputs)
+        {
+            if (!addMidiObjectId(output.id))
+            {
+                error = "Persisted MIDI object IDs must be unique.";
+                return std::nullopt;
+            }
+        }
+    }
+    for (const auto& track : project.tracks)
+    {
+        for (const auto& clip : track.midiClips)
+        {
+            if (std::find(
+                    midiClipIds.cbegin(),
+                    midiClipIds.cend(),
+                    clip.id)
+                    != midiClipIds.cend()
+                || (clip.drumMapId.isNotEmpty()
+                    && project.findDrumMap(clip.drumMapId) == nullptr)
+                || !addMidiObjectId(clip.id))
+            {
+                error = "MIDI clips require unique IDs and available drum maps.";
+                return std::nullopt;
+            }
+            midiClipIds.push_back(clip.id);
+            const auto* map = project.findDrumMap(clip.drumMapId);
+            for (const auto& note : clip.notes)
+            {
+                if (!addMidiObjectId(note.id)
+                    || (note.drumMapEntryId.isNotEmpty()
+                        && (map == nullptr
+                            || map->entryForId(note.drumMapEntryId)
+                                == nullptr)))
+                {
+                    error = "MIDI notes require unique IDs and available drum-map entries.";
+                    return std::nullopt;
+                }
+                for (const auto& expression : note.expressions)
+                {
+                    if (!addMidiObjectId(expression.id))
+                    {
+                        error = "MIDI expression IDs must be unique.";
+                        return std::nullopt;
+                    }
+                }
+            }
+        }
     }
 
     return project;

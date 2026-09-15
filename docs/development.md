@@ -5,6 +5,8 @@ configuration fetches the pinned JUCE source when a compatible package is not
 already installed. It also fetches the MIT-licensed Signalsmith Stretch 1.1.0
 headers used for pitch-preserving elastic audio, CLAP 1.2.10 and clap-helpers
 for CLAP hosting, and the Apache-2.0 ARA SDK 2.3.0 for ARA compatibility mode.
+The implemented Phase 4 slice covers MIDI/editor workflows only; bundled
+drum/amp devices and DAWproject translation remain intentionally out of scope.
 
 ## Prerequisites
 
@@ -74,6 +76,24 @@ PY
 The sample rate and frame count must match. To verify onset alignment, feed the
 same digital loopback or split signal into both inputs and compare the files in
 a sample-accurate audio editor.
+
+## Manual MIDI/editor test
+
+1. Enable a MIDI input, add a MIDI track, arm it, and record note, pitch-bend,
+   pressure, and CC74 gestures. Stop and confirm one editable clip opens in the
+   lower piano roll without interrupting live routing.
+2. Play notes while stopped, select the MIDI track, then press
+   `Command/Ctrl+Shift+M`. Confirm retrospective capture creates a trimmed clip.
+3. Create, multi-select, move, resize, lane-edit, and delete notes using both
+   pointer gestures and the documented keyboard commands. Undo and redo each
+   operation.
+4. Switch to **DRUMS**, edit/import a map, and verify open/closed/pedal/choke
+   cymbal rows, round-robin labels, and foot-control CC data.
+5. Run all five entry tools, expand a saved pattern, apply humanization twice
+   from the same original clip and seed, then save/reopen. The resulting note
+   JSON must match exactly.
+6. Apply the metal multi-output template. Confirm four channel-filtered MIDI
+   routes and destination tracks appear, then undo them in one step.
 
 ## Architecture
 
@@ -218,10 +238,13 @@ from the active generation, marks it unsaved, and can fall back to that point
 when the saved session is damaged. Stale or corrupt recovery data never
 replaces a valid saved generation and is reported to the user.
 
-Project format version 3 adds the typed routing graph, separate automation
-generations, processor policy/state metadata, tone and mixer snapshots, and
-render reports. Ordered migrations preserve version 1 direct-master behavior
-and convert version 2 `outputTrackId` values into explicit main-output routes.
+Project format version 5 includes the typed routing graph, separate automation
+generations, processor policy/state metadata, tone and mixer snapshots, render
+reports, MIDI clips/notes/expressions, drum maps, pattern aliases, and MIDI
+routing templates. Ordered migrations preserve version 1 direct-master
+behavior, convert version 2 `outputTrackId` values into explicit main-output
+routes, and add empty MIDI clips plus fixed-ID default editor resources to
+versions 1-4.
 
 Routing snapshots compile main outputs, arbitrary pre/post-fader sends,
 per-insert sidechains, parallel paths, hardware maps, folders, VCAs, solo-safe
@@ -229,9 +252,48 @@ closure, and control-room monitoring into a topological processing plan.
 Enabled MIDI devices feed every armed MIDI or instrument track. MIDI-only
 tracks run their insert chains before events fan out through the separately
 validated acyclic MIDI graph; instrument tracks keep independent audio and MIDI
-routes. VST3, Audio Unit, and CLAP events retain their block-relative sample
-offsets across sandbox workers. Delay compensation follows every audio summing
-dependency and aligns sidechains to the input of their selected insert.
+routes. Routes optionally filter one MIDI channel, which lets saved multi-output
+templates fan one ordinary clip into deterministic kick, snare, tom, and cymbal
+destinations. VST3, Audio Unit, and CLAP events retain their block-relative
+sample offsets across sandbox workers. Delay compensation follows every audio
+summing dependency and aligns sidechains to the input of their selected insert.
+
+`src/midi/MidiModel.*` owns the versioned note, expression, drum-map, pattern,
+and routing-template records. Notes use musical beats plus an explicit saved
+timing offset; velocity, duration, probability, articulation metadata,
+foot-control values, and round-robin hints remain ordinary editable fields.
+Every persisted MIDI object has a stable ID, and project loading rejects
+duplicate IDs or dangling drum-map references. MIDI commands use the same
+`CommandStack` and atomic batch behavior as audio edits.
+
+Snapshot construction converts persisted notes and per-note expression to
+preallocated short MIDI events off the audio thread. The callback performs only
+binary lookup, fixed-message construction, and writes into already reserved
+`MidiBuffer` storage. Probability is resolved deterministically from the clip
+seed and note ID. Choke groups shorten the preceding event at the next mapped
+hit; foot control emits the mapped CC before its note; pressure, timbre, pitch,
+and controller expression retain exact sample offsets.
+
+Incoming MIDI is copied once into `MidiCaptureBuffer`, a fixed 65,536-event
+single-writer ring whose slots use lock-free atomics. The callback performs no
+allocation, locks, I/O, or logging. Normal recording stores ordinal/sample
+boundaries while leaving the existing live fan-out untouched. Stop converts
+the captured channel messages into ordinary notes outside the callback.
+Retrospective capture reads the same ring, trims leading/trailing silence, and
+reports overwritten or unsupported long system-exclusive events.
+
+`MidiEditing.*` contains UI-independent create/move/resize/delete/lane
+operations, pattern expansion, the five metal entry tools, capture conversion,
+and humanization. Humanization uses fixed FNV-1a/SplitMix64 integer operations
+and bounded integer mapping rather than implementation-defined engines or
+distributions. The seed and exact resulting timing/velocity values are saved.
+Tests include a fixed cross-platform reference vector.
+
+`MidiEditorComponent` is the lower piano-roll/drum editor. It submits complete
+before/after clip states to typed commands, so drags remain one undo step.
+Standard controls remain tabbable with a visible focus ring; `Enter`, arrows,
+`Shift+Left/Right`, `Alt+Up/Down`, select-all, and delete provide keyboard
+alternatives for note and lane editing.
 
 Automation lanes use seconds or musical beats and compile off-thread to integer
 sample positions. Track and route controls evaluate per sample. External plugin

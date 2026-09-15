@@ -591,6 +591,82 @@ void TimelineComponent::paint(juce::Graphics& graphics)
 
     for (const auto& hit : clipHits())
     {
+        if (hit.midi)
+        {
+            const auto* midiClip = project->findMidiClip(hit.clipId);
+            if (midiClip == nullptr)
+                continue;
+            const auto selected = hit.clipId == selectedClipId;
+            const auto* track = project->findTrack(hit.trackId);
+            const auto colour = track != nullptr
+                ? track->colour
+                : juce::Colour(StudioColours::violet);
+            graphics.setColour(
+                colour.withAlpha(midiClip->muted ? 0.32f : 0.82f));
+            graphics.fillRoundedRectangle(hit.bounds, 5.0f);
+            graphics.setColour(
+                selected ? juce::Colours::white
+                         : colour.brighter(0.35f));
+            graphics.drawRoundedRectangle(
+                hit.bounds,
+                5.0f,
+                selected ? 2.0f : 1.0f);
+            if (!midiClip->notes.empty())
+            {
+                const auto minimumPitch = std::min_element(
+                    midiClip->notes.cbegin(),
+                    midiClip->notes.cend(),
+                    [](const auto& left, const auto& right)
+                    {
+                        return left.pitch < right.pitch;
+                    })->pitch;
+                const auto maximumPitch = std::max_element(
+                    midiClip->notes.cbegin(),
+                    midiClip->notes.cend(),
+                    [](const auto& left, const auto& right)
+                    {
+                        return left.pitch < right.pitch;
+                    })->pitch;
+                const auto pitchRange = std::max(
+                    1,
+                    maximumPitch - minimumPitch + 1);
+                graphics.setColour(juce::Colours::white.withAlpha(0.62f));
+                for (const auto& note : midiClip->notes)
+                {
+                    const auto noteX = hit.bounds.getX()
+                        + static_cast<float>(
+                            note.actualStartBeats()
+                            / midiClip->durationBeats)
+                            * hit.bounds.getWidth();
+                    const auto noteRight = hit.bounds.getX()
+                        + static_cast<float>(
+                            note.endBeats()
+                            / midiClip->durationBeats)
+                            * hit.bounds.getWidth();
+                    const auto noteY = hit.bounds.getBottom() - 7.0f
+                        - static_cast<float>(
+                            note.pitch - minimumPitch)
+                            / static_cast<float>(pitchRange)
+                            * (hit.bounds.getHeight() - 28.0f);
+                    graphics.fillRoundedRectangle(
+                        noteX,
+                        noteY,
+                        std::max(2.0f, noteRight - noteX),
+                        3.0f,
+                        1.0f);
+                }
+            }
+            graphics.setColour(juce::Colours::white);
+            graphics.setFont(12.5f);
+            graphics.drawText(
+                midiClip->name
+                    + (midiClip->editorMode == MidiEditorMode::drums
+                           ? "  DRUMS"
+                           : "  MIDI"),
+                hit.bounds.toNearestInt().withHeight(24).reduced(8, 0),
+                juce::Justification::centredLeft);
+            continue;
+        }
         const auto* clip = project->findClip(hit.clipId);
         if (clip == nullptr)
             continue;
@@ -1085,6 +1161,15 @@ void TimelineComponent::mouseDown(const juce::MouseEvent& event)
 
         selectedTrackId = hit.trackId;
         selectedClipId = hit.clipId;
+        if (hit.midi)
+        {
+            if (onClipSelected)
+                onClipSelected(hit.trackId, hit.clipId);
+            if (onSeek)
+                onSeek(xToSeconds(event.position.x));
+            repaint();
+            return;
+        }
         draggedClipId = hit.clipId;
         dragOriginalTrackId = hit.trackId;
         dragPreviewTrackId = hit.trackId;
@@ -1160,7 +1245,34 @@ void TimelineComponent::mouseDoubleClick(const juce::MouseEvent& event)
     const auto inTrackHeader = event.position.x >= static_cast<float>(viewportPositionX)
         && event.position.x < static_cast<float>(viewportPositionX + trackHeaderWidth);
     if (!inTrackHeader)
+    {
+        const auto existingClips = clipHits();
+        if (std::any_of(
+                existingClips.cbegin(),
+                existingClips.cend(),
+                [&event](const auto& hit)
+                {
+                    return hit.bounds.contains(event.position);
+                }))
+            return;
+        const auto tracks = visibleTracks();
+        const auto trackIndex = trackIndexAt(event.position.y);
+        if (trackIndex >= 0
+            && trackIndex < static_cast<int>(tracks.size()))
+        {
+            const auto& track = *tracks[
+                static_cast<std::size_t>(trackIndex)];
+            if ((track.type == TrackType::midi
+                 || track.type == TrackType::instrument)
+                && onCreateMidiClip)
+            {
+                onCreateMidiClip(
+                    track.id,
+                    xToSeconds(event.position.x));
+            }
+        }
         return;
+    }
 
     const auto tracks = visibleTracks();
     const auto trackIndex = trackIndexAt(event.position.y);
@@ -1571,10 +1683,14 @@ void TimelineComponent::showContextMenu(const juce::MouseEvent& event)
     else
     {
         const auto hasClip = selectedClipId.isNotEmpty();
+        const auto hasAudioClip =
+            project->findClip(selectedClipId) != nullptr;
+        const auto hasMidiClip =
+            project->findMidiClip(selectedClipId) != nullptr;
 
         juce::PopupMenu::Item trimStart("Trim start to playhead");
         trimStart.shortcutKeyDescription = "[";
-        trimStart.isEnabled = hasClip;
+        trimStart.isEnabled = hasAudioClip;
         trimStart.action = [this]
         {
             if (onTrimStartSelected)
@@ -1584,7 +1700,7 @@ void TimelineComponent::showContextMenu(const juce::MouseEvent& event)
 
         juce::PopupMenu::Item split("Split at playhead");
         split.shortcutKeyDescription = "S";
-        split.isEnabled = hasClip;
+        split.isEnabled = hasAudioClip;
         split.action = [this]
         {
             if (onSplitSelected)
@@ -1594,7 +1710,7 @@ void TimelineComponent::showContextMenu(const juce::MouseEvent& event)
 
         juce::PopupMenu::Item trimEnd("Trim end to playhead");
         trimEnd.shortcutKeyDescription = "]";
-        trimEnd.isEnabled = hasClip;
+        trimEnd.isEnabled = hasAudioClip;
         trimEnd.action = [this]
         {
             if (onTrimEndSelected)
@@ -1764,6 +1880,20 @@ void TimelineComponent::showContextMenu(const juce::MouseEvent& event)
                          });
             menu.addSeparator();
         }
+        else if (hasMidiClip)
+        {
+            menu.addSectionHeader("MIDI");
+            menu.addItem(
+                "Open lower editor",
+                true,
+                false,
+                [this]
+                {
+                    if (onClipSelected)
+                        onClipSelected(selectedTrackId, selectedClipId);
+                });
+            menu.addSeparator();
+        }
 
         juce::PopupMenu::Item remove("Delete clip");
         remove.shortcutKeyDescription = "Delete";
@@ -1802,6 +1932,29 @@ std::vector<TimelineComponent::Hit> TimelineComponent::clipHits() const
             const auto x = secondsToX(clip.startSeconds);
             const auto width = static_cast<float>(std::max(20.0, clip.durationSeconds * pixelsPerSecond));
             hits.push_back({ track.id, clip.id, { x, static_cast<float>(y), width, trackHeight - 24.0f } });
+        }
+        for (const auto& clip : track.midiClips)
+        {
+            const auto startSeconds = project->secondsAtBeat(
+                clip.startBeats);
+            const auto endSeconds = project->secondsAtBeat(
+                clip.endBeats());
+            const auto x = secondsToX(startSeconds);
+            const auto width = static_cast<float>(
+                std::max(
+                    20.0,
+                    (endSeconds - startSeconds) * pixelsPerSecond));
+            hits.push_back({
+                track.id,
+                clip.id,
+                {
+                    x,
+                    static_cast<float>(y),
+                    width,
+                    trackHeight - 24.0f
+                },
+                true
+            });
         }
     }
 

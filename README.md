@@ -12,7 +12,9 @@ modern metal production faster.
 
 The working C++20 and JUCE 9 application includes the Phase 1 vertical slice,
 Phase 2 professional tracking and editing, and the complete Phase 3 mixer and
-plugin platform. It is not yet the complete 1.0 DAW described in the
+plugin platform. The MIDI recording, piano-roll, and metal drum-editor portion
+of Phase 4 is complete. Bundled drum/amp devices and DAWproject interchange are
+still pending, so this is not yet the complete 1.0 DAW described in the
 [accepted design](docs/design.md).
 
 ## Highlights
@@ -24,8 +26,13 @@ plugin platform. It is not yet the complete 1.0 DAW described in the
 - Cycle-safe sends, per-insert sidechains, auxes, nested buses, folders, VCAs,
   control room, graph-routed input monitoring, flexible hardware outputs,
   solo-safe behavior, and plugin delay compensation
-- Live MIDI input and cycle-safe MIDI routing through in-process and sandboxed
-  VST3, Audio Unit, and CLAP processors
+- Live, recorded, and retrospective MIDI with ordinary beat-based clips,
+  stable note/expression IDs, cycle-safe channel-filtered routing, and exact
+  sample scheduling through in-process and sandboxed processors
+- Keyboard-accessible piano-roll and metal drum lower editors with velocity,
+  timing, duration, probability, per-note expression, editable drum maps,
+  deterministic entry tools, seeded humanization, pattern expansion, and
+  multi-output routing templates
 - Sample-accurate mixer and plugin automation with read, touch, latch, write,
   trim, and preview modes
 - Sandboxed VST3, Audio Unit, and CLAP processing plus explicit ARA 2

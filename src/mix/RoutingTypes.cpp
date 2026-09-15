@@ -113,6 +113,7 @@ juce::var RoutingConnection::toVar() const
     object->setProperty("destination", destination.toVar());
     object->setProperty("gainDecibels", gainDecibels);
     object->setProperty("pan", pan);
+    object->setProperty("midiChannel", midiChannel);
     object->setProperty("muted", muted);
     object->setProperty("enabled", enabled);
     return juce::var(object.release());
@@ -156,12 +157,18 @@ std::optional<RoutingConnection> RoutingConnection::fromVar(
         -1.0f,
         1.0f,
         static_cast<float>(numberProperty(*object, "pan", 0.0)));
+    connection.midiChannel = integerProperty(
+        *object,
+        "midiChannel",
+        0);
     connection.muted = booleanProperty(*object, "muted", false);
     connection.enabled = booleanProperty(*object, "enabled", true);
 
     if (connection.id.isEmpty()
         || connection.name.trim().isEmpty()
         || connection.sourceTrackId.isEmpty()
+        || connection.midiChannel < 0
+        || connection.midiChannel > 16
         || !std::isfinite(connection.gainDecibels)
         || !std::isfinite(connection.pan))
     {

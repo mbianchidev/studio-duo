@@ -145,7 +145,12 @@ juce::String RoutingUiModel::summary(
     }
 
     if (connection.signalType == SignalType::midi)
-        return "MIDI -> " + destination;
+        return "MIDI"
+            + (connection.midiChannel > 0
+                   ? " CH " + juce::String(connection.midiChannel)
+                   : juce::String())
+            + " -> "
+            + destination;
 
     const auto tap = juce::String(
         connection.tap == RouteTap::preFader ? "Pre" : "Post");
