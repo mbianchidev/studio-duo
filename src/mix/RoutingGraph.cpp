@@ -145,6 +145,35 @@ bool validateConnection(const Project& project,
         return false;
     }
 
+    if (connection.sourceInsertId.isNotEmpty())
+    {
+        const auto insert = std::find_if(
+            source->inserts.cbegin(),
+            source->inserts.cend(),
+            [&connection](const auto& candidate)
+            {
+                return candidate.id == connection.sourceInsertId;
+            });
+        if (connection.signalType != SignalType::audio
+            || connection.kind != RouteKind::send
+            || connection.tap != RouteTap::preFader
+            || connection.sourceBusIndex <= 0
+            || insert == source->inserts.cend()
+            || !insert->bundledDevice
+            || std::next(insert) != source->inserts.cend())
+        {
+            error =
+                "Processor-output routes require an auxiliary bus from the final bundled insert.";
+            return false;
+        }
+    }
+    else if (connection.sourceBusIndex != 0)
+    {
+        error =
+            "Processor-output routes require a source insert.";
+        return false;
+    }
+
     if (connection.signalType == SignalType::midi)
     {
         const auto* destination = project.findTrack(

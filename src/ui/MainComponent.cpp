@@ -3238,11 +3238,51 @@ void MainComponent::exportMixTo(const juce::File& destination)
             }
         }
 
+    auto renderRequests = pluginRuntimeRequests(exportProject);
+    for (const auto& capture : audioEngine.capturePluginStates(2000))
+    {
+        if (capture.insertId.isEmpty())
+        {
+            exportInputBlocker.setVisible(false);
+            startTimerHz(30);
+            exportInProgress = false;
+            showError(
+                "Export failed",
+                capture.result.getErrorMessage());
+            return;
+        }
+        const auto request = std::find_if(
+            renderRequests.begin(),
+            renderRequests.end(),
+            [&capture](const auto& candidate)
+            {
+                return candidate.insertId == capture.insertId;
+            });
+        if (request == renderRequests.end())
+            continue;
+        if (capture.result.failed())
+        {
+            if (capture.preservePreviousState)
+                continue;
+            exportInputBlocker.setVisible(false);
+            startTimerHz(30);
+            exportInProgress = false;
+            showError(
+                "Export failed",
+                capture.name
+                    + ": "
+                    + capture.result.getErrorMessage());
+            return;
+        }
+        request->state = capture.state;
+        request->missing = false;
+    }
+
     const auto result = audioEngine.renderToWav(
         exportProject,
         destination,
         48000.0,
-        pluginRuntimeRequests());
+        std::move(renderRequests));
     if (result.failed())
     {
         exportInputBlocker.setVisible(false);
@@ -3986,6 +4026,25 @@ void MainComponent::addPluginToSelectedTrack(const PluginCatalogEntry& entry)
         setStatus("Select a track before adding a plugin.", true);
         return;
     }
+    if (entry.bundledDevice
+        && entry.instrument
+        && track->type != TrackType::instrument)
+    {
+        setStatus(
+            entry.name
+                + " requires an instrument track so its audio outputs can be routed.",
+            true);
+        return;
+    }
+    if (entry.bundledDevice
+        && !entry.instrument
+        && track->type == TrackType::midi)
+    {
+        setStatus(
+            entry.name + " requires an audio-capable track.",
+            true);
+        return;
+    }
 
     PluginInsert insert;
     insert.pluginIdentifier = entry.identifier;
@@ -4020,7 +4079,11 @@ void MainComponent::addPluginToSelectedTrack(const PluginCatalogEntry& entry)
 
     if (perform(std::make_unique<AddPluginInsertCommand>(track->id, insert)))
     {
-        setStatus(entry.name + " added as a sandboxed insert model.");
+        setStatus(
+            entry.name
+            + (entry.bundledDevice
+                   ? " added as a bundled insert."
+                   : " added as a sandboxed insert model."));
         inspectorViewport.setViewPosition(
             0,
             juce::jmax(0, insertPanel->getY() - 16));

@@ -1,6 +1,6 @@
 # Studio Duo native project format
 
-Studio Duo format version 5 is a directory package with immutable generation
+Studio Duo format version 6 is a directory package with immutable generation
 files and content-addressed processor state.
 
 ```text
@@ -39,8 +39,10 @@ The prior manifest and generation remain valid until step 5 succeeds.
 - generation number and save time
 - `requiredCapabilities`
 
-Version 5 manifests include `midiCompositionV1`. Readers must reject a manifest
-version newer than they support rather than silently dropping MIDI data.
+Version 6 manifests include `midiCompositionV1` and
+`bundledCompositionDevicesV1`. Readers must reject a manifest version newer
+than they support rather than silently dropping MIDI or bundled output/cabinet
+state.
 
 Paths must be relative children of the package and cannot contain `..`.
 
@@ -55,6 +57,12 @@ separately.
 External and bundled processor records retain a stable insert ID, format,
 vendor, version, architecture, isolation mode, state path/hash, latency, tail,
 ARA capability, missing state, and recovery-disabled state.
+
+Bundled guitar and bass amp state includes normalized automatable parameters
+and either the documented embedded cabinet identity or validated mono/stereo
+cabinet samples. Custom IR state is self-contained; reopening does not require
+the original external file. Invalid or truncated state fails processor restore
+and leaves the insert in the normal failed/missing-state path.
 
 ### MIDI clips and notes
 
@@ -129,6 +137,13 @@ unbound output creates a named MIDI destination track. The resulting
 `RoutingConnection` records use `signalType: "midi"` and `midiChannel` `1..16`;
 `0` means no channel filter for ordinary manually-created routes.
 
+An audio `RoutingConnection` can additionally contain `sourceInsertId` and
+`sourceBusIndex`. Both are absent/zero for normal track sends. A nonzero bus
+must belong to the final bundled insert on the source track and currently uses
+a pre-fader send to an aux or bus track. This preserves drum Kick, Snare, Toms,
+and Cymbals stem routing in the same typed graph used by live and offline
+processing.
+
 Humanization uses saved integer parameters and stores the exact resulting note
 velocity/timing values. Its fixed integer generator and mapping do not depend
 on a platform standard-library random engine or distribution.
@@ -154,6 +169,9 @@ disabled until explicit reload. Clean shutdown removes the marker.
 - Versions 1-4 gain empty per-track `midiClips` plus the deterministic default
   metal map, pattern aliases, and routing template. Their fixed IDs remain
   stable before and after the first version 5 save.
+- Version 5 gains version 6 bundled processor-output route fields with empty
+  source insert IDs and bus index zero for every existing route.
 - The manifest and referenced session format versions must agree.
 
-The schemas in [`schema/`](schema/) document the current public envelope.
+[`schema/project-v6.schema.json`](schema/project-v6.schema.json) documents the
+current public session envelope; older schema files remain historical.

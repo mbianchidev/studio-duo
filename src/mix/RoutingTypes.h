@@ -62,6 +62,8 @@ struct RoutingConnection
     RouteKind kind = RouteKind::send;
     RouteTap tap = RouteTap::postFader;
     juce::String sourceTrackId;
+    juce::String sourceInsertId;
+    int sourceBusIndex = 0;
     RouteEndpoint destination;
     float gainDecibels = 0.0f;
     float pan = 0.0f;

@@ -346,7 +346,7 @@ struct RenderReport
 class Project
 {
 public:
-    static constexpr int currentFormatVersion = 5;
+    static constexpr int currentFormatVersion = 6;
 
     juce::String id { juce::Uuid().toString() };
     juce::String name { "Untitled" };

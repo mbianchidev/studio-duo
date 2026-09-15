@@ -191,6 +191,7 @@ juce::Result ProjectFile::save(const Project& project, const juce::File& request
             "clapHostV1",
             "araCompatibilityV1",
             "bundledDevicesV1",
+            "bundledCompositionDevicesV1",
             "toneSnapshotsV1",
             "renderReportsV1",
             "midiCompositionV1"

@@ -1,5 +1,6 @@
 #include "RoutingPanel.h"
 
+#include "devices/DeviceRegistry.h"
 #include "StudioTheme.h"
 
 #include <algorithm>
@@ -206,6 +207,72 @@ void RoutingPanel::showAddMenu()
     juce::PopupMenu postSends;
     addSends(postSends, RouteTap::postFader);
     menu.addSubMenu("Post-fader send", postSends);
+
+    juce::PopupMenu processorOutputs;
+    for (const auto& insert : source->inserts)
+    {
+        if (!insert.bundledDevice)
+            continue;
+        const auto* descriptor =
+            DeviceRegistry::descriptor(insert.pluginIdentifier);
+        if (descriptor == nullptr
+            || descriptor->outputBuses.size() <= 1)
+            continue;
+        for (int bus = 1;
+             bus < static_cast<int>(
+                 descriptor->outputBuses.size());
+             ++bus)
+        {
+            juce::PopupMenu destinations;
+            for (const auto& destination :
+                 RoutingUiModel::processorOutputDestinations(
+                     *project,
+                     trackId,
+                     insert.id,
+                     bus))
+            {
+                destinations.addItem(
+                    destination.label,
+                    [this,
+                     destination,
+                     insertId = insert.id,
+                     bus,
+                     name = descriptor->outputBuses[
+                         static_cast<std::size_t>(bus)]]
+                    {
+                        RoutingConnection route;
+                        route.name = name;
+                        route.kind = RouteKind::send;
+                        route.tap = RouteTap::preFader;
+                        route.sourceTrackId = trackId;
+                        route.sourceInsertId = insertId;
+                        route.sourceBusIndex = bus;
+                        route.destination.type =
+                            RouteEndpointType::track;
+                        route.destination.trackId =
+                            destination.trackId;
+                        if (onAddConnection)
+                            onAddConnection(std::move(route));
+                    });
+            }
+            if (destinations.getNumItems() == 0)
+            {
+                destinations.addItem(
+                    "No valid aux or bus destinations",
+                    false,
+                    false,
+                    [] {});
+            }
+            processorOutputs.addSubMenu(
+                insert.name
+                    + " / "
+                    + descriptor->outputBuses[
+                        static_cast<std::size_t>(bus)],
+                destinations);
+        }
+    }
+    if (processorOutputs.getNumItems() > 0)
+        menu.addSubMenu("Processor output", processorOutputs);
 
     juce::PopupMenu sidechains;
     for (const auto& destination :
@@ -456,26 +523,29 @@ void RoutingPanel::showRouteMenu(const RoutingConnection& route)
                  });
     if (route.signalType == SignalType::audio)
     {
-        menu.addItem("Pre-fader",
-                     true,
-                     route.tap == RouteTap::preFader,
-                     [update]
-                     {
-                         update([](auto& value)
+        if (route.sourceInsertId.isEmpty())
+        {
+            menu.addItem("Pre-fader",
+                         true,
+                         route.tap == RouteTap::preFader,
+                         [update]
                          {
-                             value.tap = RouteTap::preFader;
+                             update([](auto& value)
+                             {
+                                 value.tap = RouteTap::preFader;
+                             });
                          });
-                     });
-        menu.addItem("Post-fader",
-                     true,
-                     route.tap == RouteTap::postFader,
-                     [update]
-                     {
-                         update([](auto& value)
+            menu.addItem("Post-fader",
+                         true,
+                         route.tap == RouteTap::postFader,
+                         [update]
                          {
-                             value.tap = RouteTap::postFader;
+                             update([](auto& value)
+                             {
+                                 value.tap = RouteTap::postFader;
+                             });
                          });
-                     });
+        }
 
         juce::PopupMenu levels;
         for (const auto level :

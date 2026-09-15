@@ -5,8 +5,8 @@ configuration fetches the pinned JUCE source when a compatible package is not
 already installed. It also fetches the MIT-licensed Signalsmith Stretch 1.1.0
 headers used for pitch-preserving elastic audio, CLAP 1.2.10 and clap-helpers
 for CLAP hosting, and the Apache-2.0 ARA SDK 2.3.0 for ARA compatibility mode.
-The implemented Phase 4 slice covers MIDI/editor workflows only; bundled
-drum/amp devices and DAWproject translation remain intentionally out of scope.
+Phase 4 MIDI/editor workflows and bundled drum/guitar/bass devices are
+implemented. DAWproject translation remains intentionally out of scope.
 
 ## Prerequisites
 
@@ -94,6 +94,23 @@ a sample-accurate audio editor.
    JSON must match exactly.
 6. Apply the metal multi-output template. Confirm four channel-filtered MIDI
    routes and destination tracks appear, then undo them in one step.
+7. Add **Metal Drum Composer** to an instrument track. Confirm velocity,
+   repeated-hit variation, hi-hat CC4, and mapped choke notes are audible.
+   Create aux or bus tracks and route the insert's Kick, Snare, Toms, and
+   Cymbals outputs from the routing panel.
+
+## Manual bundled amp test
+
+1. Add **Guitar Amp** or **Bass Amp** to an audio-capable track and play a clean
+   DI through it. Verify gain, bass, mid, treble, presence/saturation or drive
+   blend, cabinet mix, and output controls change the sound.
+2. Open the insert editor and load a mono or stereo WAV, AIFF, or FLAC cabinet
+   IR no longer than 8,192 samples after conversion to 384 kHz. Invalid,
+   silent, unsupported, multichannel, or longer files must show an error and
+   leave the active cabinet unchanged.
+3. Save, remove or move the source IR, reopen the project, and verify the
+   cabinet still restores from processor state. Choose **Use embedded cabinet**
+   and confirm a clean installation remains immediately usable.
 
 ## Architecture
 
@@ -238,10 +255,11 @@ from the active generation, marks it unsaved, and can fall back to that point
 when the saved session is damaged. Stale or corrupt recovery data never
 replaces a valid saved generation and is reported to the user.
 
-Project format version 5 includes the typed routing graph, separate automation
+Project format version 6 includes the typed routing graph, separate automation
 generations, processor policy/state metadata, tone and mixer snapshots, render
 reports, MIDI clips/notes/expressions, drum maps, pattern aliases, and MIDI
-routing templates. Ordered migrations preserve version 1 direct-master
+routing templates, plus bundled processor-output bus routes. Ordered
+migrations preserve version 1 direct-master
 behavior, convert version 2 `outputTrackId` values into explicit main-output
 routes, and add empty MIDI clips plus fixed-ID default editor resources to
 versions 1-4.
@@ -316,6 +334,26 @@ inside `processBlock`. The limiter uses a four-phase, 33-tap linear-phase
 true-peak detector with a matched 16-sample audio delay. The tuner accumulates a
 multi-block downsampled window and uses normalized autocorrelation so guitar and
 bass fundamentals remain detectable with small host buffers.
+
+`DrumDeviceProcessor` consumes ordinary note/CC events from the MIDI scheduler.
+The default map's note numbers select kit pieces, articulations, cymbal states,
+chokes, and round-robin variants; CC4 controls hi-hat openness. Fixed voice and
+room buffers make rendering deterministic without callback allocation. Five
+stereo buses expose Main, Kick, Snare, Toms, and Cymbals. A processor-output
+route persists the final bundled insert ID and auxiliary bus index, then feeds
+the normal send/PDC/render graph.
+
+`AmpDeviceProcessor` shares nonlinear preamp, tone, bass-blend, cabinet, and
+state code between the in-app device and plugin targets. Cabinet decoding,
+validation, resampling, normalization, and partition FFT preparation happen
+outside processing. The callback reads a lock-free published kernel, uses fixed
+spectral/history buffers, and reports its 128-sample latency plus IR tail.
+Custom cabinet samples are embedded in opaque processor state; corrupt state
+fails validated restoration instead of selecting another cabinet. Separate
+JUCE targets build VST3 and macOS Audio Unit versions, while one CLAP bundle
+exports all three Phase 4 devices without duplicating DSP. Mix export captures
+the live runtime state before rebuilding the offline graph, preserving unsaved
+cabinet and parameter changes.
 
 ARA-capable VST3 and Audio Unit instances can opt into an in-process document
 binding. Studio Duo writes a recovery point before activation, shows the

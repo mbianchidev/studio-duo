@@ -19,6 +19,11 @@ public:
     static std::vector<RoutingDestinationItem> sendDestinations(
         const Project& project,
         const juce::String& sourceTrackId);
+    static std::vector<RoutingDestinationItem> processorOutputDestinations(
+        const Project& project,
+        const juce::String& sourceTrackId,
+        const juce::String& sourceInsertId,
+        int sourceBusIndex);
     static std::vector<RoutingDestinationItem> sidechainDestinations(
         const Project& project,
         const juce::String& sourceTrackId);

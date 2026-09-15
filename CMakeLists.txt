@@ -117,8 +117,12 @@ set(STUDIO_DUO_MODEL_SOURCES
 )
 
 set(STUDIO_DUO_PLUGIN_SOURCES
+    src/devices/AmpDeviceProcessor.cpp
+    src/devices/AmpDeviceProcessor.h
     src/devices/DeviceRegistry.cpp
     src/devices/DeviceRegistry.h
+    src/devices/DrumDeviceProcessor.cpp
+    src/devices/DrumDeviceProcessor.h
     src/devices/UtilityDeviceProcessor.cpp
     src/devices/UtilityDeviceProcessor.h
     src/plugin_host/AraDocumentHost.cpp
@@ -308,6 +312,149 @@ if(APPLE)
     )
 endif()
 
+set(STUDIO_DUO_BUNDLED_PLUGIN_FORMATS VST3)
+if(APPLE)
+    list(APPEND STUDIO_DUO_BUNDLED_PLUGIN_FORMATS AU)
+endif()
+
+function(studio_duo_add_bundled_plugin
+         target
+         product_name
+         bundle_suffix
+         plugin_code
+         processor_definition
+         is_synth
+         needs_midi)
+    juce_add_plugin(
+        ${target}
+        COMPANY_NAME "Studio Duo"
+        COMPANY_WEBSITE "https://github.com/mbianchidev/studio-duo"
+        COMPANY_EMAIL "opensource@studio-duo.invalid"
+        BUNDLE_ID "${STUDIO_DUO_BUNDLE_ID}.${bundle_suffix}"
+        PLUGIN_MANUFACTURER_CODE StDu
+        PLUGIN_CODE ${plugin_code}
+        FORMATS ${STUDIO_DUO_BUNDLED_PLUGIN_FORMATS}
+        PRODUCT_NAME "${product_name}"
+        IS_SYNTH ${is_synth}
+        NEEDS_MIDI_INPUT ${needs_midi}
+        NEEDS_MIDI_OUTPUT FALSE
+        IS_MIDI_EFFECT FALSE
+        COPY_PLUGIN_AFTER_BUILD FALSE
+    )
+    juce_generate_juce_header(${target})
+    target_sources(
+        ${target}
+        PRIVATE
+            src/devices/AmpDeviceProcessor.cpp
+            src/devices/AmpDeviceProcessor.h
+            src/devices/BundledPluginEntry.cpp
+            src/devices/DrumDeviceProcessor.cpp
+            src/devices/DrumDeviceProcessor.h
+    )
+    target_include_directories(${target} PRIVATE src)
+    target_compile_definitions(
+        ${target}
+        PRIVATE
+            JUCE_USE_CURL=0
+            JUCE_WEB_BROWSER=0
+            ${processor_definition}=1
+        PUBLIC
+            JUCE_VST3_CAN_REPLACE_VST2=0
+    )
+    target_link_libraries(
+        ${target}
+        PRIVATE
+            juce::juce_audio_formats
+            juce::juce_audio_utils
+            juce::juce_audio_plugin_client
+            juce::juce_dsp
+    )
+endfunction()
+
+studio_duo_add_bundled_plugin(
+    StudioDuoDrumComposer
+    "Studio Duo Metal Drum Composer"
+    "drum-composer"
+    Drm1
+    STUDIO_DUO_PLUGIN_DRUM
+    TRUE
+    TRUE
+)
+studio_duo_add_bundled_plugin(
+    StudioDuoGuitarAmp
+    "Studio Duo Guitar Amp"
+    "guitar-amp"
+    GAm1
+    STUDIO_DUO_PLUGIN_GUITAR_AMP
+    FALSE
+    FALSE
+)
+studio_duo_add_bundled_plugin(
+    StudioDuoBassAmp
+    "Studio Duo Bass Amp"
+    "bass-amp"
+    BAm1
+    STUDIO_DUO_PLUGIN_BASS_AMP
+    FALSE
+    FALSE
+)
+
+add_library(
+    StudioDuoBundledDevicesClap
+    MODULE
+        src/devices/AmpDeviceProcessor.cpp
+        src/devices/AmpDeviceProcessor.h
+        src/devices/BundledClapPlugin.cpp
+        src/devices/DrumDeviceProcessor.cpp
+        src/devices/DrumDeviceProcessor.h
+)
+target_include_directories(
+    StudioDuoBundledDevicesClap
+    PRIVATE
+        src
+)
+target_compile_definitions(
+    StudioDuoBundledDevicesClap
+    PRIVATE
+        JUCE_USE_CURL=0
+        JUCE_WEB_BROWSER=0
+        STUDIO_DUO_VERSION="${PROJECT_VERSION}"
+)
+target_link_libraries(
+    StudioDuoBundledDevicesClap
+    PRIVATE
+        clap
+        juce::juce_audio_formats
+        juce::juce_audio_processors
+        juce::juce_audio_utils
+        juce::juce_dsp
+)
+set_target_properties(
+    StudioDuoBundledDevicesClap
+    PROPERTIES
+        PREFIX ""
+        OUTPUT_NAME "StudioDuoBundledDevices"
+)
+if(APPLE)
+    set_target_properties(
+        StudioDuoBundledDevicesClap
+        PROPERTIES
+            BUNDLE TRUE
+            BUNDLE_EXTENSION clap
+            MACOSX_BUNDLE_GUI_IDENTIFIER
+                "${STUDIO_DUO_BUNDLE_ID}.bundled-devices-clap"
+            MACOSX_BUNDLE_BUNDLE_NAME "StudioDuoBundledDevices"
+            MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
+            MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
+    )
+elseif(WIN32)
+    set_target_properties(
+        StudioDuoBundledDevicesClap
+        PROPERTIES
+            SUFFIX ".clap"
+    )
+endif()
+
 if(STUDIO_DUO_BUILD_TESTS)
     enable_testing()
 
@@ -428,6 +575,7 @@ if(STUDIO_DUO_BUILD_TESTS)
             tests/PluginRecoveryTests.cpp
             tests/AutomationTests.cpp
             tests/DeviceTests.cpp
+            tests/BundledDeviceTests.cpp
             tests/AudioDeviceProbeTests.cpp
             tests/LoggingTests.cpp
             tests/WindowsCrashHandlerTests.cpp
@@ -473,8 +621,12 @@ if(STUDIO_DUO_BUILD_TESTS)
             src/plugin_host/PluginStateStore.h
             src/plugin_host/ScreamForgeValidation.cpp
             src/plugin_host/ScreamForgeValidation.h
+            src/devices/AmpDeviceProcessor.cpp
+            src/devices/AmpDeviceProcessor.h
             src/devices/DeviceRegistry.cpp
             src/devices/DeviceRegistry.h
+            src/devices/DrumDeviceProcessor.cpp
+            src/devices/DrumDeviceProcessor.h
             src/devices/UtilityDeviceProcessor.cpp
             src/devices/UtilityDeviceProcessor.h
             src/render/RenderEngine.cpp

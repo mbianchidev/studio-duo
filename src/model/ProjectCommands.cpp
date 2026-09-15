@@ -2502,6 +2502,19 @@ bool AddPluginInsertCommand::perform(Project& project, juce::String& error)
         error = "A plugin insert with the same ID already exists.";
         return false;
     }
+    if (std::any_of(
+            project.routingConnections.cbegin(),
+            project.routingConnections.cend(),
+            [this](const auto& connection)
+            {
+                return connection.sourceTrackId == trackId
+                    && connection.sourceInsertId.isNotEmpty();
+            }))
+    {
+        error =
+            "Remove processor-output routes before adding an insert after their source.";
+        return false;
+    }
 
     if (!capturedIndex)
     {
@@ -2566,6 +2579,20 @@ bool RemovePluginInsertCommand::perform(Project& project, juce::String& error)
                     index,
                     project.automationLanes[index]);
         }
+        for (std::size_t index = 0;
+             index < project.routingConnections.size();
+             ++index)
+        {
+            const auto& connection =
+                project.routingConnections[index];
+            if (connection.sourceInsertId == insertId
+                || connection.destination.insertId == insertId)
+            {
+                removedRoutingConnections.emplace_back(
+                    index,
+                    connection);
+            }
+        }
         capturedOriginal = true;
     }
     track->inserts.erase(iterator);
@@ -2578,6 +2605,16 @@ bool RemovePluginInsertCommand::perform(Project& project, juce::String& error)
                 return lane.target.insertId == insertId;
             }),
         project.automationLanes.end());
+    project.routingConnections.erase(
+        std::remove_if(
+            project.routingConnections.begin(),
+            project.routingConnections.end(),
+            [this](const auto& connection)
+            {
+                return connection.sourceInsertId == insertId
+                    || connection.destination.insertId == insertId;
+            }),
+        project.routingConnections.end());
     return true;
 }
 
@@ -2597,6 +2634,17 @@ void RemovePluginInsertCommand::undo(Project& project)
             project.automationLanes.begin()
                 + static_cast<std::ptrdiff_t>(index),
             lane);
+    }
+    for (const auto& [originalIndex, connection] :
+         removedRoutingConnections)
+    {
+        const auto index = std::min(
+            originalIndex,
+            project.routingConnections.size());
+        project.routingConnections.insert(
+            project.routingConnections.begin()
+                + static_cast<std::ptrdiff_t>(index),
+            connection);
     }
 }
 
@@ -2628,6 +2676,19 @@ bool ReplacePluginInsertCommand::perform(Project& project,
         || newInsert.name.trim().isEmpty())
     {
         error = "The replacement plugin is invalid.";
+        return false;
+    }
+    if (newInsert.pluginIdentifier != insert->pluginIdentifier
+        && std::any_of(
+            project.routingConnections.cbegin(),
+            project.routingConnections.cend(),
+            [this](const auto& connection)
+            {
+                return connection.sourceInsertId == insertId;
+            }))
+    {
+        error =
+            "Remove processor-output routes before replacing their source insert.";
         return false;
     }
 
@@ -3389,6 +3450,8 @@ bool DuplicateTrackCommand::perform(Project& project, juce::String& error)
             duplicate.sourceTrackId = mappedId(connection.sourceTrackId);
             duplicate.destination.trackId = mappedId(
                 connection.destination.trackId);
+            duplicate.sourceInsertId = mappedInsertId(
+                connection.sourceInsertId);
             duplicate.destination.insertId = mappedInsertId(
                 connection.destination.insertId);
             routeIdMap.emplace_back(connection.id, duplicate.id);

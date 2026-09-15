@@ -18,6 +18,7 @@ void pluginSearchPathTests();
 void pluginRecoveryTests();
 void automationTests();
 void deviceTests();
+void bundledDeviceTests();
 void loggingTests();
 void reampSnapshotTests();
 void renderEngineTests();

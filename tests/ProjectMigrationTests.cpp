@@ -28,27 +28,58 @@ void projectMigrationTests()
         package.getChildFile("manifest.json").loadFileAsString());
     const auto* manifestObject = manifest.getDynamicObject();
     auto hasMidiCapability = false;
+    auto hasBundledCompositionCapability = false;
     if (manifestObject != nullptr)
     {
         const auto required =
             manifestObject->getProperty("requiredCapabilities");
         if (required.isArray())
+        {
             for (const auto& capability : *required.getArray())
+            {
                 hasMidiCapability = hasMidiCapability
                     || capability.toString() == "midiCompositionV1";
+                hasBundledCompositionCapability =
+                    hasBundledCompositionCapability
+                    || capability.toString()
+                        == "bundledCompositionDevicesV1";
+            }
+        }
     }
     expect(manifestObject != nullptr
                && manifestObject->getProperty("requiredCapabilities").isArray()
                && manifestObject->getProperty("activeAutomation").toString()
                       .isNotEmpty()
-               && hasMidiCapability,
-           "Version 5 manifest declares MIDI capability and automation generation.");
+               && hasMidiCapability
+               && hasBundledCompositionCapability,
+           "Version 6 manifest declares MIDI, bundled-device, and automation capabilities.");
 
     juce::String error;
     const auto loaded = studio::ProjectFile::load(package, error);
     expect(loaded.has_value()
                && loaded->automationLanes.size() == 1,
-           "Version 5 automation generation loads.");
+           "Version 6 automation generation loads.");
+
+    auto versionFive = project.toVar();
+    versionFive.getDynamicObject()->setProperty("formatVersion", 5);
+    for (auto& route :
+         *versionFive.getDynamicObject()
+              ->getProperty("routingConnections")
+              .getArray())
+    {
+        route.getDynamicObject()->removeProperty("sourceInsertId");
+        route.getDynamicObject()->removeProperty("sourceBusIndex");
+    }
+    error.clear();
+    const auto migratedVersionFive =
+        studio::Project::fromVar(versionFive, error);
+    expect(migratedVersionFive.has_value()
+               && migratedVersionFive->toVar()
+                      .getDynamicObject()
+                      ->getProperty("formatVersion")
+                      == juce::var(
+                          studio::Project::currentFormatVersion),
+           "Version 5 projects migrate to version 6 with ordinary track-route sources.");
 
     auto mismatchedManifest = manifest.clone();
     mismatchedManifest.getDynamicObject()->setProperty("formatVersion", 2);

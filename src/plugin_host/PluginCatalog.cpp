@@ -357,15 +357,15 @@ std::vector<PluginCatalogEntry> PluginCatalog::entries() const
         result.push_back({
             device.name,
             "Studio Duo",
-            "Utility",
+            device.category,
             "Studio Duo",
             STUDIO_DUO_VERSION,
             currentArchitecture(),
             device.identifier,
             device.identifier,
-            2,
-            2,
-            false,
+            device.inputChannels,
+            device.outputChannels,
+            device.instrument,
             false,
             true
         });

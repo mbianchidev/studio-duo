@@ -3313,6 +3313,28 @@ std::optional<StudioAudioEngine::RenderSnapshot> StudioAudioEngine::buildSnapsho
             {
                 if (!midiNoteShouldPlay(clip, note))
                     continue;
+                const auto* mapEntry = drumMap != nullptr
+                    ? drumMap->entryForId(note.drumMapEntryId)
+                    : nullptr;
+                if (mapEntry == nullptr && drumMap != nullptr)
+                    mapEntry = drumMap->entryForPitch(note.pitch);
+                auto playbackPitch = note.pitch;
+                if (note.roundRobinHint >= 0
+                    && mapEntry != nullptr
+                    && !mapEntry->roundRobinNotes.empty())
+                {
+                    const auto variantCount =
+                        static_cast<int>(
+                            mapEntry->roundRobinNotes.size())
+                        + 1;
+                    const auto variant =
+                        note.roundRobinHint % variantCount;
+                    playbackPitch = variant == 0
+                        ? mapEntry->noteNumber
+                        : mapEntry->roundRobinNotes[
+                              static_cast<std::size_t>(
+                                  variant - 1)];
+                }
                 const auto absoluteStartBeat =
                     clip.startBeats + note.actualStartBeats();
                 auto absoluteEndBeat =
@@ -3344,11 +3366,6 @@ std::optional<StudioAudioEngine::RenderSnapshot> StudioAudioEngine::buildSnapsho
                             * targetSampleRate)));
                 if (note.footControlValue >= 0)
                 {
-                    const auto* mapEntry = drumMap != nullptr
-                        ? drumMap->entryForId(note.drumMapEntryId)
-                        : nullptr;
-                    if (mapEntry == nullptr && drumMap != nullptr)
-                        mapEntry = drumMap->entryForPitch(note.pitch);
                     if (mapEntry != nullptr
                         && mapEntry->footControlCC >= 0)
                     {
@@ -3365,7 +3382,7 @@ std::optional<StudioAudioEngine::RenderSnapshot> StudioAudioEngine::buildSnapsho
                     startSample,
                     juce::MidiMessage::noteOn(
                         note.channel,
-                        note.pitch,
+                        playbackPitch,
                         static_cast<juce::uint8>(note.velocity)),
                     2);
                 for (const auto& expression : note.expressions)
@@ -3444,7 +3461,7 @@ std::optional<StudioAudioEngine::RenderSnapshot> StudioAudioEngine::buildSnapsho
                     endSample,
                     juce::MidiMessage::noteOff(
                         note.channel,
-                        note.pitch,
+                        playbackPitch,
                         static_cast<juce::uint8>(
                             note.releaseVelocity)),
                     0);
@@ -3571,10 +3588,45 @@ std::optional<StudioAudioEngine::RenderSnapshot> StudioAudioEngine::buildSnapsho
                 >= static_cast<int>(snapshot.tracks.size()))
             continue;
 
+        if (compiledRoute.sourceInsertId.isNotEmpty())
+        {
+            const auto* sourceTrack = project.findTrack(
+                compiledRoute.sourceTrackId);
+            const auto sourceInsert = sourceTrack != nullptr
+                ? std::find_if(
+                      sourceTrack->inserts.cbegin(),
+                      sourceTrack->inserts.cend(),
+                      [&compiledRoute](const auto& insert)
+                      {
+                          return insert.id
+                              == compiledRoute.sourceInsertId;
+                      })
+                : std::vector<PluginInsert>::const_iterator {};
+            const auto* descriptor =
+                sourceTrack != nullptr
+                        && sourceInsert
+                            != sourceTrack->inserts.cend()
+                    ? DeviceRegistry::descriptor(
+                          sourceInsert->pluginIdentifier)
+                    : nullptr;
+            if (descriptor == nullptr
+                || compiledRoute.sourceBusIndex <= 0
+                || compiledRoute.sourceBusIndex
+                    >= static_cast<int>(
+                        descriptor->outputBuses.size()))
+            {
+                error =
+                    "A processor-output route references an unavailable bundled output bus.";
+                return std::nullopt;
+            }
+        }
+
         RenderTrack::Route route;
         route.id = compiledRoute.id;
         route.kind = compiledRoute.kind;
         route.tap = compiledRoute.tap;
+        route.sourceInsertId = compiledRoute.sourceInsertId;
+        route.sourceBusIndex = compiledRoute.sourceBusIndex;
         route.destinationIndex = compiledRoute.destinationTrackIndex;
         route.destinationInsertId = compiledRoute.destinationInsertId;
         if (route.kind == RouteKind::sidechain
@@ -5084,7 +5136,9 @@ void StudioAudioEngine::processRuntimeChain(std::uint64_t key,
                                             const std::vector<RenderSource::PluginAutomation>*
                                                 automation,
                                             std::int64_t timelineSample,
-                                            juce::MidiBuffer* midi) noexcept
+                                            juce::MidiBuffer* midi,
+                                            std::vector<RenderTrack::Route>*
+                                                outputRoutes) noexcept
 {
     if (key == 0)
         return;
@@ -5259,7 +5313,11 @@ void StudioAudioEngine::processRuntimeChain(std::uint64_t key,
                         insert,
                         buffer,
                         sidechain,
-                        runtimeMidi);
+                        runtimeMidi,
+                        0,
+                        {},
+                        outputRoutes,
+                        0);
                     continue;
                 }
                 const auto events =
@@ -5273,7 +5331,9 @@ void StudioAudioEngine::processRuntimeChain(std::uint64_t key,
                         sidechain,
                         runtimeMidi,
                         0,
-                        events))
+                        events,
+                        outputRoutes,
+                        0))
                 {
                     continue;
                 }
@@ -5332,6 +5392,13 @@ void StudioAudioEngine::processRuntimeChain(std::uint64_t key,
                 boundaries.erase(
                     std::unique(boundaries.begin(), boundaries.end()),
                     boundaries.end());
+                insert.midiInput.clear();
+                insert.midiInput.addEvents(
+                    runtimeMidi,
+                    0,
+                    buffer.getNumSamples(),
+                    0);
+                runtimeMidi.clear();
                 for (std::size_t boundary = 0;
                      boundary + 1 < boundaries.size();
                      ++boundary)
@@ -5386,11 +5453,25 @@ void StudioAudioEngine::processRuntimeChain(std::uint64_t key,
                         buffer.getNumChannels(),
                         offset,
                         next - offset);
+                    insert.midiSegment.clear();
+                    insert.midiSegment.addEvents(
+                        insert.midiInput,
+                        offset,
+                        next - offset,
+                        -offset);
                     processInProcessRuntime(
                         insert,
                         segment,
                         sidechain,
-                        runtimeMidi,
+                        insert.midiSegment,
+                        offset,
+                        {},
+                        outputRoutes,
+                        offset);
+                    runtimeMidi.addEvents(
+                        insert.midiSegment,
+                        0,
+                        next - offset,
                         offset);
                 }
             }
@@ -5411,7 +5492,9 @@ bool StudioAudioEngine::processInProcessRuntime(
     const juce::AudioBuffer<float>* sidechain,
     juce::MidiBuffer& midi,
     int sidechainSampleOffset,
-    std::span<const PluginBridgeParameterEvent> automation) noexcept
+    std::span<const PluginBridgeParameterEvent> automation,
+    std::vector<RenderTrack::Route>* outputRoutes,
+    int outputSampleOffset) noexcept
 {
     auto& processor = *insert.inProcess;
     auto* automationTarget =
@@ -5502,6 +5585,37 @@ bool StudioAudioEngine::processInProcessRuntime(
     }
     else
         processor.processBlock(scratchView, midi);
+    if (outputRoutes != nullptr)
+    {
+        for (auto& route : *outputRoutes)
+        {
+            if (route.sourceInsertId != insert.insertId
+                || route.sourceBusIndex <= 0
+                || route.sourceBusIndex
+                    >= processor.getBusCount(false))
+                continue;
+            const auto channels = processor.getChannelCountOfBus(
+                false,
+                route.sourceBusIndex);
+            for (int channel = 0; channel < 2; ++channel)
+            {
+                if (channels <= 0)
+                    continue;
+                const auto sourceChannel =
+                    processor.getChannelIndexInProcessBlockBuffer(
+                        false,
+                        route.sourceBusIndex,
+                        std::min(channel, channels - 1));
+                route.processingBuffer.copyFrom(
+                    channel,
+                    outputSampleOffset,
+                    scratch,
+                    sourceChannel,
+                    0,
+                    buffer.getNumSamples());
+            }
+        }
+    }
     for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
     {
         const auto outputChannel =
@@ -6083,6 +6197,12 @@ void StudioAudioEngine::runPluginRuntimeBuilder()
                     processor = messageThreadOwnedProcessor(
                         DeviceRegistry::create(
                             request.deviceIdentifier));
+                    if (processor == nullptr)
+                    {
+                        creationError =
+                            "Bundled device is unavailable: "
+                            + request.deviceIdentifier;
+                    }
                 }
                 else
                 {
@@ -7097,7 +7217,8 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
                                     &track.sidechains,
                                     &track.pluginAutomation,
                                     position,
-                                    trackMidi);
+                                    trackMidi,
+                                    &track.routes);
                 const auto publishMeter = [&](bool postFader)
                 {
                     if (track.meterIndex < 0
@@ -7146,20 +7267,23 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
                                 && !track.audible))
                             continue;
 
-                        route.processingBuffer.copyFrom(
-                            0,
-                            0,
-                            track.processingBuffer,
-                            0,
-                            0,
-                            samplesThisBlock);
-                        route.processingBuffer.copyFrom(
-                            1,
-                            0,
-                            track.processingBuffer,
-                            1,
-                            0,
-                            samplesThisBlock);
+                        if (route.sourceInsertId.isEmpty())
+                        {
+                            route.processingBuffer.copyFrom(
+                                0,
+                                0,
+                                track.processingBuffer,
+                                0,
+                                0,
+                                samplesThisBlock);
+                            route.processingBuffer.copyFrom(
+                                1,
+                                0,
+                                track.processingBuffer,
+                                1,
+                                0,
+                                samplesThisBlock);
+                        }
                         if (!route.gainAutomation.has_value()
                             && !route.panAutomation.has_value()
                             && !route.muteAutomation.has_value())

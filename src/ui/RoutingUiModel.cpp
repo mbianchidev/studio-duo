@@ -1,5 +1,7 @@
 #include "RoutingUiModel.h"
 
+#include "devices/DeviceRegistry.h"
+
 #include <algorithm>
 
 namespace studio
@@ -32,6 +34,46 @@ std::vector<RoutingDestinationItem> RoutingUiModel::sendDestinations(
             track.id,
             {},
             (track.type == TrackType::aux ? "Aux: " : "Bus: ") + track.name
+        });
+    }
+    return result;
+}
+
+std::vector<RoutingDestinationItem>
+RoutingUiModel::processorOutputDestinations(
+    const Project& project,
+    const juce::String& sourceTrackId,
+    const juce::String& sourceInsertId,
+    int sourceBusIndex)
+{
+    std::vector<RoutingDestinationItem> result;
+    for (const auto& track : project.tracks)
+    {
+        if (track.parentTrackId.isNotEmpty()
+            || track.id == sourceTrackId
+            || (track.type != TrackType::aux
+                && track.type != TrackType::bus))
+            continue;
+
+        RoutingConnection candidate;
+        candidate.name = "Processor output";
+        candidate.kind = RouteKind::send;
+        candidate.tap = RouteTap::preFader;
+        candidate.sourceTrackId = sourceTrackId;
+        candidate.sourceInsertId = sourceInsertId;
+        candidate.sourceBusIndex = sourceBusIndex;
+        candidate.destination.type = RouteEndpointType::track;
+        candidate.destination.trackId = track.id;
+        auto copy = project;
+        copy.routingConnections.push_back(std::move(candidate));
+        juce::String error;
+        if (!copy.validateRoutingGraph(error))
+            continue;
+        result.push_back({
+            track.id,
+            {},
+            (track.type == TrackType::aux ? "Aux: " : "Bus: ")
+                + track.name
         });
     }
     return result;
@@ -151,6 +193,46 @@ juce::String RoutingUiModel::summary(
                    : juce::String())
             + " -> "
             + destination;
+
+    if (connection.sourceInsertId.isNotEmpty())
+    {
+        const auto* source = project.findTrack(connection.sourceTrackId);
+        const auto insert = source != nullptr
+            ? std::find_if(
+                  source->inserts.cbegin(),
+                  source->inserts.cend(),
+                  [&connection](const auto& candidate)
+                  {
+                      return candidate.id
+                          == connection.sourceInsertId;
+                  })
+            : std::vector<PluginInsert>::const_iterator {};
+        const auto* descriptor =
+            source != nullptr && insert != source->inserts.cend()
+            ? DeviceRegistry::descriptor(insert->pluginIdentifier)
+            : nullptr;
+        const auto sourceName =
+            source != nullptr && insert != source->inserts.cend()
+            ? insert->name
+            : juce::String("Missing processor");
+        const auto busName = descriptor != nullptr
+                && connection.sourceBusIndex >= 0
+                && connection.sourceBusIndex
+                    < static_cast<int>(
+                        descriptor->outputBuses.size())
+            ? descriptor->outputBuses[
+                  static_cast<std::size_t>(
+                      connection.sourceBusIndex)]
+            : "Output " + juce::String(connection.sourceBusIndex + 1);
+        return sourceName
+            + " / "
+            + busName
+            + " -> "
+            + destination
+            + "  "
+            + juce::String(connection.gainDecibels, 1)
+            + " dB";
+    }
 
     const auto tap = juce::String(
         connection.tap == RouteTap::preFader ? "Pre" : "Post");

@@ -329,6 +329,8 @@ private:
             juce::String id;
             RouteKind kind = RouteKind::send;
             RouteTap tap = RouteTap::postFader;
+            juce::String sourceInsertId;
+            int sourceBusIndex = 0;
             int destinationIndex = -1;
             juce::String destinationInsertId;
             int destinationSidechainIndex = -1;
@@ -655,14 +657,18 @@ private:
                              const std::vector<RenderSource::PluginAutomation>*
                                  automation = nullptr,
                              std::int64_t timelineSample = 0,
-                             juce::MidiBuffer* midi = nullptr) noexcept;
+                             juce::MidiBuffer* midi = nullptr,
+                             std::vector<RenderTrack::Route>*
+                                 outputRoutes = nullptr) noexcept;
     static bool processInProcessRuntime(
         InsertRuntime& insert,
         juce::AudioBuffer<float>& buffer,
         const juce::AudioBuffer<float>* sidechain,
         juce::MidiBuffer& midi,
         int sidechainSampleOffset = 0,
-        std::span<const PluginBridgeParameterEvent> automation = {}) noexcept;
+        std::span<const PluginBridgeParameterEvent> automation = {},
+        std::vector<RenderTrack::Route>* outputRoutes = nullptr,
+        int outputSampleOffset = 0) noexcept;
     void requestPluginRuntime(std::vector<PluginRuntimeRequest> requests,
                               RenderSnapshot snapshot,
                               bool renderOwned);

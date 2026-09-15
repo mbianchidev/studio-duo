@@ -3,8 +3,8 @@
 Studio Duo is under active development. The current application includes the
 Phase 1 vertical slice, Phase 2 professional tracking and editing workflows, and
 the complete Phase 3 mixer and plugin platform. Phase 4 MIDI recording, piano
-roll, and metal drum editing are implemented. Bundled drum/amp devices,
-DAWproject exchange, and mastering remain later roadmap work.
+roll, metal drum editing, and bundled drum/guitar/bass devices are implemented.
+DAWproject exchange and mastering remain later roadmap work.
 
 ## Current capabilities
 
@@ -40,6 +40,10 @@ DAWproject exchange, and mastering remain later roadmap work.
 - Sample-accurate mixer, send, bundled-device, and plugin automation
 - Parametric EQ, compressor, true-peak limiter, reverb, gate, gain, polarity,
   delay, tuner, and signal generator devices
+- Bundled metal drum composition instrument with velocity, deterministic round
+  robin, mapped cymbal/hi-hat behavior, and separate kit-piece outputs
+- Bundled guitar and bass amps with real nonlinear/tone DSP, embedded cabinets,
+  validated custom cabinet loading, persistent IR state, and automation
 - Tone and mixer snapshots, level-matched A/B, stale detection, freeze, print,
   plugin-inclusive rendering, batch reports, and Scream Forge validation
 - Versioned `.studioduo` packages, generation saves, and recovery points
@@ -325,9 +329,12 @@ supported platforms.
 
 The default metal routing template separates kick, snare, tom, and cymbal note
 groups onto MIDI channels 1-4, creates named destination tracks, and adds
-channel-filtered routes. Applying it is one undoable command. Add a third-party
-drum instrument to the source or destination tracks as needed; this phase does
-not yet include a bundled drum instrument.
+channel-filtered routes. Applying it is one undoable command. Add **Metal Drum
+Composer** to an instrument track for the bundled basic kit. Its Main output is
+a complete stereo mix; its Kick, Snare, Toms, and Cymbals buses can be sent to
+aux or bus tracks from **ROUTING** > **ADD** > **Processor output**. The
+multi-output insert must remain last on its source track. Lower its automatable
+Main level when using stems alone to avoid summing the full mix twice.
 
 **TRACK** in the routing panel changes mono/stereo layout, polarity, solo-safe
 state, folder placement, and VCA assignment. Folder mute and solo scope their
@@ -367,7 +374,9 @@ processor automation use the same sample-accurate path.
 
 Choose **SCAN** in the processor catalog to probe installed VST3 plugins, Audio
 Units, and CLAP bundles outside the main process. Bundled utility devices are
-always listed. Select an entry and choose **ADD** to attach it to the selected
+always listed together with Metal Drum Composer, Guitar Amp, and Bass Amp.
+Select an entry and choose **ADD** to attach it to the selected track. The drum
+instrument requires an instrument track; the amps require an audio-capable
 track.
 
 Choose **PATHS** to review the active VST3 locations, add a custom folder with
@@ -404,6 +413,30 @@ The inspector reports loading, ready, missing, bypassed, recovery-disabled,
 crashed, and late-block states. Click a failed insert to reload that runtime.
 Click a missing insert, then choose a catalog processor to replace it while
 preserving the insert ID, routing, automation, and prior state reference.
+
+## Use bundled amps and cabinets
+
+**Guitar Amp** provides preamp gain, bass, mid, treble, presence, saturation,
+cabinet mix, and output parameters. **Bass Amp** uses the same cabinet core
+with a bass-specific low-frequency path and clean/distorted drive blend. Both
+are real processors, report 128 samples of cabinet-convolution latency, render
+offline, and expose every sound control to the normal parameter and automation
+panels.
+
+Open an amp editor and choose **Load cabinet IR...** for a mono or stereo WAV,
+AIFF, or FLAC file. Studio Duo rejects missing, unsupported, silent,
+non-finite, multichannel, or oversized files with a visible error and keeps the
+current cabinet. The bounded configuration accepts at most 8,192 samples after
+conversion to 384 kHz (about 21.3 ms), so processing remains deterministic and
+real-time safe at supported sample rates. Decoding and FFT preparation happen
+outside the callback.
+
+Each amp starts with a useful embedded cabinet: Modern 4x12 for guitar and
+Tight 8x10 for bass. **Use embedded cabinet** restores it explicitly. A custom
+IR's normalized samples are stored inside the insert's content-addressed
+opaque state, so the project restores after the source file is moved. Corrupt
+or truncated cabinet state reports a failed insert; Studio Duo never silently
+substitutes the default.
 
 **TEST** runs black-box public-standard compatibility checks in a separate
 process. The tracking menu can validate installed Scream Forge VST3, Audio Unit,
@@ -456,7 +489,7 @@ Studio Duo projects are versioned `.studioduo` directory packages. A save writes
 a new session generation before atomically replacing `manifest.json`; the latest
 complete state is also copied to `recovery/latest.json`.
 
-Project format version 5 stores the typed routing graph, separate automation
+Project format version 6 stores the typed routing graph, separate automation
 generations, content-addressed plugin state, compatibility policy, tone and
 mixer snapshots, render reports, ordinary MIDI clips and expressions, drum
 maps, pattern aliases, humanization state, and MIDI routing templates. Versions

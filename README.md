@@ -12,9 +12,9 @@ modern metal production faster.
 
 The working C++20 and JUCE 9 application includes the Phase 1 vertical slice,
 Phase 2 professional tracking and editing, and the complete Phase 3 mixer and
-plugin platform. The MIDI recording, piano-roll, and metal drum-editor portion
-of Phase 4 is complete. Bundled drum/amp devices and DAWproject interchange are
-still pending, so this is not yet the complete 1.0 DAW described in the
+plugin platform. Phase 4 MIDI recording/editing and the bundled drum, guitar
+amp, and bass amp devices are complete. DAWproject interchange is still
+pending, so this is not yet the complete 1.0 DAW described in the
 [accepted design](docs/design.md).
 
 ## Highlights
@@ -33,11 +33,17 @@ still pending, so this is not yet the complete 1.0 DAW described in the
   timing, duration, probability, per-note expression, editable drum maps,
   deterministic entry tools, seeded humanization, pattern expansion, and
   multi-output routing templates
+- A deterministic bundled metal drum instrument with velocity, round robin,
+  cymbal chokes/foot control, a useful synthesized kit, and routable kick,
+  snare, tom, and cymbal outputs
+- Bundled guitar and bass amps with nonlinear tone stages, embedded cabinets,
+  validated user cabinet IR loading, persistent state, and fixed-latency
+  partitioned convolution
 - Sample-accurate mixer and plugin automation with read, touch, latch, write,
   trim, and preview modes
 - Sandboxed VST3, Audio Unit, and CLAP processing plus explicit ARA 2
   compatibility mode, crash records, state recovery, and missing placeholders
-- Ten bundled utility devices and plugin-backed reamp snapshots, freeze, print,
+- Thirteen bundled devices plus plugin-backed reamp snapshots, freeze, print,
   level-matched comparison, batch rendering, and reports
 
 ## Build
@@ -78,6 +84,7 @@ or MIDI. See [startup troubleshooting and logs](docs/user-guide.md#logs-and-diag
 - [User guide](docs/user-guide.md)
 - [Product, roadmap, and technical design](docs/design.md)
 - [Development and architecture](docs/development.md)
+- [Bundled devices](docs/devices.md)
 - [Contributing](docs/contributing.md)
 - [Releasing](docs/releasing.md)
 

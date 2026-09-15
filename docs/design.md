@@ -1,6 +1,6 @@
 # Studio Duo product and technical design
 
-Status: accepted product direction; Phases 1-3 implemented
+Status: accepted product direction; Phase 4 implemented except DAWproject
 
 Date: 2026-08-30
 

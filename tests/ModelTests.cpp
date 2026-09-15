@@ -1599,6 +1599,7 @@ int main(int argc, char* argv[])
     pluginRecoveryTests();
     automationTests();
     deviceTests();
+    bundledDeviceTests();
     loggingTests();
     reampSnapshotTests();
     renderEngineTests();

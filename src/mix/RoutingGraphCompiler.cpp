@@ -49,6 +49,8 @@ CompiledRoutingConnection compileConnection(
     compiled.kind = connection.kind;
     compiled.tap = connection.tap;
     compiled.sourceTrackId = connection.sourceTrackId;
+    compiled.sourceInsertId = connection.sourceInsertId;
+    compiled.sourceBusIndex = connection.sourceBusIndex;
     compiled.destinationTrackId = connection.destination.trackId;
     compiled.destinationInsertId = connection.destination.insertId;
     compiled.sourceTrackIndex = connection.sourceTrackId == graph.masterTrackId

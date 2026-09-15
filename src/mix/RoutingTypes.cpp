@@ -110,6 +110,8 @@ juce::var RoutingConnection::toVar() const
     object->setProperty("kind", routeKindToString(kind));
     object->setProperty("tap", routeTapToString(tap));
     object->setProperty("sourceTrackId", sourceTrackId);
+    object->setProperty("sourceInsertId", sourceInsertId);
+    object->setProperty("sourceBusIndex", sourceBusIndex);
     object->setProperty("destination", destination.toVar());
     object->setProperty("gainDecibels", gainDecibels);
     object->setProperty("pan", pan);
@@ -150,6 +152,12 @@ std::optional<RoutingConnection> RoutingConnection::fromVar(
     connection.kind = *kind;
     connection.tap = *tap;
     connection.sourceTrackId = object->getProperty("sourceTrackId").toString();
+    connection.sourceInsertId =
+        object->getProperty("sourceInsertId").toString();
+    connection.sourceBusIndex = integerProperty(
+        *object,
+        "sourceBusIndex",
+        0);
     connection.destination = std::move(*destination);
     connection.gainDecibels = static_cast<float>(
         numberProperty(*object, "gainDecibels", 0.0));
@@ -167,6 +175,9 @@ std::optional<RoutingConnection> RoutingConnection::fromVar(
     if (connection.id.isEmpty()
         || connection.name.trim().isEmpty()
         || connection.sourceTrackId.isEmpty()
+        || connection.sourceBusIndex < 0
+        || (connection.sourceInsertId.isEmpty()
+            != (connection.sourceBusIndex == 0))
         || connection.midiChannel < 0
         || connection.midiChannel > 16
         || !std::isfinite(connection.gainDecibels)

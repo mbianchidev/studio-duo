@@ -697,6 +697,8 @@ private:
     PluginInsert removedInsert;
     std::vector<std::pair<std::size_t, AutomationLane>>
         removedAutomationLanes;
+    std::vector<std::pair<std::size_t, RoutingConnection>>
+        removedRoutingConnections;
     std::size_t removalIndex = 0;
     bool capturedOriginal = false;
 };
