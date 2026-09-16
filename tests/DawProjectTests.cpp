@@ -689,10 +689,12 @@ void completeArchiveRoundTrip()
     audioTrack->folderTrackId = folder.id;
     audioTrack->volumeDecibels = -3.0f;
     audioTrack->pan = -0.2f;
+    const auto audioTrackId = audioTrack->id;
     midiTrack->id = "track-midi";
     midiTrack->name = "Drums";
     midiTrack->type = studio::TrackType::instrument;
     midiTrack->folderTrackId = folder.id;
+    const auto midiTrackId = midiTrack->id;
     project.tracks.back().id = "track-master";
     project.tracks.back().name = "Master";
     for (auto& route : project.routingConnections)
@@ -721,6 +723,15 @@ void completeArchiveRoundTrip()
     aux.type = studio::TrackType::aux;
     aux.volumeDecibels = -6.0f;
     project.tracks.insert(project.tracks.end() - 1, aux);
+    audioTrack = project.findTrack(audioTrackId);
+    midiTrack = project.findTrack(midiTrackId);
+    expect(audioTrack != nullptr && midiTrack != nullptr,
+           "Round-trip source tracks survive aux insertion.");
+    if (audioTrack == nullptr || midiTrack == nullptr)
+    {
+        root.deleteRecursively();
+        return;
+    }
     studio::RoutingConnection auxOutput;
     auxOutput.id = "route-aux-output";
     auxOutput.name = "Aux output";
