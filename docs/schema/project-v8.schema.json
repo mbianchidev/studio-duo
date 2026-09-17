@@ -1,0 +1,296 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://studioduo.dev/schema/project-v8.schema.json",
+  "title": "Studio Duo session format v8",
+  "type": "object",
+  "required": [
+    "formatVersion",
+    "id",
+    "name",
+    "metadata",
+    "tracks",
+    "routingConnections",
+    "drumMaps",
+    "midiPatterns",
+    "midiRoutingTemplates",
+    "scenes",
+    "compatibilityReports",
+    "toneSnapshots",
+    "mixerSnapshots",
+    "renderReports"
+  ],
+  "properties": {
+    "formatVersion": {
+      "const": 8
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "metadata": {
+      "type": "object",
+      "required": [
+        "artist",
+        "album",
+        "originalArtist",
+        "composer",
+        "songwriter",
+        "producer",
+        "arranger",
+        "year",
+        "genre",
+        "copyright",
+        "website",
+        "comment"
+      ],
+      "properties": {
+        "artist": { "type": "string" },
+        "album": { "type": "string" },
+        "originalArtist": { "type": "string" },
+        "composer": { "type": "string" },
+        "songwriter": { "type": "string" },
+        "producer": { "type": "string" },
+        "arranger": { "type": "string" },
+        "year": { "type": "string" },
+        "genre": { "type": "string" },
+        "copyright": { "type": "string" },
+        "website": { "type": "string" },
+        "comment": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "tracks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "type",
+          "inserts",
+          "clips",
+          "midiClips"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "type": {
+            "enum": [
+              "audio",
+              "instrument",
+              "midi",
+              "aux",
+              "bus",
+              "folder",
+              "vca",
+              "controlRoom",
+              "master"
+            ]
+          },
+          "inserts": {
+            "type": "array"
+          },
+          "clips": {
+            "type": "array"
+          },
+          "midiClips": {
+            "type": "array"
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "routingConnections": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "tap",
+          "sourceTrackId",
+          "destination"
+        ],
+        "properties": {
+          "sourceInsertId": {
+            "type": "string"
+          },
+          "sourceBusIndex": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "drumMaps": {
+      "type": "array"
+    },
+    "midiPatterns": {
+      "type": "array"
+    },
+    "midiRoutingTemplates": {
+      "type": "array"
+    },
+    "scenes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "colour",
+          "slots"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "colour": {
+            "type": "string",
+            "minLength": 1
+          },
+          "slots": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "trackId",
+                "stopTrack"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "trackId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "stopTrack": {
+                  "type": "boolean"
+                },
+                "audioClip": {
+                  "type": "object"
+                },
+                "midiClip": {
+                  "type": "object"
+                }
+              },
+              "not": {
+                "required": [
+                  "audioClip",
+                  "midiClip"
+                ]
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "compatibilityReports": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "format",
+          "operation",
+          "source",
+          "destination",
+          "createdAt",
+          "issues"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "format": {
+            "type": "string",
+            "minLength": 1
+          },
+          "operation": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source": {
+            "type": "string"
+          },
+          "destination": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "issues": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "severity",
+                "code",
+                "objectPath",
+                "message"
+              ],
+              "properties": {
+                "severity": {
+                  "enum": [
+                    "info",
+                    "warning",
+                    "error"
+                  ]
+                },
+                "code": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "objectPath": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "message": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "toneSnapshots": {
+      "type": "array"
+    },
+    "mixerSnapshots": {
+      "type": "array"
+    },
+    "renderReports": {
+      "type": "array",
+      "items": {
+        "$ref": "render-report-v1.schema.json"
+      }
+    }
+  },
+  "additionalProperties": true
+}

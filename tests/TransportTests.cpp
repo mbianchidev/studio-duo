@@ -5,7 +5,12 @@
 #include "model/ProjectCommands.h"
 #include "project_io/ProjectFile.h"
 
+#include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <functional>
+#include <optional>
+#include <vector>
 
 namespace
 {
@@ -43,6 +48,501 @@ juce::File createLoopSource()
     if (writer != nullptr)
         writer->flush();
     return sourceFile;
+}
+
+struct RoutedMidiFixture
+{
+    studio::Project project;
+    juce::String sourceTrackId;
+    juce::String destinationTrackId;
+};
+
+RoutedMidiFixture createRoutedMidiFixture(
+    double noteStartSeconds,
+    double noteEndSeconds,
+    std::optional<double> loopEndSeconds = std::nullopt,
+    bool includePressureExpressions = false,
+    bool includeSustainExpression = false)
+{
+    RoutedMidiFixture fixture {
+        studio::Project::createDefault(),
+        {},
+        {}
+    };
+    fixture.project.metronomeEnabled = false;
+    if (loopEndSeconds.has_value())
+    {
+        fixture.project.loopEnabled = true;
+        fixture.project.loopStartSeconds = 0.0;
+        fixture.project.loopEndSeconds = *loopEndSeconds;
+    }
+
+    studio::Track source;
+    source.name = "Scheduled MIDI source";
+    source.type = studio::TrackType::midi;
+    fixture.sourceTrackId = source.id;
+    fixture.project.tracks.insert(
+        fixture.project.tracks.end() - 1,
+        source);
+
+    studio::Track destination;
+    destination.name = "Scheduled MIDI destination";
+    destination.type = studio::TrackType::instrument;
+    fixture.destinationTrackId = destination.id;
+    fixture.project.tracks.insert(
+        fixture.project.tracks.end() - 1,
+        destination);
+
+    studio::RoutingConnection route;
+    route.name = "Scheduled MIDI route";
+    route.signalType = studio::SignalType::midi;
+    route.kind = studio::RouteKind::mainOutput;
+    route.sourceTrackId = fixture.sourceTrackId;
+    route.destination.type = studio::RouteEndpointType::track;
+    route.destination.trackId = fixture.destinationTrackId;
+    fixture.project.routingConnections.push_back(route);
+
+    studio::MidiClip clip;
+    clip.name = "Scheduled MIDI";
+    clip.durationBeats = fixture.project.beatsAt(8.0);
+    studio::MidiNote note;
+    note.pitch = 60;
+    note.channel = 2;
+    note.startBeats =
+        fixture.project.beatsAt(noteStartSeconds);
+    note.durationBeats =
+        fixture.project.beatsAt(noteEndSeconds)
+        - note.startBeats;
+    if (includePressureExpressions)
+    {
+        studio::MidiExpressionPoint keyPressure;
+        keyPressure.type =
+            studio::MidiExpressionType::pressure;
+        keyPressure.offsetBeats =
+            fixture.project.beatsAt(noteStartSeconds + 0.001)
+            - note.startBeats;
+        keyPressure.value = 0.5;
+        studio::MidiExpressionPoint channelPressure;
+        channelPressure.type =
+            studio::MidiExpressionType::channelPressure;
+        channelPressure.offsetBeats =
+            fixture.project.beatsAt(noteStartSeconds + 0.002)
+            - note.startBeats;
+        channelPressure.value = 0.75;
+        note.expressions = {
+            keyPressure,
+            channelPressure
+        };
+    }
+    if (includeSustainExpression)
+    {
+        studio::MidiExpressionPoint sustain;
+        sustain.type = studio::MidiExpressionType::controller;
+        sustain.controller = 64;
+        sustain.offsetBeats =
+            fixture.project.beatsAt(noteStartSeconds + 0.001)
+            - note.startBeats;
+        sustain.value = 1.0;
+        note.expressions.push_back(sustain);
+    }
+    clip.notes.push_back(note);
+    fixture.project.findTrack(fixture.sourceTrackId)
+        ->midiClips.push_back(clip);
+    if (includePressureExpressions)
+    {
+        studio::AutomationLane channelPressure;
+        channelPressure.name = "Track channel pressure";
+        channelPressure.target.type =
+            studio::AutomationTargetType::midiChannelPressure;
+        channelPressure.target.trackId = fixture.sourceTrackId;
+        channelPressure.target.midiChannel = 3;
+        channelPressure.timebase =
+            studio::AutomationTimebase::seconds;
+        channelPressure.interpolation =
+            studio::AutomationInterpolation::step;
+        channelPressure.points.push_back({
+            juce::Uuid().toString(),
+            noteStartSeconds + 0.003,
+            0.25
+        });
+        fixture.project.automationLanes.push_back(
+            std::move(channelPressure));
+    }
+    return fixture;
+}
+
+juce::MidiMessage traceMessage(
+    const studio::StudioAudioEngine::MidiEventForTesting& event)
+{
+    return juce::MidiMessage(
+        event.data.data(),
+        static_cast<int>(event.size),
+        0.0);
+}
+
+int traceCount(
+    const std::vector<studio::StudioAudioEngine::MidiEventForTesting>& events,
+    std::uint64_t runtimeKey,
+    const std::function<bool(const juce::MidiMessage&)>& predicate)
+{
+    return static_cast<int>(std::count_if(
+        events.cbegin(),
+        events.cend(),
+        [runtimeKey, &predicate](const auto& event)
+        {
+            return event.runtimeKey == runtimeKey
+                && predicate(traceMessage(event));
+        }));
+}
+
+bool hasTermination(
+    const std::vector<studio::StudioAudioEngine::MidiEventForTesting>& events,
+    std::uint64_t runtimeKey)
+{
+    return traceCount(
+               events,
+               runtimeKey,
+               [](const auto& message)
+               {
+                   return message.isNoteOff();
+               })
+            > 0
+        && traceCount(
+               events,
+               runtimeKey,
+               [](const auto& message)
+               {
+                   return message.isAllNotesOff();
+               })
+            > 0
+        && traceCount(
+               events,
+               runtimeKey,
+               [](const auto& message)
+               {
+                   return message.isSustainPedalOff();
+               })
+            > 0
+        && traceCount(
+               events,
+               runtimeKey,
+               [](const auto& message)
+               {
+                   return message.isAllSoundOff();
+               })
+            > 0;
+}
+
+bool hasSafeChannelReset(
+    const std::vector<studio::StudioAudioEngine::MidiEventForTesting>& events,
+    std::uint64_t runtimeKey)
+{
+    return traceCount(
+               events,
+               runtimeKey,
+               [](const auto& message)
+               {
+                   return message.isSustainPedalOff();
+               })
+            > 0
+        && traceCount(
+               events,
+               runtimeKey,
+               [](const auto& message)
+               {
+                   return message.isAllNotesOff();
+               })
+            > 0
+        && traceCount(
+               events,
+               runtimeKey,
+               [](const auto& message)
+               {
+                   return message.isAllSoundOff();
+               })
+            > 0;
+}
+
+void midiTransportDiscontinuities()
+{
+    {
+        auto fixture = createRoutedMidiFixture(0.0, 4.0);
+        studio::StudioAudioEngine engine;
+        expect(engine.updateProject(fixture.project).wasOk(),
+               "Snapshot handoff fixture publishes.");
+        engine.seekSeconds(0.0);
+        engine.play();
+        engine.processActiveBlockForTesting(64);
+
+        auto editedProject = fixture.project;
+        editedProject.name = "Snapshot-only playback edit";
+        editedProject.routingConnections.front().enabled = false;
+        expect(engine.updateProject(editedProject).wasOk(),
+               "A playback edit reuses the active runtime.");
+        engine.clearMidiEventsForTesting();
+        engine.pause();
+        engine.processActiveBlockForTesting(64);
+        const auto paused = engine.takeMidiEventsForTesting();
+        const auto sourceKey =
+            studio::StudioAudioEngine::runtimeKeyForTesting(
+                fixture.sourceTrackId);
+        const auto destinationKey =
+            studio::StudioAudioEngine::runtimeKeyForTesting(
+                fixture.destinationTrackId);
+        expect(hasTermination(paused, sourceKey)
+                   && hasTermination(paused, destinationKey),
+               "A snapshot-only routing edit preserves active scheduled notes at their original destination for later pause termination.");
+    }
+
+    {
+        auto fixture = createRoutedMidiFixture(
+            0.0,
+            0.002,
+            std::nullopt,
+            false,
+            true);
+        studio::StudioAudioEngine engine;
+        expect(engine.updateProject(fixture.project).wasOk(),
+               "Sustain pause fixture publishes.");
+        engine.seekSeconds(0.0);
+        engine.play();
+        engine.processActiveBlockForTesting(256);
+        engine.clearMidiEventsForTesting();
+        engine.pause();
+        engine.processActiveBlockForTesting(64);
+        const auto paused = engine.takeMidiEventsForTesting();
+        const auto sourceKey =
+            studio::StudioAudioEngine::runtimeKeyForTesting(
+                fixture.sourceTrackId);
+        const auto destinationKey =
+            studio::StudioAudioEngine::runtimeKeyForTesting(
+                fixture.destinationTrackId);
+        expect(hasSafeChannelReset(paused, sourceKey)
+                   && hasSafeChannelReset(paused, destinationKey),
+               "Pause releases a sustained voice after its scheduled note-off at both MIDI destinations.");
+    }
+
+    {
+        auto fixture = createRoutedMidiFixture(
+            0.0,
+            0.002,
+            std::nullopt,
+            false,
+            true);
+        studio::StudioAudioEngine engine;
+        expect(engine.updateProject(fixture.project).wasOk(),
+               "Sustain seek fixture publishes.");
+        engine.seekSeconds(0.0);
+        engine.play();
+        engine.processActiveBlockForTesting(256);
+        engine.clearMidiEventsForTesting();
+        engine.seekSeconds(1.0);
+        engine.processActiveBlockForTesting(64);
+        const auto sought = engine.takeMidiEventsForTesting();
+        const auto sourceKey =
+            studio::StudioAudioEngine::runtimeKeyForTesting(
+                fixture.sourceTrackId);
+        const auto destinationKey =
+            studio::StudioAudioEngine::runtimeKeyForTesting(
+                fixture.destinationTrackId);
+        expect(hasSafeChannelReset(sought, sourceKey)
+                   && hasSafeChannelReset(sought, destinationKey),
+               "Seeking releases a sustained voice after its scheduled note-off at both MIDI destinations.");
+        engine.processActiveBlockForTesting(64);
+        const auto soughtAgain =
+            engine.takeMidiEventsForTesting();
+        expect(!hasSafeChannelReset(soughtAgain, sourceKey)
+                   && !hasSafeChannelReset(
+                       soughtAgain,
+                       destinationKey),
+               "Seeking clears sustained scheduled state without duplicate resets.");
+    }
+
+    {
+        auto fixture = createRoutedMidiFixture(
+            0.0,
+            4.0,
+            std::nullopt,
+            true);
+        studio::StudioAudioEngine engine;
+        expect(engine.updateProject(fixture.project).wasOk(),
+               "Pressure playback fixture publishes.");
+        engine.seekSeconds(0.0);
+        engine.clearMidiEventsForTesting();
+        engine.play();
+        engine.processActiveBlockForTesting(256);
+        const auto played = engine.takeMidiEventsForTesting();
+        const auto destinationKey =
+            studio::StudioAudioEngine::runtimeKeyForTesting(
+                fixture.destinationTrackId);
+        expect(traceCount(
+                   played,
+                   destinationKey,
+                   [](const auto& message)
+                   {
+                       return message.isAftertouch();
+                   })
+                       == 1
+                   && traceCount(
+                          played,
+                          destinationKey,
+                          [](const auto& message)
+                          {
+                              return message.isChannelPressure();
+                          })
+                          == 2
+                   && traceCount(
+                          played,
+                          destinationKey,
+                          [](const auto& message)
+                          {
+                              return message.isChannelPressure()
+                                  && message.getChannel() == 3
+                                  && message
+                                         .getChannelPressureValue()
+                                      == 32;
+                          })
+                          == 1,
+               "Playback emits polyphonic key pressure, per-note channel pressure, and track-level channel-scoped pressure as distinct MIDI messages.");
+
+        engine.clearMidiEventsForTesting();
+        engine.pause();
+        engine.processActiveBlockForTesting(64);
+        const auto paused = engine.takeMidiEventsForTesting();
+        const auto sourceKey =
+            studio::StudioAudioEngine::runtimeKeyForTesting(
+                fixture.sourceTrackId);
+        expect(hasTermination(paused, sourceKey)
+                   && hasTermination(paused, destinationKey),
+               "Pause terminates active scheduled notes at both the source and routed destination.");
+        engine.processActiveBlockForTesting(64);
+        const auto pausedAgain =
+            engine.takeMidiEventsForTesting();
+        expect(!hasTermination(pausedAgain, sourceKey)
+                   && !hasTermination(pausedAgain, destinationKey),
+               "Pause clears scheduled note state without duplicate termination events.");
+    }
+
+    {
+        auto fixture = createRoutedMidiFixture(0.0, 4.0);
+        studio::StudioAudioEngine engine;
+        expect(engine.updateProject(fixture.project).wasOk(),
+               "Seek termination fixture publishes.");
+        engine.seekSeconds(0.0);
+        engine.play();
+        engine.processActiveBlockForTesting(64);
+        engine.clearMidiEventsForTesting();
+        engine.seekSeconds(1.0);
+        engine.processActiveBlockForTesting(64);
+        const auto sought = engine.takeMidiEventsForTesting();
+        const auto sourceKey =
+            studio::StudioAudioEngine::runtimeKeyForTesting(
+                fixture.sourceTrackId);
+        const auto destinationKey =
+            studio::StudioAudioEngine::runtimeKeyForTesting(
+                fixture.destinationTrackId);
+        expect(hasTermination(sought, sourceKey)
+                   && hasTermination(sought, destinationKey),
+               "Seeking mid-note terminates the old scheduled voice through its original route.");
+        engine.processActiveBlockForTesting(64);
+        const auto soughtAgain =
+            engine.takeMidiEventsForTesting();
+        expect(!hasTermination(soughtAgain, sourceKey)
+                   && !hasTermination(soughtAgain, destinationKey),
+               "Seeking leaves no stale scheduled-note state to terminate twice.");
+    }
+
+    {
+        constexpr auto loopEndSeconds = 100.0 / 48000.0;
+        auto fixture = createRoutedMidiFixture(
+            0.0,
+            1.0,
+            loopEndSeconds);
+        studio::StudioAudioEngine engine;
+        expect(engine.updateProject(fixture.project).wasOk(),
+               "Loop termination fixture publishes.");
+        engine.seekSeconds(0.0);
+        engine.clearMidiEventsForTesting();
+        engine.play();
+        engine.processActiveBlockForTesting(150);
+        const auto looped = engine.takeMidiEventsForTesting();
+        const auto sourceKey =
+            studio::StudioAudioEngine::runtimeKeyForTesting(
+                fixture.sourceTrackId);
+        const auto destinationKey =
+            studio::StudioAudioEngine::runtimeKeyForTesting(
+                fixture.destinationTrackId);
+        const auto sourceNoteOns = traceCount(
+            looped,
+            sourceKey,
+            [](const auto& message)
+            {
+                return message.isNoteOn();
+            });
+        const auto destinationNoteOns = traceCount(
+            looped,
+            destinationKey,
+            [](const auto& message)
+            {
+                return message.isNoteOn();
+            });
+        expect(sourceNoteOns == 2
+                   && destinationNoteOns == 2
+                   && hasTermination(looped, sourceKey)
+                   && hasTermination(looped, destinationKey),
+               "A mid-note loop wrap terminates the old voice before scheduling the wrapped note on every route.");
+        engine.clearMidiEventsForTesting();
+        engine.pause();
+        engine.processActiveBlockForTesting(64);
+        const auto loopPaused =
+            engine.takeMidiEventsForTesting();
+        expect(hasTermination(loopPaused, sourceKey)
+                   && hasTermination(loopPaused, destinationKey),
+               "The wrapped replacement note remains tracked exactly once for later pause termination.");
+    }
+
+    {
+        auto fixture = createRoutedMidiFixture(7.99, 8.0);
+        studio::StudioAudioEngine engine;
+        expect(engine.updateProject(fixture.project).wasOk(),
+               "Automatic-end termination fixture publishes.");
+        engine.seekSeconds(7.99);
+        engine.clearMidiEventsForTesting();
+        engine.play();
+        engine.processActiveBlockForTesting(480);
+        const auto endingBlock =
+            engine.takeMidiEventsForTesting();
+        const auto sourceKey =
+            studio::StudioAudioEngine::runtimeKeyForTesting(
+                fixture.sourceTrackId);
+        const auto destinationKey =
+            studio::StudioAudioEngine::runtimeKeyForTesting(
+                fixture.destinationTrackId);
+        expect(!engine.isPlaying()
+                   && traceCount(
+                          endingBlock,
+                          destinationKey,
+                          [](const auto& message)
+                          {
+                              return message.isNoteOn();
+                          })
+                          == 1
+                   && !hasTermination(
+                       endingBlock,
+                       destinationKey),
+               "The automatic-end fixture leaves a boundary note active until transport termination runs.");
+        engine.processActiveBlockForTesting(64);
+        const auto ended = engine.takeMidiEventsForTesting();
+        expect(hasTermination(ended, sourceKey)
+                   && hasTermination(ended, destinationKey),
+               "Automatic transport end terminates boundary notes through every destination.");
+        engine.processActiveBlockForTesting(64);
+        const auto endedAgain =
+            engine.takeMidiEventsForTesting();
+        expect(!hasTermination(endedAgain, sourceKey)
+                   && !hasTermination(endedAgain, destinationKey),
+               "Automatic transport end clears active state without repeated note termination.");
+    }
 }
 }
 
@@ -290,6 +790,8 @@ void transportTests()
     expect(extendedLoopEngine.isPlaying()
                && extendedLoopEngine.positionSeconds() > 8.0,
            "Loop playback can cross the current content end before wrapping.");
+
+    midiTransportDiscontinuities();
 
     loopSource.deleteFile();
     package.deleteRecursively();

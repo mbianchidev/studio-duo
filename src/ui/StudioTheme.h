@@ -57,6 +57,14 @@ public:
         graphics.fillRoundedRectangle(bounds, 4.0f);
         graphics.setColour(juce::Colour(StudioColours::border));
         graphics.drawRoundedRectangle(bounds, 4.0f, 1.0f);
+        if (button.hasKeyboardFocus(true))
+        {
+            graphics.setColour(juce::Colour(StudioColours::orange));
+            graphics.drawRoundedRectangle(
+                bounds.reduced(1.5f),
+                3.0f,
+                2.0f);
+        }
     }
 };
 }

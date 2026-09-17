@@ -45,6 +45,7 @@ public:
     std::function<void(const juce::String&)> onDeleteTrack;
     std::function<void()> onAddTrack;
     std::function<void(const juce::String&, const juce::String&)> onClipSelected;
+    std::function<void(const juce::String&, double)> onCreateMidiClip;
     std::function<void(const juce::String&, const juce::String&, double)> onClipMoved;
     std::function<void(const juce::String&, double, double, double)> onClipTrimmed;
     std::function<void(double)> onSeek;
@@ -90,6 +91,7 @@ private:
         juce::String trackId;
         juce::String clipId;
         juce::Rectangle<float> bounds;
+        bool midi = false;
     };
 
     enum class DragMode

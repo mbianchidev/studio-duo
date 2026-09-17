@@ -11,9 +11,11 @@
 #include <StudioDuoBrandData.h>
 
 #include <algorithm>
+#include <charconv>
 #include <cmath>
 #include <map>
 #include <numeric>
+#include <system_error>
 
 namespace studio
 {
@@ -384,6 +386,9 @@ MainComponent::MainComponent(bool startAudioOnLaunch)
     configureButton(newButton, "Create a new project");
     configureButton(openButton, "Open a .studioduo project");
     configureButton(saveButton, "Save project (Command/Ctrl+S)");
+    configureButton(
+        dawProjectButton,
+        "Import, export, view, or save a DAWproject 1.0 compatibility report");
     configureButton(exportButton, "Export a stereo WAV");
     configureButton(
         settingsButton,
@@ -392,7 +397,9 @@ MainComponent::MainComponent(bool startAudioOnLaunch)
     configureButton(redoButton, "Redo (Command/Ctrl+Shift+Z)");
     configureButton(playButton, "Play or pause (Space)");
     configureButton(stopButton, "Stop playback; recordings stop at the current position");
-    configureButton(recordButton, "Record the selected audio track");
+    configureButton(
+        recordButton,
+        "Record armed audio, MIDI, and instrument tracks");
     configureButton(loopButton, "Loop the project range");
     configureButton(metronomeButton, "Toggle the metronome");
     configureButton(addTrackButton, "Add an audio, instrument, MIDI, aux, bus, folder, VCA, or control-room track");
@@ -402,6 +409,9 @@ MainComponent::MainComponent(bool startAudioOnLaunch)
     configureButton(deleteTrackButton, "Delete the selected track");
     configureButton(trackingButton, "Configure sections, tempo, meter, punch, count-in, and click routing");
     configureButton(automationButton, "Edit and record mixer and plugin automation");
+    configureButton(
+        newMidiClipButton,
+        "Create an ordinary editable MIDI clip at the playhead (Command/Ctrl+Shift+N)");
     configureButton(sessionPanelToggleButton, "Collapse or expand the session sidebar");
     configureButton(inspectorPanelToggleButton, "Show or hide the inspector");
     configureButton(mixerPanelToggleButton, "Show or hide the mixer");
@@ -424,6 +434,7 @@ MainComponent::MainComponent(bool startAudioOnLaunch)
     newButton.onClick = [this] { createNewProject(); };
     openButton.onClick = [this] { beginOpenProject(); };
     saveButton.onClick = [this] { beginSaveProject(); };
+    dawProjectButton.onClick = [this] { showDawProjectMenu(); };
     exportButton.onClick = [this] { beginExportMix(); };
     settingsButton.onClick = [this] { showSettings(); };
     undoButton.onClick = [this] { undo(); };
@@ -438,6 +449,10 @@ MainComponent::MainComponent(bool startAudioOnLaunch)
     deleteTrackButton.onClick = [this] { deleteSelectedTrack(); };
     trackingButton.onClick = [this] { showTrackingMenu(); };
     automationButton.onClick = [this] { showAutomationPanel(); };
+    newMidiClipButton.onClick = [this]
+    {
+        createMidiClip(selectedTrackId, audioEngine.positionSeconds());
+    };
     sessionPanelToggleButton.onClick = [this]
     {
         setLeftPanelCollapsed(!leftPanelCollapsed);
@@ -1004,6 +1019,12 @@ MainComponent::MainComponent(bool startAudioOnLaunch)
     {
         selectClip(trackId, clipId);
     };
+    timeline.onCreateMidiClip = [this](
+                                    const auto& trackId,
+                                    double startSeconds)
+    {
+        createMidiClip(trackId, startSeconds);
+    };
     timeline.onClipMoved = [this](const auto& clipId, const auto& destinationTrackId, double start)
     {
         moveClip(clipId, destinationTrackId, start);
@@ -1017,7 +1038,7 @@ MainComponent::MainComponent(bool startAudioOnLaunch)
     };
     timeline.onSeek = [this](double seconds)
     {
-        if (!activeRecordingTargets.empty() || audioEngine.isRecording())
+        if (hasActiveRecordingTargets() || audioEngine.isRecording())
         {
             setStatus("Stop recording before moving the playhead.", true);
             return;
@@ -1334,6 +1355,34 @@ MainComponent::MainComponent(bool startAudioOnLaunch)
     };
     mixer->addKeyListener(this);
     addAndMakeVisible(*mixer);
+
+    midiEditor.setProject(&project);
+    midiEditor.setSelection(selectedTrackId, selectedClipId);
+    midiEditor.onClipEdited = [this](
+                                  const auto& trackId,
+                                  const auto& before,
+                                  const auto& after,
+                                  const auto& commandName)
+    {
+        editMidiClip(trackId, before, after, commandName);
+    };
+    midiEditor.onCaptureRetrospective = [this]
+    {
+        captureRetrospectiveMidi();
+    };
+    midiEditor.onImportDrumMap = [this] { importDrumMap(); };
+    midiEditor.onEditDrumMapEntry = [this](int pitch)
+    {
+        editDrumMapEntry(pitch);
+    };
+    midiEditor.onHumanize = [this] { humanizeSelectedMidiClip(); };
+    midiEditor.onApplyRoutingTemplate = [this](const auto& templateId)
+    {
+        applyMidiRoutingTemplate(templateId);
+    };
+    midiEditor.onClose = [this] { selectTrack(selectedTrackId); };
+    midiEditor.setVisible(false);
+    addAndMakeVisible(midiEditor);
 
     pluginBrowser = std::make_unique<PluginBrowserComponent>(pluginCatalog);
     pluginBrowser->addKeyListener(this);
@@ -1806,8 +1855,13 @@ void MainComponent::paint(juce::Graphics& graphics)
 
     const auto bodyTop = 76;
     constexpr auto resizerThickness = 6;
-    const auto mixerTop = getHeight() - 28 - mixerPanelHeight;
-    const auto bodyBottom = mixerTop - resizerThickness;
+    const auto showMidiEditor =
+        project.findMidiClip(selectedClipId) != nullptr;
+    const auto lowerPanelHeight = showMidiEditor
+        ? midiEditorHeight
+        : mixerPanelHeight;
+    const auto lowerPanelTop = getHeight() - 28 - lowerPanelHeight;
+    const auto bodyBottom = lowerPanelTop - resizerThickness;
     const auto inspectorLeft = getWidth() - inspectorPanelWidth;
     graphics.setColour(juce::Colour(StudioColours::panel));
     graphics.fillRect(0,
@@ -1856,12 +1910,19 @@ void MainComponent::paint(juce::Graphics& graphics)
                           18,
                           juce::Justification::centredLeft);
     }
-    if (mixerPanelHeight > 0)
+    if (lowerPanelHeight > 0)
     {
-        graphics.drawText("MIXER",
+        graphics.drawText(
+                          showMidiEditor
+                              ? (project.findMidiClip(selectedClipId)
+                                         ->editorMode
+                                     == MidiEditorMode::drums
+                                     ? "METAL DRUM EDITOR"
+                                     : "PIANO ROLL")
+                              : "MIXER",
                           14,
-                          mixerTop + 8,
-                          120,
+                          lowerPanelTop + 8,
+                          180,
                           18,
                           juce::Justification::centredLeft);
     }
@@ -1879,7 +1940,12 @@ void MainComponent::resized()
     auto header = bounds.removeFromTop(76);
     auto status = bounds.removeFromBottom(28);
     constexpr auto resizerThickness = 6;
-    auto mixerBounds = bounds.removeFromBottom(mixerPanelHeight);
+    const auto showMidiEditor =
+        project.findMidiClip(selectedClipId) != nullptr;
+    const auto lowerPanelHeight = showMidiEditor
+        ? midiEditorHeight
+        : mixerPanelHeight;
+    auto lowerPanelBounds = bounds.removeFromBottom(lowerPanelHeight);
     auto mixerResizerBounds = bounds.removeFromBottom(
         resizerThickness);
     auto left = bounds.removeFromLeft(leftPanelWidth);
@@ -1890,8 +1956,10 @@ void MainComponent::resized()
         resizerThickness);
 
     statusLabel.setBounds(status.reduced(10, 0));
-    mixer->setBounds(mixerBounds);
-    mixer->setVisible(mixerPanelHeight > 0);
+    mixer->setBounds(lowerPanelBounds);
+    mixer->setVisible(!showMidiEditor && mixerPanelHeight > 0);
+    midiEditor.setBounds(lowerPanelBounds);
+    midiEditor.setVisible(showMidiEditor);
     mixerPanelResizer->setBounds(mixerResizerBounds);
     leftPanelResizer->setBounds(leftResizerBounds);
     inspectorPanelResizer->setBounds(inspectorResizerBounds);
@@ -1924,6 +1992,8 @@ void MainComponent::resized()
                 area.removeFromLeft(62).reduced(3, verticalInset));
             saveButton.setBounds(
                 area.removeFromLeft(62).reduced(3, verticalInset));
+            dawProjectButton.setBounds(
+                area.removeFromLeft(108).reduced(3, verticalInset));
             exportButton.setBounds(
                 area.removeFromLeft(74).reduced(3, verticalInset));
             settingsButton.setBounds(
@@ -1963,7 +2033,7 @@ void MainComponent::resized()
         topRow.removeFromTop(4);
         auto secondRow = topRow.removeFromTop(28);
 
-        layoutFileControls(firstRow.removeFromLeft(356), 1);
+        layoutFileControls(firstRow.removeFromLeft(464), 1);
         layoutTempoControls(firstRow.removeFromRight(180), 2);
         metronomeButton.setBounds(
             firstRow.removeFromRight(78).reduced(3, 1));
@@ -1974,7 +2044,7 @@ void MainComponent::resized()
     }
     else
     {
-        layoutFileControls(topRow.removeFromLeft(356), 12);
+        layoutFileControls(topRow.removeFromLeft(464), 12);
         layoutEditControls(topRow.removeFromLeft(128), 12);
         layoutTransportControls(topRow.removeFromLeft(270), 9);
         layoutTempoControls(topRow.removeFromRight(180), 10);
@@ -2034,6 +2104,8 @@ void MainComponent::resized()
     sessionPanel.removeFromTop(8);
     automationButton.setBounds(sessionPanel.removeFromTop(34));
     sessionPanel.removeFromTop(18);
+    newMidiClipButton.setBounds(sessionPanel.removeFromTop(34));
+    sessionPanel.removeFromTop(12);
     pluginBrowser->setBounds(sessionPanel);
     pluginBrowser->setVisible(!leftPanelCollapsed);
 
@@ -2107,7 +2179,7 @@ void MainComponent::timerCallback()
         }
     }
 
-    if (!activeRecordingTargets.empty()
+    if (hasActiveRecordingTargets()
         && !audioEngine.isPlaying()
         && !recordingFinalizationInProgress)
     {
@@ -2121,7 +2193,7 @@ void MainComponent::timerCallback()
                           juce::dontSendNotification);
     const auto playing = audioEngine.isPlaying();
     playButton.setButtonText(playing ? "PAUSE" : "PLAY");
-    const auto recording = !activeRecordingTargets.empty();
+    const auto recording = hasActiveRecordingTargets();
     recordButton.setButtonText(recording ? "STOP REC" : "REC");
     recordButton.setColour(juce::TextButton::buttonColourId,
                            juce::Colour(recording ? StudioColours::orange
@@ -2191,7 +2263,9 @@ void MainComponent::timerCallback()
     {
         auto progress = audioEngine.recordingProgress();
         std::vector<TimelineComponent::RecordingPreview> previews;
-        previews.reserve(activeRecordingTargets.size());
+        previews.reserve(
+            activeRecordingTargets.size()
+            + activeMidiRecordingTrackIds.size());
         for (std::size_t index = 0; index < activeRecordingTargets.size(); ++index)
         {
             TimelineComponent::RecordingPreview preview;
@@ -2204,11 +2278,26 @@ void MainComponent::timerCallback()
             }
             previews.push_back(std::move(preview));
         }
-        const auto duration = progress.empty() ? 0.0 : progress.front().durationSeconds;
+        const auto midiDuration =
+            audioEngine.midiRecordingDurationSeconds();
+        for (const auto& trackId : activeMidiRecordingTrackIds)
+        {
+            previews.push_back({
+                trackId,
+                recordingStartSeconds,
+                midiDuration,
+                {}
+            });
+        }
+        const auto duration = progress.empty()
+            ? midiDuration
+            : progress.front().durationSeconds;
+        const auto trackCount = activeRecordingTargets.size()
+            + activeMidiRecordingTrackIds.size();
         timeline.setRecordingPreviews(std::move(previews));
         setStatus("Recording "
-                      + juce::String(static_cast<int>(activeRecordingTargets.size()))
-                      + (activeRecordingTargets.size() == 1 ? " track, " : " tracks, ")
+                      + juce::String(static_cast<int>(trackCount))
+                      + (trackCount == 1 ? " track, " : " tracks, ")
                       + juce::String(duration, 1)
                       + " s. Press STOP REC or STOP to finish.");
         updateTimelineSize();
@@ -2354,6 +2443,18 @@ bool MainComponent::keyPressed(const juce::KeyPress& key)
         return true;
     }
 
+    if (command && shift && key.getKeyCode() == 'M')
+    {
+        captureRetrospectiveMidi();
+        return true;
+    }
+
+    if (command && shift && key.getKeyCode() == 'N')
+    {
+        createMidiClip(selectedTrackId, audioEngine.positionSeconds());
+        return true;
+    }
+
     if (command && key.getKeyCode() == 'Z')
     {
         shift ? redo() : undo();
@@ -2423,7 +2524,7 @@ bool MainComponent::keyPressed(const juce::KeyPress& key)
 
 void MainComponent::createNewProject()
 {
-    if (!activeRecordingTargets.empty() || recordingFinalizationInProgress)
+    if (hasActiveRecordingTargets() || recordingFinalizationInProgress)
     {
         setStatus("Stop and finalize the current recording before creating a project.", true);
         return;
@@ -2434,6 +2535,7 @@ void MainComponent::createNewProject()
         ProjectFile::clearReducedIsolationMarker(projectPackage);
     project = Project::createDefault();
     projectPackage = juce::File();
+    transientCompatibilityReport.reset();
     reducedIsolationMarkerSignature.clear();
     activeAutomationGesture.reset();
     pendingAutomationPreview.reset();
@@ -2552,6 +2654,472 @@ void MainComponent::beginExportMix()
                                   : result.withFileExtension("wav"));
         safe->fileChooser.reset();
     });
+}
+
+void MainComponent::showDawProjectMenu()
+{
+    const auto hasReport = latestCompatibilityReport() != nullptr;
+    juce::PopupMenu menu;
+    menu.addItem(
+        "Import DAWproject 1.0...",
+        !exportInProgress,
+        false,
+        [this] { beginImportDawProject(); });
+    menu.addItem(
+        "Export DAWproject 1.0...",
+        !exportInProgress,
+        false,
+        [this] { beginExportDawProject(); });
+    menu.addSeparator();
+    menu.addItem(
+        "View latest compatibility report",
+        hasReport,
+        false,
+        [this] { showLatestCompatibilityReport(); });
+    menu.addItem(
+        "Save latest compatibility report...",
+        hasReport,
+        false,
+        [this] { beginSaveCompatibilityReport(); });
+    menu.showMenuAsync(
+        juce::PopupMenu::Options().withTargetComponent(
+            dawProjectButton));
+}
+
+void MainComponent::beginImportDawProject()
+{
+    if (hasActiveRecordingTargets() || recordingFinalizationInProgress)
+    {
+        setStatus(
+            "Stop and finalize recording before importing a DAWproject.",
+            true);
+        return;
+    }
+    if (exportInProgress)
+    {
+        setStatus(
+            "Another save, import, or export is already in progress.",
+            true);
+        return;
+    }
+    fileChooser = std::make_unique<juce::FileChooser>(
+        "Import DAWproject 1.0",
+        juce::File::getSpecialLocation(
+            juce::File::userMusicDirectory),
+        "*.dawproject",
+        true,
+        false,
+        this);
+    const auto flags = juce::FileBrowserComponent::openMode
+        | juce::FileBrowserComponent::canSelectFiles;
+    fileChooser->launchAsync(
+        flags,
+        [safe = juce::Component::SafePointer<MainComponent>(this)](
+            const auto& chooser)
+        {
+            if (safe == nullptr)
+                return;
+            const auto source = chooser.getResult();
+            safe->fileChooser.reset();
+            if (source.existsAsFile())
+                safe->chooseDawProjectImportDestination(source);
+        });
+}
+
+void MainComponent::chooseDawProjectImportDestination(
+    const juce::File& sourceArchive)
+{
+    const auto initial = sourceArchive.getSiblingFile(
+        sourceArchive.getFileNameWithoutExtension()
+        + ".studioduo");
+    fileChooser = std::make_unique<juce::FileChooser>(
+        "Create Studio Duo project from DAWproject",
+        initial,
+        "*.studioduo",
+        true,
+        true,
+        this);
+    const auto flags = juce::FileBrowserComponent::saveMode
+        | juce::FileBrowserComponent::canSelectFiles;
+    fileChooser->launchAsync(
+        flags,
+        [safe = juce::Component::SafePointer<MainComponent>(this),
+         sourceArchive](const auto& chooser)
+        {
+            if (safe == nullptr)
+                return;
+            const auto destination = chooser.getResult();
+            safe->fileChooser.reset();
+            if (destination != juce::File())
+                safe->importDawProjectTo(
+                    sourceArchive,
+                    destination);
+        });
+}
+
+void MainComponent::importDawProjectTo(
+    const juce::File& sourceArchive,
+    const juce::File& destinationPackage)
+{
+    exportInProgress = true;
+    stopTimer();
+    exportInputBlocker.setVisible(true);
+    exportInputBlocker.toFront(false);
+    exportInputBlocker.grabKeyboardFocus();
+    const auto result = DawProjectIO::importProject(
+        sourceArchive,
+        destinationPackage);
+    exportInputBlocker.setVisible(false);
+    startTimerHz(30);
+    exportInProgress = false;
+    transientCompatibilityReport = result.report;
+    if (!result.succeeded())
+    {
+        setStatus(result.result.getErrorMessage(), true);
+        showLatestCompatibilityReport();
+        return;
+    }
+
+    openProjectFrom(result.package);
+    transientCompatibilityReport = result.report;
+    const auto notices =
+        static_cast<int>(result.report.issues.size());
+    setStatus(
+        "Imported "
+            + sourceArchive.getFullPathName()
+            + " into "
+            + result.package.getFullPathName()
+            + (notices > 0
+                   ? " with " + juce::String(notices)
+                       + " compatibility notice"
+                       + (notices == 1 ? "." : "s.")
+                   : juce::String(".")),
+        result.report.hasErrors());
+}
+
+void MainComponent::beginExportDawProject()
+{
+    if (hasActiveRecordingTargets() || recordingFinalizationInProgress)
+    {
+        setStatus(
+            "Stop and finalize recording before exporting DAWproject.",
+            true);
+        return;
+    }
+    if (exportInProgress)
+    {
+        setStatus(
+            "Another save, import, or export is already in progress.",
+            true);
+        return;
+    }
+
+    const auto initial =
+        (projectPackage.exists()
+             ? projectPackage.getParentDirectory()
+             : juce::File::getSpecialLocation(
+                   juce::File::userMusicDirectory))
+            .getChildFile(project.name + ".dawproject");
+    fileChooser = std::make_unique<juce::FileChooser>(
+        "Export DAWproject 1.0",
+        initial,
+        "*.dawproject",
+        true,
+        false,
+        this);
+    const auto flags = juce::FileBrowserComponent::saveMode
+        | juce::FileBrowserComponent::canSelectFiles;
+    fileChooser->launchAsync(
+        flags,
+        [safe = juce::Component::SafePointer<MainComponent>(this)](
+            const auto& chooser)
+        {
+            if (safe == nullptr)
+                return;
+            const auto destination = chooser.getResult();
+            safe->fileChooser.reset();
+            if (destination != juce::File())
+                safe->exportDawProjectTo(destination);
+        });
+}
+
+void MainComponent::exportDawProjectTo(
+    const juce::File& destinationArchive)
+{
+    exportInProgress = true;
+    stopTimer();
+    exportInputBlocker.setVisible(true);
+    exportInputBlocker.toFront(false);
+    exportInputBlocker.grabKeyboardFocus();
+    const auto normalisedDestination =
+        DawProjectIO::normaliseArchivePath(destinationArchive);
+    const auto statePackage =
+        normalisedDestination.getSiblingFile(
+            normalisedDestination.getFileNameWithoutExtension()
+            + ".export-state-" + juce::Uuid().toString()
+            + ".studioduo");
+    const auto resumePlayback = audioEngine.isPlaying();
+    if (resumePlayback)
+        audioEngine.pause();
+    const auto finishExport = [&]
+    {
+        if (statePackage.exists())
+            statePackage.deleteRecursively();
+        if (resumePlayback)
+            audioEngine.play();
+        exportInputBlocker.setVisible(false);
+        startTimerHz(30);
+        exportInProgress = false;
+    };
+    const auto failPreparation =
+        [&](const juce::String& code,
+            const juce::String& objectPath,
+            const juce::String& message)
+    {
+        CompatibilityReport report;
+        report.format = "DAWproject 1.0";
+        report.operation = "export";
+        report.source = projectPackage.exists()
+            ? projectPackage.getFullPathName()
+            : juce::String("(unsaved Studio Duo project)");
+        report.destination =
+            normalisedDestination.getFullPathName();
+        report.createdAt =
+            juce::Time::getCurrentTime().toISO8601(true);
+        report.issues.push_back({
+            CompatibilitySeverity::error,
+            code,
+            objectPath,
+            message
+        });
+        finishExport();
+        recordCompatibilityReport(report);
+        setStatus(message, true);
+        showLatestCompatibilityReport();
+    };
+    auto exportProject = project;
+    juce::String materializeWarning;
+    juce::String error;
+    if (!statePackage.createDirectory()
+        || !materializePluginStateReferences(
+            exportProject,
+            projectPackage,
+            statePackage,
+            materializeWarning,
+            error))
+    {
+        failPreparation(
+            "export.state-staging",
+            "/Project",
+            error.isNotEmpty()
+                ? error
+                : juce::String(
+                      "Could not create the temporary export state package."));
+        return;
+    }
+
+    std::vector<CompatibilityIssue> preparationIssues;
+    for (auto& capture : audioEngine.capturePluginStates(2000))
+    {
+        if (capture.insertId.isEmpty())
+        {
+            failPreparation(
+                "export.device-state-capture",
+                "/Project/Devices",
+                capture.result.getErrorMessage());
+            return;
+        }
+        auto* track = exportProject.findTrack(capture.trackId);
+        if (track == nullptr)
+            continue;
+        const auto insert = std::find_if(
+            track->inserts.begin(),
+            track->inserts.end(),
+            [&capture](const auto& candidate)
+            {
+                return candidate.id == capture.insertId;
+            });
+        if (insert == track->inserts.end())
+            continue;
+        if (capture.result.failed())
+        {
+            if (capture.preservePreviousState)
+            {
+                preparationIssues.push_back({
+                    CompatibilitySeverity::warning,
+                    "export.device-state-preserved",
+                    "/Project/Structure/Track[" + capture.trackId
+                        + "]/Device[" + capture.insertId + "]",
+                    capture.result.getErrorMessage()
+                });
+                continue;
+            }
+            failPreparation(
+                "export.device-state-capture",
+                "/Project/Structure/Track[" + capture.trackId
+                    + "]/Device[" + capture.insertId + "]",
+                capture.name + ": "
+                    + capture.result.getErrorMessage());
+            return;
+        }
+        if (capture.state.isEmpty())
+            continue;
+        const auto reference = PluginStateStore::store(
+            statePackage,
+            capture.state,
+            error);
+        if (!reference.has_value())
+        {
+            failPreparation(
+                "export.device-state-store",
+                "/Project/Structure/Track[" + capture.trackId
+                    + "]/Device[" + capture.insertId + "]",
+                error);
+            return;
+        }
+        insert->stateFile = reference->relativePath;
+        insert->stateHash = reference->hash;
+        insert->stateFormat =
+            insert->format.containsIgnoreCase("CLAP")
+            ? PluginStateFormat::clapPreset
+            : PluginStateFormat::hostOpaque;
+    }
+
+    auto result = DawProjectIO::exportProject(
+        exportProject,
+        statePackage,
+        normalisedDestination);
+    result.report.source = projectPackage.exists()
+        ? projectPackage.getFullPathName()
+        : juce::String("(unsaved Studio Duo project)");
+    if (materializeWarning.isNotEmpty())
+    {
+        result.report.issues.push_back({
+            CompatibilitySeverity::warning,
+            "export.device-state-materialization",
+            "/Project",
+            materializeWarning
+        });
+    }
+    result.report.issues.insert(
+        result.report.issues.end(),
+        preparationIssues.begin(),
+        preparationIssues.end());
+    finishExport();
+    recordCompatibilityReport(result.report);
+    if (!result.succeeded())
+    {
+        setStatus(result.result.getErrorMessage(), true);
+        showLatestCompatibilityReport();
+        return;
+    }
+    const auto notices =
+        static_cast<int>(result.report.issues.size());
+    setStatus(
+        "Exported "
+            + result.archive.getFullPathName()
+            + (notices > 0
+                   ? " with " + juce::String(notices)
+                       + " compatibility notice"
+                       + (notices == 1 ? "." : "s.")
+                   : juce::String(".")));
+}
+
+const CompatibilityReport*
+MainComponent::latestCompatibilityReport() const noexcept
+{
+    if (transientCompatibilityReport.has_value())
+        return &*transientCompatibilityReport;
+    return project.compatibilityReports.empty()
+        ? nullptr
+        : &project.compatibilityReports.back();
+}
+
+void MainComponent::recordCompatibilityReport(
+    const CompatibilityReport& report)
+{
+    transientCompatibilityReport = report;
+    project.compatibilityReports.push_back(report);
+    constexpr auto maximumReports = std::size_t { 50 };
+    if (project.compatibilityReports.size() > maximumReports)
+    {
+        project.compatibilityReports.erase(
+            project.compatibilityReports.begin(),
+            project.compatibilityReports.begin()
+                + static_cast<std::ptrdiff_t>(
+                    project.compatibilityReports.size()
+                    - maximumReports));
+    }
+    projectChanged();
+}
+
+void MainComponent::showLatestCompatibilityReport()
+{
+    const auto* report = latestCompatibilityReport();
+    if (report == nullptr)
+    {
+        setStatus("No DAWproject compatibility report is available.", true);
+        return;
+    }
+    juce::AlertWindow::showMessageBoxAsync(
+        report->hasErrors()
+            ? juce::MessageBoxIconType::WarningIcon
+            : juce::MessageBoxIconType::InfoIcon,
+        "DAWproject compatibility report",
+        report->toText());
+}
+
+void MainComponent::beginSaveCompatibilityReport()
+{
+    const auto* report = latestCompatibilityReport();
+    if (report == nullptr)
+    {
+        setStatus("No DAWproject compatibility report is available.", true);
+        return;
+    }
+    const auto reportCopy = *report;
+    const auto directory = projectPackage.exists()
+        ? projectPackage.getParentDirectory()
+        : juce::File::getSpecialLocation(
+              juce::File::userDocumentsDirectory);
+    fileChooser = std::make_unique<juce::FileChooser>(
+        "Save DAWproject compatibility report",
+        directory.getChildFile(
+            project.name + "-dawproject-report.json"),
+        "*.json",
+        true,
+        false,
+        this);
+    const auto flags = juce::FileBrowserComponent::saveMode
+        | juce::FileBrowserComponent::canSelectFiles;
+    fileChooser->launchAsync(
+        flags,
+        [safe = juce::Component::SafePointer<MainComponent>(this),
+         reportCopy](const auto& chooser)
+        {
+            if (safe == nullptr)
+                return;
+            auto destination = chooser.getResult();
+            safe->fileChooser.reset();
+            if (destination == juce::File())
+                return;
+            if (!destination.hasFileExtension("json"))
+                destination = destination.withFileExtension("json");
+            const auto result =
+                DawProjectIO::saveCompatibilityReport(
+                    reportCopy,
+                    destination);
+            if (result.failed())
+            {
+                safe->showError(
+                    "Compatibility report save failed",
+                    result.getErrorMessage());
+                return;
+            }
+            safe->setStatus(
+                "Saved compatibility report to "
+                + destination.getFullPathName() + ".");
+        });
 }
 
 void MainComponent::showSettings(bool showUpdates)
@@ -2817,6 +3385,10 @@ void MainComponent::saveProjectTo(const juce::File& package)
         }
         insert->stateFile = reference->relativePath;
         insert->stateHash = reference->hash;
+        insert->stateFormat =
+            insert->format.containsIgnoreCase("CLAP")
+            ? PluginStateFormat::clapPreset
+            : PluginStateFormat::hostOpaque;
     }
 
     juce::String materializeError;
@@ -2941,6 +3513,10 @@ bool MainComponent::captureCurrentPluginStates(
             return false;
         insert->stateFile = reference->relativePath;
         insert->stateHash = reference->hash;
+        insert->stateFormat =
+            insert->format.containsIgnoreCase("CLAP")
+            ? PluginStateFormat::clapPreset
+            : PluginStateFormat::hostOpaque;
     }
     return true;
 }
@@ -3024,7 +3600,7 @@ void MainComponent::openProjectFrom(const juce::File& package)
         return;
     }
 
-    if (!activeRecordingTargets.empty() || recordingFinalizationInProgress)
+    if (hasActiveRecordingTargets() || recordingFinalizationInProgress)
     {
         setStatus("Stop and finalize the current recording before opening a project.", true);
         return;
@@ -3051,6 +3627,7 @@ void MainComponent::openProjectFrom(const juce::File& package)
         }
     }
     project = std::move(opened->project);
+    transientCompatibilityReport.reset();
     activeAutomationGesture.reset();
     pendingAutomationPreview.reset();
     commandStack.clear();
@@ -3143,11 +3720,51 @@ void MainComponent::exportMixTo(const juce::File& destination)
             }
         }
 
+    auto renderRequests = pluginRuntimeRequests(exportProject);
+    for (const auto& capture : audioEngine.capturePluginStates(2000))
+    {
+        if (capture.insertId.isEmpty())
+        {
+            exportInputBlocker.setVisible(false);
+            startTimerHz(30);
+            exportInProgress = false;
+            showError(
+                "Export failed",
+                capture.result.getErrorMessage());
+            return;
+        }
+        const auto request = std::find_if(
+            renderRequests.begin(),
+            renderRequests.end(),
+            [&capture](const auto& candidate)
+            {
+                return candidate.insertId == capture.insertId;
+            });
+        if (request == renderRequests.end())
+            continue;
+        if (capture.result.failed())
+        {
+            if (capture.preservePreviousState)
+                continue;
+            exportInputBlocker.setVisible(false);
+            startTimerHz(30);
+            exportInProgress = false;
+            showError(
+                "Export failed",
+                capture.name
+                    + ": "
+                    + capture.result.getErrorMessage());
+            return;
+        }
+        request->state = capture.state;
+        request->missing = false;
+    }
+
     const auto result = audioEngine.renderToWav(
         exportProject,
         destination,
         48000.0,
-        pluginRuntimeRequests());
+        std::move(renderRequests));
     if (result.failed())
     {
         exportInputBlocker.setVisible(false);
@@ -3171,7 +3788,7 @@ void MainComponent::togglePlayback()
         return;
     }
 
-    if (!activeRecordingTargets.empty())
+    if (hasActiveRecordingTargets())
     {
         stopTransportAndRecording();
         return;
@@ -3221,14 +3838,23 @@ void MainComponent::toggleRecording()
         return;
     }
 
-    if (!activeRecordingTargets.empty())
+    if (hasActiveRecordingTargets())
     {
         finishRecording();
         return;
     }
 
     auto parentIds = project.armedAudioParentTrackIds();
-    if (parentIds.empty())
+    std::vector<juce::String> midiTrackIds;
+    for (const auto& track : project.tracks)
+    {
+        if (track.parentTrackId.isEmpty()
+            && track.armed
+            && (track.type == TrackType::midi
+                || track.type == TrackType::instrument))
+            midiTrackIds.push_back(track.id);
+    }
+    if (parentIds.empty() && midiTrackIds.empty())
     {
         const auto* selected = project.findTrack(selectedTrackId);
         if (selected != nullptr && selected->type == TrackType::audio)
@@ -3239,22 +3865,39 @@ void MainComponent::toggleRecording()
             if (project.findTrack(parentId) != nullptr)
                 parentIds.push_back(parentId);
         }
+        else if (selected != nullptr
+                 && selected->parentTrackId.isEmpty()
+                 && (selected->type == TrackType::midi
+                     || selected->type == TrackType::instrument))
+        {
+            midiTrackIds.push_back(selected->id);
+        }
     }
 
-    if (parentIds.empty())
+    if (parentIds.empty() && midiTrackIds.empty())
     {
-        showError("Recording unavailable", "Select an audio track or add a new one first.");
+        showError(
+            "Recording unavailable",
+            "Arm or select an audio, MIDI, or instrument track first.");
         return;
     }
 
-    auto folder = projectPackage.exists()
-        ? projectPackage.getChildFile("media")
-        : juce::File::getSpecialLocation(juce::File::userMusicDirectory)
-              .getChildFile("Studio Duo Recordings");
-    if (const auto folderResult = folder.createDirectory(); folderResult.failed())
+    auto folder = juce::File();
+    if (!parentIds.empty())
     {
-        showError("Recording unavailable", folderResult.getErrorMessage());
-        return;
+        folder = projectPackage.exists()
+            ? projectPackage.getChildFile("media")
+            : juce::File::getSpecialLocation(
+                  juce::File::userMusicDirectory)
+                  .getChildFile("Studio Duo Recordings");
+        if (const auto folderResult = folder.createDirectory();
+            folderResult.failed())
+        {
+            showError(
+                "Recording unavailable",
+                folderResult.getErrorMessage());
+            return;
+        }
     }
 
     const auto timestamp = juce::Time::getCurrentTime().formatted("%Y%m%d-%H%M%S");
@@ -3301,7 +3944,10 @@ void MainComponent::toggleRecording()
 
     activeRecordingPlan = project.recordingPlan(audioEngine.positionSeconds());
     recordingStartSeconds = activeRecordingPlan.captureStartSeconds;
-    const auto result = audioEngine.startRecording(requests, activeRecordingPlan);
+    const auto result = audioEngine.startRecording(
+        requests,
+        activeRecordingPlan,
+        !midiTrackIds.empty());
     if (result.failed())
     {
         showError("Recording unavailable", result.getErrorMessage());
@@ -3309,21 +3955,33 @@ void MainComponent::toggleRecording()
     }
 
     activeRecordingTargets = std::move(targets);
+    activeMidiRecordingTrackIds = std::move(midiTrackIds);
     std::vector<TimelineComponent::RecordingPreview> previews;
-    previews.reserve(activeRecordingTargets.size());
+    previews.reserve(
+        activeRecordingTargets.size()
+        + activeMidiRecordingTrackIds.size());
     for (const auto& target : activeRecordingTargets)
         previews.push_back({ target.parentTrackId, recordingStartSeconds, 0.0, { 0.0f } });
+    for (const auto& trackId : activeMidiRecordingTrackIds)
+        previews.push_back({ trackId, recordingStartSeconds, 0.0, {} });
     timeline.setRecordingPreviews(std::move(previews));
     setStatus("Recording "
-                  + juce::String(static_cast<int>(activeRecordingTargets.size()))
-                  + (activeRecordingTargets.size() == 1 ? " track." : " synchronized tracks.")
+                  + juce::String(
+                      static_cast<int>(
+                          activeRecordingTargets.size()
+                          + activeMidiRecordingTrackIds.size()))
+                  + (activeRecordingTargets.size()
+                             + activeMidiRecordingTrackIds.size()
+                         == 1
+                         ? " track."
+                         : " synchronized tracks.")
                   + " Press REC or STOP to finish.");
 }
 
 void MainComponent::stopTransportAndRecording()
 {
     playAfterRuntimeTransition = false;
-    if (!activeRecordingTargets.empty() || audioEngine.isRecording())
+    if (hasActiveRecordingTargets() || audioEngine.isRecording())
         finishRecording();
     else
     {
@@ -3343,41 +4001,75 @@ void MainComponent::finishRecording()
     if (recordingFinalizationInProgress)
         return;
 
-    if (activeRecordingTargets.empty() && !audioEngine.isRecording())
+    if (!hasActiveRecordingTargets() && !audioEngine.isRecording())
         return;
 
     auto pendingTargets = std::move(activeRecordingTargets);
     activeRecordingTargets.clear();
+    auto pendingMidiTrackIds = std::move(activeMidiRecordingTrackIds);
+    activeMidiRecordingTrackIds.clear();
+    std::optional<StudioAudioEngine::MidiRecordingResult> midiRecording;
+    if (!pendingMidiTrackIds.empty())
+        midiRecording = audioEngine.stopMidiRecording();
     recordingFinalizationInProgress = true;
     recordButton.setButtonText("REC");
     recordButton.setColour(juce::TextButton::buttonColourId,
                            juce::Colour(StudioColours::raised));
     timeline.clearRecordingPreviews();
-    setStatus("Stopping capture and finalizing "
-                  + juce::String(static_cast<int>(pendingTargets.size()))
-                  + (pendingTargets.size() == 1 ? " WAV..." : " synchronized WAVs..."));
+    setStatus(
+        pendingTargets.empty()
+            ? "Stopping MIDI capture..."
+            : "Stopping capture and finalizing "
+                + juce::String(static_cast<int>(pendingTargets.size()))
+                + (pendingTargets.size() == 1
+                       ? " WAV..."
+                       : " synchronized WAVs..."));
+
+    if (pendingTargets.empty())
+    {
+        auto recordings = audioEngine.stopRecording();
+        completeRecording(
+            {},
+            std::move(recordings),
+            std::move(pendingMidiTrackIds),
+            std::move(midiRecording));
+        return;
+    }
 
     audioEngine.stopRecordingAsync(
         [safe = juce::Component::SafePointer<MainComponent>(this),
-         targets = std::move(pendingTargets)](auto recordings) mutable
+         targets = std::move(pendingTargets),
+         midiTrackIds = std::move(pendingMidiTrackIds),
+         capturedMidi = std::move(midiRecording)](auto recordings) mutable
         {
             if (safe != nullptr)
-                safe->completeRecording(std::move(targets), std::move(recordings));
+                safe->completeRecording(
+                    std::move(targets),
+                    std::move(recordings),
+                    std::move(midiTrackIds),
+                    std::move(capturedMidi));
         });
 }
 
 void MainComponent::completeRecording(
     std::vector<ActiveRecordingTarget> targets,
-    std::vector<StudioAudioEngine::RecordingResult> recordings)
+    std::vector<StudioAudioEngine::RecordingResult> recordings,
+    std::vector<juce::String> midiTrackIds,
+    std::optional<StudioAudioEngine::MidiRecordingResult> midiRecording)
 {
     recordingFinalizationInProgress = false;
-    if (targets.size() != recordings.size() || recordings.empty())
+    if (targets.size() != recordings.size()
+        || (recordings.empty() && midiTrackIds.empty()))
     {
         showError("Recording failed", "The recording engine returned an incomplete multitrack take.");
         return;
     }
 
-    const auto expectedDuration = recordings.front().durationSeconds;
+    const auto expectedDuration = recordings.empty()
+        ? midiRecording.has_value()
+            ? midiRecording->durationSeconds
+            : 0.0
+        : recordings.front().durationSeconds;
     const auto durationTolerance = 1.0 / audioEngine.currentSampleRate();
     juce::String warning;
     std::vector<Track> completedTracks;
@@ -3467,16 +4159,166 @@ void MainComponent::completeRecording(
             warning = recording.warning;
     }
 
-    const auto firstTrackId = completedTracks.front().id;
     const auto completedTakeCount = completedTracks.size();
-    if (!perform(std::make_unique<AddRecordingTakeCommand>(std::move(completedTracks))))
+    std::vector<std::unique_ptr<ProjectCommand>> commands;
+    juce::String selectionTrackId;
+    if (!completedTracks.empty())
+    {
+        selectionTrackId = completedTracks.front().id;
+        commands.push_back(std::make_unique<AddRecordingTakeCommand>(
+            std::move(completedTracks)));
+    }
+
+    auto midiClipCount = 0;
+    if (!midiTrackIds.empty())
+    {
+        if (!midiRecording.has_value()
+            || midiRecording->result.failed())
+        {
+            const auto message = midiRecording.has_value()
+                ? midiRecording->result.getErrorMessage()
+                : juce::String("The MIDI capture result is unavailable.");
+            if (commands.empty())
+            {
+                showError("MIDI recording failed", message);
+                return;
+            }
+            warning << (warning.isNotEmpty() ? " " : "")
+                    << message;
+        }
+        else
+        {
+            for (const auto& midiTrackId : midiTrackIds)
+            {
+                const auto* track = project.findTrack(midiTrackId);
+                if (track == nullptr)
+                {
+                    warning << (warning.isNotEmpty() ? " " : "")
+                            << "A recorded MIDI track was removed before capture completed.";
+                    continue;
+                }
+                const DrumMap* drumMap = nullptr;
+                const auto existingDrumClip = std::find_if(
+                    track->midiClips.cbegin(),
+                    track->midiClips.cend(),
+                    [](const auto& clip)
+                    {
+                        return clip.editorMode == MidiEditorMode::drums
+                            && clip.drumMapId.isNotEmpty();
+                    });
+                if (existingDrumClip != track->midiClips.cend())
+                    drumMap = project.findDrumMap(
+                        existingDrumClip->drumMapId);
+                if (drumMap == nullptr
+                    && track->name.containsIgnoreCase("drum")
+                    && !project.drumMaps.empty())
+                    drumMap = &project.drumMaps.front();
+                const auto passes = recordingPasses(
+                    midiRecording->durationSeconds,
+                    activeRecordingPlan);
+                for (std::size_t passIndex = 0;
+                     passIndex < passes.size();
+                     ++passIndex)
+                {
+                    const auto& pass = passes[passIndex];
+                    juce::String conversionError;
+                    auto converted = convertCapturedMidiToClip(
+                        project,
+                        midiRecording->captured,
+                        midiRecording->captureStartStreamSample
+                            + static_cast<std::int64_t>(
+                                std::llround(
+                                    pass.sourceOffsetSeconds
+                                    * midiRecording->sampleRate)),
+                        pass.timelineStartSeconds,
+                        pass.durationSeconds,
+                        midiRecording->sampleRate,
+                        drumMap,
+                        track->name
+                            + " Recording"
+                            + (passes.size() > 1
+                                   ? " pass "
+                                       + juce::String(
+                                           static_cast<int>(
+                                               passIndex + 1))
+                                   : juce::String()),
+                        conversionError);
+                    if (!converted.has_value())
+                    {
+                        warning << (warning.isNotEmpty() ? " " : "")
+                                << track->name << ": "
+                                << conversionError;
+                        continue;
+                    }
+                    if (selectionTrackId.isEmpty())
+                    {
+                        selectionTrackId = track->id;
+                        firstClipId = converted->clip.id;
+                    }
+                    commands.push_back(
+                        std::make_unique<AddMidiClipCommand>(
+                            track->id,
+                            std::move(converted->clip)));
+                    ++midiClipCount;
+                    if (converted->ignoredEvents > 0
+                        || converted->unmatchedNoteOffs > 0)
+                    {
+                        warning << (warning.isNotEmpty() ? " " : "")
+                                << "Ignored "
+                                << juce::String(
+                                       static_cast<juce::int64>(
+                                           converted->ignoredEvents
+                                           + converted->unmatchedNoteOffs))
+                                << " unsupported or unmatched MIDI events.";
+                    }
+                }
+            }
+            if (midiRecording->warning.isNotEmpty())
+            {
+                warning << (warning.isNotEmpty() ? " " : "")
+                        << midiRecording->warning;
+            }
+        }
+    }
+
+    if (commands.empty())
+    {
+        showError(
+            "Recording failed",
+            warning.isNotEmpty()
+                ? warning
+                : juce::String("The recording did not produce any clips."));
         return;
-    selectClip(firstTrackId, firstClipId);
-    const auto savedMessage = "Saved "
-        + juce::String(static_cast<int>(completedTakeCount))
-        + (completedTakeCount == 1 ? " take (" : " synchronized takes (")
-        + juce::String(expectedDuration, 2)
-        + " s).";
+    }
+    const auto commandName = completedTakeCount > 0 && midiClipCount > 0
+        ? "Add audio and MIDI recording"
+        : completedTakeCount > 0
+            ? "Add recording take"
+            : "Add MIDI recording";
+    if (!perform(std::make_unique<BatchProjectCommand>(
+            commandName,
+            std::move(commands))))
+        return;
+    selectClip(selectionTrackId, firstClipId);
+    auto savedMessage = juce::String("Saved ");
+    if (completedTakeCount > 0)
+    {
+        savedMessage << juce::String(
+                            static_cast<int>(completedTakeCount))
+                     << (completedTakeCount == 1
+                             ? " audio take"
+                             : " synchronized audio takes");
+    }
+    if (midiClipCount > 0)
+    {
+        if (completedTakeCount > 0)
+            savedMessage << " and ";
+        savedMessage << juce::String(midiClipCount)
+                     << (midiClipCount == 1
+                             ? " editable MIDI clip"
+                             : " editable MIDI clips");
+    }
+    savedMessage << " (" << juce::String(expectedDuration, 2) << " s).";
     setStatus(warning.isNotEmpty()
                   ? savedMessage + " " + warning
                   : savedMessage,
@@ -3602,7 +4444,7 @@ void MainComponent::showAddTrackMenu()
 
 void MainComponent::duplicateSelectedTrack()
 {
-    if (!activeRecordingTargets.empty() || recordingFinalizationInProgress)
+    if (hasActiveRecordingTargets() || recordingFinalizationInProgress)
     {
         setStatus("Stop and finalize recording before duplicating tracks.", true);
         return;
@@ -3629,7 +4471,7 @@ void MainComponent::deleteSelectedTrack()
         setStatus("Select a non-master track to delete.", true);
         return;
     }
-    if (!activeRecordingTargets.empty() || recordingFinalizationInProgress)
+    if (hasActiveRecordingTargets() || recordingFinalizationInProgress)
     {
         setStatus("Stop and finalize recording before deleting tracks.", true);
         return;
@@ -3666,6 +4508,25 @@ void MainComponent::addPluginToSelectedTrack(const PluginCatalogEntry& entry)
         setStatus("Select a track before adding a plugin.", true);
         return;
     }
+    if (entry.bundledDevice
+        && entry.instrument
+        && track->type != TrackType::instrument)
+    {
+        setStatus(
+            entry.name
+                + " requires an instrument track so its audio outputs can be routed.",
+            true);
+        return;
+    }
+    if (entry.bundledDevice
+        && !entry.instrument
+        && track->type == TrackType::midi)
+    {
+        setStatus(
+            entry.name + " requires an audio-capable track.",
+            true);
+        return;
+    }
 
     PluginInsert insert;
     insert.pluginIdentifier = entry.identifier;
@@ -3700,7 +4561,11 @@ void MainComponent::addPluginToSelectedTrack(const PluginCatalogEntry& entry)
 
     if (perform(std::make_unique<AddPluginInsertCommand>(track->id, insert)))
     {
-        setStatus(entry.name + " added as a sandboxed insert model.");
+        setStatus(
+            entry.name
+            + (entry.bundledDevice
+                   ? " added as a bundled insert."
+                   : " added as a sandboxed insert model."));
         inspectorViewport.setViewPosition(
             0,
             juce::jmax(0, insertPanel->getY() - 16));
@@ -4092,7 +4957,8 @@ void MainComponent::trimSelectedClipEndToPlayhead()
 
 void MainComponent::copySelectedClip()
 {
-    if (project.findClip(selectedClipId) == nullptr)
+    if (project.findClip(selectedClipId) == nullptr
+        && project.findMidiClip(selectedClipId) == nullptr)
     {
         setStatus("Select a clip before copying.", true);
         return;
@@ -4126,6 +4992,29 @@ void MainComponent::duplicateSelectedClip()
 
 void MainComponent::duplicateClip(const juce::String& clipId)
 {
+    if (const auto* source = project.findMidiClip(clipId))
+    {
+        const auto* track = project.findTrackContainingMidiClip(clipId);
+        if (track == nullptr)
+        {
+            setStatus("The MIDI clip to duplicate is unavailable.", true);
+            return;
+        }
+        auto duplicate = *source;
+        regenerateMidiClipIds(duplicate);
+        duplicate.name += " Copy";
+        duplicate.startBeats = source->endBeats();
+        const auto duplicatedId = duplicate.id;
+        if (perform(std::make_unique<AddMidiClipCommand>(
+                track->id,
+                std::move(duplicate))))
+        {
+            selectClip(track->id, duplicatedId);
+            setStatus("MIDI clip duplicated and opened in the lower editor.");
+        }
+        return;
+    }
+
     auto command = std::make_unique<DuplicateClipCommand>(clipId);
     auto* commandPointer = command.get();
     if (!perform(std::move(command)))
@@ -4140,6 +5029,20 @@ void MainComponent::deleteSelectedClip()
 {
     if (selectedClipId.isEmpty())
         return;
+
+    if (project.findMidiClip(selectedClipId) != nullptr)
+    {
+        if (perform(std::make_unique<DeleteMidiClipCommand>(
+                selectedClipId)))
+        {
+            selectedClipId.clear();
+            timeline.setSelection(selectedTrackId, {});
+            midiEditor.setSelection(selectedTrackId, {});
+            updateInspector();
+            resized();
+        }
+        return;
+    }
 
     const auto* selected = project.findClip(selectedClipId);
     const auto reference = selected != nullptr
@@ -4162,6 +5065,480 @@ void MainComponent::deleteSelectedClip()
         timeline.setSelection(selectedTrackId, {});
         updateInspector();
     }
+}
+
+void MainComponent::createMidiClip(const juce::String& trackId,
+                                   double startSeconds)
+{
+    const auto* track = project.findTrack(trackId);
+    if (track == nullptr
+        || track->parentTrackId.isNotEmpty()
+        || (track->type != TrackType::midi
+            && track->type != TrackType::instrument))
+    {
+        setStatus(
+            "Select a root MIDI or instrument track before creating a MIDI clip.",
+            true);
+        return;
+    }
+
+    const auto meter = project.meterAt(startSeconds);
+    MidiClip clip;
+    clip.name = track->name + " MIDI";
+    clip.startBeats = project.beatsAt(std::max(0.0, startSeconds));
+    clip.durationBeats = static_cast<double>(meter.numerator)
+        * 4.0
+        / static_cast<double>(meter.denominator);
+    const auto clipId = clip.id;
+    if (perform(std::make_unique<AddMidiClipCommand>(
+            track->id,
+            std::move(clip))))
+    {
+        selectClip(track->id, clipId);
+        midiEditor.grabKeyboardFocus();
+        setStatus("Created an editable MIDI clip. Double-click empty MIDI track space to create another.");
+    }
+}
+
+void MainComponent::editMidiClip(const juce::String& trackId,
+                                 const MidiClip& before,
+                                 const MidiClip& after,
+                                 const juce::String& commandName)
+{
+    if (perform(std::make_unique<SetMidiClipStateCommand>(
+            trackId,
+            before,
+            after,
+            commandName)))
+    {
+        selectedTrackId = trackId;
+        selectedClipId = after.id;
+        timeline.setSelection(trackId, after.id);
+        midiEditor.setSelection(trackId, after.id);
+    }
+}
+
+void MainComponent::captureRetrospectiveMidi()
+{
+    const auto* track = project.findTrack(selectedTrackId);
+    if (track == nullptr
+        || track->parentTrackId.isNotEmpty()
+        || (track->type != TrackType::midi
+            && track->type != TrackType::instrument))
+    {
+        setStatus(
+            "Select a MIDI or instrument track before retrospective capture.",
+            true);
+        return;
+    }
+
+    auto capture = audioEngine.captureRetrospectiveMidi(30.0);
+    if (capture.result.failed())
+    {
+        setStatus(capture.result.getErrorMessage(), true);
+        return;
+    }
+    const DrumMap* map = nullptr;
+    if (const auto* selected = project.findMidiClip(selectedClipId))
+        map = project.findDrumMap(selected->drumMapId);
+    if (map == nullptr && track->name.containsIgnoreCase("drum")
+        && !project.drumMaps.empty())
+        map = &project.drumMaps.front();
+
+    juce::String error;
+    auto converted = convertCapturedMidiToClip(
+        project,
+        capture.captured,
+        capture.captureStartStreamSample,
+        capture.timelineStartSeconds,
+        capture.durationSeconds,
+        capture.sampleRate,
+        map,
+        "Retrospective MIDI",
+        error);
+    if (!converted.has_value())
+    {
+        setStatus(error, true);
+        return;
+    }
+    const auto clipId = converted->clip.id;
+    if (perform(std::make_unique<AddMidiClipCommand>(
+            track->id,
+            std::move(converted->clip))))
+    {
+        selectClip(track->id, clipId);
+        auto message = juce::String("Captured recent MIDI as an editable clip.");
+        if (capture.warning.isNotEmpty())
+            message << " " << capture.warning;
+        if (converted->ignoredEvents > 0
+            || converted->unmatchedNoteOffs > 0)
+        {
+            message << " Ignored "
+                    << juce::String(
+                           static_cast<juce::int64>(
+                               converted->ignoredEvents
+                               + converted->unmatchedNoteOffs))
+                    << " unsupported or unmatched events.";
+        }
+        setStatus(message, capture.warning.isNotEmpty());
+    }
+}
+
+void MainComponent::importDrumMap()
+{
+    fileChooser = std::make_unique<juce::FileChooser>(
+        "Import Studio Duo drum map",
+        juce::File::getSpecialLocation(
+            juce::File::userDocumentsDirectory),
+        "*.json",
+        true,
+        false);
+    fileChooser->launchAsync(
+        juce::FileBrowserComponent::openMode
+            | juce::FileBrowserComponent::canSelectFiles,
+        [safe = juce::Component::SafePointer<MainComponent>(this)](
+            const juce::FileChooser& chooser)
+        {
+            if (safe == nullptr)
+                return;
+            const auto file = chooser.getResult();
+            if (!file.existsAsFile())
+                return;
+            const auto parsed = juce::JSON::parse(
+                file.loadFileAsString());
+            juce::String error;
+            auto map = DrumMap::fromVar(parsed, error);
+            if (!map.has_value())
+            {
+                safe->showError("Drum map import failed", error);
+                return;
+            }
+            map->source = file.getFullPathName();
+            auto before = ProjectMidiResources::fromProject(
+                safe->project);
+            auto after = before;
+            const auto existing = std::find_if(
+                after.drumMaps.begin(),
+                after.drumMaps.end(),
+                [&map](const auto& candidate)
+                {
+                    return candidate.id == map->id;
+                });
+            if (existing != after.drumMaps.end())
+                *existing = *map;
+            else
+                after.drumMaps.push_back(*map);
+
+            std::vector<std::unique_ptr<ProjectCommand>> commands;
+            commands.push_back(
+                std::make_unique<SetProjectMidiResourcesCommand>(
+                    before,
+                    after,
+                    "Import drum map"));
+            if (const auto* clip =
+                    safe->project.findMidiClip(safe->selectedClipId))
+            {
+                auto edited = *clip;
+                edited.editorMode = MidiEditorMode::drums;
+                edited.drumMapId = map->id;
+                for (auto& note : edited.notes)
+                    applyDrumMapMetadata(note, &*map, 0);
+                commands.push_back(
+                    std::make_unique<SetMidiClipStateCommand>(
+                        safe->selectedTrackId,
+                        *clip,
+                        std::move(edited),
+                        "Assign imported drum map"));
+            }
+            if (safe->perform(std::make_unique<BatchProjectCommand>(
+                    "Import drum map",
+                    std::move(commands))))
+                safe->setStatus("Imported drum map " + map->name + ".");
+        });
+}
+
+void MainComponent::editDrumMapEntry(int pitch)
+{
+    const auto* clip = project.findMidiClip(selectedClipId);
+    const auto* map = clip != nullptr
+        ? project.findDrumMap(clip->drumMapId)
+        : nullptr;
+    if (map == nullptr)
+    {
+        setStatus("Select a drum MIDI clip with a drum map first.", true);
+        return;
+    }
+    const auto* entry = map->entryForPitch(pitch);
+    if (entry == nullptr)
+    {
+        setStatus("Select a named drum-map row before editing.", true);
+        return;
+    }
+
+    auto* dialog = new juce::AlertWindow(
+        "Edit drum-map entry",
+        "Edit the selected kit piece while preserving its stable ID.",
+        juce::MessageBoxIconType::NoIcon);
+    dialog->addTextEditor("name", entry->name, "Kit piece");
+    dialog->addTextEditor(
+        "articulation",
+        entry->articulation,
+        "Articulation");
+    dialog->addTextEditor(
+        "choke",
+        entry->chokeGroup,
+        "Choke group");
+    dialog->addTextEditor(
+        "cymbal",
+        cymbalStateToString(entry->cymbalState),
+        "Cymbal state");
+    dialog->addTextEditor(
+        "foot",
+        juce::String(entry->footControlCC),
+        "Foot-control CC (-1 disables)");
+    juce::StringArray roundRobin;
+    for (const auto note : entry->roundRobinNotes)
+        roundRobin.add(juce::String(note));
+    dialog->addTextEditor(
+        "roundRobin",
+        roundRobin.joinIntoString(","),
+        "Round-robin note numbers");
+    dialog->addTextEditor(
+        "output",
+        entry->outputGroup,
+        "Output group");
+    dialog->addButton(
+        "Apply",
+        1,
+        juce::KeyPress(juce::KeyPress::returnKey));
+    dialog->addButton(
+        "Cancel",
+        0,
+        juce::KeyPress(juce::KeyPress::escapeKey));
+    dialog->centreAroundComponent(&midiEditor, 460, 430);
+    const auto mapId = map->id;
+    const auto entryId = entry->id;
+    const juce::Component::SafePointer<juce::AlertWindow> dialogSafe(
+        dialog);
+    dialog->enterModalState(
+        true,
+        juce::ModalCallbackFunction::create(
+            [safe = juce::Component::SafePointer<MainComponent>(this),
+             dialogSafe,
+             mapId,
+             entryId](int result)
+            {
+                if (safe == nullptr || dialogSafe == nullptr || result != 1)
+                    return;
+                auto before = ProjectMidiResources::fromProject(
+                    safe->project);
+                auto after = before;
+                const auto editableMap = std::find_if(
+                    after.drumMaps.begin(),
+                    after.drumMaps.end(),
+                    [&mapId](const auto& candidate)
+                    {
+                        return candidate.id == mapId;
+                    });
+                if (editableMap == after.drumMaps.end())
+                {
+                    safe->showError(
+                        "Drum map edit failed",
+                        "The drum map is no longer available.");
+                    return;
+                }
+                const auto editableEntry = std::find_if(
+                    editableMap->entries.begin(),
+                    editableMap->entries.end(),
+                    [&entryId](const auto& candidate)
+                    {
+                        return candidate.id == entryId;
+                    });
+                if (editableEntry == editableMap->entries.end())
+                {
+                    safe->showError(
+                        "Drum map edit failed",
+                        "The drum-map entry is no longer available.");
+                    return;
+                }
+                editableEntry->name = dialogSafe->getTextEditorContents("name").trim();
+                editableEntry->articulation = dialogSafe
+                    ->getTextEditorContents("articulation")
+                    .trim();
+                editableEntry->chokeGroup = dialogSafe
+                    ->getTextEditorContents("choke")
+                    .trim();
+                const auto cymbal = cymbalStateFromString(
+                    dialogSafe->getTextEditorContents("cymbal").trim());
+                if (!cymbal.has_value())
+                {
+                    safe->showError(
+                        "Drum map edit failed",
+                        "Cymbal state must be none, edge, bow, bell, choke, open, closed, or pedal.");
+                    return;
+                }
+                editableEntry->cymbalState = *cymbal;
+                editableEntry->footControlCC = dialogSafe
+                    ->getTextEditorContents("foot")
+                    .getIntValue();
+                editableEntry->outputGroup = dialogSafe
+                    ->getTextEditorContents("output")
+                    .trim();
+                editableEntry->roundRobinNotes.clear();
+                const auto tokens = juce::StringArray::fromTokens(
+                    dialogSafe->getTextEditorContents("roundRobin"),
+                    ", ",
+                    {});
+                for (const auto& token : tokens)
+                    if (token.trim().isNotEmpty())
+                        editableEntry->roundRobinNotes.push_back(
+                            token.getIntValue());
+                juce::String validationError;
+                if (!DrumMap::fromVar(
+                         editableMap->toVar(),
+                         validationError)
+                         .has_value())
+                {
+                    safe->showError(
+                        "Drum map edit failed",
+                        validationError);
+                    return;
+                }
+                if (safe->perform(
+                        std::make_unique<SetProjectMidiResourcesCommand>(
+                            std::move(before),
+                            std::move(after),
+                            "Edit drum map")))
+                    safe->setStatus("Updated drum-map entry.");
+            }),
+        true);
+}
+
+void MainComponent::humanizeSelectedMidiClip()
+{
+    const auto* clip = project.findMidiClip(selectedClipId);
+    if (clip == nullptr)
+    {
+        setStatus("Select a MIDI clip before humanizing.", true);
+        return;
+    }
+    auto* dialog = new juce::AlertWindow(
+        "Deterministic MIDI humanization",
+        "The saved seed and exact note results are portable across supported platforms.",
+        juce::MessageBoxIconType::NoIcon);
+    dialog->addTextEditor(
+        "seed",
+        juce::String(
+            static_cast<juce::uint64>(
+                clip->humanizeSeed == 0
+                    ? 1
+                    : clip->humanizeSeed)),
+        "Seed");
+    dialog->addTextEditor(
+        "timing",
+        juce::String(
+            clip->humanizeTimingTicks == 0
+                ? 12
+                : clip->humanizeTimingTicks),
+        "Maximum timing ticks (960 per beat)");
+    dialog->addTextEditor(
+        "velocity",
+        juce::String(
+            clip->humanizeVelocity == 0
+                ? 8
+                : clip->humanizeVelocity),
+        "Maximum velocity change");
+    dialog->addButton(
+        "Apply",
+        1,
+        juce::KeyPress(juce::KeyPress::returnKey));
+    dialog->addButton(
+        "Cancel",
+        0,
+        juce::KeyPress(juce::KeyPress::escapeKey));
+    dialog->centreAroundComponent(&midiEditor, 460, 270);
+    const auto trackId = selectedTrackId;
+    const auto clipId = selectedClipId;
+    const juce::Component::SafePointer<juce::AlertWindow> dialogSafe(
+        dialog);
+    dialog->enterModalState(
+        true,
+        juce::ModalCallbackFunction::create(
+            [safe = juce::Component::SafePointer<MainComponent>(this),
+             dialogSafe,
+             trackId,
+             clipId](int result)
+            {
+                if (safe == nullptr || dialogSafe == nullptr || result != 1)
+                    return;
+                const auto* current = safe->project.findMidiClip(clipId);
+                if (current == nullptr)
+                    return;
+                const auto seedText = dialogSafe
+                    ->getTextEditorContents("seed")
+                    .trim()
+                    .toStdString();
+                std::uint64_t seedValue = 0;
+                const auto seedConversion = std::from_chars(
+                    seedText.data(),
+                    seedText.data() + seedText.size(),
+                    seedValue);
+                if (seedText.empty()
+                    || seedConversion.ec != std::errc {}
+                    || seedConversion.ptr
+                        != seedText.data() + seedText.size())
+                {
+                    safe->showError(
+                        "Humanization failed",
+                        "Seed must be an unsigned 64-bit decimal integer.");
+                    return;
+                }
+                MidiHumanizeSettings settings;
+                settings.seed = seedValue;
+                settings.maximumTimingTicks = dialogSafe
+                    ->getTextEditorContents("timing")
+                    .getIntValue();
+                settings.maximumVelocityChange = dialogSafe
+                    ->getTextEditorContents("velocity")
+                    .getIntValue();
+                if (settings.maximumTimingTicks < 0
+                    || settings.maximumTimingTicks > 960
+                    || settings.maximumVelocityChange < 0
+                    || settings.maximumVelocityChange > 127)
+                {
+                    safe->showError(
+                        "Humanization failed",
+                        "Timing must be 0-960 ticks and velocity change must be 0-127.");
+                    return;
+                }
+                auto after = humanizeMidiClip(*current, settings);
+                safe->editMidiClip(
+                    trackId,
+                    *current,
+                    after,
+                    "Humanize MIDI notes");
+                safe->setStatus(
+                    "Applied deterministic MIDI humanization with seed "
+                    + juce::String(
+                        static_cast<juce::uint64>(seedValue))
+                    + ".");
+            }),
+        true);
+}
+
+void MainComponent::applyMidiRoutingTemplate(
+    const juce::String& templateId)
+{
+    const auto* routing = project.findMidiRoutingTemplate(templateId);
+    if (routing == nullptr)
+    {
+        setStatus("The selected MIDI routing template is unavailable.", true);
+        return;
+    }
+    if (perform(std::make_unique<ApplyMidiRoutingTemplateCommand>(
+            selectedTrackId,
+            *routing)))
+        setStatus("Applied MIDI routing template " + routing->name + ".");
 }
 
 void MainComponent::moveClip(const juce::String& clipId,
@@ -4611,7 +5988,7 @@ void MainComponent::toggleClipReverse(const juce::String& clipId)
 
 void MainComponent::consolidateClip(const juce::String& clipId)
 {
-    if (!activeRecordingTargets.empty() || recordingFinalizationInProgress)
+    if (hasActiveRecordingTargets() || recordingFinalizationInProgress)
     {
         setStatus("Stop and finalize recording before consolidating clips.", true);
         return;
@@ -4694,7 +6071,7 @@ void MainComponent::consolidateClip(const juce::String& clipId)
 
 void MainComponent::undo()
 {
-    if (!activeRecordingTargets.empty() || recordingFinalizationInProgress)
+    if (hasActiveRecordingTargets() || recordingFinalizationInProgress)
     {
         setStatus("Stop and finalize recording before undoing edits.", true);
         return;
@@ -4709,7 +6086,7 @@ void MainComponent::undo()
 
 void MainComponent::redo()
 {
-    if (!activeRecordingTargets.empty() || recordingFinalizationInProgress)
+    if (hasActiveRecordingTargets() || recordingFinalizationInProgress)
     {
         setStatus("Stop and finalize recording before redoing edits.", true);
         return;
@@ -4765,10 +6142,12 @@ void MainComponent::selectTrack(const juce::String& trackId)
     selectedTrackId = trackId;
     selectedClipId.clear();
     timeline.setSelection(selectedTrackId, selectedClipId);
+    midiEditor.setSelection(selectedTrackId, selectedClipId);
     mixer->setSelection(selectedTrackId);
     routingPanel->setTrack(selectedTrackId);
     insertPanel->setTrack(selectedTrackId);
     updateInspector();
+    resized();
 }
 
 void MainComponent::selectClip(const juce::String& trackId, const juce::String& clipId)
@@ -4776,16 +6155,19 @@ void MainComponent::selectClip(const juce::String& trackId, const juce::String& 
     selectedTrackId = trackId;
     selectedClipId = clipId;
     timeline.setSelection(selectedTrackId, selectedClipId);
+    midiEditor.setSelection(selectedTrackId, selectedClipId);
     mixer->setSelection(selectedTrackId);
     routingPanel->setTrack(selectedTrackId);
     insertPanel->setTrack(selectedTrackId);
     updateInspector();
+    resized();
 }
 
 void MainComponent::updateInspector()
 {
     const auto* track = project.findTrack(selectedTrackId);
     const auto* clip = project.findClip(selectedClipId);
+    const auto* midiClip = project.findMidiClip(selectedClipId);
 
     if (track == nullptr)
     {
@@ -4813,9 +6195,17 @@ void MainComponent::updateInspector()
         return;
     }
 
-    const auto canRenameTrack = clip == nullptr && track->type != TrackType::master;
+    const auto canRenameTrack = clip == nullptr
+        && midiClip == nullptr
+        && track->type != TrackType::master;
     updatingTrackName = true;
-    inspectorName.setText(clip != nullptr ? clip->name : track->name, juce::dontSendNotification);
+    inspectorName.setText(
+        clip != nullptr
+            ? clip->name
+            : midiClip != nullptr
+                ? midiClip->name
+                : track->name,
+        juce::dontSendNotification);
     updatingTrackName = false;
     inspectorName.setEditable(false, canRenameTrack, false);
     inspectorName.setTooltip(canRenameTrack
@@ -4825,8 +6215,17 @@ void MainComponent::updateInspector()
         ? juce::String(clip->durationSeconds, 2)
             + " s  |  "
             + clip->sourceFile.getFileName()
+        : midiClip != nullptr
+            ? juce::String(midiClip->durationBeats, 2)
+                + " beats  |  "
+                + juce::String(
+                    static_cast<int>(midiClip->notes.size()))
+                + " notes  |  "
+                + (midiClip->editorMode == MidiEditorMode::drums
+                       ? "DRUMS"
+                       : "PIANO ROLL")
         : trackTypeToString(track->type).toUpperCase();
-    if (clip == nullptr)
+    if (clip == nullptr && midiClip == nullptr)
     {
         if (const auto* route = project.reampRouteForReturn(track->id))
         {
@@ -4869,7 +6268,7 @@ void MainComponent::updateInspector()
         || track->type == TrackType::midi);
     trackColourButton.setEnabled(track->type != TrackType::master);
     splitClipButton.setEnabled(clip != nullptr);
-    deleteClipButton.setEnabled(clip != nullptr);
+    deleteClipButton.setEnabled(clip != nullptr || midiClip != nullptr);
     trimClipStartButton.setEnabled(clip != nullptr);
     trimClipEndButton.setEnabled(clip != nullptr);
     inputSelector.setEnabled(track->type == TrackType::audio);
@@ -6710,6 +8109,8 @@ void MainComponent::projectChanged(bool writeRecovery, bool markDirty)
         dirty = true;
 
     timeline.setProject(&project);
+    midiEditor.setProject(&project);
+    midiEditor.setSelection(selectedTrackId, selectedClipId);
     mixer->setProject(&project);
     routingPanel->setProject(&project);
     insertPanel->setProject(&project);
@@ -7166,6 +8567,12 @@ Track* MainComponent::recordingTrack()
         return track.type == TrackType::audio && track.armed;
     });
     return iterator == project.tracks.end() ? nullptr : &*iterator;
+}
+
+bool MainComponent::hasActiveRecordingTargets() const noexcept
+{
+    return !activeRecordingTargets.empty()
+        || !activeMidiRecordingTrackIds.empty();
 }
 
 void MainComponent::setStatus(const juce::String& message, bool error)

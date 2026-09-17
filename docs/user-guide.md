@@ -2,8 +2,9 @@
 
 Studio Duo is under active development. The current application includes the
 Phase 1 vertical slice, Phase 2 professional tracking and editing workflows, and
-the complete Phase 3 mixer and plugin platform. MIDI composition, DAWproject
-exchange, and mastering remain later roadmap phases.
+the complete Phase 3 mixer and plugin platform. Phase 4 MIDI recording, piano
+roll, metal drum editing, bundled drum/guitar/bass devices, and DAWproject 1.0
+exchange are implemented. Mastering remains later roadmap work.
 
 ## Current capabilities
 
@@ -27,14 +28,28 @@ exchange, and mastering remain later roadmap phases.
 - Pre/post-fader sends, per-insert sidechains, parallel paths, auxes, nested
   buses, folders, VCAs, control room, hardware outputs, graph-routed input
   monitoring, and solo-safe routing
-- Live MIDI input and cycle-safe MIDI routes through in-process and sandboxed
-  instrument and MIDI-effect plugins
+- Live, recorded, and retrospective MIDI with persisted notes and per-note
+  pitch bend, poly pressure, channel pressure, timbre, and controller
+  expression
+- Piano-roll and metal drum lower editors with velocity, timing, duration,
+  probability, and expression lanes
+- Editable/importable drum maps, choke and cymbal metadata, foot control,
+  round-robin hints, deterministic metal entry tools, pattern aliases,
+  seeded humanization, and channel-filtered multi-output routing templates
+- Cycle-safe MIDI routes through in-process and sandboxed instrument and
+  MIDI-effect plugins
 - Sample-accurate mixer, send, bundled-device, and plugin automation
 - Parametric EQ, compressor, true-peak limiter, reverb, gate, gain, polarity,
   delay, tuner, and signal generator devices
+- Bundled metal drum composition instrument with velocity, deterministic round
+  robin, mapped cymbal/hi-hat behavior, and separate kit-piece outputs
+- Bundled guitar and bass amps with real nonlinear/tone DSP, embedded cabinets,
+  validated custom cabinet loading, persistent IR state, and automation
 - Tone and mixer snapshots, level-matched A/B, stale detection, freeze, print,
   plugin-inclusive rendering, batch reports, and Scream Forge validation
 - Versioned `.studioduo` packages, generation saves, and recovery points
+- DAWproject 1.0 import/export with embedded media and plug-in state,
+  official schema validation, scene preservation, and compatibility reports
 - Deterministic 48 kHz, 24-bit stereo WAV export when active plugins are absent
 - In-app update checks, verified background downloads, and user-controlled
   restart installation on macOS and Windows
@@ -47,6 +62,8 @@ exchange, and mastering remain later roadmap phases.
 | Save | `Command/Ctrl+S` |
 | Open | `Command/Ctrl+O` |
 | Import audio | `Command/Ctrl+I` |
+| Create MIDI clip at playhead | `Command/Ctrl+Shift+N` |
+| Capture recent MIDI | `Command/Ctrl+Shift+M` |
 | Undo | `Command/Ctrl+Z` |
 | Redo | `Command/Ctrl+Shift+Z` |
 | Copy and duplicate selected clip | `Command/Ctrl+C`, then `Command/Ctrl+V` |
@@ -54,6 +71,11 @@ exchange, and mastering remain later roadmap phases.
 | Trim selected clip start to playhead | `[` |
 | Trim selected clip end to playhead | `]` |
 | Delete selected clip | `Delete` or `Backspace` |
+| Piano-roll note create | `Enter` |
+| Piano-roll note move | Arrow keys |
+| Piano-roll note resize | `Shift+Left/Right` |
+| Edit selected MIDI lane | `Alt+Up/Down` |
+| Select all notes | `Command/Ctrl+A` while the editor is focused |
 | Zoom timeline out or in | `Command/Ctrl+-` or `Command/Ctrl++` |
 | Reset timeline zoom | `Command/Ctrl+0` |
 
@@ -64,8 +86,9 @@ trackpad scrolling and pinch gestures zoom the same view.
 
 1. Open **SETTINGS** > **Audio / MIDI** and enable the required hardware inputs
    and outputs.
-2. Add audio tracks with **+ AUDIO TRACK**, or import WAV, AIFF, FLAC, or MP3
-   files with **IMPORT AUDIO**.
+2. Add audio, instrument, or MIDI tracks with **+ TRACK**. Import WAV, AIFF,
+   FLAC, or MP3 files with **IMPORT AUDIO**, or select a MIDI/instrument track
+   and use **NEW MIDI CLIP**.
 3. Select a track to configure its input, mono or stereo capture, monitoring,
    volume, pan, color, inserts, and output.
 4. Save the project as a `.studioduo` directory package before recording so new
@@ -254,8 +277,67 @@ tracks can add independent MIDI destinations without replacing an instrument
 track's audio output. MIDI track inserts process events before they are sent
 downstream; standard and CLAP
 events cross sandbox workers with their sample offsets intact. MIDI feedback
-cycles are rejected before the route is added. MIDI clip recording and editing
-remain Phase 4 work.
+cycles are rejected before the route is added. A MIDI route can also filter one
+of channels 1-16; the metal multi-output template uses those filters.
+
+## Record and edit MIDI
+
+Arm any combination of root MIDI and instrument tracks, then press **REC**.
+Studio Duo records the same enabled hardware MIDI input delivered to live
+routing while audio tracks can record in the same pass. Stopping creates
+ordinary beat-based MIDI clips through one undoable command. Loop passes become
+separate clips at the loop position. Notes keep their channel, velocity,
+release velocity, duration, probability, timing offset, drum metadata, and
+per-note expression points.
+
+The engine also keeps a bounded lock-free history of short MIDI messages.
+Choose **CAPTURE** in the MIDI editor or press `Command/Ctrl+Shift+M` to recover
+the recent performance on the selected MIDI/instrument track. The result is
+trimmed to the captured performance and remains fully editable. Channel voice
+messages, poly pressure, channel pressure, pitch bend, and controllers are
+converted into notes and expression. Long system-exclusive messages continue
+through live routing but are not stored as note data; overflow or ignored data
+is reported in the status bar.
+
+Create an empty one-bar clip with **NEW MIDI CLIP**,
+`Command/Ctrl+Shift+N`, or by double-clicking empty arrangement space on a MIDI
+or instrument track. Selecting a MIDI clip opens the lower editor in place of
+the mixer:
+
+- Click empty grid space or press `Enter` to create a note.
+- Click a note to select it; `Command/Ctrl`-click toggles selection.
+- Drag notes to move them and drag the right edge to resize.
+- Use arrow keys to move, `Shift+Left/Right` to resize, and
+  `Delete`/`Backspace` to remove selected notes.
+- Choose **Velocity**, **Timing**, **Duration**, **Probability**, or
+  **Expression** in the lower lane. Drag lane values, or use `Alt+Up/Down` for
+  a keyboard-only adjustment. Expression supports poly pressure, channel
+  pressure, timbre, pitch bend, and a saved per-note controller.
+- Choose a grid from quarter notes through 32nd notes or 16th-note triplets.
+
+Use **PIANO/DRUMS** to switch the same ordinary MIDI clip between editors. The
+drum view reads named kit pieces and articulations from the selected drum map
+and shows choke groups, cymbal edge/bow/bell/open/closed/pedal/choke states,
+foot-control CCs, and round-robin hints. **IMPORT MAP** accepts the documented
+JSON drum-map object. **EDIT MAP** changes the selected row without replacing
+its stable ID.
+
+The **FLAM**, **ROLL**, **GRAVITY**, **BLAST**, and **DOUBLE KICK** tools insert
+fixed grid-derived notes, never opaque generated regions. Saved pattern aliases
+expand with **EXPAND** into new ordinary notes. **HUMANIZE** accepts an explicit
+seed plus timing-tick and velocity ranges. Studio Duo uses its own integer
+generator rather than a standard-library distribution, stores both the seed
+and the resulting values, and reproduces the exact project JSON after reopen on
+supported platforms.
+
+The default metal routing template separates kick, snare, tom, and cymbal note
+groups onto MIDI channels 1-4, creates named destination tracks, and adds
+channel-filtered routes. Applying it is one undoable command. Add **Metal Drum
+Composer** to an instrument track for the bundled basic kit. Its Main output is
+a complete stereo mix; its Kick, Snare, Toms, and Cymbals buses can be sent to
+aux or bus tracks from **ROUTING** > **ADD** > **Processor output**. The
+multi-output insert must remain last on its source track. Lower its automatable
+Main level when using stems alone to avoid summing the full mix twice.
 
 **TRACK** in the routing panel changes mono/stereo layout, polarity, solo-safe
 state, folder placement, and VCA assignment. Folder mute and solo scope their
@@ -295,7 +377,9 @@ processor automation use the same sample-accurate path.
 
 Choose **SCAN** in the processor catalog to probe installed VST3 plugins, Audio
 Units, and CLAP bundles outside the main process. Bundled utility devices are
-always listed. Select an entry and choose **ADD** to attach it to the selected
+always listed together with Metal Drum Composer, Guitar Amp, and Bass Amp.
+Select an entry and choose **ADD** to attach it to the selected track. The drum
+instrument requires an instrument track; the amps require an audio-capable
 track.
 
 Choose **PATHS** to review the active VST3 locations, add a custom folder with
@@ -332,6 +416,30 @@ The inspector reports loading, ready, missing, bypassed, recovery-disabled,
 crashed, and late-block states. Click a failed insert to reload that runtime.
 Click a missing insert, then choose a catalog processor to replace it while
 preserving the insert ID, routing, automation, and prior state reference.
+
+## Use bundled amps and cabinets
+
+**Guitar Amp** provides preamp gain, bass, mid, treble, presence, saturation,
+cabinet mix, and output parameters. **Bass Amp** uses the same cabinet core
+with a bass-specific low-frequency path and clean/distorted drive blend. Both
+are real processors, report 128 samples of cabinet-convolution latency, render
+offline, and expose every sound control to the normal parameter and automation
+panels.
+
+Open an amp editor and choose **Load cabinet IR...** for a mono or stereo WAV,
+AIFF, or FLAC file. Studio Duo rejects missing, unsupported, silent,
+non-finite, multichannel, or oversized files with a visible error and keeps the
+current cabinet. The bounded configuration accepts at most 8,192 samples after
+conversion to 384 kHz (about 21.3 ms), so processing remains deterministic and
+real-time safe at supported sample rates. Decoding and FFT preparation happen
+outside the callback.
+
+Each amp starts with a useful embedded cabinet: Modern 4x12 for guitar and
+Tight 8x10 for bass. **Use embedded cabinet** restores it explicitly. A custom
+IR's normalized samples are stored inside the insert's content-addressed
+opaque state, so the project restores after the source file is moved. Corrupt
+or truncated cabinet state reports a failed insert; Studio Duo never silently
+substitutes the default.
 
 **TEST** runs black-box public-standard compatibility checks in a separate
 process. The tracking menu can validate installed Scream Forge VST3, Audio Unit,
@@ -384,15 +492,43 @@ Studio Duo projects are versioned `.studioduo` directory packages. A save writes
 a new session generation before atomically replacing `manifest.json`; the latest
 complete state is also copied to `recovery/latest.json`.
 
-Project format version 3 stores a typed routing graph, separate automation
+Project format version 8 stores the typed routing graph, separate automation
 generations, content-addressed plugin state, compatibility policy, tone and
-mixer snapshots, and render reports. Version 1 and 2 projects migrate on load.
+mixer snapshots, render reports, ordinary MIDI clips and expressions, drum
+maps, pattern aliases, humanization state, MIDI routing templates, project
+metadata, scenes, persisted interchange reports, and channel-scoped MIDI
+pressure automation. Versions 1-7 migrate on load.
 See [project-format.md](project-format.md).
 
 Stereo WAV export is 48 kHz and 24-bit. Projects without processors use the
 fast deterministic graph. Bundled and trusted processors render offline;
 sandboxed third-party processors use the same one-block pipeline in a real-time
 fallback so processing is never silently omitted.
+
+Use **DAWPROJECT** in the main header to:
+
+- Import a `.dawproject` archive into a newly created `.studioduo` project
+- Export the open project as a deterministic `.dawproject` archive
+- View the latest structured compatibility report
+- Save the report as JSON
+
+Import validates `project.xml` and `metadata.xml` against the embedded official
+DAWproject 1.0 schemas before creating a staging project. The open project is
+not replaced until the archive, media, plug-in state, translated model, native
+save, and reopen verification all succeed. The source archive and external
+media are read-only. Choose a new destination path; an existing `.studioduo`
+package is never moved or replaced. Export also stages and verifies the complete ZIP before
+atomically publishing it, so a failed export does not leave a partial success
+file.
+
+Studio Duo embeds referenced audio and captured plug-in state. Track/channel
+hierarchy, mixer routing, audio and MIDI clips, notes, note expressions,
+automation, devices, scenes, warps, markers, metadata, tempo, and time
+signatures are translated through the dedicated interchange layer. Unsupported
+source or destination details remain listed by object path in the compatibility
+report instead of disappearing silently. See
+[dawproject.md](dawproject.md) for the exact mapping and current compatibility
+boundary.
 
 ## Update Studio Duo
 

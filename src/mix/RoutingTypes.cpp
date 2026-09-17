@@ -110,9 +110,12 @@ juce::var RoutingConnection::toVar() const
     object->setProperty("kind", routeKindToString(kind));
     object->setProperty("tap", routeTapToString(tap));
     object->setProperty("sourceTrackId", sourceTrackId);
+    object->setProperty("sourceInsertId", sourceInsertId);
+    object->setProperty("sourceBusIndex", sourceBusIndex);
     object->setProperty("destination", destination.toVar());
     object->setProperty("gainDecibels", gainDecibels);
     object->setProperty("pan", pan);
+    object->setProperty("midiChannel", midiChannel);
     object->setProperty("muted", muted);
     object->setProperty("enabled", enabled);
     return juce::var(object.release());
@@ -149,6 +152,12 @@ std::optional<RoutingConnection> RoutingConnection::fromVar(
     connection.kind = *kind;
     connection.tap = *tap;
     connection.sourceTrackId = object->getProperty("sourceTrackId").toString();
+    connection.sourceInsertId =
+        object->getProperty("sourceInsertId").toString();
+    connection.sourceBusIndex = integerProperty(
+        *object,
+        "sourceBusIndex",
+        0);
     connection.destination = std::move(*destination);
     connection.gainDecibels = static_cast<float>(
         numberProperty(*object, "gainDecibels", 0.0));
@@ -156,12 +165,21 @@ std::optional<RoutingConnection> RoutingConnection::fromVar(
         -1.0f,
         1.0f,
         static_cast<float>(numberProperty(*object, "pan", 0.0)));
+    connection.midiChannel = integerProperty(
+        *object,
+        "midiChannel",
+        0);
     connection.muted = booleanProperty(*object, "muted", false);
     connection.enabled = booleanProperty(*object, "enabled", true);
 
     if (connection.id.isEmpty()
         || connection.name.trim().isEmpty()
         || connection.sourceTrackId.isEmpty()
+        || connection.sourceBusIndex < 0
+        || (connection.sourceInsertId.isEmpty()
+            != (connection.sourceBusIndex == 0))
+        || connection.midiChannel < 0
+        || connection.midiChannel > 16
         || !std::isfinite(connection.gainDecibels)
         || !std::isfinite(connection.pan))
     {

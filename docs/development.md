@@ -5,6 +5,10 @@ configuration fetches the pinned JUCE source when a compatible package is not
 already installed. It also fetches the MIT-licensed Signalsmith Stretch 1.1.0
 headers used for pitch-preserving elastic audio, CLAP 1.2.10 and clap-helpers
 for CLAP hosting, and the Apache-2.0 ARA SDK 2.3.0 for ARA compatibility mode.
+Phase 4 MIDI/editor workflows and bundled drum/guitar/bass devices are
+implemented. The dedicated DAWproject 1.0 translation, schema-validation, ZIP,
+scene, and compatibility-report layer is also implemented without runtime
+network access.
 
 ## Prerequisites
 
@@ -74,6 +78,41 @@ PY
 The sample rate and frame count must match. To verify onset alignment, feed the
 same digital loopback or split signal into both inputs and compare the files in
 a sample-accurate audio editor.
+
+## Manual MIDI/editor test
+
+1. Enable a MIDI input, add a MIDI track, arm it, and record note, pitch-bend,
+   pressure, and CC74 gestures. Stop and confirm one editable clip opens in the
+   lower piano roll without interrupting live routing.
+2. Play notes while stopped, select the MIDI track, then press
+   `Command/Ctrl+Shift+M`. Confirm retrospective capture creates a trimmed clip.
+3. Create, multi-select, move, resize, lane-edit, and delete notes using both
+   pointer gestures and the documented keyboard commands. Undo and redo each
+   operation.
+4. Switch to **DRUMS**, edit/import a map, and verify open/closed/pedal/choke
+   cymbal rows, round-robin labels, and foot-control CC data.
+5. Run all five entry tools, expand a saved pattern, apply humanization twice
+   from the same original clip and seed, then save/reopen. The resulting note
+   JSON must match exactly.
+6. Apply the metal multi-output template. Confirm four channel-filtered MIDI
+   routes and destination tracks appear, then undo them in one step.
+7. Add **Metal Drum Composer** to an instrument track. Confirm velocity,
+   repeated-hit variation, hi-hat CC4, and mapped choke notes are audible.
+   Create aux or bus tracks and route the insert's Kick, Snare, Toms, and
+   Cymbals outputs from the routing panel.
+
+## Manual bundled amp test
+
+1. Add **Guitar Amp** or **Bass Amp** to an audio-capable track and play a clean
+   DI through it. Verify gain, bass, mid, treble, presence/saturation or drive
+   blend, cabinet mix, and output controls change the sound.
+2. Open the insert editor and load a mono or stereo WAV, AIFF, or FLAC cabinet
+   IR no longer than 8,192 samples after conversion to 384 kHz. Invalid,
+   silent, unsupported, multichannel, or longer files must show an error and
+   leave the active cabinet unchanged.
+3. Save, remove or move the source IR, reopen the project, and verify the
+   cabinet still restores from processor state. Choose **Use embedded cabinet**
+   and confirm a clean installation remains immediately usable.
 
 ## Architecture
 
@@ -218,10 +257,47 @@ from the active generation, marks it unsaved, and can fall back to that point
 when the saved session is damaged. Stale or corrupt recovery data never
 replaces a valid saved generation and is reported to the user.
 
-Project format version 3 adds the typed routing graph, separate automation
-generations, processor policy/state metadata, tone and mixer snapshots, and
-render reports. Ordered migrations preserve version 1 direct-master behavior
-and convert version 2 `outputTrackId` values into explicit main-output routes.
+Project format version 6 introduced the typed routing graph, separate automation
+generations, processor policy/state metadata, tone and mixer snapshots, render
+reports, MIDI clips/notes/expressions, drum maps, pattern aliases, and MIDI
+routing templates, plus bundled processor-output bus routes. Ordered
+migrations preserve version 1 direct-master
+behavior, convert version 2 `outputTrackId` values into explicit main-output
+routes, and add empty MIDI clips plus fixed-ID default editor resources to
+versions 1-4.
+
+Project format version 7 adds general project metadata, persisted launch scenes,
+and structured interchange compatibility reports. Version 6 projects migrate
+with empty values for those collections.
+
+Project format version 8 adds channel-scoped MIDI pressure automation targets.
+Version 7 automation targets migrate with `midiChannel: -1`; channel-pressure
+targets persist channels in the internal `1..16` range.
+
+`src/dawproject_io/` is an explicit translation boundary:
+
+- `DawProjectIdMapper` produces stable, kind-specific XML IDs and deterministic
+  internal IDs for imports.
+- `DawProjectSchemaValidator` parses the vendored official XSDs and enforces
+  element sequences, choices, required attributes, simple types,
+  enumerations, XML IDs, and IDREFs. A semantic pass validates string-encoded
+  numbers, ranges, target consistency, warp mappings, and safe file
+  references.
+- `DawProjectIO` translates the internal model, stages ZIP/native packages,
+  materializes embedded or external media, preserves opaque plug-in state, and
+  publishes only after validation and reopen verification.
+
+Exports set fixed ZIP timestamps, stable entry order, stable identifiers, and
+locale-independent numeric formatting. Tests compare complete archive hashes
+to catch ordering or byte drift. The XSDs, upstream example, hashes, and MIT
+license are pinned under `third_party/dawproject/v1.0.0/` and embedded by
+CMake, so application validation never performs network access.
+
+DAWproject tests generate audio/state fixtures and cover both official schemas,
+the upstream XML example, complete supported round trips, source immutability,
+external and embedded media, plug-in state, scenes, invalid archives, semantic
+validation, compatibility reports, deterministic output, and native migration.
+See [dawproject.md](dawproject.md).
 
 Routing snapshots compile main outputs, arbitrary pre/post-fader sends,
 per-insert sidechains, parallel paths, hardware maps, folders, VCAs, solo-safe
@@ -229,9 +305,55 @@ closure, and control-room monitoring into a topological processing plan.
 Enabled MIDI devices feed every armed MIDI or instrument track. MIDI-only
 tracks run their insert chains before events fan out through the separately
 validated acyclic MIDI graph; instrument tracks keep independent audio and MIDI
-routes. VST3, Audio Unit, and CLAP events retain their block-relative sample
-offsets across sandbox workers. Delay compensation follows every audio summing
-dependency and aligns sidechains to the input of their selected insert.
+routes. Routes optionally filter one MIDI channel, which lets saved multi-output
+templates fan one ordinary clip into deterministic kick, snare, tom, and cymbal
+destinations. VST3, Audio Unit, and CLAP events retain their block-relative
+sample offsets across sandbox workers. Delay compensation follows every audio
+summing dependency and aligns sidechains to the input of their selected insert.
+
+`src/midi/MidiModel.*` owns the versioned note, expression, drum-map, pattern,
+and routing-template records. Notes use musical beats plus an explicit saved
+timing offset; velocity, duration, probability, articulation metadata,
+foot-control values, and round-robin hints remain ordinary editable fields.
+Every persisted MIDI object has a stable ID, and project loading rejects
+duplicate IDs or dangling drum-map references. MIDI commands use the same
+`CommandStack` and atomic batch behavior as audio edits.
+
+Snapshot construction converts persisted notes and per-note expression to
+preallocated short MIDI events off the audio thread. The callback performs only
+binary lookup, fixed-message construction, and writes into already reserved
+`MidiBuffer` storage. Probability is resolved deterministically from the clip
+seed and note ID. Choke groups shorten the preceding event at the next mapped
+hit; foot control emits the mapped CC before its note; poly pressure, channel
+pressure, timbre, pitch-bend, and controller expression retain exact sample
+offsets.
+
+Incoming MIDI is copied once into `MidiCaptureBuffer`, a fixed 65,536-event
+single-writer ring whose slots use a per-slot publication sequence and a
+separate completed ordinal. The callback performs no allocation, locks, I/O,
+or logging. Normal recording stores quiesced ordinal/sample boundaries while
+leaving the existing live fan-out untouched. Stop converts the captured
+channel messages into ordinary notes outside the callback.
+
+Scheduled note state uses fixed per-track/channel/key counters in the published
+snapshot. Pause, seek, loop wrap, and automatic transport end inject note-offs
+plus channel all-notes-off messages through the same MIDI routing graph before
+the state is cleared.
+Retrospective capture reads the same ring, trims leading/trailing silence, and
+reports overwritten or unsupported long system-exclusive events.
+
+`MidiEditing.*` contains UI-independent create/move/resize/delete/lane
+operations, pattern expansion, the five metal entry tools, capture conversion,
+and humanization. Humanization uses fixed FNV-1a/SplitMix64 integer operations
+and bounded integer mapping rather than implementation-defined engines or
+distributions. The seed and exact resulting timing/velocity values are saved.
+Tests include a fixed cross-platform reference vector.
+
+`MidiEditorComponent` is the lower piano-roll/drum editor. It submits complete
+before/after clip states to typed commands, so drags remain one undo step.
+Standard controls remain tabbable with a visible focus ring; `Enter`, arrows,
+`Shift+Left/Right`, `Alt+Up/Down`, select-all, and delete provide keyboard
+alternatives for note and lane editing.
 
 Automation lanes use seconds or musical beats and compile off-thread to integer
 sample positions. Track and route controls evaluate per sample. External plugin
@@ -254,6 +376,26 @@ inside `processBlock`. The limiter uses a four-phase, 33-tap linear-phase
 true-peak detector with a matched 16-sample audio delay. The tuner accumulates a
 multi-block downsampled window and uses normalized autocorrelation so guitar and
 bass fundamentals remain detectable with small host buffers.
+
+`DrumDeviceProcessor` consumes ordinary note/CC events from the MIDI scheduler.
+The default map's note numbers select kit pieces, articulations, cymbal states,
+chokes, and round-robin variants; CC4 controls hi-hat openness. Fixed voice and
+room buffers make rendering deterministic without callback allocation. Five
+stereo buses expose Main, Kick, Snare, Toms, and Cymbals. A processor-output
+route persists the final bundled insert ID and auxiliary bus index, then feeds
+the normal send/PDC/render graph.
+
+`AmpDeviceProcessor` shares nonlinear preamp, tone, bass-blend, cabinet, and
+state code between the in-app device and plugin targets. Cabinet decoding,
+validation, resampling, normalization, and partition FFT preparation happen
+outside processing. The callback reads a lock-free published kernel, uses fixed
+spectral/history buffers, and reports its 128-sample latency plus IR tail.
+Custom cabinet samples are embedded in opaque processor state; corrupt state
+fails validated restoration instead of selecting another cabinet. Separate
+JUCE targets build VST3 and macOS Audio Unit versions, while one CLAP bundle
+exports all three Phase 4 devices without duplicating DSP. Mix export captures
+the live runtime state before rebuilding the offline graph, preserving unsaved
+cabinet and parameter changes.
 
 ARA-capable VST3 and Audio Unit instances can opt into an in-process document
 binding. Studio Duo writes a recovery point before activation, shows the

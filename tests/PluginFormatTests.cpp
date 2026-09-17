@@ -9,6 +9,7 @@
 #include "audio/StudioAudioEngine.h"
 
 #include <atomic>
+#include <memory>
 #include <thread>
 
 void pluginFormatTests()
@@ -255,6 +256,7 @@ void pluginFormatTests()
                       : -1.0f)
             + ").")
                .toRawUTF8());
+
     auto* exactAutomation =
         dynamic_cast<studio::SampleAccurateAutomationTarget*>(
             instance.get());
@@ -465,9 +467,9 @@ void pluginFormatTests()
            "Process-only CLAP parameters receive a silent process block and persist while stopped.");
     instance->releaseResources();
 
-    studio::PluginBridgeClient sandbox(
+    auto sandbox = std::make_unique<studio::PluginBridgeClient>(
         juce::File(STUDIO_DUO_BRIDGE_WORKER_PATH));
-    const auto sandboxStart = sandbox.startPlugin(
+    const auto sandboxStart = sandbox->startPlugin(
         *descriptions[0],
         48000.0,
         64);
@@ -477,14 +479,14 @@ void pluginFormatTests()
     if (sandboxCaptureSucceeded)
     {
         sandboxAudioThread = std::thread(
-            [&sandbox, &keepProcessing]
+            [client = sandbox.get(), &keepProcessing]
             {
                 juce::AudioBuffer<float> block(2, 64);
                 while (keepProcessing.load(
                     std::memory_order_acquire))
                 {
                     block.clear();
-                    sandbox.processBlock(block);
+                    client->processBlock(block);
                 }
             });
         for (auto capture = 0;
@@ -493,7 +495,7 @@ void pluginFormatTests()
         {
             juce::MemoryBlock captured;
             sandboxCaptureSucceeded =
-                sandbox.requestState(
+                sandbox->requestState(
                     captured,
                     std::chrono::seconds(2))
                     .wasOk()
@@ -502,7 +504,7 @@ void pluginFormatTests()
         keepProcessing.store(false, std::memory_order_release);
         sandboxAudioThread.join();
     }
-    sandbox.stop();
+    sandbox->stop();
     expect(
         sandboxCaptureSucceeded,
         (juce::String(
@@ -606,6 +608,7 @@ void pluginFormatTests()
                            - monoRender.getSample(0, 33))
                       < 0.0001f,
            "CLAP automation is sample-exact in one process call and mono output duplicates to stereo.");
+
     studio::Track dryTrack;
     dryTrack.name = "PDC reference";
     dryTrack.clips.push_back(monoClip);

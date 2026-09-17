@@ -12,7 +12,9 @@ modern metal production faster.
 
 The working C++20 and JUCE 9 application includes the Phase 1 vertical slice,
 Phase 2 professional tracking and editing, and the complete Phase 3 mixer and
-plugin platform. It is not yet the complete 1.0 DAW described in the
+plugin platform. Phase 4 MIDI recording/editing and the bundled drum, guitar
+amp, bass amp, and DAWproject 1.0 interchange work are complete. Mastering and
+release workflows remain before the complete 1.0 DAW described in the
 [accepted design](docs/design.md).
 
 ## Highlights
@@ -24,13 +26,27 @@ plugin platform. It is not yet the complete 1.0 DAW described in the
 - Cycle-safe sends, per-insert sidechains, auxes, nested buses, folders, VCAs,
   control room, graph-routed input monitoring, flexible hardware outputs,
   solo-safe behavior, and plugin delay compensation
-- Live MIDI input and cycle-safe MIDI routing through in-process and sandboxed
-  VST3, Audio Unit, and CLAP processors
+- Live, recorded, and retrospective MIDI with ordinary beat-based clips,
+  stable note/expression IDs, cycle-safe channel-filtered routing, and exact
+  sample scheduling through in-process and sandboxed processors
+- Keyboard-accessible piano-roll and metal drum lower editors with velocity,
+  timing, duration, probability, per-note expression, editable drum maps,
+  deterministic entry tools, seeded humanization, pattern expansion, and
+  multi-output routing templates
+- A deterministic bundled metal drum instrument with velocity, round robin,
+  cymbal chokes/foot control, a useful synthesized kit, and routable kick,
+  snare, tom, and cymbal outputs
+- Bundled guitar and bass amps with nonlinear tone stages, embedded cabinets,
+  validated user cabinet IR loading, persistent state, and fixed-latency
+  partitioned convolution
+- Transactional DAWproject 1.0 import/export with official embedded schema
+  validation, deterministic ZIP output, media and plug-in state transfer,
+  preserved scenes, and object-specific compatibility reports
 - Sample-accurate mixer and plugin automation with read, touch, latch, write,
   trim, and preview modes
 - Sandboxed VST3, Audio Unit, and CLAP processing plus explicit ARA 2
   compatibility mode, crash records, state recovery, and missing placeholders
-- Ten bundled utility devices and plugin-backed reamp snapshots, freeze, print,
+- Thirteen bundled devices plus plugin-backed reamp snapshots, freeze, print,
   level-matched comparison, batch rendering, and reports
 
 ## Build
@@ -71,6 +87,8 @@ or MIDI. See [startup troubleshooting and logs](docs/user-guide.md#logs-and-diag
 - [User guide](docs/user-guide.md)
 - [Product, roadmap, and technical design](docs/design.md)
 - [Development and architecture](docs/development.md)
+- [Bundled devices](docs/devices.md)
+- [DAWproject interchange](docs/dawproject.md)
 - [Contributing](docs/contributing.md)
 - [Releasing](docs/releasing.md)
 
@@ -81,3 +99,4 @@ Studio Duo is licensed under the
 option. On Windows, Studio Duo uses JUCE's dual-licensed Steinberg ASIO SDK
 headers under their GPLv3 option. Signalsmith Stretch 1.1.0, CLAP 1.2.10, and
 clap-helpers are MIT licensed. ARA SDK 2.3.0 is Apache-2.0 licensed.
+The vendored DAWproject 1.0 schemas and upstream XML example are MIT licensed.

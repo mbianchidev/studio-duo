@@ -136,10 +136,41 @@ bool validateConnection(const Project& project,
         || connection.name.trim().isEmpty()
         || source == nullptr
         || source->parentTrackId.isNotEmpty()
+        || connection.midiChannel < 0
+        || connection.midiChannel > 16
         || !std::isfinite(connection.gainDecibels)
         || !std::isfinite(connection.pan))
     {
         error = "Routing connections require valid IDs, names, sources, and levels.";
+        return false;
+    }
+
+    if (connection.sourceInsertId.isNotEmpty())
+    {
+        const auto insert = std::find_if(
+            source->inserts.cbegin(),
+            source->inserts.cend(),
+            [&connection](const auto& candidate)
+            {
+                return candidate.id == connection.sourceInsertId;
+            });
+        if (connection.signalType != SignalType::audio
+            || connection.kind != RouteKind::send
+            || connection.tap != RouteTap::preFader
+            || connection.sourceBusIndex <= 0
+            || insert == source->inserts.cend()
+            || !insert->bundledDevice
+            || std::next(insert) != source->inserts.cend())
+        {
+            error =
+                "Processor-output routes require an auxiliary bus from the final bundled insert.";
+            return false;
+        }
+    }
+    else if (connection.sourceBusIndex != 0)
+    {
+        error =
+            "Processor-output routes require a source insert.";
         return false;
     }
 
@@ -159,6 +190,12 @@ bool validateConnection(const Project& project,
             return false;
         }
         return true;
+    }
+
+    if (connection.midiChannel != 0)
+    {
+        error = "Audio routes cannot use a MIDI channel filter.";
+        return false;
     }
 
     if (!isAudioNode(*source) && source->type != TrackType::master)

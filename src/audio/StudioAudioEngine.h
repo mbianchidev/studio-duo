@@ -4,6 +4,7 @@
 #include "RecordingWaveform.h"
 #include "StudioAudioDeviceManager.h"
 #include "automation/AutomationScheduler.h"
+#include "midi/MidiCaptureBuffer.h"
 #include "model/ProjectModel.h"
 #include "plugin_host/PluginBridgeClient.h"
 #include "plugin_host/AraDocumentHost.h"
@@ -48,6 +49,17 @@ public:
     {
         double durationSeconds = 0.0;
         std::vector<float> waveform;
+    };
+
+    struct MidiRecordingResult
+    {
+        juce::Result result { juce::Result::ok() };
+        CapturedMidiWindow captured;
+        std::int64_t captureStartStreamSample = 0;
+        double timelineStartSeconds = 0.0;
+        double durationSeconds = 0.0;
+        double sampleRate = 48000.0;
+        juce::String warning;
     };
 
     struct LatencyCalibrationResult
@@ -138,6 +150,14 @@ public:
     [[nodiscard]] float rightPeak() const noexcept;
     [[nodiscard]] double currentSampleRate() const noexcept;
 #if defined(STUDIO_DUO_TESTING)
+    struct MidiEventForTesting
+    {
+        std::uint64_t runtimeKey = 0;
+        int samplePosition = 0;
+        std::array<std::uint8_t, 3> data {};
+        std::uint8_t size = 0;
+    };
+
     [[nodiscard]] int minimumRouteBufferCapacityForTesting() const noexcept;
     [[nodiscard]] double activeSnapshotSampleRateForTesting() const noexcept;
     [[nodiscard]] juce::AudioBuffer<float>
@@ -151,6 +171,14 @@ public:
             const juce::MidiBuffer& midi,
             int samples,
             int outputChannels = 2);
+    void setMidiCapturePublicationPauseForTesting(
+        std::atomic<bool>* entered,
+        const std::atomic<bool>* release) noexcept;
+    void clearMidiEventsForTesting() noexcept;
+    [[nodiscard]] std::vector<MidiEventForTesting>
+        takeMidiEventsForTesting();
+    [[nodiscard]] static std::uint64_t runtimeKeyForTesting(
+        const juce::String& trackId) noexcept;
     void processActiveBlockForTesting(int samples);
     bool simulatePluginCrashForTesting(
         const juce::String& insertId);
@@ -194,9 +222,14 @@ public:
         juce::String insertId = {});
 
     juce::Result startRecording(const std::vector<RecordingRequest>& requests,
-                                const RecordingPlan& plan);
+                                const RecordingPlan& plan,
+                                bool captureMidi = false);
     std::vector<RecordingResult> stopRecording();
     void stopRecordingAsync(std::function<void(std::vector<RecordingResult>)> completion);
+    [[nodiscard]] MidiRecordingResult stopMidiRecording();
+    [[nodiscard]] MidiRecordingResult captureRetrospectiveMidi(
+        double durationSeconds) const;
+    [[nodiscard]] double midiRecordingDurationSeconds() const noexcept;
     std::optional<double> audioFileDuration(const juce::File& source, juce::String& error);
     std::vector<double> analyseTransients(const AudioClip& clip, juce::String& error);
     juce::Result renderClipToWav(const AudioClip& clip,
@@ -312,6 +345,8 @@ private:
             juce::String id;
             RouteKind kind = RouteKind::send;
             RouteTap tap = RouteTap::postFader;
+            juce::String sourceInsertId;
+            int sourceBusIndex = 0;
             int destinationIndex = -1;
             juce::String destinationInsertId;
             int destinationSidechainIndex = -1;
@@ -375,10 +410,35 @@ private:
     {
         struct MidiTrack
         {
+            struct ActiveScheduledState
+            {
+                std::array<std::uint16_t, 16 * 128> notes {};
+                std::array<bool, 16> sustainDown {};
+            };
+
+            struct Event
+            {
+                std::int64_t sample = 0;
+                std::array<std::uint8_t, 3> data {};
+                std::uint8_t size = 0;
+                std::uint8_t priority = 0;
+            };
+
+            struct Destination
+            {
+                int trackIndex = -1;
+                int midiChannel = 0;
+            };
+
             std::uint64_t runtimeKey = 0;
             int audioTrackIndex = -1;
             bool inputArmed = false;
-            std::vector<int> destinationIndices;
+            std::vector<Destination> destinations;
+            std::vector<Event> events;
+            std::shared_ptr<ActiveScheduledState>
+                activeScheduledState {
+                    std::make_shared<ActiveScheduledState>()
+                };
             juce::AudioBuffer<float> processingBuffer {
                 2,
                 PluginBridgeSharedState::maxBlockSize
@@ -593,6 +653,18 @@ private:
                                   bool loopEnabled,
                                   std::int64_t loopStartSample,
                                   std::int64_t loopEndSample) noexcept;
+    static void addMidiClipEvents(
+        RenderSnapshot::MidiTrack& track,
+        std::int64_t timelineSample,
+        int samples,
+        juce::MidiBuffer& destination) noexcept;
+    static void trackActiveMidiMessage(
+        RenderSnapshot::MidiTrack& track,
+        const juce::MidiMessage& message) noexcept;
+    static bool flushActiveMidiNotes(
+        RenderSnapshot::MidiTrack& track,
+        juce::MidiBuffer& destination,
+        int sampleOffset) noexcept;
     static bool readRenderClipSample(const RenderClip& clip,
                                     std::int64_t relativeSample,
                                     float& left,
@@ -618,14 +690,18 @@ private:
                              const std::vector<RenderSource::PluginAutomation>*
                                  automation = nullptr,
                              std::int64_t timelineSample = 0,
-                             juce::MidiBuffer* midi = nullptr) noexcept;
+                             juce::MidiBuffer* midi = nullptr,
+                             std::vector<RenderTrack::Route>*
+                                 outputRoutes = nullptr) noexcept;
     static bool processInProcessRuntime(
         InsertRuntime& insert,
         juce::AudioBuffer<float>& buffer,
         const juce::AudioBuffer<float>* sidechain,
         juce::MidiBuffer& midi,
         int sidechainSampleOffset = 0,
-        std::span<const PluginBridgeParameterEvent> automation = {}) noexcept;
+        std::span<const PluginBridgeParameterEvent> automation = {},
+        std::vector<RenderTrack::Route>* outputRoutes = nullptr,
+        int outputSampleOffset = 0) noexcept;
     void requestPluginRuntime(std::vector<PluginRuntimeRequest> requests,
                               RenderSnapshot snapshot,
                               bool renderOwned);
@@ -634,6 +710,12 @@ private:
         const std::vector<PluginRuntimeRequest>& requests) const;
     bool waitForPluginRuntimeTransition(int timeoutMilliseconds);
     [[nodiscard]] static std::uint64_t runtimeKey(const juce::String& trackId) noexcept;
+    void requestMidiNoteTermination() noexcept;
+#if defined(STUDIO_DUO_TESTING)
+    void recordMidiEventsForTesting(
+        std::uint64_t runtimeKey,
+        const juce::MidiBuffer& midi) noexcept;
+#endif
     [[nodiscard]] static std::uint64_t renderPair(std::uint64_t generation,
                                                   int snapshotIndex,
                                                   int runtimeIndex) noexcept;
@@ -661,6 +743,7 @@ private:
     AraPreservationResult preserveLiveAraStates(
         std::vector<PluginRuntimeRequest>& requests);
     void waitForRecordingCallbacks() const noexcept;
+    void waitForMidiRecordingCallbacks() const noexcept;
     std::vector<RecordingResult> finishRecordingSession();
     static void addMetronome(const RenderSnapshot& snapshot,
                              std::int64_t timelineSample,
@@ -700,8 +783,23 @@ private:
     std::atomic<bool> metronomeEnabled { true };
     std::atomic<bool> monitoringEnabled { false };
     std::atomic<bool> midiInputEnabled { false };
+    std::atomic<std::uint64_t> midiTerminationRequested { 0 };
+    std::atomic<std::uint64_t> midiTerminationHandled { 0 };
     juce::MidiMessageCollector midiCollector;
     juce::MidiBuffer incomingMidi;
+    MidiCaptureBuffer midiCapture;
+    std::atomic<std::int64_t> streamSampleClock { 0 };
+    std::atomic<bool> midiRecordingActive { false };
+    std::atomic<std::uint64_t> midiRecordingGeneration { 0 };
+    mutable std::atomic<int> midiRecordingCallbacksInFlight { 0 };
+    std::atomic<std::uint64_t> midiRecordingFirstOrdinal { 0 };
+    std::atomic<std::uint64_t> midiRecordingCompletedOrdinal { 0 };
+    std::atomic<std::uint64_t> midiRecordingUnsupportedAtStart { 0 };
+    std::atomic<std::uint64_t> midiRecordingCompletedUnsupported { 0 };
+    std::atomic<std::int64_t> midiRecordingCaptureStartStreamSample { 0 };
+    std::atomic<std::int64_t> midiRecordingCaptureEndStreamSample { -1 };
+    std::atomic<std::int64_t> midiRecordingCompletedStreamSample { 0 };
+    std::atomic<double> midiRecordingTimelineStartSeconds { 0.0 };
     std::atomic<float> outputLeftPeak { 0.0f };
     std::atomic<float> outputRightPeak { 0.0f };
     std::array<int, maximumHardwareAudioChannels>
@@ -777,7 +875,11 @@ private:
     std::atomic<std::int64_t> calibrationSamplesElapsed { 0 };
     std::atomic<int> calibrationLatencySamples { -1 };
 #if defined(STUDIO_DUO_TESTING)
+    static constexpr std::size_t midiEventTraceCapacity = 8192;
     juce::MidiBuffer testingMidiInput;
+    std::array<MidiEventForTesting, midiEventTraceCapacity>
+        testingMidiEvents {};
+    std::atomic<std::size_t> testingMidiEventCount { 0 };
 #endif
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(StudioAudioEngine)

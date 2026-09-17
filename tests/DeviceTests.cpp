@@ -174,8 +174,8 @@ void deviceTests()
            "Inactive hardware channels are absent from audio callbacks.");
 
     const auto descriptors = studio::DeviceRegistry::descriptors();
-    expect(descriptors.size() == 10,
-           "The bundled registry contains all ten Phase 3 utility devices.");
+    expect(descriptors.size() == 13,
+           "The bundled registry contains the Phase 3 utilities and Phase 4 composition devices.");
 
     juce::MidiBuffer midi;
     auto gain = studio::DeviceRegistry::create("studio.device.gain");

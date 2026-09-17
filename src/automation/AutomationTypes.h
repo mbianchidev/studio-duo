@@ -40,6 +40,7 @@ enum class AutomationTargetType
     sendPan,
     sendMute,
     controlRoomDim,
+    midiChannelPressure,
     pluginParameter,
     deviceParameter
 };
@@ -52,6 +53,7 @@ struct AutomationTarget
     juce::String insertId;
     juce::String parameterId;
     int parameterIndex = -1;
+    int midiChannel = -1;
 
     bool operator==(const AutomationTarget& other) const noexcept;
     [[nodiscard]] juce::var toVar() const;

@@ -6,9 +6,13 @@
   version 1.0 scope, architecture, roadmap, and exit criteria
 - [Development](development.md): prerequisites, builds, tests, architecture,
   real-time rules, persistence, and implementation details
+- [Bundled devices](devices.md): drum instrument, amp/cabinet DSP, routing,
+  state, and plugin targets
+- [DAWproject interchange](dawproject.md): supported mappings, schema
+  validation, deterministic archives, transactions, and compatibility reports
 - [Releasing](releasing.md): versioning, release minting, CI artifacts, and
   installation
-- [Native project format](project-format.md): version 3 package layout,
+- [Native project format](project-format.md): version 8 package layout,
   generations, schemas, state hashes, recovery, and migrations
 - [Contributing](contributing.md): coding expectations and pull-request workflow
 

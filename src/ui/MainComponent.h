@@ -3,12 +3,14 @@
 #include "StudioTheme.h"
 #include "AutomationPanel.h"
 #include "MixerPanel.h"
+#include "MidiEditorComponent.h"
 #include "PluginInsertPanel.h"
 #include "PluginParameterPanel.h"
 #include "RoutingPanel.h"
 #include "TimelineComponent.h"
 #include "audio/StudioAudioDeviceManager.h"
 #include "audio/StudioAudioEngine.h"
+#include "dawproject_io/DawProjectIO.h"
 #include "model/LinkedEditModel.h"
 #include "model/ProjectCommands.h"
 #include "plugin_host/PluginBrowserComponent.h"
@@ -88,6 +90,20 @@ private:
     void beginSaveProject();
     void beginImportAudio();
     void beginExportMix();
+    void showDawProjectMenu();
+    void beginImportDawProject();
+    void chooseDawProjectImportDestination(
+        const juce::File& sourceArchive);
+    void importDawProjectTo(const juce::File& sourceArchive,
+                            const juce::File& destinationPackage);
+    void beginExportDawProject();
+    void exportDawProjectTo(const juce::File& destinationArchive);
+    void showLatestCompatibilityReport();
+    void beginSaveCompatibilityReport();
+    [[nodiscard]] const CompatibilityReport*
+        latestCompatibilityReport() const noexcept;
+    void recordCompatibilityReport(
+        const CompatibilityReport& report);
     void showSettings(bool showUpdates = false);
     void restartForUpdate();
     void updateStateChanged(
@@ -111,7 +127,10 @@ private:
     void stopTransportAndRecording();
     void finishRecording();
     void completeRecording(std::vector<ActiveRecordingTarget> targets,
-                           std::vector<StudioAudioEngine::RecordingResult> recordings);
+                           std::vector<StudioAudioEngine::RecordingResult> recordings,
+                           std::vector<juce::String> midiTrackIds,
+                           std::optional<StudioAudioEngine::MidiRecordingResult>
+                               midiRecording);
     void addAudioTrack();
     void addBusTrack();
     void addTrack(TrackType type);
@@ -136,6 +155,16 @@ private:
     void duplicateSelectedClip();
     void duplicateClip(const juce::String& clipId);
     void deleteSelectedClip();
+    void createMidiClip(const juce::String& trackId, double startSeconds);
+    void editMidiClip(const juce::String& trackId,
+                      const MidiClip& before,
+                      const MidiClip& after,
+                      const juce::String& commandName);
+    void captureRetrospectiveMidi();
+    void importDrumMap();
+    void editDrumMapEntry(int pitch);
+    void humanizeSelectedMidiClip();
+    void applyMidiRoutingTemplate(const juce::String& templateId);
     void moveClip(const juce::String& clipId,
                   const juce::String& destinationTrackId,
                   double startSeconds);
@@ -226,6 +255,7 @@ private:
         const std::function<bool(AudioClip&, const AudioClip&, juce::String&)>& update);
     [[nodiscard]] Track makeRecordingVersionTrack(const Track& parent) const;
     Track* recordingTrack();
+    [[nodiscard]] bool hasActiveRecordingTargets() const noexcept;
     void setStatus(const juce::String& message, bool error = false);
     void showError(const juce::String& title, const juce::String& message);
     static juce::String positionText(double seconds, const Project& project);
@@ -243,6 +273,7 @@ private:
     CommandStack commandStack;
     juce::File projectPackage;
     std::vector<ActiveRecordingTarget> activeRecordingTargets;
+    std::vector<juce::String> activeMidiRecordingTrackIds;
     std::optional<ActiveAutomationGesture> activeAutomationGesture;
     std::optional<AutomationPreview> pendingAutomationPreview;
     RecordingPlan activeRecordingPlan;
@@ -271,11 +302,13 @@ private:
     juce::String calibratingReampRouteId;
     std::uint64_t lastRuntimeCatalogRevision = 0;
     juce::String reducedIsolationMarkerSignature;
+    std::optional<CompatibilityReport> transientCompatibilityReport;
     juce::ThreadPool compatibilityValidator { 1 };
 
     juce::TextButton newButton { "NEW" };
     juce::TextButton openButton { "OPEN" };
     juce::TextButton saveButton { "SAVE" };
+    juce::TextButton dawProjectButton { "DAWPROJECT" };
     juce::TextButton exportButton { "EXPORT" };
     juce::TextButton settingsButton { "SETTINGS" };
     juce::TextButton undoButton { "UNDO" };
@@ -297,6 +330,7 @@ private:
     juce::TextButton deleteTrackButton { "DELETE TRACK" };
     juce::TextButton trackingButton { "TRACKING SETUP" };
     juce::TextButton automationButton { "AUTOMATION" };
+    juce::TextButton newMidiClipButton { "NEW MIDI CLIP" };
     juce::TextButton sessionPanelToggleButton { "<" };
     juce::TextButton inspectorPanelToggleButton { "INSPECT" };
     juce::TextButton mixerPanelToggleButton { "MIX" };
@@ -331,12 +365,14 @@ private:
     juce::Viewport timelineViewport;
     TimelineComponent timeline;
     std::unique_ptr<MixerPanel> mixer;
+    MidiEditorComponent midiEditor;
     std::unique_ptr<PanelResizer> leftPanelResizer;
     std::unique_ptr<PanelResizer> inspectorPanelResizer;
     std::unique_ptr<PanelResizer> mixerPanelResizer;
     int leftPanelWidth = 286;
     int inspectorPanelWidth = 250;
     int mixerPanelHeight = 220;
+    int midiEditorHeight = 330;
     bool leftPanelCollapsed = false;
     PluginCatalog pluginCatalog;
     std::unique_ptr<PluginBrowserComponent> pluginBrowser;

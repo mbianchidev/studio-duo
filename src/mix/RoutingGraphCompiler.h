@@ -27,6 +27,8 @@ struct CompiledRoutingConnection
     RouteKind kind = RouteKind::send;
     RouteTap tap = RouteTap::postFader;
     juce::String sourceTrackId;
+    juce::String sourceInsertId;
+    int sourceBusIndex = 0;
     juce::String destinationTrackId;
     juce::String destinationInsertId;
     int sourceTrackIndex = -1;

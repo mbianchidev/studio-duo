@@ -191,8 +191,14 @@ juce::Result ProjectFile::save(const Project& project, const juce::File& request
             "clapHostV1",
             "araCompatibilityV1",
             "bundledDevicesV1",
+            "bundledCompositionDevicesV1",
             "toneSnapshotsV1",
-            "renderReportsV1"
+            "renderReportsV1",
+            "midiCompositionV1",
+            "midiChannelPressureV1",
+            "scenesV1",
+            "compatibilityReportsV1",
+            "dawprojectV1"
         }));
     manifest->setProperty("savedAt", juce::Time::getCurrentTime().toISO8601(true));
 
@@ -256,7 +262,7 @@ std::optional<Project> ProjectFile::load(const juce::File& requestedPackageDirec
     if (manifestVersion >= 3
         && !manifest->getProperty("requiredCapabilities").isArray())
     {
-        error = "The version 3 manifest does not declare required capabilities.";
+        error = "The project manifest does not declare required capabilities.";
         return std::nullopt;
     }
 

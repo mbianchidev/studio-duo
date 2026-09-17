@@ -20,6 +20,47 @@ void addEmptyArray(juce::DynamicObject& object, const juce::Identifier& name)
         object.setProperty(name, juce::var(juce::Array<juce::var> {}));
 }
 
+bool addVersionFiveMidi(juce::DynamicObject& project,
+                        juce::String& error)
+{
+    const auto tracksValue = project.getProperty("tracks");
+    if (!tracksValue.isArray())
+    {
+        error = "Project tracks must be a JSON array before MIDI migration.";
+        return false;
+    }
+    for (auto& trackValue : *tracksValue.getArray())
+    {
+        auto* track = trackValue.getDynamicObject();
+        if (track == nullptr)
+        {
+            error = "Project tracks must contain JSON objects before MIDI migration.";
+            return false;
+        }
+        addEmptyArray(*track, "midiClips");
+    }
+    if (project.getProperty("drumMaps").isVoid()
+        || project.getProperty("midiPatterns").isVoid()
+        || project.getProperty("midiRoutingTemplates").isVoid())
+    {
+        const auto map = createDefaultMetalDrumMap();
+        juce::Array<juce::var> maps;
+        maps.add(map.toVar());
+        project.setProperty("drumMaps", juce::var(maps));
+        juce::Array<juce::var> patterns;
+        for (const auto& pattern : createDefaultMetalPatterns(map))
+            patterns.add(pattern.toVar());
+        project.setProperty("midiPatterns", juce::var(patterns));
+        juce::Array<juce::var> routingTemplates;
+        routingTemplates.add(
+            createDefaultMetalRoutingTemplate(map).toVar());
+        project.setProperty(
+            "midiRoutingTemplates",
+            juce::var(routingTemplates));
+    }
+    return true;
+}
+
 bool addVersionThreeRouting(juce::DynamicObject& project, juce::String& error)
 {
     const auto tracksValue = project.getProperty("tracks");
@@ -79,6 +120,35 @@ bool addVersionThreeRouting(juce::DynamicObject& project, juce::String& error)
     project.setProperty("routingConnections", juce::var(routes));
     return true;
 }
+
+bool addVersionEightMidiChannelMetadata(
+    juce::DynamicObject& project,
+    juce::String& error)
+{
+    const auto lanesValue = project.getProperty("automationLanes");
+    if (lanesValue.isVoid())
+        return true;
+    if (!lanesValue.isArray())
+    {
+        error = "Project automation lanes must be a JSON array before MIDI channel migration.";
+        return false;
+    }
+    for (auto& laneValue : *lanesValue.getArray())
+    {
+        auto* lane = laneValue.getDynamicObject();
+        auto* target = lane != nullptr
+            ? lane->getProperty("target").getDynamicObject()
+            : nullptr;
+        if (target == nullptr)
+        {
+            error = "Project automation lanes must contain target objects before MIDI channel migration.";
+            return false;
+        }
+        if (target->getProperty("midiChannel").isVoid())
+            target->setProperty("midiChannel", -1);
+    }
+    return true;
+}
 }
 
 std::optional<juce::var> ProjectMigration::migrateToCurrent(
@@ -105,6 +175,12 @@ std::optional<juce::var> ProjectMigration::migrateToCurrent(
     if (version < 3
         && !addVersionThreeRouting(*object, error))
         return std::nullopt;
+    if (version < 5
+        && !addVersionFiveMidi(*object, error))
+        return std::nullopt;
+    if (version < 8
+        && !addVersionEightMidiChannelMetadata(*object, error))
+        return std::nullopt;
 
     addEmptyArray(*object, "routingConnections");
     addEmptyArray(*object, "reampRoutes");
@@ -113,6 +189,13 @@ std::optional<juce::var> ProjectMigration::migrateToCurrent(
     addEmptyArray(*object, "toneSnapshots");
     addEmptyArray(*object, "mixerSnapshots");
     addEmptyArray(*object, "renderReports");
+    addEmptyArray(*object, "drumMaps");
+    addEmptyArray(*object, "midiPatterns");
+    addEmptyArray(*object, "midiRoutingTemplates");
+    addEmptyArray(*object, "scenes");
+    addEmptyArray(*object, "compatibilityReports");
+    if (object->getProperty("metadata").isVoid())
+        object->setProperty("metadata", ProjectMetadata {}.toVar());
     object->setProperty("formatVersion", Project::currentFormatVersion);
     return migrated;
 }

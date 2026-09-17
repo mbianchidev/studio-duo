@@ -15,6 +15,18 @@ void projectMigrationTests()
         0.5
     });
     project.automationLanes.push_back(lane);
+    studio::AutomationLane channelPressure;
+    channelPressure.name = "Channel pressure";
+    channelPressure.target.type =
+        studio::AutomationTargetType::midiChannelPressure;
+    channelPressure.target.trackId = project.tracks.front().id;
+    channelPressure.target.midiChannel = 4;
+    channelPressure.points.push_back({
+        juce::Uuid().toString(),
+        0.5,
+        0.75
+    });
+    project.automationLanes.push_back(channelPressure);
 
     const auto package = juce::File::getSpecialLocation(
                              juce::File::tempDirectory)
@@ -23,21 +35,128 @@ void projectMigrationTests()
                                  ".studioduo",
                                  false);
     expect(studio::ProjectFile::save(project, package).wasOk(),
-           "Version 3 project package can be saved.");
+           "Current project package can be saved.");
     const auto manifest = juce::JSON::parse(
         package.getChildFile("manifest.json").loadFileAsString());
     const auto* manifestObject = manifest.getDynamicObject();
+    auto hasMidiCapability = false;
+    auto hasBundledCompositionCapability = false;
+    auto hasDawProjectCapability = false;
+    auto hasSceneCapability = false;
+    auto hasCompatibilityReportCapability = false;
+    auto hasMidiChannelPressureCapability = false;
+    if (manifestObject != nullptr)
+    {
+        const auto required =
+            manifestObject->getProperty("requiredCapabilities");
+        if (required.isArray())
+        {
+            for (const auto& capability : *required.getArray())
+            {
+                hasMidiCapability = hasMidiCapability
+                    || capability.toString() == "midiCompositionV1";
+                hasBundledCompositionCapability =
+                    hasBundledCompositionCapability
+                    || capability.toString()
+                        == "bundledCompositionDevicesV1";
+                hasDawProjectCapability = hasDawProjectCapability
+                    || capability.toString() == "dawprojectV1";
+                hasSceneCapability = hasSceneCapability
+                    || capability.toString() == "scenesV1";
+                hasCompatibilityReportCapability =
+                    hasCompatibilityReportCapability
+                    || capability.toString()
+                        == "compatibilityReportsV1";
+                hasMidiChannelPressureCapability =
+                    hasMidiChannelPressureCapability
+                    || capability.toString()
+                        == "midiChannelPressureV1";
+            }
+        }
+    }
     expect(manifestObject != nullptr
                && manifestObject->getProperty("requiredCapabilities").isArray()
                && manifestObject->getProperty("activeAutomation").toString()
-                      .isNotEmpty(),
-           "Version 3 manifest declares capabilities and automation generation.");
+                      .isNotEmpty()
+               && hasMidiCapability
+               && hasBundledCompositionCapability
+               && hasDawProjectCapability
+               && hasSceneCapability
+               && hasCompatibilityReportCapability
+               && hasMidiChannelPressureCapability,
+           "Version 8 manifest declares MIDI, channel-pressure, bundled-device, scene, report, DAWproject, and automation capabilities.");
 
     juce::String error;
     const auto loaded = studio::ProjectFile::load(package, error);
     expect(loaded.has_value()
-               && loaded->automationLanes.size() == 1,
-           "Version 3 automation generation loads.");
+               && loaded->automationLanes.size() == 2
+               && loaded->automationLanes[1].target.type
+                      == studio::AutomationTargetType::
+                          midiChannelPressure
+               && loaded->automationLanes[1].target.midiChannel == 4,
+           "Version 8 automation generation preserves channel-scoped pressure.");
+
+    auto legacyVersionSeven = project.toVar();
+    auto* legacyObject = legacyVersionSeven.getDynamicObject();
+    auto* legacyLanes =
+        legacyObject->getProperty("automationLanes").getArray();
+    legacyLanes->remove(1);
+    legacyLanes->getReference(0)
+        .getDynamicObject()
+        ->getProperty("target")
+        .getDynamicObject()
+        ->removeProperty("midiChannel");
+    error.clear();
+    const auto loadedLegacyVersionSeven =
+        studio::Project::fromVar(legacyVersionSeven, error);
+    expect(loadedLegacyVersionSeven.has_value()
+               && loadedLegacyVersionSeven->automationLanes.size()
+                      == 1
+               && loadedLegacyVersionSeven->automationLanes.front()
+                      .target.midiChannel
+                      == -1
+               && loadedLegacyVersionSeven->toVar()
+                      .getDynamicObject()
+                      ->getProperty("formatVersion")
+                      == juce::var(
+                          studio::Project::currentFormatVersion),
+           "Version 7 automation targets without MIDI channel metadata migrate to version 8.");
+
+    auto versionSix = project.toVar();
+    auto* versionSixObject = versionSix.getDynamicObject();
+    versionSixObject->setProperty("formatVersion", 6);
+    versionSixObject->removeProperty("metadata");
+    versionSixObject->removeProperty("scenes");
+    versionSixObject->removeProperty("compatibilityReports");
+    error.clear();
+    const auto migratedVersionSix =
+        studio::Project::fromVar(versionSix, error);
+    expect(migratedVersionSix.has_value()
+               && migratedVersionSix->scenes.empty()
+               && migratedVersionSix->compatibilityReports.empty()
+               && migratedVersionSix->metadata.artist.isEmpty(),
+           "Version 6 projects migrate with empty metadata, scenes, and compatibility reports.");
+
+    auto versionFive = project.toVar();
+    versionFive.getDynamicObject()->setProperty("formatVersion", 5);
+    for (auto& route :
+         *versionFive.getDynamicObject()
+              ->getProperty("routingConnections")
+              .getArray())
+    {
+        route.getDynamicObject()->removeProperty("sourceInsertId");
+        route.getDynamicObject()->removeProperty("sourceBusIndex");
+    }
+    error.clear();
+    const auto migratedVersionFive =
+        studio::Project::fromVar(versionFive, error);
+    expect(migratedVersionFive.has_value()
+               && migratedVersionFive->toVar()
+                      .getDynamicObject()
+                      ->getProperty("formatVersion")
+                      == juce::var(
+                          studio::Project::currentFormatVersion),
+           "Version 5 projects migrate to version 8 with ordinary track-route sources.");
 
     auto mismatchedManifest = manifest.clone();
     mismatchedManifest.getDynamicObject()->setProperty("formatVersion", 2);

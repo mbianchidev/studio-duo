@@ -3,6 +3,7 @@
 #include "logging/StudioLogger.h"
 #include "mix/RoutingGraph.h"
 #include "mix/RoutingGraphCompiler.h"
+#include "midi/MidiEditing.h"
 #include "plugin_host/PluginFormats.h"
 #include "plugin_host/ClapPluginInstance.h"
 #include "devices/DeviceRegistry.h"
@@ -12,6 +13,7 @@
 #include <algorithm>
 #include <cmath>
 #include <condition_variable>
+#include <limits>
 #include <mutex>
 #include <span>
 #include <thread>
@@ -453,6 +455,10 @@ void StudioAudioEngine::shutdown()
     playing.store(false, std::memory_order_release);
     monitoringEnabled.store(false, std::memory_order_release);
     midiInputEnabled.store(false, std::memory_order_release);
+    midiRecordingActive.store(false, std::memory_order_release);
+    midiRecordingGeneration.fetch_add(
+        1,
+        std::memory_order_acq_rel);
     recordingAccepting.store(false, std::memory_order_release);
     calibrationActive.store(false, std::memory_order_release);
     calibrationResultReady.store(false, std::memory_order_release);
@@ -468,6 +474,7 @@ void StudioAudioEngine::shutdown()
     }
 
     waitForRecordingCallbacks();
+    waitForMidiRecordingCallbacks();
     recordingFinalizer.removeAllJobs(false, -1);
     if (activeRecorderCount.load(std::memory_order_acquire) > 0)
         finishRecordingSession();
@@ -662,6 +669,7 @@ void StudioAudioEngine::pause() noexcept
     if (renderInProgress.load(std::memory_order_acquire))
         return;
     playing.store(false, std::memory_order_release);
+    requestMidiNoteTermination();
 }
 
 void StudioAudioEngine::stop() noexcept
@@ -670,6 +678,7 @@ void StudioAudioEngine::stop() noexcept
         return;
     playing.store(false, std::memory_order_release);
     playheadSample.store(0, std::memory_order_release);
+    requestMidiNoteTermination();
 }
 
 void StudioAudioEngine::seekSeconds(double seconds) noexcept
@@ -690,6 +699,7 @@ void StudioAudioEngine::seekSeconds(double seconds) noexcept
         }
     }
     playheadSample.store(target, std::memory_order_release);
+    requestMidiNoteTermination();
 }
 
 bool StudioAudioEngine::resetPluginProcessing()
@@ -921,6 +931,42 @@ StudioAudioEngine::renderActiveBlockWithMidiForTesting(
         outputChannels);
     testingMidiInput.clear();
     return output;
+}
+
+void StudioAudioEngine::setMidiCapturePublicationPauseForTesting(
+    std::atomic<bool>* entered,
+    const std::atomic<bool>* release) noexcept
+{
+    midiCapture.setPublicationPauseForTesting(entered, release);
+}
+
+void StudioAudioEngine::clearMidiEventsForTesting() noexcept
+{
+    testingMidiEventCount.store(0, std::memory_order_release);
+}
+
+std::vector<StudioAudioEngine::MidiEventForTesting>
+StudioAudioEngine::takeMidiEventsForTesting()
+{
+    const auto count = std::min(
+        testingMidiEventCount.exchange(
+            0,
+            std::memory_order_acq_rel),
+        testingMidiEvents.size());
+    std::vector<MidiEventForTesting> result;
+    result.reserve(count);
+    result.insert(
+        result.end(),
+        testingMidiEvents.cbegin(),
+        testingMidiEvents.cbegin()
+            + static_cast<std::ptrdiff_t>(count));
+    return result;
+}
+
+std::uint64_t StudioAudioEngine::runtimeKeyForTesting(
+    const juce::String& trackId) noexcept
+{
+    return runtimeKey(trackId);
 }
 
 void StudioAudioEngine::processActiveBlockForTesting(int samples)
@@ -1283,6 +1329,20 @@ std::vector<StudioAudioEngine::RecordingProgress> StudioAudioEngine::recordingPr
                                : RecordingProgress {});
     }
     return progress;
+}
+
+double StudioAudioEngine::midiRecordingDurationSeconds() const noexcept
+{
+    if (!midiRecordingActive.load(std::memory_order_acquire))
+        return 0.0;
+    const auto start = midiRecordingCaptureStartStreamSample.load(
+        std::memory_order_relaxed);
+    const auto capturedEnd = midiRecordingCompletedStreamSample.load(
+        std::memory_order_acquire);
+    return static_cast<double>(std::max<std::int64_t>(
+               0,
+               capturedEnd - start))
+        / currentSampleRate();
 }
 
 std::vector<StudioAudioEngine::PluginRuntimeStatus>
@@ -2191,8 +2251,10 @@ juce::Result StudioAudioEngine::forcePluginRuntimeReloadInternal(
     return result;
 }
 
-juce::Result StudioAudioEngine::startRecording(const std::vector<RecordingRequest>& requests,
-                                               const RecordingPlan& plan)
+juce::Result StudioAudioEngine::startRecording(
+    const std::vector<RecordingRequest>& requests,
+    const RecordingPlan& plan,
+    bool captureMidi)
 {
     if (renderInProgress.load(std::memory_order_acquire))
         return juce::Result::fail(
@@ -2226,19 +2288,30 @@ juce::Result StudioAudioEngine::startRecording(const std::vector<RecordingReques
     if (recordingAccepting.load(std::memory_order_acquire)
         || activeRecorderCount.load(std::memory_order_acquire) > 0)
         return juce::Result::fail("A recording is already in progress.");
-    if (requests.empty())
-        return juce::Result::fail("Arm at least one audio track before recording.");
+    if (requests.empty() && !captureMidi)
+        return juce::Result::fail(
+            "Arm at least one audio, MIDI, or instrument track before recording.");
     if (requests.size() > maximumRecordingTracks)
         return juce::Result::fail("Too many tracks are armed for one recording pass.");
 
-    if (deviceManager == nullptr)
+    if (deviceManager == nullptr
+#if defined(STUDIO_DUO_TESTING)
+        && !(captureMidi && requests.empty())
+#endif
+    )
         return juce::Result::fail("No audio device is available.");
 
-    const auto* device = deviceManager->getCurrentAudioDevice();
-    if (device == nullptr || device->getActiveInputChannels().countNumberOfSetBits() == 0)
+    const auto* device = deviceManager != nullptr
+        ? deviceManager->getCurrentAudioDevice()
+        : nullptr;
+    if (!requests.empty()
+        && (device == nullptr
+            || device->getActiveInputChannels().countNumberOfSetBits() == 0))
         return juce::Result::fail("Enable at least one audio input before recording.");
 
-    const auto activeInputs = device->getActiveInputChannels();
+    const auto activeInputs = device != nullptr
+        ? device->getActiveInputChannels()
+        : juce::BigInteger {};
     for (std::size_t index = 0; index < requests.size(); ++index)
     {
         const auto& request = requests[index];
@@ -2295,6 +2368,53 @@ juce::Result StudioAudioEngine::startRecording(const std::vector<RecordingReques
     }
 
     const auto recordingSampleRate = currentSampleRate();
+    if (captureMidi)
+    {
+        const auto streamStart = streamSampleClock.load(
+            std::memory_order_acquire);
+        const auto captureStartOffset = static_cast<std::int64_t>(
+            std::llround(
+                (plan.captureStartSeconds - plan.transportStartSeconds)
+                * recordingSampleRate));
+        const auto captureEndOffset = plan.captureEndSeconds >= 0.0
+            ? static_cast<std::int64_t>(
+                  std::llround(
+                      (plan.captureEndSeconds
+                       - plan.transportStartSeconds)
+                      * recordingSampleRate))
+            : -1;
+        const auto firstOrdinal = midiCapture.writeOrdinal();
+        const auto unsupportedAtStart =
+            midiCapture.unsupportedEventCount();
+        midiRecordingFirstOrdinal.store(
+            firstOrdinal,
+            std::memory_order_relaxed);
+        midiRecordingCompletedOrdinal.store(
+            firstOrdinal,
+            std::memory_order_relaxed);
+        midiRecordingUnsupportedAtStart.store(
+            unsupportedAtStart,
+            std::memory_order_relaxed);
+        midiRecordingCompletedUnsupported.store(
+            unsupportedAtStart,
+            std::memory_order_relaxed);
+        midiRecordingCaptureStartStreamSample.store(
+            streamStart + captureStartOffset,
+            std::memory_order_relaxed);
+        midiRecordingCaptureEndStreamSample.store(
+            captureEndOffset >= 0 ? streamStart + captureEndOffset : -1,
+            std::memory_order_relaxed);
+        midiRecordingTimelineStartSeconds.store(
+            plan.captureStartSeconds,
+            std::memory_order_relaxed);
+        midiRecordingCompletedStreamSample.store(
+            streamStart + captureStartOffset,
+            std::memory_order_relaxed);
+        midiRecordingGeneration.fetch_add(
+            1,
+            std::memory_order_acq_rel);
+        midiRecordingActive.store(true, std::memory_order_release);
+    }
     recordingCaptureStartSample.store(
         static_cast<std::int64_t>(std::llround(plan.captureStartSeconds
                                               * recordingSampleRate)),
@@ -2327,6 +2447,7 @@ std::vector<StudioAudioEngine::RecordingResult> StudioAudioEngine::stopRecording
 {
     recordingAccepting.store(false, std::memory_order_release);
     playing.store(false, std::memory_order_release);
+    requestMidiNoteTermination();
     waitForRecordingCallbacks();
     return finishRecordingSession();
 }
@@ -2349,6 +2470,7 @@ void StudioAudioEngine::stopRecordingAsync(
 
     recordingAccepting.store(false, std::memory_order_release);
     playing.store(false, std::memory_order_release);
+    requestMidiNoteTermination();
     recordingFinalizer.addJob([this, callback = std::move(completion)]() mutable
     {
         waitForRecordingCallbacks();
@@ -2363,10 +2485,135 @@ void StudioAudioEngine::stopRecordingAsync(
     });
 }
 
+StudioAudioEngine::MidiRecordingResult
+StudioAudioEngine::stopMidiRecording()
+{
+    MidiRecordingResult result;
+    result.sampleRate = currentSampleRate();
+    if (!midiRecordingActive.exchange(false, std::memory_order_acq_rel))
+    {
+        result.result = juce::Result::fail(
+            "No MIDI recording is in progress.");
+        return result;
+    }
+    midiRecordingGeneration.fetch_add(
+        1,
+        std::memory_order_acq_rel);
+
+    waitForMidiRecordingCallbacks();
+    const auto lastOrdinal = midiRecordingCompletedOrdinal.load(
+        std::memory_order_acquire);
+    const auto firstOrdinal = midiRecordingFirstOrdinal.load(
+        std::memory_order_relaxed);
+    result.captured = midiCapture.read(firstOrdinal, lastOrdinal);
+    const auto unsupportedAtStart =
+        midiRecordingUnsupportedAtStart.load(std::memory_order_relaxed);
+    const auto unsupportedAtEnd =
+        midiRecordingCompletedUnsupported.load(
+            std::memory_order_acquire);
+    result.captured.unsupportedEvents =
+        unsupportedAtEnd >= unsupportedAtStart
+        ? unsupportedAtEnd - unsupportedAtStart
+        : 0;
+    result.captureStartStreamSample =
+        midiRecordingCaptureStartStreamSample.load(
+            std::memory_order_relaxed);
+    const auto captureEnd =
+        midiRecordingCompletedStreamSample.load(
+            std::memory_order_acquire);
+    result.timelineStartSeconds =
+        midiRecordingTimelineStartSeconds.load(std::memory_order_relaxed);
+    result.durationSeconds = static_cast<double>(
+        std::max<std::int64_t>(
+            0,
+            captureEnd - result.captureStartStreamSample))
+        / result.sampleRate;
+    if (result.captured.overwrittenEvents > 0)
+    {
+        result.warning = "MIDI capture overflowed by "
+            + juce::String(
+                static_cast<juce::int64>(
+                    result.captured.overwrittenEvents))
+            + " events.";
+    }
+    if (result.captured.unsupportedEvents > 0)
+    {
+        if (result.warning.isNotEmpty())
+            result.warning << " ";
+        result.warning << "Ignored "
+                       << juce::String(
+                              static_cast<juce::int64>(
+                                  result.captured.unsupportedEvents))
+                       << " long system-exclusive MIDI events.";
+    }
+    if (result.durationSeconds <= 0.0)
+    {
+        result.result = juce::Result::fail(
+            "The MIDI recording did not reach its capture range.");
+    }
+    return result;
+}
+
+StudioAudioEngine::MidiRecordingResult
+StudioAudioEngine::captureRetrospectiveMidi(double durationSeconds) const
+{
+    MidiRecordingResult result;
+    result.sampleRate = currentSampleRate();
+    if (!std::isfinite(durationSeconds) || durationSeconds <= 0.0)
+    {
+        result.result = juce::Result::fail(
+            "Retrospective MIDI duration must be positive.");
+        return result;
+    }
+    durationSeconds = juce::jlimit(0.25, 120.0, durationSeconds);
+    const auto endStream = streamSampleClock.load(std::memory_order_acquire);
+    const auto requestedSamples = static_cast<std::int64_t>(
+        std::llround(durationSeconds * result.sampleRate));
+    result.captureStartStreamSample = std::max<std::int64_t>(
+        0,
+        endStream - requestedSamples);
+    result.captured = midiCapture.readRecent(
+        result.captureStartStreamSample,
+        midiCapture.writeOrdinal());
+    if (result.captured.events.empty())
+    {
+        result.result = juce::Result::fail(
+            "No recent MIDI input is available for retrospective capture.");
+        return result;
+    }
+    result.captureStartStreamSample =
+        result.captured.events.front().streamSample;
+    result.durationSeconds = static_cast<double>(
+        std::max<std::int64_t>(
+            1,
+            endStream - result.captureStartStreamSample))
+        / result.sampleRate;
+    result.timelineStartSeconds = std::max(
+        0.0,
+        static_cast<double>(
+            result.captured.events.front().timelineSample)
+            / result.sampleRate);
+    if (result.captured.overwrittenEvents > 0)
+    {
+        result.warning = "The oldest retrospective MIDI events were overwritten.";
+    }
+    return result;
+}
+
 void StudioAudioEngine::waitForRecordingCallbacks() const noexcept
 {
     while (recordingCallbacksInFlight.load(std::memory_order_acquire) > 0)
         juce::Thread::sleep(1);
+}
+
+void StudioAudioEngine::waitForMidiRecordingCallbacks() const noexcept
+{
+    while (midiRecordingCallbacksInFlight.load(
+               std::memory_order_acquire)
+           > 0)
+    {
+        juce::Thread::sleep(1);
+    }
 }
 
 std::vector<StudioAudioEngine::RecordingResult> StudioAudioEngine::finishRecordingSession()
@@ -3095,6 +3342,263 @@ std::optional<StudioAudioEngine::RenderSnapshot> StudioAudioEngine::buildSnapsho
     const auto midiOrder = RoutingGraph::midiOrder(project, error);
     if (!midiOrder.has_value())
         return std::nullopt;
+    const auto compileMidiEvents =
+        [&project, targetSampleRate](
+            const Track& track,
+            RenderSnapshot::MidiTrack& destination)
+    {
+        const auto append = [&destination](
+                                std::int64_t sample,
+                                const juce::MidiMessage& message,
+                                std::uint8_t priority)
+        {
+            const auto size = message.getRawDataSize();
+            if (size < 1 || size > 3)
+                return;
+            RenderSnapshot::MidiTrack::Event event;
+            event.sample = std::max<std::int64_t>(0, sample);
+            event.size = static_cast<std::uint8_t>(size);
+            event.priority = priority;
+            std::copy_n(
+                message.getRawData(),
+                size,
+                event.data.begin());
+            destination.events.push_back(event);
+        };
+
+        auto expectedEvents = std::size_t { 0 };
+        for (const auto& clip : track.midiClips)
+            for (const auto& note : clip.notes)
+                expectedEvents += 2 + note.expressions.size()
+                    + (note.footControlValue >= 0 ? 1 : 0);
+        for (const auto& lane : project.automationLanes)
+            if (lane.enabled
+                && lane.target.type
+                    == AutomationTargetType::midiChannelPressure
+                && lane.target.trackId == track.id)
+                expectedEvents += lane.points.size();
+        destination.events.reserve(expectedEvents);
+
+        for (const auto& lane : project.automationLanes)
+        {
+            if (!lane.enabled
+                || lane.target.type
+                    != AutomationTargetType::midiChannelPressure
+                || lane.target.trackId != track.id)
+            {
+                continue;
+            }
+            for (const auto& point : lane.points)
+            {
+                const auto seconds =
+                    lane.timebase == AutomationTimebase::seconds
+                    ? point.position
+                    : project.secondsAtBeat(point.position);
+                const auto sample = static_cast<std::int64_t>(
+                    std::llround(seconds * targetSampleRate));
+                append(
+                    sample,
+                    juce::MidiMessage::channelPressureChange(
+                        lane.target.midiChannel,
+                        juce::jlimit(
+                            0,
+                            127,
+                            static_cast<int>(
+                                std::llround(
+                                    (point.value
+                                     + lane.trimOffset)
+                                    * 127.0)))),
+                    1);
+            }
+        }
+
+        for (const auto& clip : track.midiClips)
+        {
+            if (clip.muted)
+                continue;
+            const auto* drumMap = project.findDrumMap(clip.drumMapId);
+            for (const auto& note : clip.notes)
+            {
+                if (!midiNoteShouldPlay(clip, note))
+                    continue;
+                const auto* mapEntry = drumMap != nullptr
+                    ? drumMap->entryForId(note.drumMapEntryId)
+                    : nullptr;
+                if (mapEntry == nullptr && drumMap != nullptr)
+                    mapEntry = drumMap->entryForPitch(note.pitch);
+                auto playbackPitch = note.pitch;
+                if (note.roundRobinHint >= 0
+                    && mapEntry != nullptr
+                    && !mapEntry->roundRobinNotes.empty())
+                {
+                    const auto variantCount =
+                        static_cast<int>(
+                            mapEntry->roundRobinNotes.size())
+                        + 1;
+                    const auto variant =
+                        note.roundRobinHint % variantCount;
+                    playbackPitch = variant == 0
+                        ? mapEntry->noteNumber
+                        : mapEntry->roundRobinNotes[
+                              static_cast<std::size_t>(
+                                  variant - 1)];
+                }
+                const auto absoluteStartBeat =
+                    clip.startBeats + note.actualStartBeats();
+                auto absoluteEndBeat =
+                    clip.startBeats + note.endBeats();
+                if (note.chokeGroup.isNotEmpty())
+                {
+                    for (const auto& candidate : clip.notes)
+                    {
+                        if (candidate.id == note.id
+                            || candidate.chokeGroup != note.chokeGroup)
+                            continue;
+                        const auto candidateStart = clip.startBeats
+                            + candidate.actualStartBeats();
+                        if (candidateStart > absoluteStartBeat + 0.0000001)
+                            absoluteEndBeat = std::min(
+                                absoluteEndBeat,
+                                candidateStart);
+                    }
+                }
+                const auto startSample = static_cast<std::int64_t>(
+                    std::llround(
+                        project.secondsAtBeat(absoluteStartBeat)
+                        * targetSampleRate));
+                const auto endSample = std::max(
+                    startSample + 1,
+                    static_cast<std::int64_t>(
+                        std::llround(
+                            project.secondsAtBeat(absoluteEndBeat)
+                            * targetSampleRate)));
+                if (note.footControlValue >= 0)
+                {
+                    if (mapEntry != nullptr
+                        && mapEntry->footControlCC >= 0)
+                    {
+                        append(
+                            startSample,
+                            juce::MidiMessage::controllerEvent(
+                                note.channel,
+                                mapEntry->footControlCC,
+                                note.footControlValue),
+                            1);
+                    }
+                }
+                append(
+                    startSample,
+                    juce::MidiMessage::noteOn(
+                        note.channel,
+                        playbackPitch,
+                        static_cast<juce::uint8>(note.velocity)),
+                    2);
+                for (const auto& expression : note.expressions)
+                {
+                    const auto expressionBeat = absoluteStartBeat
+                        + expression.offsetBeats;
+                    const auto expressionSample =
+                        static_cast<std::int64_t>(
+                            std::llround(
+                                project.secondsAtBeat(expressionBeat)
+                                * targetSampleRate));
+                    switch (expression.type)
+                    {
+                        case MidiExpressionType::pitchBend:
+                            append(
+                                expressionSample,
+                                juce::MidiMessage::pitchWheel(
+                                    note.channel,
+                                    juce::jlimit(
+                                        0,
+                                        16383,
+                                        static_cast<int>(
+                                            std::llround(
+                                                (expression.value + 1.0)
+                                                * 8191.5)))),
+                                3);
+                            break;
+                        case MidiExpressionType::pressure:
+                            append(
+                                expressionSample,
+                                juce::MidiMessage::aftertouchChange(
+                                    note.channel,
+                                    playbackPitch,
+                                    juce::jlimit(
+                                        0,
+                                        127,
+                                        static_cast<int>(
+                                            std::llround(
+                                                expression.value
+                                                * 127.0)))),
+                                3);
+                            break;
+                        case MidiExpressionType::channelPressure:
+                            append(
+                                expressionSample,
+                                juce::MidiMessage::channelPressureChange(
+                                    note.channel,
+                                    juce::jlimit(
+                                        0,
+                                        127,
+                                        static_cast<int>(
+                                            std::llround(
+                                                expression.value
+                                                * 127.0)))),
+                                3);
+                            break;
+                        case MidiExpressionType::timbre:
+                            append(
+                                expressionSample,
+                                juce::MidiMessage::controllerEvent(
+                                    note.channel,
+                                    74,
+                                    juce::jlimit(
+                                        0,
+                                        127,
+                                        static_cast<int>(
+                                            std::llround(
+                                                expression.value
+                                                * 127.0)))),
+                                3);
+                            break;
+                        case MidiExpressionType::controller:
+                            append(
+                                expressionSample,
+                                juce::MidiMessage::controllerEvent(
+                                    note.channel,
+                                    expression.controller,
+                                    juce::jlimit(
+                                        0,
+                                        127,
+                                        static_cast<int>(
+                                            std::llround(
+                                                expression.value
+                                                * 127.0)))),
+                                3);
+                            break;
+                    }
+                }
+                append(
+                    endSample,
+                    juce::MidiMessage::noteOff(
+                        note.channel,
+                        playbackPitch,
+                        static_cast<juce::uint8>(
+                            note.releaseVelocity)),
+                    0);
+            }
+        }
+        std::stable_sort(
+            destination.events.begin(),
+            destination.events.end(),
+            [](const auto& left, const auto& right)
+            {
+                if (left.sample != right.sample)
+                    return left.sample < right.sample;
+                return left.priority < right.priority;
+            });
+    };
     snapshot.midiTracks.reserve(midiOrder->size());
     for (const auto& trackId : *midiOrder)
     {
@@ -3122,6 +3626,7 @@ std::optional<StudioAudioEngine::RenderSnapshot> StudioAudioEngine::buildSnapsho
                     static_cast<int>(snapshot.midiTracks.size());
         }
         midiTrack.midi.ensureSize(65536);
+        compileMidiEvents(*track, midiTrack);
         snapshot.midiTracks.push_back(std::move(midiTrack));
     }
     for (const auto& connection : project.routingConnections)
@@ -3142,10 +3647,13 @@ std::optional<StudioAudioEngine::RenderSnapshot> StudioAudioEngine::buildSnapsho
             continue;
         snapshot.midiTracks[static_cast<std::size_t>(
             std::distance(midiOrder->cbegin(), source))]
-            .destinationIndices.push_back(
-                static_cast<int>(std::distance(
-                    midiOrder->cbegin(),
-                    destination)));
+            .destinations.push_back(
+                {
+                    static_cast<int>(std::distance(
+                        midiOrder->cbegin(),
+                        destination)),
+                    connection.midiChannel
+                });
     }
 
     for (std::size_t index = 0; index < snapshot.tracks.size(); ++index)
@@ -3202,10 +3710,45 @@ std::optional<StudioAudioEngine::RenderSnapshot> StudioAudioEngine::buildSnapsho
                 >= static_cast<int>(snapshot.tracks.size()))
             continue;
 
+        if (compiledRoute.sourceInsertId.isNotEmpty())
+        {
+            const auto* sourceTrack = project.findTrack(
+                compiledRoute.sourceTrackId);
+            const auto sourceInsert = sourceTrack != nullptr
+                ? std::find_if(
+                      sourceTrack->inserts.cbegin(),
+                      sourceTrack->inserts.cend(),
+                      [&compiledRoute](const auto& insert)
+                      {
+                          return insert.id
+                              == compiledRoute.sourceInsertId;
+                      })
+                : std::vector<PluginInsert>::const_iterator {};
+            const auto* descriptor =
+                sourceTrack != nullptr
+                        && sourceInsert
+                            != sourceTrack->inserts.cend()
+                    ? DeviceRegistry::descriptor(
+                          sourceInsert->pluginIdentifier)
+                    : nullptr;
+            if (descriptor == nullptr
+                || compiledRoute.sourceBusIndex <= 0
+                || compiledRoute.sourceBusIndex
+                    >= static_cast<int>(
+                        descriptor->outputBuses.size()))
+            {
+                error =
+                    "A processor-output route references an unavailable bundled output bus.";
+                return std::nullopt;
+            }
+        }
+
         RenderTrack::Route route;
         route.id = compiledRoute.id;
         route.kind = compiledRoute.kind;
         route.tap = compiledRoute.tap;
+        route.sourceInsertId = compiledRoute.sourceInsertId;
+        route.sourceBusIndex = compiledRoute.sourceBusIndex;
         route.destinationIndex = compiledRoute.destinationTrackIndex;
         route.destinationInsertId = compiledRoute.destinationInsertId;
         if (route.kind == RouteKind::sidechain
@@ -3288,6 +3831,9 @@ std::optional<StudioAudioEngine::RenderSnapshot> StudioAudioEngine::buildSnapsho
     {
         if (!lane.enabled)
             continue;
+        if (lane.target.type
+            == AutomationTargetType::midiChannelPressure)
+            continue;
         auto compiled = AutomationScheduler::compile(
             project,
             lane,
@@ -3317,6 +3863,7 @@ std::optional<StudioAudioEngine::RenderSnapshot> StudioAudioEngine::buildSnapsho
                 case AutomationTargetType::sendPan:
                 case AutomationTargetType::sendMute:
                 case AutomationTargetType::controlRoomDim:
+                case AutomationTargetType::midiChannelPressure:
                     break;
                 case AutomationTargetType::pluginParameter:
                 case AutomationTargetType::deviceParameter:
@@ -3366,6 +3913,7 @@ std::optional<StudioAudioEngine::RenderSnapshot> StudioAudioEngine::buildSnapsho
                 case AutomationTargetType::sendGain:
                 case AutomationTargetType::sendPan:
                 case AutomationTargetType::sendMute:
+                case AutomationTargetType::midiChannelPressure:
                     break;
             }
             continue;
@@ -3471,6 +4019,7 @@ std::optional<StudioAudioEngine::RenderSnapshot> StudioAudioEngine::buildSnapsho
             }
             case AutomationTargetType::vcaVolume:
             case AutomationTargetType::controlRoomDim:
+            case AutomationTargetType::midiChannelPressure:
                 break;
             case AutomationTargetType::pluginParameter:
             case AutomationTargetType::deviceParameter:
@@ -4398,6 +4947,140 @@ void StudioAudioEngine::renderSourceBlock(RenderSource& source,
                          source.pan);
 }
 
+void StudioAudioEngine::addMidiClipEvents(
+    RenderSnapshot::MidiTrack& track,
+    std::int64_t timelineSample,
+    int samples,
+    juce::MidiBuffer& destination) noexcept
+{
+    if (samples <= 0 || track.events.empty())
+        return;
+    const auto endSample = timelineSample + samples;
+    auto event = std::lower_bound(
+        track.events.cbegin(),
+        track.events.cend(),
+        timelineSample,
+        [](const auto& candidate, std::int64_t sample)
+        {
+            return candidate.sample < sample;
+        });
+    for (; event != track.events.cend() && event->sample < endSample; ++event)
+    {
+        const juce::MidiMessage message(
+            event->data.data(),
+            static_cast<int>(event->size),
+            0.0);
+        destination.addEvent(
+            message,
+            static_cast<int>(event->sample - timelineSample));
+        trackActiveMidiMessage(track, message);
+    }
+}
+
+void StudioAudioEngine::trackActiveMidiMessage(
+    RenderSnapshot::MidiTrack& track,
+    const juce::MidiMessage& message) noexcept
+{
+    const auto channel = message.getChannel();
+    if (channel < 1 || channel > 16)
+        return;
+    const auto channelIndex = static_cast<std::size_t>(
+        channel - 1);
+    if (message.isNoteOn())
+    {
+        const auto note = message.getNoteNumber();
+        if (note < 0 || note > 127)
+            return;
+        auto& active = track.activeScheduledState->notes[
+            channelIndex * 128
+            + static_cast<std::size_t>(note)];
+        if (active < std::numeric_limits<std::uint16_t>::max())
+            ++active;
+    }
+    else if (message.isNoteOff())
+    {
+        const auto note = message.getNoteNumber();
+        if (note < 0 || note > 127)
+            return;
+        auto& active = track.activeScheduledState->notes[
+            channelIndex * 128
+            + static_cast<std::size_t>(note)];
+        if (active > 0)
+            --active;
+    }
+    else if (message.isSustainPedalOn())
+    {
+        track.activeScheduledState->sustainDown[channelIndex] =
+            true;
+    }
+    else if (message.isSustainPedalOff())
+    {
+        track.activeScheduledState->sustainDown[channelIndex] =
+            false;
+    }
+    else if (message.isAllNotesOff()
+             || message.isAllSoundOff())
+    {
+        std::fill_n(
+            track.activeScheduledState->notes.begin()
+                + static_cast<std::ptrdiff_t>(
+                    channelIndex * 128),
+            128,
+            std::uint16_t { 0 });
+    }
+    else if (message.isResetAllControllers())
+    {
+        track.activeScheduledState->sustainDown[channelIndex] =
+            false;
+    }
+}
+
+bool StudioAudioEngine::flushActiveMidiNotes(
+    RenderSnapshot::MidiTrack& track,
+    juce::MidiBuffer& destination,
+    int sampleOffset) noexcept
+{
+    auto emitted = false;
+    for (int channel = 1; channel <= 16; ++channel)
+    {
+        const auto channelIndex =
+            static_cast<std::size_t>(channel - 1);
+        auto channelActive =
+            track.activeScheduledState
+                ->sustainDown[channelIndex];
+        const auto channelOffset =
+            channelIndex * 128;
+        for (int note = 0; note < 128; ++note)
+        {
+            auto& active = track.activeScheduledState->notes[
+                channelOffset + static_cast<std::size_t>(note)];
+            if (active == 0)
+                continue;
+            destination.addEvent(
+                juce::MidiMessage::noteOff(channel, note),
+                sampleOffset);
+            active = 0;
+            channelActive = true;
+        }
+        if (channelActive)
+        {
+            destination.addEvent(
+                juce::MidiMessage::controllerEvent(channel, 64, 0),
+                sampleOffset);
+            destination.addEvent(
+                juce::MidiMessage::allNotesOff(channel),
+                sampleOffset);
+            destination.addEvent(
+                juce::MidiMessage::allSoundOff(channel),
+                sampleOffset);
+            track.activeScheduledState
+                ->sustainDown[channelIndex] = false;
+            emitted = true;
+        }
+    }
+    return emitted;
+}
+
 bool StudioAudioEngine::readRenderClipSample(const RenderClip& clip,
                                              std::int64_t relativeSample,
                                              float& left,
@@ -4679,6 +5362,35 @@ void StudioAudioEngine::applyDelayCompensation(
     }
 }
 
+#if defined(STUDIO_DUO_TESTING)
+void StudioAudioEngine::recordMidiEventsForTesting(
+    std::uint64_t key,
+    const juce::MidiBuffer& midi) noexcept
+{
+    auto next = std::min(
+        testingMidiEventCount.load(std::memory_order_relaxed),
+        testingMidiEvents.size());
+    for (const auto metadata : midi)
+    {
+        if (next >= testingMidiEvents.size())
+            break;
+        const auto& message = metadata.getMessage();
+        const auto size = message.getRawDataSize();
+        if (size < 1 || size > 3)
+            continue;
+        auto& event = testingMidiEvents[next++];
+        event.runtimeKey = key;
+        event.samplePosition = metadata.samplePosition;
+        event.size = static_cast<std::uint8_t>(size);
+        std::copy_n(
+            message.getRawData(),
+            size,
+            event.data.begin());
+    }
+    testingMidiEventCount.store(next, std::memory_order_release);
+}
+#endif
+
 void StudioAudioEngine::processRuntimeChain(std::uint64_t key,
                                             juce::AudioBuffer<float>& buffer,
                                             const std::vector<RenderTrack::SidechainInput>*
@@ -4686,10 +5398,16 @@ void StudioAudioEngine::processRuntimeChain(std::uint64_t key,
                                             const std::vector<RenderSource::PluginAutomation>*
                                                 automation,
                                             std::int64_t timelineSample,
-                                            juce::MidiBuffer* midi) noexcept
+                                            juce::MidiBuffer* midi,
+                                            std::vector<RenderTrack::Route>*
+                                                outputRoutes) noexcept
 {
     if (key == 0)
         return;
+#if defined(STUDIO_DUO_TESTING)
+    if (midi != nullptr)
+        recordMidiEventsForTesting(key, *midi);
+#endif
 
     const auto readingIndex = readingPluginRuntime.load(std::memory_order_acquire);
     const auto runtimeIndex = readingIndex >= 0
@@ -4861,7 +5579,11 @@ void StudioAudioEngine::processRuntimeChain(std::uint64_t key,
                         insert,
                         buffer,
                         sidechain,
-                        runtimeMidi);
+                        runtimeMidi,
+                        0,
+                        {},
+                        outputRoutes,
+                        0);
                     continue;
                 }
                 const auto events =
@@ -4875,7 +5597,9 @@ void StudioAudioEngine::processRuntimeChain(std::uint64_t key,
                         sidechain,
                         runtimeMidi,
                         0,
-                        events))
+                        events,
+                        outputRoutes,
+                        0))
                 {
                     continue;
                 }
@@ -4934,6 +5658,13 @@ void StudioAudioEngine::processRuntimeChain(std::uint64_t key,
                 boundaries.erase(
                     std::unique(boundaries.begin(), boundaries.end()),
                     boundaries.end());
+                insert.midiInput.clear();
+                insert.midiInput.addEvents(
+                    runtimeMidi,
+                    0,
+                    buffer.getNumSamples(),
+                    0);
+                runtimeMidi.clear();
                 for (std::size_t boundary = 0;
                      boundary + 1 < boundaries.size();
                      ++boundary)
@@ -4988,11 +5719,25 @@ void StudioAudioEngine::processRuntimeChain(std::uint64_t key,
                         buffer.getNumChannels(),
                         offset,
                         next - offset);
+                    insert.midiSegment.clear();
+                    insert.midiSegment.addEvents(
+                        insert.midiInput,
+                        offset,
+                        next - offset,
+                        -offset);
                     processInProcessRuntime(
                         insert,
                         segment,
                         sidechain,
-                        runtimeMidi,
+                        insert.midiSegment,
+                        offset,
+                        {},
+                        outputRoutes,
+                        offset);
+                    runtimeMidi.addEvents(
+                        insert.midiSegment,
+                        0,
+                        next - offset,
                         offset);
                 }
             }
@@ -5013,7 +5758,9 @@ bool StudioAudioEngine::processInProcessRuntime(
     const juce::AudioBuffer<float>* sidechain,
     juce::MidiBuffer& midi,
     int sidechainSampleOffset,
-    std::span<const PluginBridgeParameterEvent> automation) noexcept
+    std::span<const PluginBridgeParameterEvent> automation,
+    std::vector<RenderTrack::Route>* outputRoutes,
+    int outputSampleOffset) noexcept
 {
     auto& processor = *insert.inProcess;
     auto* automationTarget =
@@ -5104,6 +5851,37 @@ bool StudioAudioEngine::processInProcessRuntime(
     }
     else
         processor.processBlock(scratchView, midi);
+    if (outputRoutes != nullptr)
+    {
+        for (auto& route : *outputRoutes)
+        {
+            if (route.sourceInsertId != insert.insertId
+                || route.sourceBusIndex <= 0
+                || route.sourceBusIndex
+                    >= processor.getBusCount(false))
+                continue;
+            const auto channels = processor.getChannelCountOfBus(
+                false,
+                route.sourceBusIndex);
+            for (int channel = 0; channel < 2; ++channel)
+            {
+                if (channels <= 0)
+                    continue;
+                const auto sourceChannel =
+                    processor.getChannelIndexInProcessBlockBuffer(
+                        false,
+                        route.sourceBusIndex,
+                        std::min(channel, channels - 1));
+                route.processingBuffer.copyFrom(
+                    channel,
+                    outputSampleOffset,
+                    scratch,
+                    sourceChannel,
+                    0,
+                    buffer.getNumSamples());
+            }
+        }
+    }
     for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
     {
         const auto outputChannel =
@@ -5461,6 +6239,26 @@ void StudioAudioEngine::requestPluginRuntime(
         {
             const auto runtime =
                 activePluginRuntime.load(std::memory_order_acquire);
+            if (activeSnapshotTemplate != nullptr)
+            {
+                for (auto& midiTrack : snapshot.midiTracks)
+                {
+                    const auto activeTrack = std::find_if(
+                        activeSnapshotTemplate->midiTracks.cbegin(),
+                        activeSnapshotTemplate->midiTracks.cend(),
+                        [&midiTrack](const auto& candidate)
+                        {
+                            return candidate.runtimeKey
+                                == midiTrack.runtimeKey;
+                        });
+                    if (activeTrack
+                        != activeSnapshotTemplate->midiTracks.cend())
+                    {
+                        midiTrack.activeScheduledState =
+                            activeTrack->activeScheduledState;
+                    }
+                }
+            }
             std::vector<PluginRuntimeStatus> statuses;
             {
                 const juce::ScopedLock statusLock(pluginStatusLock);
@@ -5488,6 +6286,7 @@ void StudioAudioEngine::requestPluginRuntime(
                                               destination,
                                               runtime),
                                    std::memory_order_release);
+            requestMidiNoteTermination();
             activePluginFingerprint = fingerprint;
             desiredPluginFingerprint = fingerprint;
             activePluginRequests = std::move(requests);
@@ -5685,6 +6484,12 @@ void StudioAudioEngine::runPluginRuntimeBuilder()
                     processor = messageThreadOwnedProcessor(
                         DeviceRegistry::create(
                             request.deviceIdentifier));
+                    if (processor == nullptr)
+                    {
+                        creationError =
+                            "Bundled device is unavailable: "
+                            + request.deviceIdentifier;
+                    }
                 }
                 else
                 {
@@ -6154,6 +6959,13 @@ std::uint64_t StudioAudioEngine::runtimeKey(const juce::String& trackId) noexcep
     return static_cast<std::uint64_t>(trackId.hashCode64());
 }
 
+void StudioAudioEngine::requestMidiNoteTermination() noexcept
+{
+    midiTerminationRequested.fetch_add(
+        1,
+        std::memory_order_acq_rel);
+}
+
 std::uint64_t StudioAudioEngine::renderPair(std::uint64_t generation,
                                             int snapshotIndex,
                                             int runtimeIndex) noexcept
@@ -6195,6 +7007,13 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
 {
     audioCallbacksInFlight.fetch_add(1, std::memory_order_acq_rel);
     AtomicCounterScope callbackScope { audioCallbacksInFlight };
+    const auto captureRealtimeMidi =
+        !renderInProgress.load(std::memory_order_acquire);
+    const auto streamBlockStart = captureRealtimeMidi
+        ? streamSampleClock.fetch_add(
+              numSamples,
+              std::memory_order_acq_rel)
+        : streamSampleClock.load(std::memory_order_acquire);
 
     for (int channel = 0; channel < numOutputChannels; ++channel)
         if (outputChannelData[channel] != nullptr)
@@ -6324,18 +7143,24 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
         }
     }
 
-    if (pluginStateOperationActive.load(std::memory_order_acquire))
+    auto midiRecordingBlockActive = false;
+    RecordingCallbackScope midiRecordingScope;
+    const auto midiRecordingCandidateGeneration =
+        midiRecordingGeneration.load(std::memory_order_acquire);
+    if (captureRealtimeMidi
+        && midiRecordingActive.load(std::memory_order_acquire))
     {
-        outputLeftPeak.store(0.0f, std::memory_order_relaxed);
-        outputRightPeak.store(0.0f, std::memory_order_relaxed);
-        return;
-    }
-
-    if (numOutputChannels == 0)
-    {
-        outputLeftPeak.store(0.0f, std::memory_order_relaxed);
-        outputRightPeak.store(0.0f, std::memory_order_relaxed);
-        return;
+        midiRecordingCallbacksInFlight.fetch_add(
+            1,
+            std::memory_order_acq_rel);
+        midiRecordingScope.counter =
+            &midiRecordingCallbacksInFlight;
+        // This second observation is the block admission boundary used by stop.
+        midiRecordingBlockActive =
+            midiRecordingActive.load(std::memory_order_acquire)
+            && midiRecordingCandidateGeneration
+                == midiRecordingGeneration.load(
+                    std::memory_order_acquire);
     }
 
     incomingMidi.clear();
@@ -6350,6 +7175,48 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
         0);
     testingMidiInput.clear();
 #endif
+    if (captureRealtimeMidi)
+    {
+        midiCapture.push(
+            incomingMidi,
+            streamBlockStart,
+            playheadSample.load(std::memory_order_acquire));
+        if (midiRecordingBlockActive)
+        {
+            midiRecordingCompletedOrdinal.store(
+                midiCapture.writeOrdinal(),
+                std::memory_order_release);
+            midiRecordingCompletedUnsupported.store(
+                midiCapture.unsupportedEventCount(),
+                std::memory_order_release);
+            const auto captureStart =
+                midiRecordingCaptureStartStreamSample.load(
+                    std::memory_order_relaxed);
+            const auto requestedEnd =
+                midiRecordingCaptureEndStreamSample.load(
+                    std::memory_order_relaxed);
+            auto completedEnd = streamBlockStart + numSamples;
+            if (requestedEnd >= 0)
+                completedEnd = std::min(completedEnd, requestedEnd);
+            midiRecordingCompletedStreamSample.store(
+                std::max(captureStart, completedEnd),
+                std::memory_order_release);
+        }
+    }
+
+    if (pluginStateOperationActive.load(std::memory_order_acquire))
+    {
+        outputLeftPeak.store(0.0f, std::memory_order_relaxed);
+        outputRightPeak.store(0.0f, std::memory_order_relaxed);
+        return;
+    }
+
+    if (numOutputChannels == 0)
+    {
+        outputLeftPeak.store(0.0f, std::memory_order_relaxed);
+        outputRightPeak.store(0.0f, std::memory_order_relaxed);
+        return;
+    }
 
     auto leftPeakValue = 0.0f;
     auto rightPeakValue = 0.0f;
@@ -6364,10 +7231,14 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
     const auto midiBlockActive = !incomingMidi.isEmpty();
     const auto midiAuditionActive =
         midiInputEnabled.load(std::memory_order_acquire);
+    const auto midiTerminationPending =
+        midiTerminationRequested.load(std::memory_order_acquire)
+        != midiTerminationHandled.load(std::memory_order_acquire);
     if (transportRunning
         || monitoringBlockActive
         || midiBlockActive
-        || midiAuditionActive)
+        || midiAuditionActive
+        || midiTerminationPending)
     {
         int snapshotIndex = 0;
         int runtimeIndex = 0;
@@ -6463,6 +7334,7 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
                 if (position >= recordingTransportEnd)
                 {
                     playing.store(false, std::memory_order_release);
+                    requestMidiNoteTermination();
                     break;
                 }
                 samplesThisBlock = static_cast<int>(std::min<std::int64_t>(
@@ -6476,9 +7348,17 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
                 && !renderLooping)
             {
                 playing.store(false, std::memory_order_release);
+                requestMidiNoteTermination();
                 break;
             }
 
+            const auto terminationOrdinal =
+                midiTerminationRequested.load(
+                    std::memory_order_acquire);
+            const auto terminateScheduledNotes =
+                terminationOrdinal
+                != midiTerminationHandled.load(
+                    std::memory_order_acquire);
             snapshot.masterBuffer.clear(0, 0, samplesThisBlock);
             snapshot.masterBuffer.clear(1, 0, samplesThisBlock);
             for (auto& track : snapshot.tracks)
@@ -6507,6 +7387,21 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
                     0,
                     samplesThisBlock);
                 midiTrack.midi.clear();
+                if (terminateScheduledNotes)
+                {
+                    flushActiveMidiNotes(
+                        midiTrack,
+                        midiTrack.midi,
+                        0);
+                }
+                if (transportRunning)
+                {
+                    addMidiClipEvents(
+                        midiTrack,
+                        position,
+                        samplesThisBlock,
+                        midiTrack.midi);
+                }
                 if (midiTrack.inputArmed)
                 {
                     midiTrack.midi.addEvents(
@@ -6515,6 +7410,12 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
                         samplesThisBlock,
                         -outputOffset);
                 }
+            }
+            if (terminateScheduledNotes)
+            {
+                midiTerminationHandled.store(
+                    terminationOrdinal,
+                    std::memory_order_release);
             }
 
             for (auto& midiTrack : snapshot.midiTracks)
@@ -6537,22 +7438,47 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
                         position,
                         &midiTrack.midi);
                 }
-                for (const auto destinationIndex :
-                     midiTrack.destinationIndices)
+                for (const auto& destination :
+                     midiTrack.destinations)
                 {
-                    if (destinationIndex < 0
-                        || destinationIndex
+                    if (destination.trackIndex < 0
+                        || destination.trackIndex
                             >= static_cast<int>(
                                 snapshot.midiTracks.size()))
                         continue;
-                    snapshot.midiTracks[
+                    auto& destinationTrack = snapshot.midiTracks[
                         static_cast<std::size_t>(
-                            destinationIndex)]
-                        .midi.addEvents(
+                            destination.trackIndex)];
+                    auto& destinationMidi =
+                        destinationTrack.midi;
+                    if (destination.midiChannel == 0)
+                    {
+                        destinationMidi.addEvents(
                             midiTrack.midi,
                             0,
                             samplesThisBlock,
                             0);
+                        for (const auto metadata : midiTrack.midi)
+                        {
+                            trackActiveMidiMessage(
+                                destinationTrack,
+                                metadata.getMessage());
+                        }
+                        continue;
+                    }
+                    for (const auto metadata : midiTrack.midi)
+                    {
+                        if (metadata.getMessage().getChannel()
+                            == destination.midiChannel)
+                        {
+                            destinationMidi.addEvent(
+                                metadata.getMessage(),
+                                metadata.samplePosition);
+                            trackActiveMidiMessage(
+                                destinationTrack,
+                                metadata.getMessage());
+                        }
+                    }
                 }
             }
 
@@ -6662,7 +7588,8 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
                                     &track.sidechains,
                                     &track.pluginAutomation,
                                     position,
-                                    trackMidi);
+                                    trackMidi,
+                                    &track.routes);
                 const auto publishMeter = [&](bool postFader)
                 {
                     if (track.meterIndex < 0
@@ -6711,20 +7638,23 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
                                 && !track.audible))
                             continue;
 
-                        route.processingBuffer.copyFrom(
-                            0,
-                            0,
-                            track.processingBuffer,
-                            0,
-                            0,
-                            samplesThisBlock);
-                        route.processingBuffer.copyFrom(
-                            1,
-                            0,
-                            track.processingBuffer,
-                            1,
-                            0,
-                            samplesThisBlock);
+                        if (route.sourceInsertId.isEmpty())
+                        {
+                            route.processingBuffer.copyFrom(
+                                0,
+                                0,
+                                track.processingBuffer,
+                                0,
+                                0,
+                                samplesThisBlock);
+                            route.processingBuffer.copyFrom(
+                                1,
+                                0,
+                                track.processingBuffer,
+                                1,
+                                0,
+                                samplesThisBlock);
+                        }
                         if (!route.gainAutomation.has_value()
                             && !route.panAutomation.has_value()
                             && !route.muteAutomation.has_value())
@@ -7235,12 +8165,14 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
             {
                 position = recordingTransportEnd;
                 playing.store(false, std::memory_order_release);
+                requestMidiNoteTermination();
                 break;
             }
             if (transportRunning
                 && renderLooping
                 && position >= snapshot.loopEndSample)
             {
+                requestMidiNoteTermination();
                 position = wrapLoopPosition(
                     position,
                     snapshot.loopStartSample,
@@ -7253,6 +8185,7 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
             {
                 position = snapshot.lengthSamples;
                 playing.store(false, std::memory_order_release);
+                requestMidiNoteTermination();
             }
         }
 

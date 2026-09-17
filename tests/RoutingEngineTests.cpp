@@ -4,11 +4,406 @@
 #include "mix/SoloResolver.h"
 #include "mix/RoutingGraphCompiler.h"
 #include "audio/StudioAudioEngine.h"
+#include "model/ProjectCommands.h"
 #include "model/ProjectModel.h"
 #include "plugin_host/PluginFormats.h"
 
+namespace
+{
+studio::MidiRoutingTemplate makeRoutingTemplate(
+    const juce::String& destinationTrackId,
+    int midiChannel,
+    std::vector<int> pitches)
+{
+    studio::MidiRoutingTemplate routing;
+    routing.name = "Test routing";
+    studio::MidiRoutingTemplateOutput output;
+    output.name = "Test output";
+    output.destinationTrackId = destinationTrackId;
+    output.midiChannel = midiChannel;
+    output.pitches = std::move(pitches);
+    routing.outputs.push_back(std::move(output));
+    return routing;
+}
+
+struct MidiRoutingFixture
+{
+    MidiRoutingFixture()
+    {
+        studio::Track source;
+        source.name = "MIDI source";
+        source.type = studio::TrackType::midi;
+        sourceId = source.id;
+        studio::MidiClip clip;
+        clip.durationBeats = 1.0;
+        for (const auto pitch : { 36, 38 })
+        {
+            studio::MidiNote note;
+            note.pitch = pitch;
+            clip.notes.push_back(note);
+        }
+        source.midiClips.push_back(clip);
+
+        studio::Track destination;
+        destination.name = "MIDI destination";
+        destination.type = studio::TrackType::instrument;
+        destinationId = destination.id;
+        project.tracks.insert(project.tracks.end() - 1, source);
+        project.tracks.insert(project.tracks.end() - 1, destination);
+    }
+
+    studio::Project project = studio::Project::createDefault();
+    juce::String sourceId;
+    juce::String destinationId;
+};
+
+void midiRoutingTemplateCommandTests()
+{
+    {
+        MidiRoutingFixture fixture;
+        studio::RoutingConnection exactRoute;
+        exactRoute.name = "Stale route";
+        exactRoute.signalType = studio::SignalType::midi;
+        exactRoute.kind = studio::RouteKind::mainOutput;
+        exactRoute.sourceTrackId = fixture.sourceId;
+        exactRoute.destination.type =
+            studio::RouteEndpointType::track;
+        exactRoute.destination.trackId = fixture.destinationId;
+        exactRoute.midiChannel = 4;
+        exactRoute.enabled = false;
+        const auto exactRouteId = exactRoute.id;
+        fixture.project.routingConnections.push_back(exactRoute);
+        const auto routeCount =
+            fixture.project.routingConnections.size();
+
+        studio::CommandStack commands;
+        juce::String error;
+        expect(commands.perform(
+                   std::make_unique<
+                       studio::ApplyMidiRoutingTemplateCommand>(
+                       fixture.sourceId,
+                       makeRoutingTemplate(
+                           fixture.destinationId,
+                           4,
+                           { 36 })),
+                   fixture.project,
+                   error),
+               error.toRawUTF8());
+        const auto* reused =
+            fixture.project.findRoutingConnection(exactRouteId);
+        expect(fixture.project.routingConnections.size()
+                       == routeCount
+                   && reused != nullptr
+                   && reused->name == "Test output"
+                   && reused->kind == studio::RouteKind::send
+                   && reused->enabled
+                   && fixture.project.findTrack(fixture.sourceId)
+                          ->midiClips.front()
+                          .notes.front()
+                          .channel == 4,
+               "Applying a MIDI routing template updates and reuses an exact-channel route.");
+    }
+
+    {
+        MidiRoutingFixture fixture;
+        studio::RoutingConnection otherChannel;
+        otherChannel.name = "Existing channel 2";
+        otherChannel.signalType = studio::SignalType::midi;
+        otherChannel.sourceTrackId = fixture.sourceId;
+        otherChannel.destination.type =
+            studio::RouteEndpointType::track;
+        otherChannel.destination.trackId = fixture.destinationId;
+        otherChannel.midiChannel = 2;
+        const auto otherChannelId = otherChannel.id;
+        fixture.project.routingConnections.push_back(otherChannel);
+        const auto routeCount =
+            fixture.project.routingConnections.size();
+
+        studio::CommandStack commands;
+        juce::String error;
+        expect(commands.perform(
+                   std::make_unique<
+                       studio::ApplyMidiRoutingTemplateCommand>(
+                       fixture.sourceId,
+                       makeRoutingTemplate(
+                           fixture.destinationId,
+                           1,
+                           { 36 })),
+                   fixture.project,
+                   error),
+               error.toRawUTF8());
+        const auto* preserved =
+            fixture.project.findRoutingConnection(otherChannelId);
+        const auto requestedRoutes = std::count_if(
+            fixture.project.routingConnections.cbegin(),
+            fixture.project.routingConnections.cend(),
+            [&fixture](const auto& route)
+            {
+                return route.signalType == studio::SignalType::midi
+                    && route.sourceTrackId == fixture.sourceId
+                    && route.destination.type
+                        == studio::RouteEndpointType::track
+                    && route.destination.trackId
+                        == fixture.destinationId
+                    && route.midiChannel == 1;
+            });
+        expect(fixture.project.routingConnections.size()
+                       == routeCount + 1
+                   && preserved != nullptr
+                   && preserved->midiChannel == 2
+                   && requestedRoutes == 1,
+               "Applying a MIDI routing template does not reuse a route for the same endpoints on another channel.");
+    }
+
+    {
+        MidiRoutingFixture fixture;
+        auto routing = makeRoutingTemplate({}, 6, { 36 });
+        studio::CommandStack commands;
+        juce::String error;
+        expect(commands.perform(
+                   std::make_unique<
+                       studio::ApplyMidiRoutingTemplateCommand>(
+                       fixture.sourceId,
+                       routing),
+                   fixture.project,
+                   error),
+               error.toRawUTF8());
+        const auto firstApplication =
+            juce::JSON::toString(fixture.project.toVar(), false);
+        error.clear();
+        expect(commands.perform(
+                   std::make_unique<
+                       studio::ApplyMidiRoutingTemplateCommand>(
+                       fixture.sourceId,
+                       routing),
+                   fixture.project,
+                   error),
+               error.toRawUTF8());
+        expect(juce::JSON::toString(
+                   fixture.project.toVar(),
+                   false)
+                   == firstApplication,
+               "Repeated MIDI routing-template application is idempotent.");
+    }
+
+    {
+        MidiRoutingFixture fixture;
+        studio::Track secondDestination;
+        secondDestination.name = "Second destination";
+        secondDestination.type = studio::TrackType::midi;
+        const auto secondDestinationId = secondDestination.id;
+        fixture.project.tracks.insert(
+            fixture.project.tracks.end() - 1,
+            secondDestination);
+
+        studio::RoutingConnection exactRoute;
+        exactRoute.name = "Old output name";
+        exactRoute.signalType = studio::SignalType::midi;
+        exactRoute.kind = studio::RouteKind::mainOutput;
+        exactRoute.sourceTrackId = fixture.sourceId;
+        exactRoute.destination.type =
+            studio::RouteEndpointType::track;
+        exactRoute.destination.trackId = fixture.destinationId;
+        exactRoute.midiChannel = 1;
+        exactRoute.enabled = false;
+        const auto exactRouteBefore = exactRoute;
+        fixture.project.routingConnections.push_back(exactRoute);
+
+        studio::RoutingConnection unrelatedRoute = exactRoute;
+        unrelatedRoute.id = juce::Uuid().toString();
+        unrelatedRoute.name = "Keep channel 9";
+        unrelatedRoute.kind = studio::RouteKind::send;
+        unrelatedRoute.midiChannel = 9;
+        unrelatedRoute.enabled = true;
+        unrelatedRoute.gainDecibels = -7.0f;
+        const auto unrelatedRouteId = unrelatedRoute.id;
+        const auto unrelatedBefore =
+            juce::JSON::toString(unrelatedRoute.toVar(), false);
+        fixture.project.routingConnections.push_back(unrelatedRoute);
+        const auto routeCount =
+            fixture.project.routingConnections.size();
+
+        auto routing = makeRoutingTemplate(
+            fixture.destinationId,
+            1,
+            { 36 });
+        auto secondOutput = routing.outputs.front();
+        secondOutput.id = juce::Uuid().toString();
+        secondOutput.name = "Second output";
+        secondOutput.destinationTrackId = secondDestinationId;
+        secondOutput.midiChannel = 2;
+        secondOutput.pitches = { 38 };
+        routing.outputs.push_back(std::move(secondOutput));
+
+        studio::CommandStack commands;
+        juce::String error;
+        expect(commands.perform(
+                   std::make_unique<
+                       studio::ApplyMidiRoutingTemplateCommand>(
+                       fixture.sourceId,
+                       routing),
+                   fixture.project,
+                   error),
+               error.toRawUTF8());
+        const auto* updated = fixture.project.findRoutingConnection(
+            exactRouteBefore.id);
+        const auto* unrelated =
+            fixture.project.findRoutingConnection(unrelatedRouteId);
+        const auto created = std::find_if(
+            fixture.project.routingConnections.cbegin(),
+            fixture.project.routingConnections.cend(),
+            [&fixture, &secondDestinationId](const auto& route)
+            {
+                return route.signalType == studio::SignalType::midi
+                    && route.sourceTrackId == fixture.sourceId
+                    && route.destination.type
+                        == studio::RouteEndpointType::track
+                    && route.destination.trackId
+                        == secondDestinationId
+                    && route.midiChannel == 2;
+            });
+        const auto* routedSource =
+            fixture.project.findTrack(fixture.sourceId);
+        expect(fixture.project.routingConnections.size()
+                       == routeCount + 1
+                   && updated != nullptr
+                   && updated->name == "Test output"
+                   && updated->kind == studio::RouteKind::send
+                   && updated->enabled
+                   && unrelated != nullptr
+                   && juce::JSON::toString(
+                          unrelated->toVar(),
+                          false)
+                          == unrelatedBefore
+                   && created
+                       != fixture.project.routingConnections.cend()
+                   && routedSource != nullptr
+                   && routedSource->midiClips.front().notes[0].channel
+                       == 1
+                   && routedSource->midiClips.front().notes[1].channel
+                       == 2,
+               "MIDI routing-template updates and creates preserve unrelated channel routes.");
+        const auto undone = commands.undo(fixture.project);
+        const auto* restored = fixture.project.findRoutingConnection(
+            exactRouteBefore.id);
+        unrelated =
+            fixture.project.findRoutingConnection(unrelatedRouteId);
+        expect(undone
+                   && fixture.project.routingConnections.size()
+                       == routeCount
+                   && restored != nullptr
+                   && juce::JSON::toString(
+                          restored->toVar(),
+                          false)
+                          == juce::JSON::toString(
+                              exactRouteBefore.toVar(),
+                              false)
+                   && unrelated != nullptr
+                   && juce::JSON::toString(
+                          unrelated->toVar(),
+                          false)
+                          == unrelatedBefore,
+               "Undo restores updated routes and removes only template-created routes.");
+    }
+
+    {
+        MidiRoutingFixture fixture;
+        const auto unchanged =
+            juce::JSON::toString(fixture.project.toVar(), false);
+        auto invalid = makeRoutingTemplate(
+            fixture.destinationId,
+            17,
+            { 36 });
+        studio::CommandStack commands;
+        juce::String error;
+        expect(!commands.perform(
+                   std::make_unique<
+                       studio::ApplyMidiRoutingTemplateCommand>(
+                       fixture.sourceId,
+                       invalid),
+                   fixture.project,
+                   error)
+                   && error.startsWith(
+                       "The MIDI routing template is invalid:")
+                   && juce::JSON::toString(
+                          fixture.project.toVar(),
+                          false)
+                          == unchanged,
+               "Invalid MIDI routing templates leave tracks, clips, and routes unchanged.");
+    }
+
+    {
+        MidiRoutingFixture fixture;
+        const auto unchanged =
+            juce::JSON::toString(fixture.project.toVar(), false);
+        auto unavailable = makeRoutingTemplate({}, 1, { 36 });
+        auto missingOutput = unavailable.outputs.front();
+        missingOutput.id = juce::Uuid().toString();
+        missingOutput.name = "Missing destination";
+        missingOutput.destinationTrackId = "missing-track";
+        missingOutput.midiChannel = 2;
+        missingOutput.pitches = { 38 };
+        unavailable.outputs.push_back(std::move(missingOutput));
+        studio::CommandStack commands;
+        juce::String error;
+        expect(!commands.perform(
+                   std::make_unique<
+                       studio::ApplyMidiRoutingTemplateCommand>(
+                       fixture.sourceId,
+                       unavailable),
+                   fixture.project,
+                   error)
+                   && error.contains(
+                       "Missing destination")
+                   && error.contains(
+                       "unavailable destination track")
+                   && juce::JSON::toString(
+                          fixture.project.toVar(),
+                          false)
+                          == unchanged,
+               "Destination planning failures leave tracks, clips, and routes unchanged.");
+    }
+
+    {
+        MidiRoutingFixture fixture;
+        studio::RoutingConnection reverseRoute;
+        reverseRoute.name = "Reverse MIDI";
+        reverseRoute.signalType = studio::SignalType::midi;
+        reverseRoute.sourceTrackId = fixture.destinationId;
+        reverseRoute.destination.type =
+            studio::RouteEndpointType::track;
+        reverseRoute.destination.trackId = fixture.sourceId;
+        reverseRoute.midiChannel = 1;
+        fixture.project.routingConnections.push_back(reverseRoute);
+        const auto unchanged =
+            juce::JSON::toString(fixture.project.toVar(), false);
+
+        studio::CommandStack commands;
+        juce::String error;
+        expect(!commands.perform(
+                   std::make_unique<
+                       studio::ApplyMidiRoutingTemplateCommand>(
+                       fixture.sourceId,
+                       makeRoutingTemplate(
+                           fixture.destinationId,
+                           1,
+                           { 36 })),
+                   fixture.project,
+                   error)
+                   && error.containsIgnoreCase("cycle")
+                   && juce::JSON::toString(
+                          fixture.project.toVar(),
+                          false)
+                          == unchanged,
+               "Route-creation failures leave tracks, clips, and routes unchanged.");
+    }
+}
+}
+
 void routingEngineTests()
 {
+    midiRoutingTemplateCommandTests();
+
     auto project = studio::Project::createDefault();
     project.tracks.front().solo = true;
     const auto sourceId = project.tracks.front().id;
@@ -719,6 +1114,91 @@ void routingEngineTests()
                 + juce::String(midiSample, 5)
                 + ").")
                    .toRawUTF8());
+
+        auto storedMidiProject = midiRuntimeProject;
+        auto* storedSource = storedMidiProject.findTrack(midiSourceId);
+        storedSource->armed = false;
+        studio::MidiClip storedClip;
+        storedClip.name = "Stored MIDI";
+        storedClip.durationBeats = 1.0;
+        studio::MidiNote storedNote;
+        storedNote.pitch = 61;
+        storedNote.startBeats = storedMidiProject.beatsAt(
+            12.0 / 48000.0);
+        storedNote.durationBeats = 0.25;
+        storedNote.velocity = 96;
+        storedClip.notes.push_back(storedNote);
+        storedSource->midiClips.push_back(storedClip);
+        expect(midiRuntimeEngine.updateProject(
+                   storedMidiProject,
+                   { instrumentRequest })
+                   .wasOk(),
+               "Persisted MIDI clips publish into the existing MIDI routing graph.");
+        midiRuntimeEngine.seekSeconds(0.0);
+        midiRuntimeEngine.play();
+        const auto storedMidiOutput =
+            midiRuntimeEngine.renderActiveBlockForTesting(64);
+        expect(storedMidiOutput.getSample(0, 12) > 0.7f,
+               "Persisted MIDI notes retain exact sample scheduling through instrument routing.");
+        midiRuntimeEngine.pause();
+
+        auto filteredMidiProject = storedMidiProject;
+        filteredMidiProject.routingConnections.back().midiChannel = 2;
+        filteredMidiProject.findTrack(midiSourceId)
+            ->midiClips.front()
+            .notes.front()
+            .channel = 1;
+        expect(midiRuntimeEngine.updateProject(
+                   filteredMidiProject,
+                   { instrumentRequest })
+                   .wasOk(),
+               "MIDI channel-filtered routes publish.");
+        midiRuntimeEngine.seekSeconds(0.0);
+        midiRuntimeEngine.play();
+        const auto filteredOut =
+            midiRuntimeEngine.renderActiveBlockForTesting(64);
+        expect(filteredOut.getMagnitude(
+                   0,
+                   0,
+                   filteredOut.getNumSamples())
+                   < 0.001f,
+               "Multi-output MIDI routes exclude notes assigned to other channels.");
+        filteredMidiProject.findTrack(midiSourceId)
+            ->midiClips.front()
+            .notes.front()
+            .channel = 2;
+        expect(midiRuntimeEngine.updateProject(
+                   filteredMidiProject,
+                   { instrumentRequest })
+                   .wasOk(),
+               "A matching channel-filtered MIDI route publishes.");
+        midiRuntimeEngine.seekSeconds(0.0);
+        midiRuntimeEngine.play();
+        const auto filteredIn =
+            midiRuntimeEngine.renderActiveBlockForTesting(64);
+        expect(filteredIn.getSample(0, 12) > 0.7f,
+               "Multi-output MIDI routes deliver notes assigned to their channel.");
+        midiRuntimeEngine.pause();
+        filteredMidiProject.findTrack(midiSourceId)
+            ->midiClips.front()
+            .notes.front()
+            .probability = 0.0;
+        expect(midiRuntimeEngine.updateProject(
+                   filteredMidiProject,
+                   { instrumentRequest })
+                   .wasOk(),
+               "A zero-probability MIDI note publishes.");
+        midiRuntimeEngine.seekSeconds(0.0);
+        midiRuntimeEngine.play();
+        const auto probabilityOutput =
+            midiRuntimeEngine.renderActiveBlockForTesting(64);
+        expect(probabilityOutput.getMagnitude(
+                   0,
+                   0,
+                   probabilityOutput.getNumSamples())
+                   < 0.001f,
+               "Persisted MIDI probability deterministically suppresses playback.");
+        midiRuntimeEngine.pause();
 
         auto sandboxMidiProject = midiRuntimeProject;
         auto* sandboxInstrument =
