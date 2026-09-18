@@ -5616,6 +5616,8 @@ private:
             : project.secondsAtBeat(start + duration)
                 - project.secondsAtBeat(start);
         result.sourceFile = *importedFile;
+        result.sourceHash =
+            juce::SHA256(*importedFile).toHexString();
         result.sourceLengthSeconds = actualDuration;
         result.sourceRangeStartSeconds = 0.0;
         result.sourceRangeEndSeconds = result.sourceLengthSeconds;

@@ -10,9 +10,11 @@
   state, and plugin targets
 - [DAWproject interchange](dawproject.md): supported mappings, schema
   validation, deterministic archives, transactions, and compatibility reports
+- [Mastering and release](mastering.md): album sequencing, loudness analysis,
+  master/DDP exports, signed reports, portable copies, and repair
 - [Releasing](releasing.md): versioning, release minting, CI artifacts, and
   installation
-- [Native project format](project-format.md): version 8 package layout,
+- [Native project format](project-format.md): version 9 package layout,
   generations, schemas, state hashes, recovery, and migrations
 - [Contributing](contributing.md): coding expectations and pull-request workflow
 

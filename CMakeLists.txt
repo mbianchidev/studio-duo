@@ -41,6 +41,18 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(signalsmith_stretch)
 
+set(LIBSAMPLERATE_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(LIBSAMPLERATE_INSTALL OFF CACHE BOOL "" FORCE)
+set(LIBSAMPLERATE_TESTS OFF CACHE BOOL "" FORCE)
+set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
+FetchContent_Declare(
+    libsamplerate
+    GIT_REPOSITORY https://github.com/libsndfile/libsamplerate.git
+    GIT_TAG 0.2.2
+    GIT_SHALLOW TRUE
+)
+FetchContent_MakeAvailable(libsamplerate)
+
 set(CLAP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(
     clap
@@ -118,6 +130,12 @@ set(STUDIO_DUO_MODEL_SOURCES
     src/midi/MidiEditing.h
     src/midi/MidiModel.cpp
     src/midi/MidiModel.h
+    src/mastering/MasteringEngine.cpp
+    src/mastering/MasteringEngine.h
+    src/mastering/MasteringModel.cpp
+    src/mastering/MasteringModel.h
+    src/mastering/MasteringReleaseService.cpp
+    src/mastering/MasteringReleaseService.h
     src/model/LinkedEditModel.cpp
     src/model/LinkedEditModel.h
     src/model/ProjectCommands.cpp
@@ -126,6 +144,8 @@ set(STUDIO_DUO_MODEL_SOURCES
     src/model/ProjectModel.h
     src/project_io/ProjectFile.cpp
     src/project_io/ProjectFile.h
+    src/project_io/ProjectCollectionService.cpp
+    src/project_io/ProjectCollectionService.h
     src/project_io/ProjectMigration.cpp
     src/project_io/ProjectMigration.h
     src/reamp/ReampSnapshotService.cpp
@@ -216,6 +236,8 @@ target_sources(
         src/ui/MainComponent.h
         src/ui/MainWindowSizing.cpp
         src/ui/MainWindowSizing.h
+        src/ui/MasteringWorkspaceComponent.cpp
+        src/ui/MasteringWorkspaceComponent.h
         src/ui/MidiEditorComponent.cpp
         src/ui/MidiEditorComponent.h
         src/ui/AutomationPanel.cpp
@@ -305,6 +327,7 @@ target_link_libraries(
         juce::juce_gui_extra
         clap
         clap-helpers
+        SampleRate::samplerate
         StudioDuoBrandData
         StudioDuoDawProjectSchemaData
     PUBLIC
@@ -475,6 +498,11 @@ endif()
 if(STUDIO_DUO_BUILD_TESTS)
     enable_testing()
 
+    add_executable(
+        StudioDuoDdpEncoderFixture
+        tests/fixtures/DdpEncoderFixture.cpp
+    )
+
     set(STUDIO_DUO_ARA_FIXTURE_FORMATS VST3)
     if(APPLE)
         list(APPEND STUDIO_DUO_ARA_FIXTURE_FORMATS AU)
@@ -598,6 +626,7 @@ if(STUDIO_DUO_BUILD_TESTS)
             tests/WindowsCrashHandlerTests.cpp
             tests/ReampSnapshotTests.cpp
             tests/RenderEngineTests.cpp
+            tests/MasteringTests.cpp
             tests/PluginCompatibilityTests.cpp
             tests/ProjectMigrationTests.cpp
             tests/WindowSizingTests.cpp
@@ -687,6 +716,7 @@ if(STUDIO_DUO_BUILD_TESTS)
             PRIVATE
                 STUDIO_DUO_ARA_FIXTURE_PATH="$<TARGET_BUNDLE_DIR:StudioDuoAraFixture_VST3>"
                 STUDIO_DUO_CLAP_FIXTURE_PATH="$<TARGET_BUNDLE_DIR:StudioDuoClapFixture>"
+                STUDIO_DUO_DDP_FIXTURE_PATH="$<TARGET_FILE:StudioDuoDdpEncoderFixture>"
                 STUDIO_DUO_ROUTING_FIXTURE_PATH="$<TARGET_BUNDLE_DIR:StudioDuoRoutingFixture_VST3>"
                 STUDIO_DUO_BRIDGE_WORKER_PATH="$<TARGET_FILE:StudioDuo>"
         )
@@ -696,6 +726,7 @@ if(STUDIO_DUO_BUILD_TESTS)
             PRIVATE
                 STUDIO_DUO_ARA_FIXTURE_PATH="$<TARGET_FILE:StudioDuoAraFixture_VST3>"
                 STUDIO_DUO_CLAP_FIXTURE_PATH="$<TARGET_FILE:StudioDuoClapFixture>"
+                STUDIO_DUO_DDP_FIXTURE_PATH="$<TARGET_FILE:StudioDuoDdpEncoderFixture>"
                 STUDIO_DUO_ROUTING_FIXTURE_PATH="$<TARGET_FILE:StudioDuoRoutingFixture_VST3>"
                 STUDIO_DUO_BRIDGE_WORKER_PATH="$<TARGET_FILE:StudioDuo>"
         )
@@ -703,6 +734,7 @@ if(STUDIO_DUO_BUILD_TESTS)
     add_dependencies(
         StudioDuoTests
         StudioDuo
+        StudioDuoDdpEncoderFixture
         StudioDuoAraFixture_VST3
         StudioDuoClapFixture
         StudioDuoRoutingFixture_VST3
@@ -726,6 +758,7 @@ if(STUDIO_DUO_BUILD_TESTS)
             juce::juce_graphics
             clap
             clap-helpers
+            SampleRate::samplerate
             StudioDuoDawProjectSchemaData
         PUBLIC
             juce::juce_recommended_config_flags

@@ -3,6 +3,7 @@
 #include "StudioTheme.h"
 #include "AutomationPanel.h"
 #include "MixerPanel.h"
+#include "MasteringWorkspaceComponent.h"
 #include "MidiEditorComponent.h"
 #include "PluginInsertPanel.h"
 #include "PluginParameterPanel.h"
@@ -90,6 +91,7 @@ private:
     void beginSaveProject();
     void beginImportAudio();
     void beginExportMix();
+    void setMasteringWorkspaceVisible(bool visible);
     void showDawProjectMenu();
     void beginImportDawProject();
     void chooseDawProjectImportDestination(
@@ -310,6 +312,7 @@ private:
     juce::TextButton saveButton { "SAVE" };
     juce::TextButton dawProjectButton { "DAWPROJECT" };
     juce::TextButton exportButton { "EXPORT" };
+    juce::TextButton masteringButton { "MASTERING" };
     juce::TextButton settingsButton { "SETTINGS" };
     juce::TextButton undoButton { "UNDO" };
     juce::TextButton redoButton { "REDO" };
@@ -364,6 +367,7 @@ private:
 
     juce::Viewport timelineViewport;
     TimelineComponent timeline;
+    MasteringWorkspaceComponent masteringWorkspace;
     std::unique_ptr<MixerPanel> mixer;
     MidiEditorComponent midiEditor;
     std::unique_ptr<PanelResizer> leftPanelResizer;
@@ -374,6 +378,7 @@ private:
     int mixerPanelHeight = 220;
     int midiEditorHeight = 330;
     bool leftPanelCollapsed = false;
+    bool masteringWorkspaceVisible = false;
     PluginCatalog pluginCatalog;
     std::unique_ptr<PluginBrowserComponent> pluginBrowser;
     std::unique_ptr<RoutingPanel> routingPanel;

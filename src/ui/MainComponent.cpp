@@ -9,6 +9,7 @@
 #include "render/RenderEngine.h"
 
 #include <StudioDuoBrandData.h>
+#include <juce_cryptography/juce_cryptography.h>
 
 #include <algorithm>
 #include <charconv>
@@ -391,6 +392,9 @@ MainComponent::MainComponent(bool startAudioOnLaunch)
         "Import, export, view, or save a DAWproject 1.0 compatibility report");
     configureButton(exportButton, "Export a stereo WAV");
     configureButton(
+        masteringButton,
+        "Open the album mastering, release export, DDP, and portable-copy workspace");
+    configureButton(
         settingsButton,
         "Configure audio, MIDI, and automatic updates");
     configureButton(undoButton, "Undo (Command/Ctrl+Z)");
@@ -436,6 +440,10 @@ MainComponent::MainComponent(bool startAudioOnLaunch)
     saveButton.onClick = [this] { beginSaveProject(); };
     dawProjectButton.onClick = [this] { showDawProjectMenu(); };
     exportButton.onClick = [this] { beginExportMix(); };
+    masteringButton.onClick = [this]
+    {
+        setMasteringWorkspaceVisible(!masteringWorkspaceVisible);
+    };
     settingsButton.onClick = [this] { showSettings(); };
     undoButton.onClick = [this] { undo(); };
     redoButton.onClick = [this] { redo(); };
@@ -1384,6 +1392,35 @@ MainComponent::MainComponent(bool startAudioOnLaunch)
     midiEditor.setVisible(false);
     addAndMakeVisible(midiEditor);
 
+    masteringWorkspace.setProject(&project);
+    masteringWorkspace.onAlbumEdited = [this](
+                                             const auto& before,
+                                             const auto& after)
+    {
+        return perform(std::make_unique<SetMasteringAlbumCommand>(
+            before,
+            after));
+    };
+    masteringWorkspace.onReportsAdded = [this](auto reports)
+    {
+        perform(std::make_unique<AddRenderReportsCommand>(
+            std::move(reports)));
+    };
+    masteringWorkspace.onProjectRepaired = [this](auto repaired)
+    {
+        project = std::move(repaired);
+        commandStack.clear();
+        projectChanged();
+    };
+    masteringWorkspace.onStatus = [this](
+                                      const auto& message,
+                                      bool error)
+    {
+        setStatus(message, error);
+    };
+    masteringWorkspace.setVisible(false);
+    addAndMakeVisible(masteringWorkspace);
+
     pluginBrowser = std::make_unique<PluginBrowserComponent>(pluginCatalog);
     pluginBrowser->addKeyListener(this);
     pluginBrowser->onPluginActivated = [this](const auto& entry)
@@ -1996,6 +2033,8 @@ void MainComponent::resized()
                 area.removeFromLeft(108).reduced(3, verticalInset));
             exportButton.setBounds(
                 area.removeFromLeft(74).reduced(3, verticalInset));
+            masteringButton.setBounds(
+                area.removeFromLeft(96).reduced(3, verticalInset));
             settingsButton.setBounds(
                 area.removeFromLeft(84).reduced(3, verticalInset));
         };
@@ -2033,7 +2072,7 @@ void MainComponent::resized()
         topRow.removeFromTop(4);
         auto secondRow = topRow.removeFromTop(28);
 
-        layoutFileControls(firstRow.removeFromLeft(464), 1);
+        layoutFileControls(firstRow.removeFromLeft(560), 1);
         layoutTempoControls(firstRow.removeFromRight(180), 2);
         metronomeButton.setBounds(
             firstRow.removeFromRight(78).reduced(3, 1));
@@ -2044,7 +2083,7 @@ void MainComponent::resized()
     }
     else
     {
-        layoutFileControls(topRow.removeFromLeft(464), 12);
+        layoutFileControls(topRow.removeFromLeft(560), 12);
         layoutEditControls(topRow.removeFromLeft(128), 12);
         layoutTransportControls(topRow.removeFromLeft(270), 9);
         layoutTempoControls(topRow.removeFromRight(180), 10);
@@ -2142,6 +2181,13 @@ void MainComponent::resized()
 
     updateTimelineSize();
     timeline.setViewportPosition(timelineViewport.getViewPositionX());
+    masteringWorkspace.setBounds(
+        getLocalBounds()
+            .withTrimmedTop(76)
+            .withTrimmedBottom(28));
+    masteringWorkspace.setVisible(masteringWorkspaceVisible);
+    if (masteringWorkspaceVisible)
+        masteringWorkspace.toFront(false);
     exportInputBlocker.setBounds(getLocalBounds());
     if (exportInputBlocker.isVisible())
         exportInputBlocker.toFront(false);
@@ -3675,6 +3721,7 @@ void MainComponent::importAudioFile(const juce::File& source)
     AudioClip clip;
     clip.name = source.getFileNameWithoutExtension();
     clip.sourceFile = source;
+    clip.sourceHash = juce::SHA256(source).toHexString();
     clip.startSeconds = audioEngine.positionSeconds();
     clip.durationSeconds = *duration;
     clip.sourceLengthSeconds = *duration;
@@ -4137,6 +4184,8 @@ void MainComponent::completeRecording(
                        ? " pass " + juce::String(static_cast<int>(passIndex + 1))
                        : juce::String());
             clip.sourceFile = recording.file;
+            clip.sourceHash =
+                juce::SHA256(recording.file).toHexString();
             clip.startSeconds = std::max(0.0,
                                          pass.timelineStartSeconds
                                              - alignmentSeconds);
@@ -6042,6 +6091,8 @@ void MainComponent::consolidateClip(const juce::String& clipId)
         auto after = *current;
         after.name += " consolidated";
         after.sourceFile = destination;
+        after.sourceHash =
+            juce::SHA256(destination).toHexString();
         after.sourceOffsetSeconds = 0.0;
         after.sourceLengthSeconds = current->durationSeconds;
         after.sourceRangeStartSeconds = 0.0;
@@ -7893,6 +7944,8 @@ void MainComponent::renderToneSnapshots(const juce::String& routeId,
             AudioClip clip;
             clip.name = renderedTrack.name;
             clip.sourceFile = juce::File(success->outputFile);
+            clip.sourceHash =
+                juce::SHA256(clip.sourceFile).toHexString();
             clip.durationSeconds = *duration;
             clip.sourceLengthSeconds = *duration;
             clip.sourceRangeEndSeconds = *duration;
@@ -8103,6 +8156,22 @@ void MainComponent::setMixerPanelVisible(bool visible)
     repaint();
 }
 
+void MainComponent::setMasteringWorkspaceVisible(bool visible)
+{
+    if (masteringWorkspaceVisible == visible)
+        return;
+    if (visible)
+        stopTransportAndRecording();
+    masteringWorkspaceVisible = visible;
+    masteringButton.setToggleState(
+        visible,
+        juce::dontSendNotification);
+    masteringWorkspace.setProjectPackage(projectPackage);
+    masteringWorkspace.refresh();
+    resized();
+    repaint();
+}
+
 void MainComponent::projectChanged(bool writeRecovery, bool markDirty)
 {
     if (markDirty)
@@ -8114,6 +8183,8 @@ void MainComponent::projectChanged(bool writeRecovery, bool markDirty)
     mixer->setProject(&project);
     routingPanel->setProject(&project);
     insertPanel->setProject(&project);
+    masteringWorkspace.setProject(&project);
+    masteringWorkspace.setProjectPackage(projectPackage);
     projectLabel.setText(project.name + (dirty ? " *" : ""), juce::dontSendNotification);
     loopButton.setToggleState(project.loopEnabled, juce::dontSendNotification);
     metronomeButton.setToggleState(project.metronomeEnabled, juce::dontSendNotification);

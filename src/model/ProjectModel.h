@@ -2,12 +2,14 @@
 
 #include "mix/RoutingTypes.h"
 #include "automation/AutomationTypes.h"
+#include "mastering/MasteringModel.h"
 #include "midi/MidiModel.h"
 
 #include <juce_data_structures/juce_data_structures.h>
 #include <juce_graphics/juce_graphics.h>
 
 #include <optional>
+#include <limits>
 #include <vector>
 
 namespace studio
@@ -205,6 +207,7 @@ struct AudioClip
     juce::String id { juce::Uuid().toString() };
     juce::String name { "Audio clip" };
     juce::File sourceFile;
+    juce::String sourceHash;
     double startSeconds = 0.0;
     double sourceOffsetSeconds = 0.0;
     double sourceLengthSeconds = 4.0;
@@ -431,6 +434,17 @@ struct RenderReport
     juce::String error;
     double durationSeconds = 0.0;
     juce::String createdAt;
+    juce::String format;
+    double sampleRate = 0.0;
+    int bitDepth = 0;
+    std::optional<double> integratedLoudnessLufs;
+    std::optional<double> loudnessRangeLu;
+    double truePeakDbtp = -std::numeric_limits<double>::infinity();
+    double samplePeakDbfs = -std::numeric_limits<double>::infinity();
+    double correlation = 1.0;
+    juce::String settingsHash;
+    juce::String signingPublicKey;
+    juce::String signature;
 
     [[nodiscard]] juce::var toVar() const;
     static std::optional<RenderReport> fromVar(const juce::var& value,
@@ -440,11 +454,12 @@ struct RenderReport
 class Project
 {
 public:
-    static constexpr int currentFormatVersion = 8;
+    static constexpr int currentFormatVersion = 9;
 
     juce::String id { juce::Uuid().toString() };
     juce::String name { "Untitled" };
     ProjectMetadata metadata;
+    MasteringAlbum mastering;
     double tempo = 120.0;
     int timeSignatureNumerator = 4;
     int timeSignatureDenominator = 4;

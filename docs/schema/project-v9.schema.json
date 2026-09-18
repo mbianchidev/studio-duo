@@ -1,0 +1,324 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://studioduo.dev/schema/project-v9.schema.json",
+  "title": "Studio Duo session format v9",
+  "type": "object",
+  "required": [
+    "formatVersion",
+    "id",
+    "name",
+    "metadata",
+    "mastering",
+    "tracks",
+    "routingConnections",
+    "drumMaps",
+    "midiPatterns",
+    "midiRoutingTemplates",
+    "scenes",
+    "compatibilityReports",
+    "toneSnapshots",
+    "mixerSnapshots",
+    "renderReports"
+  ],
+  "properties": {
+    "formatVersion": {
+      "const": 9
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "metadata": {
+      "type": "object"
+    },
+    "mastering": {
+      "$ref": "#/$defs/masteringAlbum"
+    },
+    "tracks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "type",
+          "inserts",
+          "clips",
+          "midiClips"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "type": {
+            "enum": [
+              "audio",
+              "instrument",
+              "midi",
+              "aux",
+              "bus",
+              "folder",
+              "vca",
+              "controlRoom",
+              "master"
+            ]
+          },
+          "inserts": {
+            "type": "array"
+          },
+          "clips": {
+            "type": "array"
+          },
+          "midiClips": {
+            "type": "array"
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "routingConnections": {
+      "type": "array"
+    },
+    "drumMaps": {
+      "type": "array"
+    },
+    "midiPatterns": {
+      "type": "array"
+    },
+    "midiRoutingTemplates": {
+      "type": "array"
+    },
+    "scenes": {
+      "type": "array"
+    },
+    "compatibilityReports": {
+      "type": "array"
+    },
+    "toneSnapshots": {
+      "type": "array"
+    },
+    "mixerSnapshots": {
+      "type": "array"
+    },
+    "renderReports": {
+      "type": "array",
+      "items": {
+        "$ref": "render-report-v2.schema.json"
+      }
+    }
+  },
+  "$defs": {
+    "masteringSource": {
+      "type": "object",
+      "required": [
+        "id",
+        "name",
+        "file",
+        "sourceHash",
+        "durationSeconds"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "file": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sourceHash": {
+          "type": "string",
+          "pattern": "^$|^[A-Fa-f0-9]{64}$"
+        },
+        "durationSeconds": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "masteringTrack": {
+      "type": "object",
+      "required": [
+        "id",
+        "title",
+        "artist",
+        "songwriter",
+        "isrc",
+        "gapBeforeSeconds",
+        "overlapPreviousSeconds",
+        "fadeInSeconds",
+        "fadeOutSeconds",
+        "gainDecibels",
+        "indexMarkersSeconds",
+        "sources",
+        "selectedSourceId"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "artist": {
+          "type": "string"
+        },
+        "songwriter": {
+          "type": "string"
+        },
+        "isrc": {
+          "type": "string",
+          "pattern": "^$|^[A-Z]{2}[A-Z0-9]{3}[0-9]{7}$"
+        },
+        "gapBeforeSeconds": {
+          "type": "number",
+          "minimum": 0
+        },
+        "overlapPreviousSeconds": {
+          "type": "number",
+          "minimum": 0
+        },
+        "fadeInSeconds": {
+          "type": "number",
+          "minimum": 0
+        },
+        "fadeOutSeconds": {
+          "type": "number",
+          "minimum": 0
+        },
+        "gainDecibels": {
+          "type": "number"
+        },
+        "indexMarkersSeconds": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "minimum": 0
+          }
+        },
+        "sources": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/masteringSource"
+          }
+        },
+        "selectedSourceId": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "masteringReference": {
+      "type": "object",
+      "required": [
+        "id",
+        "name",
+        "file",
+        "sourceHash"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "file": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sourceHash": {
+          "type": "string",
+          "pattern": "^$|^[A-Fa-f0-9]{64}$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "masteringAlbum": {
+      "type": "object",
+      "required": [
+        "title",
+        "artist",
+        "songwriter",
+        "label",
+        "catalogNumber",
+        "mcn",
+        "releaseDate",
+        "genre",
+        "copyright",
+        "outputGainDecibels",
+        "tracks",
+        "references"
+      ],
+      "properties": {
+        "title": {
+          "type": "string"
+        },
+        "artist": {
+          "type": "string"
+        },
+        "songwriter": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "catalogNumber": {
+          "type": "string"
+        },
+        "mcn": {
+          "type": "string",
+          "pattern": "^$|^[0-9]{13}$"
+        },
+        "releaseDate": {
+          "type": "string"
+        },
+        "genre": {
+          "type": "string"
+        },
+        "copyright": {
+          "type": "string"
+        },
+        "outputGainDecibels": {
+          "type": "number",
+          "minimum": -60,
+          "maximum": 12
+        },
+        "tracks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/masteringTrack"
+          }
+        },
+        "references": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/masteringReference"
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": true
+}

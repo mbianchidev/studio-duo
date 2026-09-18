@@ -1616,6 +1616,7 @@ int main(int argc, char* argv[])
     RUN_SUITE(updateTests);
     RUN_SUITE(midiTests);
     RUN_SUITE(dawProjectTests);
+    RUN_SUITE(masteringTests);
 
 #undef RUN_SUITE
 

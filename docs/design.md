@@ -521,7 +521,7 @@ Completed in the working application:
 - Guitar and bass amp devices
 - Complete DAWproject import and export
 
-### Phase 5: mastering and release
+### Phase 5: mastering and release — complete
 
 - Mastering workspace and album sequencing
 - Loudness and true-peak analysis
