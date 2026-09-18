@@ -678,6 +678,66 @@ bool PluginBridgeClient::recoversLateFirstOutputForTesting()
     onTimeClient->processBlock(onTimeOutput);
     onTimeClient->sharedState = nullptr;
 
+    auto preDeadlineState =
+        std::make_unique<PluginBridgeSharedState>();
+    auto preDeadlineClient =
+        std::make_unique<PluginBridgeClient>();
+    preDeadlineClient->sharedState = preDeadlineState.get();
+    preDeadlineClient->ready.store(true, std::memory_order_release);
+    preDeadlineClient->processingBlockSize = 4;
+    preDeadlineClient->prepareOutputTimeline(8);
+    juce::AudioBuffer<float> preDeadlineFirst(2, 4);
+    preDeadlineFirst.clear();
+    juce::MidiBuffer preDeadlineInputMidi;
+    preDeadlineInputMidi.addEvent(
+        juce::MidiMessage::noteOn(
+            1,
+            61,
+            static_cast<juce::uint8>(96)),
+        1);
+    preDeadlineClient->processBlock(
+        preDeadlineFirst,
+        preDeadlineInputMidi);
+    juce::AudioBuffer<float> preDeadlineMiss(2, 4);
+    preDeadlineMiss.clear();
+    juce::MidiBuffer preDeadlineMissMidi;
+    preDeadlineClient->processBlock(
+        preDeadlineMiss,
+        preDeadlineMissMidi);
+    preDeadlineState->midiOutputEventCount.store(
+        1,
+        std::memory_order_relaxed);
+    preDeadlineState->midiOutputByteCount.store(
+        3,
+        std::memory_order_relaxed);
+    preDeadlineState->midiOutputEvents[0] = {
+        1,
+        0,
+        3
+    };
+    preDeadlineState->midiOutputData[0] = 0x90;
+    preDeadlineState->midiOutputData[1] = 61;
+    preDeadlineState->midiOutputData[2] = 96;
+    completeWorkerBlock(*preDeadlineState, 0.75f);
+    juce::AudioBuffer<float> preDeadlineOutput(2, 4);
+    preDeadlineOutput.clear();
+    juce::MidiBuffer preDeadlineOutputMidi;
+    preDeadlineClient->processBlock(
+        preDeadlineOutput,
+        preDeadlineOutputMidi);
+    auto receivedPreDeadlineMidi = false;
+    for (const auto metadata : preDeadlineOutputMidi)
+    {
+        if (metadata.samplePosition == 1
+            && metadata.getMessage().isNoteOn()
+            && metadata.getMessage().getNoteNumber() == 61)
+        {
+            receivedPreDeadlineMidi = true;
+            break;
+        }
+    }
+    preDeadlineClient->sharedState = nullptr;
+
     auto bypassState =
         std::make_unique<PluginBridgeSharedState>();
     auto bypassClient =
@@ -775,6 +835,10 @@ bool PluginBridgeClient::recoversLateFirstOutputForTesting()
         && recovered(laterCallbackOutput)
         && std::abs(onTimeOutput.getSample(0, 0) - 0.75f)
             < 0.0001f
+        && std::abs(
+               preDeadlineOutput.getSample(0, 0) - 0.75f)
+            < 0.0001f
+        && receivedPreDeadlineMidi
         && recovered(bypassOutput)
         && bypassState->resetRequested.load(
                std::memory_order_acquire)
@@ -997,14 +1061,15 @@ void PluginBridgeClient::queueCompletedOutput() noexcept
                 + pluginLatencySamples.load(
                     std::memory_order_relaxed));
     }
-    if (timelineResetPending)
+    const auto targetStart = completedStartSample
+        + bridgeQuantumSamples;
+    if (timelineResetPending
+        && targetStart < streamSamplePosition)
     {
         completedSequence = -1;
         return;
     }
 
-    const auto targetStart = completedStartSample
-        + bridgeQuantumSamples;
     for (int sample = 0; sample < completedOutputSamples; ++sample)
     {
         const auto absolutePosition = targetStart + sample;
