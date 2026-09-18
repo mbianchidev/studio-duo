@@ -43,7 +43,8 @@ FetchContent_MakeAvailable(signalsmith_stretch)
 
 set(LIBSAMPLERATE_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(LIBSAMPLERATE_INSTALL OFF CACHE BOOL "" FORCE)
-set(LIBSAMPLERATE_TESTS OFF CACHE BOOL "" FORCE)
+unset(LIBSAMPLERATE_TESTS CACHE)
+set(BUILD_TESTING OFF CACHE BOOL "Disable dependency test targets" FORCE)
 set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
 FetchContent_Declare(
     libsamplerate
