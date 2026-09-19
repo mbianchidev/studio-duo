@@ -158,6 +158,10 @@ try {
     Copy-Item `
         -LiteralPath (Join-Path $repositoryRootPath 'LICENSE') `
         -Destination $stagingDirectory
+    Copy-Item `
+        -LiteralPath (Join-Path (Split-Path -Parent $executablePath) 'licenses') `
+        -Destination (Join-Path $stagingDirectory 'licenses') `
+        -Recurse
     if (Test-Path -LiteralPath $zipPath) {
         Remove-Item -LiteralPath $zipPath -Force
     }

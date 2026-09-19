@@ -2821,14 +2821,125 @@ juce::Result StudioAudioEngine::renderToWav(const Project& project,
     return juce::Result::ok();
 }
 
+juce::Result StudioAudioEngine::renderRangeToBuffer(
+    const Project& project,
+    juce::AudioBuffer<float>& destination,
+    double renderSampleRate,
+    const RenderRange& range,
+    std::vector<PluginRuntimeRequest> pluginRequests)
+{
+    return renderToBufferInternal(
+        project, destination, renderSampleRate,
+        std::move(pluginRequests), range);
+}
+
 juce::Result StudioAudioEngine::renderToBuffer(
     const Project& project,
     juce::AudioBuffer<float>& destination,
     double renderSampleRate,
     std::vector<PluginRuntimeRequest> pluginRequests)
 {
-    if (renderSampleRate <= 0.0)
-        return juce::Result::fail("Render sample rate must be positive.");
+    return renderToBufferInternal(
+        project, destination, renderSampleRate,
+        std::move(pluginRequests), std::nullopt);
+}
+
+std::optional<juce::Range<std::int64_t>> StudioAudioEngine::prepareRenderRange(
+    RenderSnapshot& snapshot,
+    const RenderRange& range,
+    juce::String& error)
+{
+    const auto start = static_cast<std::int64_t>(
+        std::llround(range.startSeconds * snapshot.sampleRate));
+    const auto end = static_cast<std::int64_t>(
+        std::llround(range.endSeconds * snapshot.sampleRate));
+    const auto latency = snapshot.clickCompensation.delaySamples;
+    const auto tail = range.tailSeconds.has_value()
+        ? static_cast<std::int64_t>(
+            std::llround(*range.tailSeconds * snapshot.sampleRate))
+        : std::max<std::int64_t>(
+            0, snapshot.lengthSamples - snapshot.contentLengthSamples - latency);
+    if (end <= start || end + latency + tail > std::numeric_limits<int>::max())
+    {
+        error = "The export range is empty at this sample rate or too long for a memory buffer.";
+        return std::nullopt;
+    }
+
+    snapshot.loopEnabled = false;
+    snapshot.contentLengthSamples = end;
+    snapshot.lengthSamples = end + latency + tail;
+    for (auto& track : snapshot.tracks)
+        for (auto& source : track.sources)
+            for (auto& clip : source.clips)
+                clip.lengthSamples = std::max<std::int64_t>(
+                    0, std::min(clip.lengthSamples, end - clip.startSample));
+
+    for (auto& track : snapshot.midiTracks)
+    {
+        RenderSnapshot::MidiTrack history;
+        for (const auto& event : track.events)
+        {
+            if (event.sample >= end)
+                break;
+            trackActiveMidiMessage(
+                history,
+                juce::MidiMessage(event.data.data(), static_cast<int>(event.size), 0.0));
+        }
+        track.events.erase(
+            std::lower_bound(
+                track.events.begin(), track.events.end(), end,
+                [](const auto& event, std::int64_t position) { return event.sample < position; }),
+            track.events.end());
+        const auto append = [&track, end](const juce::MidiMessage& message)
+        {
+            RenderSnapshot::MidiTrack::Event event;
+            event.sample = end;
+            event.size = static_cast<std::uint8_t>(message.getRawDataSize());
+            std::copy_n(message.getRawData(), event.size, event.data.begin());
+            track.events.push_back(event);
+        };
+        for (int channel = 1; channel <= 16; ++channel)
+        {
+            const auto channelIndex = static_cast<std::size_t>(channel - 1);
+            auto activeChannel = history.activeScheduledState->sustainDown[channelIndex];
+            for (int note = 0; note < 128; ++note)
+            {
+                if (history.activeScheduledState->notes[
+                        channelIndex * 128 + static_cast<std::size_t>(note)] == 0)
+                    continue;
+                append(juce::MidiMessage::noteOff(channel, note));
+                activeChannel = true;
+            }
+            if (activeChannel)
+            {
+                // Release notes, not all-sound-off, so instrument tails can decay.
+                append(juce::MidiMessage::controllerEvent(channel, 64, 0));
+                append(juce::MidiMessage::allNotesOff(channel));
+            }
+        }
+    }
+    return juce::Range<std::int64_t>(start + latency, snapshot.lengthSamples);
+}
+
+juce::Result StudioAudioEngine::renderToBufferInternal(
+    const Project& project,
+    juce::AudioBuffer<float>& destination,
+    double renderSampleRate,
+    std::vector<PluginRuntimeRequest> pluginRequests,
+    std::optional<RenderRange> range)
+{
+    if (!std::isfinite(renderSampleRate) || renderSampleRate <= 0.0)
+        return juce::Result::fail("Render sample rate must be finite and positive.");
+    if (range.has_value()
+        && (!std::isfinite(range->startSeconds)
+            || !std::isfinite(range->endSeconds)
+            || range->startSeconds < 0.0
+            || range->endSeconds <= range->startSeconds
+            || (range->tailSeconds.has_value()
+                && (!std::isfinite(*range->tailSeconds) || *range->tailSeconds < 0.0))
+            || (range->endSeconds + range->tailSeconds.value_or(0.0)) * renderSampleRate
+                > static_cast<double>(std::numeric_limits<int>::max())))
+        return juce::Result::fail("The export range or effects tail is invalid or too long to render.");
     auto expectedRender = false;
     if (!renderInProgress.compare_exchange_strong(
             expectedRender,
@@ -2878,6 +2989,8 @@ juce::Result StudioAudioEngine::renderToBuffer(
 
         auto renderProject = project;
         renderProject.metronomeEnabled = false;
+        if (range.has_value())
+            renderProject.loopEnabled = false;
         for (auto& route : renderProject.routingConnections)
             if (route.kind == RouteKind::controlRoom)
                 route.enabled = false;
@@ -2984,8 +3097,17 @@ juce::Result StudioAudioEngine::renderToBuffer(
 
         const auto snapshotIndex = activeSnapshot.load(
             std::memory_order_acquire);
-        const auto length = snapshots[static_cast<std::size_t>(
-            snapshotIndex)].lengthSamples;
+        auto& snapshot = snapshots[static_cast<std::size_t>(snapshotIndex)];
+        juce::Range<std::int64_t> window(0, snapshot.lengthSamples);
+        if (range.has_value())
+        {
+            juce::String error;
+            const auto resolved = prepareRenderRange(snapshot, *range, error);
+            if (!resolved.has_value())
+                return restoreAfterFailure(juce::Result::fail(error), true);
+            window = *resolved;
+        }
+        const auto length = window.getLength();
         if (length <= 0
             || length
                 > static_cast<std::int64_t>(
@@ -3017,12 +3139,11 @@ juce::Result StudioAudioEngine::renderToBuffer(
         juce::AudioBuffer<float> block(2, renderBlockSize);
         juce::AudioIODeviceCallbackContext context;
         playing.store(true, std::memory_order_release);
-        auto offset = 0;
-        while (offset < destination.getNumSamples())
+        auto offset = std::int64_t { 0 };
+        while (offset < window.getEnd())
         {
-            const auto samples = std::min(
-                renderBlockSize,
-                destination.getNumSamples() - offset);
+            const auto samples = static_cast<int>(std::min<std::int64_t>(
+                renderBlockSize, window.getEnd() - offset));
             block.clear();
             float* outputs[] {
                 block.getWritePointer(0),
@@ -3035,8 +3156,17 @@ juce::Result StudioAudioEngine::renderToBuffer(
                 2,
                 samples,
                 context);
-            destination.copyFrom(0, offset, block, 0, 0, samples);
-            destination.copyFrom(1, offset, block, 1, 0, samples);
+            const auto capturedStart = std::max(offset, window.getStart());
+            const auto capturedSamples = static_cast<int>(
+                std::max<std::int64_t>(0, offset + samples - capturedStart));
+            if (capturedSamples > 0)
+            {
+                const auto destinationOffset = static_cast<int>(capturedStart - window.getStart());
+                const auto sourceOffset = static_cast<int>(capturedStart - offset);
+                for (int channel = 0; channel < 2; ++channel)
+                    destination.copyFrom(
+                        channel, destinationOffset, block, channel, sourceOffset, capturedSamples);
+            }
             offset += samples;
             if (realtime)
             {
@@ -3050,6 +3180,11 @@ juce::Result StudioAudioEngine::renderToBuffer(
                                 / renderSampleRate))));
             }
         }
+        for (const auto& status : pluginRuntimeStatuses())
+            if (status.state == PluginRuntimeStatus::State::failed
+                || status.state == PluginRuntimeStatus::State::missing)
+                return restoreAfterFailure(
+                    juce::Result::fail(status.name + ": " + status.message), true);
         if (const auto restore = restoreSettings(true); restore.failed())
             return juce::Result::fail(
                 "Render completed, but live audio restoration failed: "
@@ -3061,14 +3196,22 @@ juce::Result StudioAudioEngine::renderToBuffer(
     auto snapshot = buildSnapshot(project, renderSampleRate, {}, error);
     if (!snapshot.has_value())
         return juce::Result::fail(error);
-    if (snapshot->lengthSamples <= 0
-        || snapshot->lengthSamples
+    juce::Range<std::int64_t> window(0, snapshot->lengthSamples);
+    if (range.has_value())
+    {
+        const auto resolved = prepareRenderRange(*snapshot, *range, error);
+        if (!resolved.has_value())
+            return juce::Result::fail(error);
+        window = *resolved;
+    }
+    if (window.getLength() <= 0
+        || window.getLength()
             > static_cast<std::int64_t>(std::numeric_limits<int>::max()))
         return juce::Result::fail("Rendered project is too long for a memory buffer.");
 
     destination.setSize(
         2,
-        static_cast<int>(snapshot->lengthSamples),
+        static_cast<int>(window.getLength()),
         false,
         true,
         false);
@@ -3077,11 +3220,12 @@ juce::Result StudioAudioEngine::renderToBuffer(
     {
         float left = 0.0f;
         float right = 0.0f;
+        const auto position = window.getStart() + sample;
         const auto timelineSample = snapshot->loopEnabled
-            ? wrapLoopPosition(sample,
+            ? wrapLoopPosition(position,
                                snapshot->loopStartSample,
                                snapshot->loopEndSample)
-            : sample;
+            : position;
         mixSample(*snapshot, timelineSample, left, right);
         destination.setSample(0, sample, left);
         destination.setSample(1, sample, right);

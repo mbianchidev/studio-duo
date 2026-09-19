@@ -58,8 +58,8 @@ private:
     void removeSelectedTrack();
     void moveSelectedTrack(int offset);
     void analyseAlbum();
-    void showExportMenu();
-    void beginExport(MasteringExportFormat format);
+    void showExportOptions();
+    void beginExport(MasteringExportSettings settings);
     void exportTo(const juce::File& destination,
                   MasteringExportSettings settings);
     void beginDdpExport();
@@ -81,6 +81,7 @@ private:
     std::atomic<bool> operationInProgress { false };
     juce::ThreadPool backgroundJobs { 1 };
     std::unique_ptr<juce::FileChooser> chooser;
+    MasteringExportSettings lastExportSettings;
 
     juce::Label titleLabel;
     juce::ListBox trackList { "Mastering songs", this };

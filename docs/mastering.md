@@ -49,18 +49,21 @@ or true-peak warning.
 
 ## Master exports
 
-The export menu provides:
+**EXPORT MASTER** opens the same encoding settings as mix export:
 
-- 48 kHz / 24-bit WAV
-- 48 kHz / 24-bit FLAC
-- compressed Ogg Vorbis reference
-- 44.1 kHz / 16-bit Audio CD WAV with deterministic TPDF dither
+- WAV (16/24-bit PCM or 32-bit float), AIFF, and FLAC masters
+- Ogg Vorbis quality and MP3 constant-bitrate or variable-bitrate references
+- Sample rate, mono/stereo, FLAC compression, optional peak normalization,
+  and deterministic TPDF dither for integer output
+- An Audio CD preset for 44.1 kHz / 16-bit stereo WAV with TPDF dither
 
 Source-rate conversion uses libsamplerate's band-limited best-quality sinc
 converter, and a selected source is rendered continuously into the album
-timeline before final quantization. TPDF samples are
-derived from the album and settings hashes plus absolute channel/sample
-positions, so buffer size and thread scheduling cannot change the output.
+timeline before final quantization. TPDF noise is deterministic at each
+channel/sample position. The selected format and processing settings are part
+of the signed settings hash. MP3 encoding is bundled; no separate installation
+is needed. Peak normalization is a separate opt-in sample-peak adjustment, not
+the distribution preset's LUFS target or true-peak limiting.
 
 After encoding, Studio Duo decodes and remeasures the final file. The adjacent
 `.report.json` includes source, sequence/settings, and output hashes; format,

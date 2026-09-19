@@ -1563,12 +1563,21 @@ int main(int argc, char* argv[])
         return *result;
 #endif
 
+    juce::StringArray selectedSuites;
+    for (const auto& argument : arguments)
+        if (argument.startsWith("--suite="))
+            selectedSuites.add(argument.substring(8));
+    juce::StringArray completedSuites;
     juce::ScopedJuceInitialiser_GUI juceInitialiser;
 #define RUN_SUITE(suite)                                                     \
     do                                                                       \
     {                                                                        \
-        std::cout << "RUN: " #suite << std::endl;                            \
-        suite();                                                             \
+        if (selectedSuites.isEmpty() || selectedSuites.contains(#suite))      \
+        {                                                                    \
+            std::cout << "RUN: " #suite << std::endl;                          \
+            suite();                                                         \
+            completedSuites.add(#suite);                                      \
+        }                                                                    \
     } while (false)
 
     RUN_SUITE(audioDeviceProbeTests);
@@ -1610,6 +1619,8 @@ int main(int argc, char* argv[])
     RUN_SUITE(loggingTests);
     RUN_SUITE(reampSnapshotTests);
     RUN_SUITE(renderEngineTests);
+    RUN_SUITE(audioExportTests);
+    RUN_SUITE(audioExportOptionsTests);
     RUN_SUITE(pluginCompatibilityTests);
     RUN_SUITE(projectMigrationTests);
     RUN_SUITE(windowSizingTests);
@@ -1619,6 +1630,10 @@ int main(int argc, char* argv[])
     RUN_SUITE(masteringTests);
 
 #undef RUN_SUITE
+
+    for (const auto& requested : selectedSuites)
+        expect(completedSuites.contains(requested),
+               ("Unknown test suite: " + requested).toRawUTF8());
 
     if (failures == 0)
     {

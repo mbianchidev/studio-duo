@@ -239,6 +239,19 @@ public:
                                 juce::AudioBuffer<float>& destination,
                                 double sampleRate,
                                 std::vector<PluginRuntimeRequest> pluginRequests = {});
+    struct RenderRange
+    {
+        double startSeconds = 0.0;
+        double endSeconds = 0.0;
+        std::optional<double> tailSeconds;
+    };
+
+    juce::Result renderRangeToBuffer(
+        const Project& project,
+        juce::AudioBuffer<float>& destination,
+        double sampleRate,
+        const RenderRange& range,
+        std::vector<PluginRuntimeRequest> pluginRequests = {});
     juce::Result startLatencyCalibration(int outputChannel, int inputChannel);
     std::optional<LatencyCalibrationResult> takeLatencyCalibrationResult();
     juce::Result renderToWav(
@@ -611,6 +624,16 @@ private:
                                                 double sampleRate,
                                                 const std::vector<PluginRuntimeRequest>& pluginRequests,
                                                 juce::String& error);
+    juce::Result renderToBufferInternal(
+        const Project& project,
+        juce::AudioBuffer<float>& destination,
+        double sampleRate,
+        std::vector<PluginRuntimeRequest> pluginRequests,
+        std::optional<RenderRange> range);
+    static std::optional<juce::Range<std::int64_t>> prepareRenderRange(
+        RenderSnapshot& snapshot,
+        const RenderRange& range,
+        juce::String& error);
     juce::Result updateProjectInternal(
         const Project& project,
         std::vector<PluginRuntimeRequest> pluginRequests,

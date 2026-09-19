@@ -22,6 +22,8 @@ void bundledDeviceTests();
 void loggingTests();
 void reampSnapshotTests();
 void renderEngineTests();
+void audioExportTests();
+void audioExportOptionsTests();
 void pluginCompatibilityTests();
 void projectMigrationTests();
 void windowSizingTests();

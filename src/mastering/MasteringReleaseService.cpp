@@ -10,138 +10,31 @@
 #include <cmath>
 #include <algorithm>
 #include <array>
-#include <cstdint>
 #include <memory>
 
 namespace studio
 {
 namespace
 {
-juce::String formatName(MasteringExportFormat format)
-{
-    switch (format)
-    {
-        case MasteringExportFormat::wav:
-            return "wav";
-        case MasteringExportFormat::flac:
-            return "flac";
-        case MasteringExportFormat::oggReference:
-            return "ogg";
-    }
-    return "wav";
-}
-
-juce::String ditherName(MasteringDither dither)
-{
-    return dither == MasteringDither::tpdf ? "tpdf" : "none";
-}
-
-std::uint64_t splitMix64(std::uint64_t value) noexcept
-{
-    value += 0x9e3779b97f4a7c15ULL;
-    value = (value ^ (value >> 30U))
-        * 0xbf58476d1ce4e5b9ULL;
-    value = (value ^ (value >> 27U))
-        * 0x94d049bb133111ebULL;
-    return value ^ (value >> 31U);
-}
-
-double uniformUnit(std::uint64_t value) noexcept
-{
-    return static_cast<double>(splitMix64(value) >> 11U)
-        * (1.0 / 9007199254740992.0);
-}
-
-void applyDither(juce::AudioBuffer<float>& audio,
-                 int bitDepth,
-                 std::uint64_t seed)
-{
-    const auto lsb = std::ldexp(1.0, 1 - bitDepth);
-    for (int channel = 0; channel < audio.getNumChannels(); ++channel)
-        for (int sample = 0; sample < audio.getNumSamples(); ++sample)
-        {
-            const auto counter =
-                seed
-                ^ (static_cast<std::uint64_t>(channel + 1)
-                   * 0xd6e8feb86659fd93ULL)
-                ^ (static_cast<std::uint64_t>(sample + 1)
-                   * 0xa0761d6478bd642fULL);
-            const auto noise =
-                (uniformUnit(counter)
-                 - uniformUnit(counter ^ 0xe7037ed1a0b428dbULL))
-                * lsb;
-            audio.setSample(
-                channel,
-                sample,
-                juce::jlimit(
-                    -1.0f,
-                    std::nextafter(1.0f, 0.0f),
-                    audio.getSample(channel, sample)
-                        + static_cast<float>(noise)));
-        }
-}
-
-std::unique_ptr<juce::AudioFormat> createFormat(
-    MasteringExportFormat format)
-{
-    switch (format)
-    {
-        case MasteringExportFormat::wav:
-            return std::make_unique<juce::WavAudioFormat>();
-        case MasteringExportFormat::flac:
-            return std::make_unique<juce::FlacAudioFormat>();
-        case MasteringExportFormat::oggReference:
-            return std::make_unique<juce::OggVorbisAudioFormat>();
-    }
-    return {};
-}
-
 bool writeAudio(const juce::AudioBuffer<float>& audio,
                 const MasteringAlbum& album,
                 const juce::File& destination,
                 const MasteringExportSettings& settings,
                 juce::String& error)
 {
-    if (!destination.getParentDirectory().createDirectory())
+    juce::StringPairArray metadata;
+    metadata.set("title", album.title);
+    metadata.set("artist", album.artist);
+    metadata.set("album", album.title);
+    metadata.set("genre", album.genre);
+    metadata.set("date", album.releaseDate);
+    metadata.set("copyright", album.copyright);
+    const auto result = AudioExport::write(audio, destination, settings, metadata);
+    if (result.failed())
     {
-        error = "Could not create export directory: "
-            + destination.getParentDirectory().getFullPathName();
+        error = result.getErrorMessage();
         return false;
     }
-    auto format = createFormat(settings.format);
-    std::unique_ptr<juce::OutputStream> stream =
-        destination.createOutputStream();
-    if (format == nullptr || stream == nullptr)
-    {
-        error = "Could not create export file: "
-            + destination.getFullPathName();
-        return false;
-    }
-    auto options = juce::AudioFormatWriterOptions {}
-        .withSampleRate(settings.sampleRate)
-        .withNumChannels(audio.getNumChannels())
-        .withBitsPerSample(settings.bitDepth)
-        .withMetadata("title", album.title)
-        .withMetadata("artist", album.artist)
-        .withMetadata("album", album.title)
-        .withMetadata("genre", album.genre)
-        .withMetadata("date", album.releaseDate)
-        .withMetadata("copyright", album.copyright);
-    if (settings.format == MasteringExportFormat::oggReference)
-        options = options.withQualityOptionIndex(1);
-    auto writer = format->createWriterFor(stream, options);
-    if (writer == nullptr
-        || !writer->writeFromAudioSampleBuffer(
-            audio,
-            0,
-            audio.getNumSamples()))
-    {
-        error = "Could not encode export file: "
-            + destination.getFullPathName();
-        destination.deleteFile();
-        return false;
-    }
-    writer.reset();
     return true;
 }
 
@@ -488,15 +381,9 @@ std::optional<juce::String> writeDdpChecksums(
 
 juce::var MasteringExportSettings::toVar() const
 {
-    auto object = std::make_unique<juce::DynamicObject>();
-    object->setProperty("format", formatName(format));
-    object->setProperty("sampleRate", sampleRate);
-    object->setProperty("bitDepth", bitDepth);
-    object->setProperty("dither", ditherName(dither));
-    object->setProperty(
-        "distributionPresetId",
-        distributionPresetId);
-    return juce::var(object.release());
+    auto value = AudioExportSettings::toVar();
+    value.getDynamicObject()->setProperty("distributionPresetId", distributionPresetId);
+    return value;
 }
 
 std::vector<MasteringDistributionPreset>
@@ -529,17 +416,9 @@ std::optional<RenderReport> MasteringReleaseService::exportMaster(
     const juce::File& signingDirectory,
     juce::String& error)
 {
-    if (settings.sampleRate < 8000.0
-        || settings.sampleRate > 384000.0
-        || (settings.bitDepth != 16
-            && settings.bitDepth != 24
-            && settings.bitDepth != 32)
-        || (settings.format == MasteringExportFormat::flac
-            && settings.bitDepth == 32)
-        || (settings.format == MasteringExportFormat::oggReference
-            && settings.bitDepth != 32))
+    if (const auto validation = AudioExport::validate(settings); validation.failed())
     {
-        error = "The mastering export sample rate, bit depth, or format is unsupported.";
+        error = validation.getErrorMessage();
         return std::nullopt;
     }
     auto rendered = MasteringEngine::renderAlbum(
@@ -552,17 +431,6 @@ std::optional<RenderReport> MasteringReleaseService::exportMaster(
     const auto settingsText = juce::JSON::toString(
         settings.toVar(),
         false);
-    if (settings.dither == MasteringDither::tpdf)
-    {
-        const auto seed = static_cast<std::uint64_t>(juce::SHA256(
-            (juce::JSON::toString(album.toVar(), false)
-             + settingsText)
-                .toUTF8())
-                              .toHexString()
-                              .substring(0, 16)
-                              .getHexValue64());
-        applyDither(rendered->audio, settings.bitDepth, seed);
-    }
     juce::TemporaryFile stagedMaster(destination);
     const auto stagedMasterFile = stagedMaster.getFile();
     if (!writeAudio(
@@ -594,9 +462,12 @@ std::optional<RenderReport> MasteringReleaseService::exportMaster(
     report.durationSeconds = measurement->durationSeconds;
     report.createdAt =
         juce::Time::getCurrentTime().toISO8601(true);
-    report.format = formatName(settings.format);
+    report.format = AudioExport::extension(settings.format);
     report.sampleRate = settings.sampleRate;
-    report.bitDepth = settings.bitDepth;
+    report.bitDepth = settings.format == AudioExportFormat::mp3
+            || settings.format == AudioExportFormat::oggVorbis
+        ? 0
+        : settings.bitDepth;
     report.integratedLoudnessLufs =
         measurement->integratedLoudnessLufs;
     report.loudnessRangeLu = measurement->loudnessRangeLu;
@@ -621,7 +492,10 @@ std::optional<RenderReport> MasteringReleaseService::exportMaster(
                            << juce::String(
                                   *report.integratedLoudnessLufs,
                                   1)
-                           << " LUFS. No loudness normalization was applied.";
+                           << " LUFS. "
+                           << (settings.normalizePeak
+                                   ? "Sample-peak normalization was applied, not LUFS normalization."
+                                   : "No loudness normalization was applied.");
         }
         if (preset->maximumTruePeakDbtp.has_value()
             && report.truePeakDbtp

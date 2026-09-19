@@ -51,6 +51,8 @@ public:
     std::function<void(double)> onSeek;
     std::function<void(double, double)> onZoomRequested;
     std::function<void(double)> onAddSectionRequested;
+    std::function<void(const juce::String&)> onEditSectionRequested;
+    std::function<void(const juce::String&)> onRemoveSectionRequested;
     std::function<void()> onSplitSelected;
     std::function<void()> onTrimStartSelected;
     std::function<void()> onTrimEndSelected;
@@ -107,6 +109,7 @@ private:
         fadeOutCurve
     };
 
+    [[nodiscard]] juce::String sectionIdAt(juce::Point<float> position) const;
     [[nodiscard]] std::vector<Hit> clipHits() const;
     [[nodiscard]] std::vector<const Track*> visibleTracks() const;
     [[nodiscard]] int trackIndexAt(float y) const noexcept;

@@ -17,6 +17,7 @@
 #include "plugin_host/PluginBrowserComponent.h"
 #include "plugin_host/PluginCatalog.h"
 #include "project_io/ProjectFile.h"
+#include "render/RenderEngine.h"
 #include "update/UpdateService.h"
 
 #include <juce_audio_utils/juce_audio_utils.h>
@@ -91,8 +92,10 @@ private:
     void beginSaveProject();
     void beginImportAudio();
     void beginExportMix();
+    void chooseMixExportDestination(MixExportSettings settings);
     void finishMixExport(const juce::File& destination,
-                         const juce::Result& result);
+                         const juce::Result& result,
+                         const MixExportSettings& settings);
     void setMasteringWorkspaceVisible(bool visible);
     void showDawProjectMenu();
     void beginImportDawProject();
@@ -125,7 +128,8 @@ private:
         juce::String& error) const;
     void openProjectFrom(const juce::File& package);
     void importAudioFile(const juce::File& source);
-    void exportMixTo(const juce::File& destination);
+    void exportMixTo(const juce::File& destination,
+                     MixExportSettings settings);
     void togglePlayback();
     void toggleRecording();
     void stopTransportAndRecording();
@@ -205,7 +209,8 @@ private:
                               juce::Rectangle<int> targetScreenArea);
     void showTrackingMenu();
     void showAutomationPanel();
-    void promptSongSection(double position);
+    void promptSongSection(double position,
+                           const juce::String& sectionId = {});
     void promptTempoChange();
     void promptMeterChange();
     void createPluginTonePath(const juce::String& sourceTrackId);
@@ -291,6 +296,7 @@ private:
     bool audioEngineInitialised = false;
     bool exportInProgress = false;
     bool shutdownRequestedDuringExport = false;
+    MixExportSettings lastMixExportSettings;
     ExportInputBlocker exportInputBlocker;
     bool statusIsError = false;
     bool recordingFinalizationInProgress = false;

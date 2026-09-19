@@ -1,5 +1,6 @@
 #include "MainComponent.h"
 
+#include "AudioExportOptionsComponent.h"
 #include "automation/AutomationRecorder.h"
 #include "audio/AudioDeviceProbe.h"
 #include "logging/StudioLogger.h"
@@ -390,7 +391,7 @@ MainComponent::MainComponent(bool startAudioOnLaunch)
     configureButton(
         dawProjectButton,
         "Import, export, view, or save a DAWproject 1.0 compatibility report");
-    configureButton(exportButton, "Export a stereo WAV");
+    configureButton(exportButton, "Export audio: format, quality, named-marker range, fades, and effects tail");
     configureButton(
         masteringButton,
         "Open the album mastering, release export, DDP, and portable-copy workspace");
@@ -411,7 +412,7 @@ MainComponent::MainComponent(bool startAudioOnLaunch)
     configureButton(importButton, "Import WAV, AIFF, FLAC, or MP3 audio");
     configureButton(duplicateTrackButton, "Duplicate the selected track and its edits");
     configureButton(deleteTrackButton, "Delete the selected track");
-    configureButton(trackingButton, "Configure sections, tempo, meter, punch, count-in, and click routing");
+    configureButton(trackingButton, "Add or edit named markers, tempo, meter, punch, count-in, and click routing");
     configureButton(automationButton, "Edit and record mixer and plugin automation");
     configureButton(
         newMidiClipButton,
@@ -1075,6 +1076,14 @@ MainComponent::MainComponent(bool startAudioOnLaunch)
     timeline.onAddSectionRequested = [this](double position)
     {
         promptSongSection(position);
+    };
+    timeline.onEditSectionRequested = [this](const auto& sectionId)
+    {
+        promptSongSection(0.0, sectionId);
+    };
+    timeline.onRemoveSectionRequested = [this](const auto& sectionId)
+    {
+        perform(std::make_unique<RemoveSongSectionCommand>(sectionId));
     };
     timeline.onSplitSelected = [this] { splitSelectedClip(); };
     timeline.onTrimStartSelected = [this] { trimSelectedClipStartToPlayhead(); };
@@ -2678,7 +2687,7 @@ void MainComponent::beginImportAudio()
     fileChooser = std::make_unique<juce::FileChooser>(
         "Import audio",
         juce::File::getSpecialLocation(juce::File::userMusicDirectory),
-        "*.wav;*.wave;*.aif;*.aiff;*.flac;*.mp3",
+        "*.wav;*.wave;*.aif;*.aiff;*.flac;*.mp3;*.ogg",
         true,
         false,
         this);
@@ -2698,27 +2707,88 @@ void MainComponent::beginImportAudio()
 
 void MainComponent::beginExportMix()
 {
+    if (exportInProgress)
+    {
+        setStatus("A render is already in progress.", true);
+        return;
+    }
+    if (hasActiveRecordingTargets()
+        || audioEngine.isRecording()
+        || recordingFinalizationInProgress)
+    {
+        showError("Export unavailable", "Stop and finalize recording before exporting audio.");
+        return;
+    }
+    AudioExportOptionsComponent::show(
+        &project,
+        lastMixExportSettings,
+        *this,
+        [safe = juce::Component::SafePointer<MainComponent>(this)](
+            MixExportSettings settings)
+        {
+            if (safe != nullptr)
+                safe->chooseMixExportDestination(std::move(settings));
+        });
+}
+
+void MainComponent::chooseMixExportDestination(MixExportSettings settings)
+{
+    const auto extension = AudioExport::extension(settings.audio.format);
     const auto initial = juce::File::getSpecialLocation(juce::File::userMusicDirectory)
-        .getChildFile(project.name + "-mix.wav");
-    fileChooser = std::make_unique<juce::FileChooser>("Export stereo mix",
+        .getChildFile(juce::File::createLegalFileName(project.name + "-mix") + "." + extension);
+    fileChooser = std::make_unique<juce::FileChooser>("Export audio mix",
                                                       initial,
-                                                      "*.wav",
+                                                      "*." + extension,
                                                       true,
                                                       false,
                                                       this);
     const auto chooserFlags = juce::FileBrowserComponent::saveMode
-        | juce::FileBrowserComponent::canSelectFiles;
-    fileChooser->launchAsync(chooserFlags, [safe = juce::Component::SafePointer<MainComponent>(this)](const auto& chooser)
+        | juce::FileBrowserComponent::canSelectFiles
+        | juce::FileBrowserComponent::warnAboutOverwriting;
+    fileChooser->launchAsync(chooserFlags,
+        [safe = juce::Component::SafePointer<MainComponent>(this),
+         settings,
+         projectId = project.id,
+         extension](const auto& chooser)
     {
         if (safe == nullptr)
             return;
 
         const auto result = chooser.getResult();
-        if (result != juce::File())
-            safe->exportMixTo(result.hasFileExtension("wav")
-                                  ? result
-                                  : result.withFileExtension("wav"));
         safe->fileChooser.reset();
+        if (result == juce::File())
+            return;
+        if (safe->project.id != projectId)
+        {
+            safe->showError("Export unavailable", "The project changed while choosing the export destination.");
+            return;
+        }
+        const auto destination = result.withFileExtension(extension);
+        if (destination != result && destination.existsAsFile())
+        {
+            juce::AlertWindow::showAsync(
+                juce::MessageBoxOptions()
+                    .withIconType(juce::MessageBoxIconType::WarningIcon)
+                    .withTitle("Replace existing export?")
+                    .withMessage("The selected format will write "
+                                 + destination.getFullPathName()
+                                 + ". Replace this file?")
+                    .withButton("Replace")
+                    .withButton("Cancel"),
+                [safe, destination, settings, projectId](int choice)
+                {
+                    if (choice != 1 || safe == nullptr)
+                        return;
+                    if (safe->project.id != projectId)
+                    {
+                        safe->showError("Export unavailable", "The project changed before export.");
+                        return;
+                    }
+                    safe->exportMixTo(destination, settings);
+                });
+            return;
+        }
+        safe->exportMixTo(destination, settings);
     });
 }
 
@@ -3755,13 +3825,31 @@ void MainComponent::importAudioFile(const juce::File& source)
         selectClip(destination->id, clipId);
 }
 
-void MainComponent::exportMixTo(const juce::File& destination)
+void MainComponent::exportMixTo(const juce::File& destination,
+                               MixExportSettings settings)
 {
     if (exportInProgress)
     {
         setStatus("A render is already in progress.", true);
         return;
     }
+    if (hasActiveRecordingTargets()
+        || audioEngine.isRecording()
+        || recordingFinalizationInProgress)
+    {
+        showError("Export unavailable", "Stop and finalize recording before exporting audio.");
+        return;
+    }
+    juce::String rangeError;
+    const auto validation = AudioExport::validate(settings.audio);
+    if (validation.failed()
+        || !RenderEngine::resolveRange(project, settings, rangeError).has_value())
+    {
+        showError("Export unavailable",
+                  validation.failed() ? validation.getErrorMessage() : rangeError);
+        return;
+    }
+    lastMixExportSettings = settings;
     exportInProgress = true;
     shutdownRequestedDuringExport = false;
     stopTimer();
@@ -3811,7 +3899,8 @@ void MainComponent::exportMixTo(const juce::File& destination)
             finishMixExport(
                 destination,
                 juce::Result::fail(
-                    capture.result.getErrorMessage()));
+                    capture.result.getErrorMessage()),
+                settings);
             return;
         }
         const auto request = std::find_if(
@@ -3833,7 +3922,8 @@ void MainComponent::exportMixTo(const juce::File& destination)
                 juce::Result::fail(
                     capture.name
                     + ": "
-                    + capture.result.getErrorMessage()));
+                    + capture.result.getErrorMessage()),
+                settings);
             return;
         }
         request->state = capture.state;
@@ -3850,34 +3940,30 @@ void MainComponent::exportMixTo(const juce::File& destination)
          renderEngine,
          projectForExport = std::move(exportProject),
          destination,
+         settings,
          requestsForExport = std::move(renderRequests)]() mutable
         {
-            juce::TemporaryFile stagedExport(destination);
-            auto result = renderEngine->renderToWav(
+            const auto result = RenderEngine::exportMix(
+                *renderEngine,
                 projectForExport,
-                stagedExport.getFile(),
-                48000.0,
+                destination,
+                settings,
                 std::move(requestsForExport));
-            if (result.wasOk()
-                && !stagedExport.overwriteTargetFileWithTemporary())
-            {
-                result = juce::Result::fail(
-                    "Could not publish the completed WAV export.");
-            }
             juce::MessageManager::callAsync(
-                [safe, renderEngine, destination, result]
+                [safe, renderEngine, destination, result, settings]
                 {
                     renderEngine->shutdown();
                     if (safe == nullptr)
                         return;
-                    safe->finishMixExport(destination, result);
+                    safe->finishMixExport(destination, result, settings);
                 });
         });
 }
 
 void MainComponent::finishMixExport(
     const juce::File& destination,
-    const juce::Result& result)
+    const juce::Result& result,
+    const MixExportSettings& settings)
 {
     exportInputBlocker.setVisible(false);
     startTimerHz(30);
@@ -3891,7 +3977,7 @@ void MainComponent::finishMixExport(
     else
     {
         setStatus(
-            "Exported 48 kHz / 24-bit WAV to "
+            "Exported " + AudioExport::description(settings.audio) + " to "
             + destination.getFullPathName());
     }
     if (quitAfterExport)
@@ -6721,11 +6807,36 @@ void MainComponent::showTrackingMenu()
 {
     const auto position = audioEngine.positionSeconds();
     juce::PopupMenu menu;
-    menu.addSectionHeader("Song sections");
-    menu.addItem("Add section at playhead...", [this, position]
+    menu.addSectionHeader("Named markers / song sections");
+    menu.addItem("Add marker at playhead...", [this, position]
     {
         promptSongSection(position);
     });
+    juce::PopupMenu markers;
+    for (const auto& section : project.sections)
+    {
+        juce::PopupMenu actions;
+        actions.addItem("Go to marker", [this, sectionId = section.id]
+        {
+            const auto found = std::find_if(
+                project.sections.cbegin(), project.sections.cend(),
+                [&sectionId](const auto& candidate) { return candidate.id == sectionId; });
+            if (found != project.sections.cend() && timeline.onSeek)
+                timeline.onSeek(found->timeSeconds);
+        });
+        actions.addItem("Rename / move marker...", [this, sectionId = section.id]
+        {
+            promptSongSection(0.0, sectionId);
+        });
+        actions.addItem("Delete marker", [this, sectionId = section.id]
+        {
+            perform(std::make_unique<RemoveSongSectionCommand>(sectionId));
+        });
+        markers.addSubMenu(
+            section.name + " (" + juce::String(section.timeSeconds, 3) + " s)",
+            actions);
+    }
+    menu.addSubMenu("Edit or navigate markers", markers, !project.sections.empty());
     menu.addSeparator();
     menu.addSectionHeader("Tempo and meter");
     menu.addItem("Add tempo change at playhead...", [this] { promptTempoChange(); });
@@ -7454,41 +7565,70 @@ void MainComponent::showTrackingMenu()
     menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(trackingButton));
 }
 
-void MainComponent::promptSongSection(double position)
+void MainComponent::promptSongSection(double position,
+                                      const juce::String& sectionId)
 {
+    std::optional<SongSection> before;
+    if (sectionId.isNotEmpty())
+    {
+        const auto found = std::find_if(
+            project.sections.cbegin(), project.sections.cend(),
+            [&sectionId](const auto& section) { return section.id == sectionId; });
+        if (found == project.sections.cend())
+        {
+            showError("Marker unavailable", "The selected marker no longer exists.");
+            return;
+        }
+        before = *found;
+        position = before->timeSeconds;
+    }
     auto* dialog = new juce::AlertWindow(
-        "Song section",
-        "Create a section marker without moving the playhead.",
+        before.has_value() ? "Edit named marker" : "Add named marker",
+        "Name a timeline position, such as Start or End, for navigation and export ranges.",
         juce::MessageBoxIconType::NoIcon);
     dialog->addTextEditor(
         "name",
-        "Section " + juce::String(static_cast<int>(project.sections.size() + 1)),
+        before.has_value()
+            ? before->name
+            : "Marker " + juce::String(static_cast<int>(project.sections.size() + 1)),
         "Name");
-    dialog->addButton("Create", 1, juce::KeyPress(juce::KeyPress::returnKey));
+    dialog->addTextEditor("position", juce::String(position, 9), "Position (seconds)");
+    dialog->addButton(before.has_value() ? "Save" : "Create",
+                      1, juce::KeyPress(juce::KeyPress::returnKey));
     dialog->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
-    dialog->centreAroundComponent(&trackingButton, 380, 180);
+    dialog->centreAroundComponent(&trackingButton, 420, 250);
     const juce::Component::SafePointer<juce::AlertWindow> dialogSafe(dialog);
     dialog->enterModalState(
         true,
         juce::ModalCallbackFunction::create(
             [safe = juce::Component::SafePointer<MainComponent>(this),
              dialogSafe,
-             position](int result)
+             before](int result)
             {
                 if (result != 1 || safe == nullptr || dialogSafe == nullptr)
                     return;
 
-                SongSection section;
+                auto section = before.value_or(SongSection {});
                 section.name = dialogSafe->getTextEditorContents("name").trim();
-                section.timeSeconds = std::max(0.0, position);
-                if (section.name.isEmpty())
+                const auto positionText = dialogSafe->getTextEditorContents("position").trim().toStdString();
+                const auto conversion = std::from_chars(
+                    positionText.data(),
+                    positionText.data() + positionText.size(),
+                    section.timeSeconds);
+                if (section.name.isEmpty()
+                    || conversion.ec != std::errc()
+                    || conversion.ptr != positionText.data() + positionText.size()
+                    || !std::isfinite(section.timeSeconds)
+                    || section.timeSeconds < 0.0)
                 {
-                    safe->showError("Section unavailable",
-                                    "Enter a name for the song section.");
+                    safe->showError("Marker unavailable",
+                                    "Enter a name and a finite, non-negative position in seconds.");
                     return;
                 }
-                safe->perform(std::make_unique<AddSongSectionCommand>(
-                    std::move(section)));
+                if (before.has_value())
+                    safe->perform(std::make_unique<SetSongSectionCommand>(*before, std::move(section)));
+                else
+                    safe->perform(std::make_unique<AddSongSectionCommand>(std::move(section)));
             }),
         true);
 }

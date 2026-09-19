@@ -4,12 +4,35 @@
 #include "reamp/ReampSnapshotService.h"
 
 #include <algorithm>
+#include <cmath>
 #include <numeric>
 
 namespace studio
 {
 namespace
 {
+bool validSongSection(const SongSection& section)
+{
+    return section.id.trim().isNotEmpty()
+        && section.name.trim().isNotEmpty()
+        && std::isfinite(section.timeSeconds)
+        && section.timeSeconds >= 0.0;
+}
+
+void insertSongSection(std::vector<SongSection>& sections,
+                       const SongSection& section)
+{
+    const auto insertion = std::lower_bound(
+        sections.begin(),
+        sections.end(),
+        section.timeSeconds,
+        [](const auto& existing, double position)
+        {
+            return existing.timeSeconds < position;
+        });
+    sections.insert(insertion, section);
+}
+
 bool hasMainAudioOutput(TrackType type)
 {
     return type == TrackType::audio
@@ -218,24 +241,14 @@ bool AddSongSectionCommand::perform(Project& project, juce::String& error)
             return existing.id == section.id
                 || std::abs(existing.timeSeconds - section.timeSeconds) < 0.0001;
         });
-    if (section.id.isEmpty()
-        || section.name.isEmpty()
-        || section.timeSeconds < 0.0
+    if (!validSongSection(section)
         || duplicate != project.sections.cend())
     {
-        error = "A song section needs a name and a unique non-negative timeline position.";
+        error = "A song section needs a unique ID, a name, and a unique finite non-negative timeline position.";
         return false;
     }
 
-    const auto insertion = std::lower_bound(
-        project.sections.begin(),
-        project.sections.end(),
-        section.timeSeconds,
-        [](const auto& existing, double position)
-        {
-            return existing.timeSeconds < position;
-        });
-    project.sections.insert(insertion, section);
+    insertSongSection(project.sections, section);
     return true;
 }
 
@@ -249,6 +262,123 @@ void AddSongSectionCommand::undo(Project& project)
                            return existing.id == section.id;
                        }),
         project.sections.end());
+}
+
+SetSongSectionCommand::SetSongSectionCommand(
+    SongSection before,
+    SongSection after)
+    : oldSection(std::move(before)),
+      newSection(std::move(after))
+{
+    newSection.name = newSection.name.trim();
+}
+
+juce::String SetSongSectionCommand::name() const
+{
+    return "Edit song section";
+}
+
+bool SetSongSectionCommand::perform(Project& project, juce::String& error)
+{
+    if (oldSection.id != newSection.id
+        || !validSongSection(oldSection)
+        || !validSongSection(newSection))
+    {
+        error = "A song section edit must keep its ID and have a name and a finite non-negative timeline position.";
+        return false;
+    }
+
+    const auto section = std::find_if(
+        project.sections.begin(),
+        project.sections.end(),
+        [this](const auto& existing)
+        {
+            return existing.id == oldSection.id;
+        });
+    if (section == project.sections.end())
+    {
+        error = "The song section no longer exists.";
+        return false;
+    }
+    const auto duplicate = std::any_of(
+        project.sections.cbegin(),
+        project.sections.cend(),
+        [this](const auto& existing)
+        {
+            return existing.id != newSection.id
+                && std::abs(existing.timeSeconds - newSection.timeSeconds)
+                       < 0.0001;
+        });
+    if (duplicate)
+    {
+        error = "Song sections require unique timeline positions.";
+        return false;
+    }
+
+    if (!capturedOriginal)
+    {
+        oldSection = *section;
+        capturedOriginal = true;
+    }
+    project.sections.erase(section);
+    insertSongSection(project.sections, newSection);
+    return true;
+}
+
+void SetSongSectionCommand::undo(Project& project)
+{
+    if (!capturedOriginal)
+        return;
+
+    const auto section = std::find_if(
+        project.sections.begin(),
+        project.sections.end(),
+        [this](const auto& existing)
+        {
+            return existing.id == oldSection.id;
+        });
+    if (section != project.sections.end())
+    {
+        project.sections.erase(section);
+        insertSongSection(project.sections, oldSection);
+    }
+}
+
+RemoveSongSectionCommand::RemoveSongSectionCommand(
+    juce::String sectionToRemove)
+    : sectionId(std::move(sectionToRemove))
+{
+}
+
+juce::String RemoveSongSectionCommand::name() const
+{
+    return "Remove song section";
+}
+
+bool RemoveSongSectionCommand::perform(Project& project, juce::String& error)
+{
+    const auto section = std::find_if(
+        project.sections.begin(),
+        project.sections.end(),
+        [this](const auto& existing)
+        {
+            return existing.id == sectionId;
+        });
+    if (sectionId.trim().isEmpty() || section == project.sections.end())
+    {
+        error = "The song section no longer exists.";
+        return false;
+    }
+    if (!removedSection.has_value())
+        removedSection = *section;
+    project.sections.erase(section);
+    return true;
+}
+
+void RemoveSongSectionCommand::undo(Project& project)
+{
+    if (removedSection.has_value())
+        insertSongSection(project.sections, *removedSection);
 }
 
 AddTrackCommand::AddTrackCommand(Track trackToAdd)

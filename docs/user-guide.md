@@ -51,12 +51,13 @@ DAWproject exchange, and Phase 5 mastering and release workflows.
   official schema validation, scene preservation, and compatibility reports
 - Dedicated album mastering with alternate mixes, sequencing, gaps, overlaps,
   fades, ISRC/release metadata, BS.1770/R128 loudness analysis, true peak,
-  correlation, WAV/FLAC/Ogg exports, deterministic dither, and signed reports
+  correlation, WAV/AIFF/FLAC/Ogg/MP3 exports, deterministic dither, and signed reports
 - External licensed DDP encoder integration with sector/MCN validation,
   fileset checks, SHA-256 delivery manifests, and signed reports
 - Content-addressed portable copies, relocatable package paths, transfer
   validation, and hash-based missing-media repair
-- Deterministic 48 kHz, 24-bit stereo WAV export when active plugins are absent
+- Configurable mix export with named-marker ranges, lossless and compressed
+  formats, mono/stereo, bitrate/quality, normalization, and dither
 - In-app update checks, verified background downloads, and user-controlled
   restart installation on macOS and Windows
 
@@ -93,7 +94,7 @@ trackpad scrolling and pinch gestures zoom the same view.
 1. Open **SETTINGS** > **Audio / MIDI** and enable the required hardware inputs
    and outputs.
 2. Add audio, instrument, or MIDI tracks with **+ TRACK**. Import WAV, AIFF,
-   FLAC, or MP3 files with **IMPORT AUDIO**, or select a MIDI/instrument track
+   FLAC, MP3, or Ogg Vorbis files with **IMPORT AUDIO**, or select a MIDI/instrument track
    and use **NEW MIDI CLIP**.
 3. Select a track to configure its input, mono or stereo capture, monitoring,
    volume, pan, color, inserts, and output.
@@ -539,10 +540,56 @@ references, sequencing, release metadata, and final measurements. Versions
 1-8 migrate on load.
 See [project-format.md](project-format.md).
 
-Stereo WAV export is 48 kHz and 24-bit. Projects without processors use the
-fast deterministic graph. Bundled and trusted processors render offline;
-sandboxed third-party processors use the same one-block pipeline in a real-time
-fallback so processing is never silently omitted.
+### Audio export
+
+**EXPORT** opens audio settings before the destination chooser. WAV at 48 kHz,
+24-bit stereo remains the default. Choose WAV, AIFF, FLAC, Ogg Vorbis, or MP3;
+MP3 encoding is built in and requires no separate encoder installation.
+The same encoding controls are available under **MASTERING > EXPORT MASTER**.
+
+Select a supported sample rate and bit depth, stereo or mono, and the
+format-specific controls: MP3 constant bitrate or variable-bitrate quality,
+Ogg quality, or FLAC compression level. WAV also supports 32-bit floating point
+for preserving processing headroom. Higher FLAC compression changes file size
+and encoding speed, not audio quality. Mono averages the left and right channels.
+MP3 offers 64-320 kbps CBR or VBR quality 0-9 at 32, 44.1, or 48 kHz.
+Ogg offers quality 0-10; FLAC offers compression levels 1-8 (JUCE's level 0
+does not actually select its advertised compression level). MP3 files carry
+encoder-delay/padding metadata; players that ignore gapless tags may expose
+additional codec padding.
+
+Optional peak normalization sets the sample peak to the chosen dBFS target.
+It is not LUFS normalization or a true-peak limiter; lossy encoding can introduce
+additional peaks. TPDF dither is available for integer PCM output only, not MP3,
+Ogg, or floating-point WAV.
+
+For mix exports, choose the whole project, the loop range, two named markers,
+or custom start/end times in seconds. Playback looping is ignored during export.
+The start is included and the end excluded, rounded to the output sample grid.
+Choose no effects tail for an exact range, automatic for the processors'
+reported tails, or a custom tail duration. Optional fade-in/out lengths apply
+to the exported file, including its tail, without changing timeline clips.
+
+Create named **Start** and **End** markers using **TRACKING SETUP > Add marker
+at playhead**, or double-click empty space in the timeline marker lane. Enter a
+name and position in seconds. Existing song sections are these same markers:
+they survive saving, reopening, and DAWproject exchange. Use the marker's context
+menu, double-click its label, or the tracking menu to rename/move/delete it;
+all changes support undo and redo. In export settings, choose **Between markers**
+and select the start and end names. Names can repeat; each choice also shows its
+position and uses a stable marker ID. Missing markers or an end at/before the
+start are rejected rather than falling back to the entire project.
+
+Projects without processors use the fast deterministic graph. Bundled and
+trusted processors render offline; sandboxed third-party processors use the
+same one-block pipeline in a real-time fallback so processing is never silently
+omitted. Range exports retain the preceding processor/automation history and
+compensate processing latency. Tails stop new source audio/MIDI at the selected
+end instead of including the next section. Completed files replace their
+destination only after successful encoding; a failed export preserves the
+previous file.
+
+### DAWproject interchange
 
 Use **DAWPROJECT** in the main header to:
 

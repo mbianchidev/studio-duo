@@ -189,11 +189,12 @@ std::optional<SongSection> SongSection::fromVar(const juce::var& value,
     section.id = object->getProperty("id").toString();
     section.name = object->getProperty("name").toString().trim();
     section.timeSeconds = numberProperty(*object, "timeSeconds", 0.0);
-    if (section.id.isEmpty()
+    if (section.id.trim().isEmpty()
         || section.name.isEmpty()
+        || !std::isfinite(section.timeSeconds)
         || section.timeSeconds < 0.0)
     {
-        error = "Song sections require an ID, a name, and a non-negative position.";
+        error = "Song sections require an ID, a name, and a finite non-negative position.";
         return std::nullopt;
     }
     return section;

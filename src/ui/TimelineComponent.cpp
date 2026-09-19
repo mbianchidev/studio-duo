@@ -321,7 +321,7 @@ void TimelineComponent::paint(juce::Graphics& graphics)
     graphics.setColour(juce::Colour(StudioColours::secondaryText));
     graphics.setFont(juce::Font(juce::FontOptions(9.0f,
                                                   juce::Font::bold)));
-    graphics.drawText("SECTIONS",
+    graphics.drawText("MARKERS / SECTIONS",
                       viewportPositionX + 12,
                       0,
                       trackHeaderWidth - 24,
@@ -1244,6 +1244,28 @@ void TimelineComponent::mouseDoubleClick(const juce::MouseEvent& event)
         return;
     const auto inTrackHeader = event.position.x >= static_cast<float>(viewportPositionX)
         && event.position.x < static_cast<float>(viewportPositionX + trackHeaderWidth);
+    if (!inTrackHeader
+        && event.position.y >= 0.0f
+        && event.position.y < static_cast<float>(sectionLaneHeight))
+    {
+        if (!event.mods.isPopupMenu())
+        {
+            const auto sectionId = sectionIdAt(event.position);
+            if (sectionId.isNotEmpty())
+            {
+                const auto editSection = onEditSectionRequested;
+                if (editSection)
+                    editSection(sectionId);
+            }
+            else
+            {
+                const auto addSection = onAddSectionRequested;
+                if (addSection)
+                    addSection(xToSeconds(event.position.x));
+            }
+        }
+        return;
+    }
     if (!inTrackHeader)
     {
         const auto existingClips = clipHits();
@@ -1523,14 +1545,33 @@ void TimelineComponent::showContextMenu(const juce::MouseEvent& event)
     const auto inTrackHeader = event.position.x >= static_cast<float>(viewportPositionX)
         && event.position.x < static_cast<float>(viewportPositionX + trackHeaderWidth);
     if (!inTrackHeader
+        && event.position.y >= 0.0f
         && event.position.y < static_cast<float>(sectionLaneHeight))
     {
         juce::PopupMenu menu;
-        menu.addItem("Add section here...", [this, position = xToSeconds(event.position.x)]
+        const auto safeThis = juce::Component::SafePointer<TimelineComponent>(this);
+        const auto sectionId = sectionIdAt(event.position);
+        if (sectionId.isNotEmpty())
         {
-            if (onAddSectionRequested)
-                onAddSectionRequested(position);
-        });
+            menu.addItem("Rename / move marker...", [safeThis, sectionId]
+            {
+                if (safeThis != nullptr && safeThis->onEditSectionRequested)
+                    safeThis->onEditSectionRequested(sectionId);
+            });
+            menu.addItem("Remove marker", [safeThis, sectionId]
+            {
+                if (safeThis != nullptr && safeThis->onRemoveSectionRequested)
+                    safeThis->onRemoveSectionRequested(sectionId);
+            });
+            menu.addSeparator();
+        }
+        menu.addItem(
+            "Add marker here...",
+            [safeThis, position = xToSeconds(event.position.x)]
+            {
+                if (safeThis != nullptr && safeThis->onAddSectionRequested)
+                    safeThis->onAddSectionRequested(position);
+            });
         const auto screenPosition = event.getScreenPosition();
         menu.showMenuAsync(juce::PopupMenu::Options()
                                .withTargetComponent(this)
@@ -1914,6 +1955,36 @@ void TimelineComponent::showContextMenu(const juce::MouseEvent& event)
                                                    1,
                                                    1 }));
     repaint();
+}
+
+juce::String TimelineComponent::sectionIdAt(juce::Point<float> position) const
+{
+    if (project == nullptr
+        || position.y < 0.0f
+        || position.y >= static_cast<float>(sectionLaneHeight)
+        || position.x < static_cast<float>(viewportPositionX + trackHeaderWidth)
+        || position.x >= static_cast<float>(getWidth()))
+        return {};
+
+    const juce::Font font(juce::FontOptions(10.0f, juce::Font::bold));
+    for (auto index = project->sections.size(); index > 0; --index)
+    {
+        const auto& section = project->sections[index - 1];
+        const auto startX = secondsToX(section.timeSeconds);
+        const auto nextX = index < project->sections.size()
+            ? secondsToX(project->sections[index].timeSeconds)
+            : static_cast<float>(getWidth());
+        const auto labelEndX = startX + 10.0f
+            + juce::GlyphArrangement::getStringWidth(font, section.name);
+        const juce::Rectangle<float> bounds(
+            startX - 3.0f,
+            0.0f,
+            std::max(6.0f, std::min(labelEndX, nextX) - startX + 3.0f),
+            static_cast<float>(sectionLaneHeight));
+        if (bounds.contains(position))
+            return section.id;
+    }
+    return {};
 }
 
 std::vector<TimelineComponent::Hit> TimelineComponent::clipHits() const
