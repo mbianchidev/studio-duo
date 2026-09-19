@@ -5,7 +5,6 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <limits>
 #include <locale>
 #include <sstream>
 #include <utility>
@@ -23,6 +22,21 @@ constexpr std::array exportFormats {
 };
 
 constexpr std::array mp3Bitrates { 64, 96, 128, 160, 192, 224, 256, 320 };
+
+class ExportActionButton final : public juce::TextButton
+{
+public:
+    void paintButton(juce::Graphics& graphics, bool highlighted, bool down) override
+    {
+        juce::TextButton::paintButton(graphics, highlighted, down);
+        if (hasKeyboardFocus(true))
+        {
+            graphics.setColour(findColour(juce::TextButton::textColourOffId));
+            graphics.drawRoundedRectangle(
+                getLocalBounds().toFloat().reduced(2.5f), 2.0f, 2.0f);
+        }
+    }
+};
 
 bool isLossy(AudioExportFormat format)
 {
@@ -56,7 +70,7 @@ std::optional<double> parseNumber(const juce::String& text)
 bool readNumber(
     const juce::TextEditor& editor,
     double minimum,
-    double maximum,
+    std::optional<double> maximum,
     const juce::String& name,
     double& value,
     juce::String& error)
@@ -67,12 +81,12 @@ bool readNumber(
         error = name + " must be a finite number, without units or other text.";
         return false;
     }
-    if (*parsed < minimum || *parsed > maximum)
+    if (*parsed < minimum || (maximum && *parsed > *maximum))
     {
-        error = maximum == std::numeric_limits<double>::max()
-            ? name + " must be a non-negative finite number."
-            : name + " must be between " + numberText(minimum)
-                + " and " + numberText(maximum) + ".";
+        error = maximum
+            ? name + " must be between " + numberText(minimum)
+                + " and " + numberText(*maximum) + "."
+            : name + " must be a non-negative finite number.";
         return false;
     }
     value = *parsed;
@@ -261,7 +275,7 @@ struct AudioExportOptionsComponent::Impl
         oggQuality.initialise(content, "export.oggQuality", "Vorbis quality",
                               "Ogg Vorbis quality: 0 is smallest, 10 is highest quality.");
         flacCompression.initialise(content, "export.flacCompression", "FLAC compression",
-                                   "0 encodes fastest; 8 produces the smallest lossless files.");
+                                   "1 encodes fastest; 8 produces the smallest lossless files.");
         dither.initialise(content, "export.dither", "Dither",
                           "TPDF adds low-level noise when quantizing integer PCM. "
                           "It is not applied to floating-point or lossy formats.");
@@ -317,10 +331,10 @@ struct AudioExportOptionsComponent::Impl
                 juce::String(quality)
                     + (quality == 0 ? " - smallest" : quality == 10 ? " - best" : ""),
                 quality + 1);
-        for (int level = 0; level <= 8; ++level)
+        for (int level = 1; level <= 8; ++level)
             flacCompression.control.addItem(
                 juce::String(level)
-                    + (level == 0 ? " - fastest" : level == 8 ? " - smallest" : ""),
+                    + (level == 1 ? " - fastest" : level == 8 ? " - smallest" : ""),
                 level + 1);
         dither.control.addItem("None", 1);
         dither.control.addItem("TPDF", 2);
@@ -397,7 +411,7 @@ struct AudioExportOptionsComponent::Impl
             juce::TextButton::buttonColourId,
             juce::Colour(StudioColours::orange));
         exportButton.setColour(
-            juce::TextButton::textColourOffId, juce::Colours::white);
+            juce::TextButton::textColourOffId, juce::Colours::black);
         owner.addAndMakeVisible(cancel);
         owner.addAndMakeVisible(exportButton);
 
@@ -497,7 +511,7 @@ struct AudioExportOptionsComponent::Impl
         oggQuality.control.setSelectedId(
             juce::jlimit(0, 10, audio.oggQuality) + 1, juce::dontSendNotification);
         flacCompression.control.setSelectedId(
-            juce::jlimit(0, 8, audio.flacCompressionLevel) + 1, juce::dontSendNotification);
+            juce::jlimit(1, 8, audio.flacCompressionLevel) + 1, juce::dontSendNotification);
         normalize.control.setToggleState(audio.normalizePeak, juce::dontSendNotification);
         normalizeTarget.control.setText(numberText(audio.normalizePeakDbfs), false);
     }
@@ -543,19 +557,19 @@ struct AudioExportOptionsComponent::Impl
                 return std::isfinite(first.seconds);
             return std::isfinite(first.seconds) && first.seconds < second.seconds;
         });
-        for (size_t index = 0; index < markers.size(); ++index)
+        std::vector<juce::String> labels;
+        labels.reserve(markers.size());
+        for (const auto& marker : markers)
         {
-            const auto& marker = markers[index];
             const auto time = std::isfinite(marker.seconds)
                 ? juce::String(marker.seconds, 3) + " s" : "invalid time";
-            auto label = (marker.name.isNotEmpty() ? marker.name : "Unnamed marker")
-                + " - " + time;
-            const auto duplicate = std::count_if(
-                markers.begin(), markers.end(), [&marker](const auto& other)
-                {
-                    return other.name == marker.name && other.seconds == marker.seconds;
-                }) > 1;
-            if (duplicate)
+            labels.push_back(
+                (marker.name.isNotEmpty() ? marker.name : "Unnamed marker") + " - " + time);
+        }
+        for (size_t index = 0; index < markers.size(); ++index)
+        {
+            auto label = labels[index];
+            if (std::count(labels.begin(), labels.end(), label) > 1)
                 label += " [" + juce::String(static_cast<int>(index) + 1) + "]";
             const auto itemId = static_cast<int>(index) + 1;
             startMarker.control.addItem(label, itemId);
@@ -766,9 +780,9 @@ struct AudioExportOptionsComponent::Impl
         }
         if (result.range == MixExportRange::custom)
         {
-            if (!readNumber(start.control, 0.0, std::numeric_limits<double>::max(),
+            if (!readNumber(start.control, 0.0, std::nullopt,
                             "Start time (seconds)", result.startSeconds, error)
-                || !readNumber(end.control, 0.0, std::numeric_limits<double>::max(),
+                || !readNumber(end.control, 0.0, std::nullopt,
                                "End time (seconds)", result.endSeconds, error))
                 return std::nullopt;
         }
@@ -993,7 +1007,7 @@ struct AudioExportOptionsComponent::Impl
         }
         completing = true;
         exportButton.setEnabled(false);
-        auto callback = owner.onExport;
+        auto exportCallback = owner.onExport;
         if (auto* window = owner.findParentComponentOfClass<juce::DialogWindow>())
         {
             // The modal callback runs before JUCE deletes the owned content.
@@ -1001,13 +1015,13 @@ struct AudioExportOptionsComponent::Impl
             juce::ModalComponentManager::getInstance()->attachCallback(
                 window,
                 juce::ModalCallbackFunction::create(
-                    [callback = std::move(callback), selection = *value](int result) mutable
+                    [modalExport = std::move(exportCallback), selection = *value](int result) mutable
                     {
-                        if (result == 1 && callback)
+                        if (result == 1 && modalExport)
                             juce::MessageManager::callAsync(
-                                [callback = std::move(callback), selection]() mutable
+                                [dispatchExport = std::move(modalExport), selection]() mutable
                                 {
-                                    callback(selection);
+                                    dispatchExport(selection);
                                 });
                     }));
             window->exitModalState(1);
@@ -1015,10 +1029,10 @@ struct AudioExportOptionsComponent::Impl
         }
         const auto safe = juce::Component::SafePointer<AudioExportOptionsComponent>(&owner);
         juce::MessageManager::callAsync(
-            [safe, callback = std::move(callback), selection = *value]() mutable
+            [safe, standaloneExport = std::move(exportCallback), selection = *value]() mutable
             {
-                if (safe != nullptr && callback)
-                    callback(selection);
+                if (safe != nullptr && standaloneExport)
+                    standaloneExport(selection);
             });
     }
 
@@ -1047,7 +1061,8 @@ struct AudioExportOptionsComponent::Impl
     NumberField normalizeTarget;
     ComboField range, startMarker, endMarker, tailMode;
     NumberField start, end, tail, fadeIn, fadeOut;
-    juce::TextButton cancel, exportButton;
+    juce::TextButton cancel;
+    ExportActionButton exportButton;
     juce::TooltipWindow tooltipWindow;
     std::vector<double> sampleRates;
     std::vector<MarkerChoice> markers;
@@ -1099,7 +1114,7 @@ void AudioExportOptionsComponent::show(
     auto workArea = juce::Rectangle<int>(0, 0, 1280, 800);
     if (const auto* display = juce::Desktop::getInstance().getDisplays()
                                   .getDisplayForRect(centreAround.getScreenBounds()))
-        workArea = display->userArea;
+        workArea = display->userBounds.getLargestIntegerWithin();
     auto clientArea = workArea.reduced(16).withTrimmedTop(36);
     if (clientArea.isEmpty())
         clientArea = { workArea.getX(), workArea.getY(), 1, 1 };
@@ -1168,7 +1183,10 @@ void AudioExportOptionsComponent::focusOfChildComponentChanged(FocusChangeType)
     auto* focused = juce::Component::getCurrentlyFocusedComponent();
     if (!impl || focused == nullptr || !impl->content.isParentOf(focused))
         return;
-    const auto bounds = impl->content.getLocalArea(focused, focused->getLocalBounds()).expanded(0, 6);
+    const auto bounds = juce::BorderSize<int>(
+        impl->content.getWidth() < 450 ? 24 : 6, 0, 6, 0)
+                            .addedTo(impl->content.getLocalArea(
+                                focused, focused->getLocalBounds()));
     const auto top = impl->viewport.getViewPositionY();
     const auto bottom = top + impl->viewport.getViewHeight();
     if (bounds.getY() < top)

@@ -2,9 +2,11 @@
 
 #include "ui/AudioExportOptionsComponent.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <stdexcept>
+#include <string>
 
 namespace
 {
@@ -146,12 +148,54 @@ void codecQualityControls()
            "Ogg Vorbis exposes all quality levels from 0 through 10 and hides MP3 options.");
 
     selectFormat(component, AudioExportFormat::flac);
+    auto& compression = control<juce::ComboBox>(component, "export.flacCompression");
+    expect(compression.getNumItems() == 8
+               && compression.getItemId(0) == 2
+               && compression.getItemId(7) == 9
+               && compression.getTooltip().contains("1 encodes fastest"),
+           "FLAC offers only the supported levels 1..8 and explains the correct minimum.");
+    select(component, "export.flacCompression", 2);
+    selected = component.settings(error);
+    expect(selected && selected->audio.flacCompressionLevel == 1,
+           "The fastest FLAC option explicitly selects supported compression level 1.");
     select(component, "export.flacCompression", 9);
     selected = component.settings(error);
     expect(selected && selected->audio.flacCompressionLevel == 8
                && control<juce::ComboBox>(component, "export.flacCompression").isVisible()
                && !control<juce::ComboBox>(component, "export.oggQuality").isVisible(),
            "FLAC exposes its lossless compression levels without lossy quality controls.");
+
+    MixExportSettings obsolete;
+    obsolete.audio.format = AudioExportFormat::flac;
+    obsolete.audio.flacCompressionLevel = 0;
+    AudioExportOptionsComponent restored(std::nullopt, obsolete);
+    selected = restored.settings(error);
+    expect(selected && selected->audio.flacCompressionLevel == 1
+               && control<juce::ComboBox>(restored, "export.flacCompression").getSelectedId() == 2,
+           "An obsolete level-zero setting is visibly replaced with supported FLAC level 1.");
+}
+
+void advertisedRatesMatchTheEncoder()
+{
+    AudioExportOptionsComponent component(std::nullopt, {});
+    for (const auto format : { AudioExportFormat::wav, AudioExportFormat::aiff,
+                               AudioExportFormat::flac, AudioExportFormat::oggVorbis,
+                               AudioExportFormat::mp3 })
+    {
+        selectFormat(component, format);
+        const auto rates = studio::AudioExport::sampleRates(format);
+        auto& combo = control<juce::ComboBox>(component, "export.sampleRate");
+        expect(combo.getNumItems() == static_cast<int>(rates.size()),
+               "The dialog advertises exactly the selected encoder's supported sample rates.");
+        for (size_t index = 0; index < rates.size(); ++index)
+        {
+            combo.setSelectedItemIndex(static_cast<int>(index), juce::sendNotificationSync);
+            juce::String error;
+            const auto selected = component.settings(error);
+            expect(selected && std::abs(selected->audio.sampleRate - rates[index]) < 1.0e-9,
+                   "Every advertised rate maps to the exact supported numeric value.");
+        }
+    }
 }
 
 void presetsReplaceAllAudioFields()
@@ -179,7 +223,7 @@ void presetsReplaceAllAudioFields()
                && selected->audio.channels == 2
                && selected->audio.dither == AudioExportDither::tpdf
                && !selected->audio.normalizePeak
-               && selected->audio.normalizePeakDbfs == -1.0
+               && std::abs(selected->audio.normalizePeakDbfs + 1.0) < 1.0e-9
                && selected->audio.mp3BitrateMode == studio::Mp3BitrateMode::constant
                && selected->audio.mp3VbrQuality == 2
                && selected->audio.oggQuality == 6
@@ -208,7 +252,7 @@ void presetsReplaceAllAudioFields()
     select(component, "export.preset", 1);
     selected = component.settings(error);
     expect(selected && selected->audio.normalizePeak
-               && selected->audio.normalizePeakDbfs == -6.0
+               && std::abs(selected->audio.normalizePeakDbfs + 6.0) < 1.0e-9
                && selected->audio.mp3VbrQuality == 9
                && selected->audio.oggQuality == 10
                && selected->audio.flacCompressionLevel == 8,
@@ -263,6 +307,32 @@ void markerRangesUseStableSnapshots()
     select(insufficient, "export.range", 3);
     expect(!insufficient.settings(error),
            "Programmatically selecting an unavailable marker range is also rejected.");
+
+    auto identicalLabels = markerProject();
+    identicalLabels.sections = {
+        { "first-boundary", "Boundary", 1.0 },
+        { "second-boundary", "Boundary", 1.0 },
+        { "end-boundary", "Boundary", 6.0 }
+    };
+    MixExportSettings duplicateSelection;
+    duplicateSelection.range = MixExportRange::markers;
+    duplicateSelection.startMarkerId = "second-boundary";
+    duplicateSelection.endMarkerId = "end-boundary";
+    AudioExportOptionsComponent duplicates(identicalLabels, duplicateSelection);
+    const auto& selector = control<juce::ComboBox>(duplicates, "export.startMarker");
+    selected = duplicates.settings(error);
+    expect(selected && selected->startMarkerId == "second-boundary"
+               && selector.getSelectedId() == 2
+               && selector.getItemText(0) != selector.getItemText(1),
+           "Even equal-name, equal-time markers have distinct labels and preserve the selected stable ID.");
+    identicalLabels.sections[0].timeSeconds = 1.0001;
+    identicalLabels.sections[1].timeSeconds = 1.0002;
+    AudioExportOptionsComponent roundedLabels(identicalLabels, duplicateSelection);
+    const auto& roundedSelector = control<juce::ComboBox>(roundedLabels, "export.startMarker");
+    selected = roundedLabels.settings(error);
+    expect(selected && selected->startMarkerId == "second-boundary"
+               && roundedSelector.getItemText(0) != roundedSelector.getItemText(1),
+           "Different marker times that round to the same displayed timestamp remain distinguishable.");
 }
 
 void exactRangesAndTails()
@@ -365,6 +435,15 @@ void numericValidationAndMasteringScope()
         expect(!component.settings(error),
                "Normalization is limited to -24 through 0 dBFS.");
     }
+    edit(component, "export.normalizeTarget", "invalid");
+    control<juce::ToggleButton>(component, "export.normalize")
+        .setToggleState(false, juce::sendNotificationSync);
+    expect(component.settings(error).has_value()
+               && !control<juce::TextEditor>(component, "export.normalizeTarget").isEnabled(),
+           "Disabling normalization makes an inactive, invalid target irrelevant to export.");
+    control<juce::ToggleButton>(component, "export.normalize")
+        .setToggleState(true, juce::sendNotificationSync);
+    edit(component, "export.normalizeTarget", "0.001");
 
     bool exported = false;
     component.onExport = [&](auto) { exported = true; };
@@ -410,6 +489,37 @@ void scrollLayoutKeepsControlsReachable()
                && control<juce::TextEditor>(component, "export.startSeconds").getTitle().isNotEmpty(),
            "Editable controls expose accessible titles and explanatory tooltips.");
 }
+
+void primaryActionContrast()
+{
+    AudioExportOptionsComponent component(std::nullopt, {});
+    const auto& button = control<juce::TextButton>(component, "export.submit");
+    const auto foreground = button.findColour(juce::TextButton::textColourOffId);
+    const auto background = button.findColour(juce::TextButton::buttonColourId);
+    const auto luminance = [](juce::Colour colour)
+    {
+        const auto linear = [](double channel)
+        {
+            return channel <= 0.04045 ? channel / 12.92
+                                     : std::pow((channel + 0.055) / 1.055, 2.4);
+        };
+        return 0.2126 * linear(colour.getFloatRed())
+            + 0.7152 * linear(colour.getFloatGreen())
+            + 0.0722 * linear(colour.getFloatBlue());
+    };
+    for (const auto state : std::array {
+             background,
+             background.brighter(0.08f),
+             background.darker(0.12f),
+             background.brighter(0.08f).darker(0.12f) })
+    {
+        const auto text = luminance(foreground);
+        const auto fill = luminance(state);
+        const auto contrast = (std::max(text, fill) + 0.05) / (std::min(text, fill) + 0.05);
+        expect(contrast >= 4.5,
+               "Export text meets 4.5:1 contrast in the theme's idle, hover and pressed states.");
+    }
+}
 }
 
 void audioExportOptionsTests()
@@ -418,11 +528,13 @@ void audioExportOptionsTests()
     {
         defaultsAndFormatChanges();
         codecQualityControls();
+        advertisedRatesMatchTheEncoder();
         presetsReplaceAllAudioFields();
         markerRangesUseStableSnapshots();
         exactRangesAndTails();
         numericValidationAndMasteringScope();
         scrollLayoutKeepsControlsReachable();
+        primaryActionContrast();
     }
     catch (const std::exception& error)
     {
