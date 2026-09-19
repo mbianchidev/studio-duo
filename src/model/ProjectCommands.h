@@ -466,6 +466,21 @@ private:
     ProjectTransportState newState;
 };
 
+class SetMasteringAlbumCommand final : public ProjectCommand
+{
+public:
+    SetMasteringAlbumCommand(MasteringAlbum before,
+                             MasteringAlbum after);
+
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    MasteringAlbum oldState;
+    MasteringAlbum newState;
+};
+
 struct TrackMixState
 {
     float volumeDecibels = 0.0f;

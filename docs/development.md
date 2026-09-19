@@ -274,6 +274,20 @@ Project format version 8 adds channel-scoped MIDI pressure automation targets.
 Version 7 automation targets migrate with `midiChannel: -1`; channel-pressure
 targets persist channels in the internal `1..16` range.
 
+Project format version 9 adds the mastering album, alternate source mixes,
+release metadata, source media hashes, extended signed render reports, and
+package-relative portable media paths. `src/mastering/MasteringModel.*` owns
+the persisted sequence. `MasteringEngine.*` performs rendering, K-weighted
+BS.1770 integrated loudness, R128 loudness range, oversampled true peak, sample
+peak, and correlation analysis. `MasteringReleaseService.*` owns WAV, FLAC,
+Ogg, deterministic TPDF, final-file measurement, report signing, and the
+external DDP encoder-adapter boundary.
+
+`ProjectCollectionService` collects arrangement and mastering media by SHA-256,
+copies plugin state, writes and validates `portable-manifest.json`, and repairs
+missing resources by content hash. `ProjectFile` serializes package-local paths
+with `${PROJECT_DIR}/...` and rejects tokens that escape the package.
+
 `src/dawproject_io/` is an explicit translation boundary:
 
 - `DawProjectIdMapper` produces stable, kind-specific XML IDs and deterministic

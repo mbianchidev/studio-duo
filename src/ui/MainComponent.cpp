@@ -9,6 +9,7 @@
 #include "render/RenderEngine.h"
 
 #include <StudioDuoBrandData.h>
+#include <juce_cryptography/juce_cryptography.h>
 
 #include <algorithm>
 #include <charconv>
@@ -391,6 +392,9 @@ MainComponent::MainComponent(bool startAudioOnLaunch)
         "Import, export, view, or save a DAWproject 1.0 compatibility report");
     configureButton(exportButton, "Export a stereo WAV");
     configureButton(
+        masteringButton,
+        "Open the album mastering, release export, DDP, and portable-copy workspace");
+    configureButton(
         settingsButton,
         "Configure audio, MIDI, and automatic updates");
     configureButton(undoButton, "Undo (Command/Ctrl+Z)");
@@ -436,6 +440,10 @@ MainComponent::MainComponent(bool startAudioOnLaunch)
     saveButton.onClick = [this] { beginSaveProject(); };
     dawProjectButton.onClick = [this] { showDawProjectMenu(); };
     exportButton.onClick = [this] { beginExportMix(); };
+    masteringButton.onClick = [this]
+    {
+        setMasteringWorkspaceVisible(!masteringWorkspaceVisible);
+    };
     settingsButton.onClick = [this] { showSettings(); };
     undoButton.onClick = [this] { undo(); };
     redoButton.onClick = [this] { redo(); };
@@ -471,6 +479,8 @@ MainComponent::MainComponent(bool startAudioOnLaunch)
     mixerPanelToggleButton.setToggleState(
         true,
         juce::dontSendNotification);
+    inspectorPanelToggleButton.setButtonText(">");
+    mixerPanelToggleButton.setButtonText("v");
     muteButton.onClick = [this]
     {
         const auto* track = project.findTrack(selectedTrackId);
@@ -1384,6 +1394,35 @@ MainComponent::MainComponent(bool startAudioOnLaunch)
     midiEditor.setVisible(false);
     addAndMakeVisible(midiEditor);
 
+    masteringWorkspace.setProject(&project);
+    masteringWorkspace.onAlbumEdited = [this](
+                                             const auto& before,
+                                             const auto& after)
+    {
+        return perform(std::make_unique<SetMasteringAlbumCommand>(
+            before,
+            after));
+    };
+    masteringWorkspace.onReportsAdded = [this](auto reports)
+    {
+        perform(std::make_unique<AddRenderReportsCommand>(
+            std::move(reports)));
+    };
+    masteringWorkspace.onProjectRepaired = [this](auto repaired)
+    {
+        project = std::move(repaired);
+        commandStack.clear();
+        projectChanged();
+    };
+    masteringWorkspace.onStatus = [this](
+                                      const auto& message,
+                                      bool error)
+    {
+        setStatus(message, error);
+    };
+    masteringWorkspace.setVisible(false);
+    addAndMakeVisible(masteringWorkspace);
+
     pluginBrowser = std::make_unique<PluginBrowserComponent>(pluginCatalog);
     pluginBrowser->addKeyListener(this);
     pluginBrowser->onPluginActivated = [this](const auto& entry)
@@ -1798,6 +1837,8 @@ bool MainComponent::connectAudioEngine()
 MainComponent::~MainComponent()
 {
     updateService.removeListener(this);
+    exportWorker.removeAllJobs(true, 30000);
+    exportInProgress = false;
     prepareForShutdown();
     const auto recoveryPending = std::any_of(
         project.tracks.cbegin(),
@@ -1820,12 +1861,17 @@ MainComponent::~MainComponent()
 bool MainComponent::prepareForShutdown()
 {
     if (exportInProgress)
+    {
+        shutdownRequestedDuringExport = true;
+        setStatus("Finishing the current export before quitting.");
         return false;
+    }
     if (appShutdownPrepared)
         return true;
     appShutdownPrepared = true;
     stopTimer();
     compatibilityValidator.removeAllJobs(true, 2000);
+    exportWorker.removeAllJobs(true, 30000);
     if (audioEngine.isRecording())
         audioEngine.stopRecording();
     audioEngine.shutdown();
@@ -1906,7 +1952,7 @@ void MainComponent::paint(juce::Graphics& graphics)
         graphics.drawText("INSPECTOR",
                           inspectorLeft + 16,
                           bodyTop + 12,
-                          inspectorPanelWidth - 32,
+                          inspectorPanelWidth - 64,
                           18,
                           juce::Justification::centredLeft);
     }
@@ -1969,6 +2015,10 @@ void MainComponent::resized()
         juce::jmax(1, inspectorViewport.getWidth() - 8),
         juce::jmax(900, inspectorViewport.getHeight()));
     auto editToolbar = bounds.removeFromTop(38).reduced(7, 4);
+    auto inspectorRestoreBounds = juce::Rectangle<int>();
+    if (inspectorPanelWidth == 0)
+        inspectorRestoreBounds =
+            editToolbar.removeFromRight(88);
     auto zoomControls = editToolbar.removeFromRight(132);
     zoomOutButton.setBounds(zoomControls.removeFromLeft(36).reduced(2));
     zoomResetButton.setBounds(zoomControls.removeFromLeft(60).reduced(2));
@@ -1996,6 +2046,8 @@ void MainComponent::resized()
                 area.removeFromLeft(108).reduced(3, verticalInset));
             exportButton.setBounds(
                 area.removeFromLeft(74).reduced(3, verticalInset));
+            masteringButton.setBounds(
+                area.removeFromLeft(96).reduced(3, verticalInset));
             settingsButton.setBounds(
                 area.removeFromLeft(84).reduced(3, verticalInset));
         };
@@ -2033,7 +2085,7 @@ void MainComponent::resized()
         topRow.removeFromTop(4);
         auto secondRow = topRow.removeFromTop(28);
 
-        layoutFileControls(firstRow.removeFromLeft(464), 1);
+        layoutFileControls(firstRow.removeFromLeft(560), 1);
         layoutTempoControls(firstRow.removeFromRight(180), 2);
         metronomeButton.setBounds(
             firstRow.removeFromRight(78).reduced(3, 1));
@@ -2044,7 +2096,7 @@ void MainComponent::resized()
     }
     else
     {
-        layoutFileControls(topRow.removeFromLeft(464), 12);
+        layoutFileControls(topRow.removeFromLeft(560), 12);
         layoutEditControls(topRow.removeFromLeft(128), 12);
         layoutTransportControls(topRow.removeFromLeft(270), 9);
         layoutTempoControls(topRow.removeFromRight(180), 10);
@@ -2053,42 +2105,46 @@ void MainComponent::resized()
         positionLabel.setBounds(topRow.reduced(6, 8));
     }
 
-    if (leftPanelCollapsed)
+    sessionPanelToggleButton.setBounds(
+        leftPanelCollapsed ? left.getX() + 4 : left.getRight() - 40,
+        left.getY() + 7,
+        leftPanelCollapsed ? 56 : 32,
+        26);
+    if (inspectorPanelWidth > 0)
     {
-        sessionPanelToggleButton.setBounds(
-            left.getX() + 4,
-            left.getY() + 7,
-            18,
-            26);
         inspectorPanelToggleButton.setBounds(
-            left.getX() + 23,
-            left.getY() + 7,
-            18,
-            26);
-        mixerPanelToggleButton.setBounds(
-            left.getX() + 42,
-            left.getY() + 7,
-            18,
+            right.getRight() - 40,
+            right.getY() + 7,
+            32,
             26);
     }
     else
     {
-        sessionPanelToggleButton.setBounds(
-            left.getRight() - 40,
-            left.getY() + 7,
-            32,
-            26);
-        mixerPanelToggleButton.setBounds(
-            left.getRight() - 92,
-            left.getY() + 7,
-            44,
-            26);
         inspectorPanelToggleButton.setBounds(
-            left.getRight() - 174,
-            left.getY() + 7,
-            74,
-            26);
+            inspectorRestoreBounds.reduced(4, 0));
     }
+    if (!showMidiEditor)
+    {
+        if (mixerPanelHeight > 0)
+        {
+            mixerPanelToggleButton.setBounds(
+                lowerPanelBounds.getRight() - 40,
+                lowerPanelBounds.getY() + 5,
+                32,
+                24);
+        }
+        else
+        {
+            mixerPanelToggleButton.setBounds(
+                getWidth()
+                    - inspectorPanelWidth
+                    - 72,
+                status.getY() - 30,
+                64,
+                24);
+        }
+    }
+    mixerPanelToggleButton.setVisible(!showMidiEditor);
     auto sessionPanel = left.reduced(leftPanelCollapsed ? 8 : 14, 42);
     addTrackButton.setBounds(sessionPanel.removeFromTop(34));
     sessionPanel.removeFromTop(8);
@@ -2142,6 +2198,16 @@ void MainComponent::resized()
 
     updateTimelineSize();
     timeline.setViewportPosition(timelineViewport.getViewPositionX());
+    sessionPanelToggleButton.toFront(false);
+    inspectorPanelToggleButton.toFront(false);
+    mixerPanelToggleButton.toFront(false);
+    masteringWorkspace.setBounds(
+        getLocalBounds()
+            .withTrimmedTop(76)
+            .withTrimmedBottom(28));
+    masteringWorkspace.setVisible(masteringWorkspaceVisible);
+    if (masteringWorkspaceVisible)
+        masteringWorkspace.toFront(false);
     exportInputBlocker.setBounds(getLocalBounds());
     if (exportInputBlocker.isVisible())
         exportInputBlocker.toFront(false);
@@ -2762,6 +2828,7 @@ void MainComponent::importDawProjectTo(
     const juce::File& destinationPackage)
 {
     exportInProgress = true;
+    shutdownRequestedDuringExport = false;
     stopTimer();
     exportInputBlocker.setVisible(true);
     exportInputBlocker.toFront(false);
@@ -3304,6 +3371,7 @@ void MainComponent::saveProjectTo(const juce::File& package)
         return;
     }
     exportInProgress = true;
+    shutdownRequestedDuringExport = false;
     stopTimer();
     exportInputBlocker.setVisible(true);
     exportInputBlocker.toFront(false);
@@ -3675,6 +3743,7 @@ void MainComponent::importAudioFile(const juce::File& source)
     AudioClip clip;
     clip.name = source.getFileNameWithoutExtension();
     clip.sourceFile = source;
+    clip.sourceHash = juce::SHA256(source).toHexString();
     clip.startSeconds = audioEngine.positionSeconds();
     clip.durationSeconds = *duration;
     clip.sourceLengthSeconds = *duration;
@@ -3694,6 +3763,7 @@ void MainComponent::exportMixTo(const juce::File& destination)
         return;
     }
     exportInProgress = true;
+    shutdownRequestedDuringExport = false;
     stopTimer();
     exportInputBlocker.setVisible(true);
     exportInputBlocker.toFront(false);
@@ -3721,16 +3791,27 @@ void MainComponent::exportMixTo(const juce::File& destination)
         }
 
     auto renderRequests = pluginRuntimeRequests(exportProject);
+    const auto resumePlayback = audioEngine.isPlaying();
+    const auto resumePosition = audioEngine.positionSeconds();
+    if (resumePlayback)
+        audioEngine.pause();
+    const auto restoreLiveTransport =
+        [this, resumePlayback, resumePosition]
+        {
+            if (!resumePlayback)
+                return;
+            audioEngine.seekSeconds(resumePosition);
+            audioEngine.play();
+        };
     for (const auto& capture : audioEngine.capturePluginStates(2000))
     {
         if (capture.insertId.isEmpty())
         {
-            exportInputBlocker.setVisible(false);
-            startTimerHz(30);
-            exportInProgress = false;
-            showError(
-                "Export failed",
-                capture.result.getErrorMessage());
+            restoreLiveTransport();
+            finishMixExport(
+                destination,
+                juce::Result::fail(
+                    capture.result.getErrorMessage()));
             return;
         }
         const auto request = std::find_if(
@@ -3746,38 +3827,83 @@ void MainComponent::exportMixTo(const juce::File& destination)
         {
             if (capture.preservePreviousState)
                 continue;
-            exportInputBlocker.setVisible(false);
-            startTimerHz(30);
-            exportInProgress = false;
-            showError(
-                "Export failed",
-                capture.name
+            restoreLiveTransport();
+            finishMixExport(
+                destination,
+                juce::Result::fail(
+                    capture.name
                     + ": "
-                    + capture.result.getErrorMessage());
+                    + capture.result.getErrorMessage()));
             return;
         }
         request->state = capture.state;
         request->missing = false;
     }
+    restoreLiveTransport();
 
-    const auto result = audioEngine.renderToWav(
-        exportProject,
-        destination,
-        48000.0,
-        std::move(renderRequests));
-    if (result.failed())
-    {
-        exportInputBlocker.setVisible(false);
-        startTimerHz(30);
-        exportInProgress = false;
-        showError("Export failed", result.getErrorMessage());
-        return;
-    }
+    const auto safe =
+        juce::Component::SafePointer<MainComponent>(this);
+    auto renderEngine =
+        std::make_shared<StudioAudioEngine>();
+    exportWorker.addJob(
+        [safe,
+         renderEngine,
+         projectForExport = std::move(exportProject),
+         destination,
+         requestsForExport = std::move(renderRequests)]() mutable
+        {
+            juce::TemporaryFile stagedExport(destination);
+            auto result = renderEngine->renderToWav(
+                projectForExport,
+                stagedExport.getFile(),
+                48000.0,
+                std::move(requestsForExport));
+            if (result.wasOk()
+                && !stagedExport.overwriteTargetFileWithTemporary())
+            {
+                result = juce::Result::fail(
+                    "Could not publish the completed WAV export.");
+            }
+            juce::MessageManager::callAsync(
+                [safe, renderEngine, destination, result]
+                {
+                    renderEngine->shutdown();
+                    if (safe == nullptr)
+                        return;
+                    safe->finishMixExport(destination, result);
+                });
+        });
+}
 
+void MainComponent::finishMixExport(
+    const juce::File& destination,
+    const juce::Result& result)
+{
     exportInputBlocker.setVisible(false);
     startTimerHz(30);
     exportInProgress = false;
-    setStatus("Exported 48 kHz / 24-bit WAV to " + destination.getFullPathName());
+    const auto quitAfterExport = shutdownRequestedDuringExport;
+    shutdownRequestedDuringExport = false;
+    if (result.failed())
+    {
+        showError("Export failed", result.getErrorMessage());
+    }
+    else
+    {
+        setStatus(
+            "Exported 48 kHz / 24-bit WAV to "
+            + destination.getFullPathName());
+    }
+    if (quitAfterExport)
+    {
+        juce::MessageManager::callAsync(
+            []
+            {
+                if (auto* app =
+                        juce::JUCEApplicationBase::getInstance())
+                    app->systemRequestedQuit();
+            });
+    }
 }
 
 void MainComponent::togglePlayback()
@@ -4137,6 +4263,8 @@ void MainComponent::completeRecording(
                        ? " pass " + juce::String(static_cast<int>(passIndex + 1))
                        : juce::String());
             clip.sourceFile = recording.file;
+            clip.sourceHash =
+                juce::SHA256(recording.file).toHexString();
             clip.startSeconds = std::max(0.0,
                                          pass.timelineStartSeconds
                                              - alignmentSeconds);
@@ -6042,6 +6170,8 @@ void MainComponent::consolidateClip(const juce::String& clipId)
         auto after = *current;
         after.name += " consolidated";
         after.sourceFile = destination;
+        after.sourceHash =
+            juce::SHA256(destination).toHexString();
         after.sourceOffsetSeconds = 0.0;
         after.sourceLengthSeconds = current->durationSeconds;
         after.sourceRangeStartSeconds = 0.0;
@@ -7893,6 +8023,8 @@ void MainComponent::renderToneSnapshots(const juce::String& routeId,
             AudioClip clip;
             clip.name = renderedTrack.name;
             clip.sourceFile = juce::File(success->outputFile);
+            clip.sourceHash =
+                juce::SHA256(clip.sourceFile).toHexString();
             clip.durationSeconds = *duration;
             clip.sourceLengthSeconds = *duration;
             clip.sourceRangeEndSeconds = *duration;
@@ -8069,9 +8201,6 @@ void MainComponent::setLeftPanelCollapsed(bool collapsed)
     leftPanelCollapsed = collapsed;
     leftPanelWidth = collapsed ? 64 : 286;
     sessionPanelToggleButton.setButtonText(collapsed ? ">" : "<");
-    inspectorPanelToggleButton.setButtonText(
-        collapsed ? "I" : "INSPECT");
-    mixerPanelToggleButton.setButtonText(collapsed ? "M" : "MIX");
     addTrackButton.setButtonText(collapsed ? "+" : "+ TRACK");
     addBusButton.setButtonText(collapsed ? "B" : "+ BUS TRACK");
     importButton.setButtonText(collapsed ? "I" : "IMPORT AUDIO");
@@ -8086,6 +8215,8 @@ void MainComponent::setLeftPanelCollapsed(bool collapsed)
 void MainComponent::setInspectorPanelVisible(bool visible)
 {
     inspectorPanelWidth = visible ? 250 : 0;
+    inspectorPanelToggleButton.setButtonText(
+        visible ? ">" : "INSPECT");
     inspectorPanelToggleButton.setToggleState(
         visible,
         juce::dontSendNotification);
@@ -8096,9 +8227,27 @@ void MainComponent::setInspectorPanelVisible(bool visible)
 void MainComponent::setMixerPanelVisible(bool visible)
 {
     mixerPanelHeight = visible ? 220 : 0;
+    mixerPanelToggleButton.setButtonText(
+        visible ? "v" : "MIX");
     mixerPanelToggleButton.setToggleState(
         visible,
         juce::dontSendNotification);
+    resized();
+    repaint();
+}
+
+void MainComponent::setMasteringWorkspaceVisible(bool visible)
+{
+    if (masteringWorkspaceVisible == visible)
+        return;
+    if (visible)
+        stopTransportAndRecording();
+    masteringWorkspaceVisible = visible;
+    masteringButton.setToggleState(
+        visible,
+        juce::dontSendNotification);
+    masteringWorkspace.setProjectPackage(projectPackage);
+    masteringWorkspace.refresh();
     resized();
     repaint();
 }
@@ -8114,6 +8263,8 @@ void MainComponent::projectChanged(bool writeRecovery, bool markDirty)
     mixer->setProject(&project);
     routingPanel->setProject(&project);
     insertPanel->setProject(&project);
+    masteringWorkspace.setProject(&project);
+    masteringWorkspace.setProjectPackage(projectPackage);
     projectLabel.setText(project.name + (dirty ? " *" : ""), juce::dontSendNotification);
     loopButton.setToggleState(project.loopEnabled, juce::dontSendNotification);
     metronomeButton.setToggleState(project.metronomeEnabled, juce::dontSendNotification);
