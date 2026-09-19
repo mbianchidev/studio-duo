@@ -54,6 +54,13 @@ bool validMeterDenominator(int denominator)
         || denominator == 16
         || denominator == 32;
 }
+
+bool validSha256(const juce::String& value)
+{
+    return value.isEmpty()
+        || (value.length() == 64
+            && value.containsOnly("0123456789abcdefABCDEF"));
+}
 }
 
 juce::var WarpMarker::toVar() const
@@ -525,6 +532,7 @@ juce::var AudioClip::toVar() const
     object->setProperty("id", id);
     object->setProperty("name", name);
     object->setProperty("sourceFile", sourceFile.getFullPathName());
+    object->setProperty("sourceHash", sourceHash);
     object->setProperty("startSeconds", startSeconds);
     object->setProperty("sourceOffsetSeconds", sourceOffsetSeconds);
     object->setProperty("sourceLengthSeconds", sourceLengthSeconds);
@@ -563,6 +571,7 @@ std::optional<AudioClip> AudioClip::fromVar(const juce::var& value, juce::String
     clip.id = object->getProperty("id").toString();
     clip.name = object->getProperty("name").toString();
     clip.sourceFile = juce::File(object->getProperty("sourceFile").toString());
+    clip.sourceHash = object->getProperty("sourceHash").toString();
     clip.startSeconds = numberProperty(*object, "startSeconds", 0.0);
     clip.sourceOffsetSeconds = numberProperty(*object, "sourceOffsetSeconds", 0.0);
     clip.durationSeconds = numberProperty(*object, "durationSeconds", 0.0);
@@ -628,6 +637,7 @@ std::optional<AudioClip> AudioClip::fromVar(const juce::var& value, juce::String
     clip.colour = colourProperty(*object, "colour", juce::Colour(0xffdd5b3f));
 
     if (clip.id.isEmpty() || clip.durationSeconds <= 0.0 || clip.startSeconds < 0.0
+        || !validSha256(clip.sourceHash)
         || clip.sourceOffsetSeconds < 0.0
         || clip.sourceRangeStartSeconds < 0.0
         || clip.sourceRangeStartSeconds > clip.sourceOffsetSeconds + 0.0001
@@ -1456,6 +1466,23 @@ juce::var RenderReport::toVar() const
     object->setProperty("error", error);
     object->setProperty("durationSeconds", durationSeconds);
     object->setProperty("createdAt", createdAt);
+    object->setProperty("format", format);
+    object->setProperty("sampleRate", sampleRate);
+    object->setProperty("bitDepth", bitDepth);
+    if (integratedLoudnessLufs.has_value())
+        object->setProperty(
+            "integratedLoudnessLufs",
+            *integratedLoudnessLufs);
+    if (loudnessRangeLu.has_value())
+        object->setProperty("loudnessRangeLu", *loudnessRangeLu);
+    if (std::isfinite(truePeakDbtp))
+        object->setProperty("truePeakDbtp", truePeakDbtp);
+    if (std::isfinite(samplePeakDbfs))
+        object->setProperty("samplePeakDbfs", samplePeakDbfs);
+    object->setProperty("correlation", correlation);
+    object->setProperty("settingsHash", settingsHash);
+    object->setProperty("signingPublicKey", signingPublicKey);
+    object->setProperty("signature", signature);
     return juce::var(object.release());
 }
 
@@ -1482,6 +1509,41 @@ std::optional<RenderReport> RenderReport::fromVar(
         "durationSeconds",
         0.0);
     report.createdAt = object->getProperty("createdAt").toString();
+    report.format = object->getProperty("format").toString();
+    report.sampleRate = numberProperty(*object, "sampleRate", 0.0);
+    report.bitDepth = integerProperty(*object, "bitDepth", 0);
+    const auto integrated =
+        object->getProperty("integratedLoudnessLufs");
+    if (integrated.isDouble()
+        || integrated.isInt()
+        || integrated.isInt64())
+        report.integratedLoudnessLufs =
+            static_cast<double>(integrated);
+    const auto loudnessRange =
+        object->getProperty("loudnessRangeLu");
+    if (loudnessRange.isDouble()
+        || loudnessRange.isInt()
+        || loudnessRange.isInt64())
+        report.loudnessRangeLu =
+            static_cast<double>(loudnessRange);
+    report.truePeakDbtp = numberProperty(
+        *object,
+        "truePeakDbtp",
+        -std::numeric_limits<double>::infinity());
+    report.samplePeakDbfs = numberProperty(
+        *object,
+        "samplePeakDbfs",
+        -std::numeric_limits<double>::infinity());
+    report.correlation = numberProperty(
+        *object,
+        "correlation",
+        1.0);
+    report.settingsHash =
+        object->getProperty("settingsHash").toString();
+    report.signingPublicKey =
+        object->getProperty("signingPublicKey").toString();
+    report.signature =
+        object->getProperty("signature").toString();
     if (report.id.isEmpty()
         || report.scope.isEmpty()
         || report.status.isEmpty())
@@ -2252,6 +2314,7 @@ juce::var Project::toVar() const
     object->setProperty("id", id);
     object->setProperty("name", name);
     object->setProperty("metadata", metadata.toVar());
+    object->setProperty("mastering", mastering.toVar());
     object->setProperty("tempo", tempo);
     object->setProperty("timeSignatureNumerator", timeSignatureNumerator);
     object->setProperty("timeSignatureDenominator", timeSignatureDenominator);
@@ -2369,6 +2432,12 @@ std::optional<Project> Project::fromVar(const juce::var& value, juce::String& er
     if (!metadata.has_value())
         return std::nullopt;
     project.metadata = std::move(*metadata);
+    auto mastering = MasteringAlbum::fromVar(
+        object->getProperty("mastering"),
+        error);
+    if (!mastering.has_value())
+        return std::nullopt;
+    project.mastering = std::move(*mastering);
     project.tempo = numberProperty(*object, "tempo", 120.0);
     project.timeSignatureNumerator = integerProperty(*object, "timeSignatureNumerator", 4);
     project.timeSignatureDenominator = integerProperty(*object, "timeSignatureDenominator", 4);

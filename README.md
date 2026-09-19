@@ -10,11 +10,10 @@ modern metal production faster.
 
 ## Status
 
-The working C++20 and JUCE 9 application includes the Phase 1 vertical slice,
-Phase 2 professional tracking and editing, and the complete Phase 3 mixer and
-plugin platform. Phase 4 MIDI recording/editing and the bundled drum, guitar
-amp, bass amp, and DAWproject 1.0 interchange work are complete. Mastering and
-release workflows remain before the complete 1.0 DAW described in the
+The working C++20 and JUCE 9 application includes Phases 1 through 5: tracking,
+editing, mixing, plugin hosting, MIDI composition, bundled instruments and
+amps, DAWproject 1.0 interchange, and mastering/release delivery. Version 1.0
+hardening remains before the complete DAW described in the
 [accepted design](docs/design.md).
 
 ## Highlights
@@ -42,6 +41,12 @@ release workflows remain before the complete 1.0 DAW described in the
 - Transactional DAWproject 1.0 import/export with official embedded schema
   validation, deterministic ZIP output, media and plug-in state transfer,
   preserved scenes, and object-specific compatibility reports
+- Dedicated multi-song mastering with alternate source mixes, gaps, overlaps,
+  fades, metadata, BS.1770/R128 loudness analysis, true peak, WAV/FLAC/Ogg
+  export, deterministic TPDF dither, signed reports, and external licensed DDP
+  encoder integration
+- Content-addressed portable copies with package-relative media paths,
+  SHA-256 transfer validation, and hash-based missing-resource repair
 - Sample-accurate mixer and plugin automation with read, touch, latch, write,
   trim, and preview modes
 - Sandboxed VST3, Audio Unit, and CLAP processing plus explicit ARA 2
@@ -65,7 +70,7 @@ ctest --test-dir build --build-config Release --output-on-failure
 On macOS with the default generator:
 
 ```sh
-open "build/StudioDuo_artefacts/Studio Duo.app"
+open "build/StudioDuo_artefacts/Release/Studio Duo.app"
 ```
 
 ## Install
@@ -88,6 +93,7 @@ or MIDI. See [startup troubleshooting and logs](docs/user-guide.md#logs-and-diag
 - [Product, roadmap, and technical design](docs/design.md)
 - [Development and architecture](docs/development.md)
 - [Bundled devices](docs/devices.md)
+- [Mastering and release](docs/mastering.md)
 - [DAWproject interchange](docs/dawproject.md)
 - [Contributing](docs/contributing.md)
 - [Releasing](docs/releasing.md)
@@ -98,5 +104,6 @@ Studio Duo is licensed under the
 [GNU Affero General Public License v3.0 only](LICENSE). JUCE 9 uses its AGPLv3
 option. On Windows, Studio Duo uses JUCE's dual-licensed Steinberg ASIO SDK
 headers under their GPLv3 option. Signalsmith Stretch 1.1.0, CLAP 1.2.10, and
-clap-helpers are MIT licensed. ARA SDK 2.3.0 is Apache-2.0 licensed.
+clap-helpers are MIT licensed. libsamplerate 0.2.2 is BSD-2-Clause licensed.
+ARA SDK 2.3.0 is Apache-2.0 licensed.
 The vendored DAWproject 1.0 schemas and upstream XML example are MIT licensed.

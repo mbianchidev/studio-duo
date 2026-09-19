@@ -6,6 +6,7 @@ namespace
 {
 constexpr auto manifestName = "manifest.json";
 constexpr auto reducedIsolationMarkerName = "in-process-active.json";
+constexpr auto projectDirectoryToken = "${PROJECT_DIR}/";
 
 struct ManifestState
 {
@@ -21,6 +22,112 @@ struct RecoveryPoint
     bool hasBaseGeneration = false;
     juce::String writtenAt;
 };
+
+bool transformPackagePaths(
+    juce::var& value,
+    const juce::File& packageDirectory,
+    bool encode,
+    bool pathBearing,
+    juce::String& error)
+{
+    if (value.isArray())
+    {
+        for (auto& child : *value.getArray())
+            if (!transformPackagePaths(
+                    child,
+                    packageDirectory,
+                    encode,
+                    pathBearing,
+                    error))
+                return false;
+        return true;
+    }
+
+    if (auto* object = value.getDynamicObject())
+    {
+        auto& properties = object->getProperties();
+        for (int index = 0; index < properties.size(); ++index)
+        {
+            const auto name = properties.getName(index);
+            auto child = properties.getValueAt(index).clone();
+            const auto childIsPath =
+                name == juce::Identifier("sourceFile")
+                || name == juce::Identifier("file")
+                || name == juce::Identifier("renderFile");
+            if (!transformPackagePaths(
+                    child,
+                    packageDirectory,
+                    encode,
+                    childIsPath,
+                    error))
+                return false;
+            properties.set(name, child);
+        }
+        return true;
+    }
+    if (!value.isString() || !pathBearing)
+        return true;
+
+    const auto text = value.toString();
+    if (encode)
+    {
+        if (!juce::File::isAbsolutePath(text))
+            return true;
+        const juce::File file(text);
+        if (!file.isAChildOf(packageDirectory))
+            return true;
+        value = juce::String(projectDirectoryToken)
+            + file.getRelativePathFrom(packageDirectory)
+                  .replaceCharacter('\\', '/');
+        return true;
+    }
+    if (!text.startsWith(projectDirectoryToken))
+        return true;
+    const auto relative =
+        text.substring(juce::String(projectDirectoryToken).length());
+    if (relative.isEmpty()
+        || relative.contains("..")
+        || juce::File::isAbsolutePath(relative))
+    {
+        error = "The project contains an unsafe package-relative path.";
+        return false;
+    }
+    const auto resolved = packageDirectory.getChildFile(relative);
+    if (!resolved.isAChildOf(packageDirectory))
+    {
+        error = "The project package-relative path escapes the package.";
+        return false;
+    }
+    value = resolved.getFullPathName();
+    return true;
+}
+
+bool resolvePackageRelativeToneRenders(
+    Project& project,
+    const juce::File& packageDirectory,
+    juce::String& error)
+{
+    for (auto& snapshot : project.toneSnapshots)
+    {
+        if (snapshot.renderFile.isEmpty()
+            || juce::File::isAbsolutePath(snapshot.renderFile))
+            continue;
+        if (snapshot.renderFile.contains(".."))
+        {
+            error = "A tone snapshot contains an unsafe render path.";
+            return false;
+        }
+        const auto resolved =
+            packageDirectory.getChildFile(snapshot.renderFile);
+        if (!resolved.isAChildOf(packageDirectory))
+        {
+            error = "A tone snapshot render path escapes the project package.";
+            return false;
+        }
+        snapshot.renderFile = resolved.getFullPathName();
+    }
+    return true;
+}
 
 int nextGeneration(const juce::File& manifest)
 {
@@ -81,13 +188,31 @@ std::optional<RecoveryPoint> readRecoveryPoint(
         return std::nullopt;
     }
 
+    auto projectValue = object->getProperty("project").clone();
     juce::String projectError;
-    auto project = Project::fromVar(object->getProperty("project"),
-                                    projectError);
+    if (!transformPackagePaths(
+            projectValue,
+            packageDirectory,
+            false,
+            false,
+            projectError))
+    {
+        error = projectError;
+        return std::nullopt;
+    }
+    auto project = Project::fromVar(projectValue, projectError);
     if (!project.has_value())
     {
         error = "The recovery point contains an invalid project: "
             + projectError;
+        return std::nullopt;
+    }
+    if (!resolvePackageRelativeToneRenders(
+            *project,
+            packageDirectory,
+            projectError))
+    {
+        error = projectError;
         return std::nullopt;
     }
 
@@ -157,6 +282,13 @@ juce::Result ProjectFile::save(const Project& project, const juce::File& request
     auto sessionValue = project.toVar();
     if (auto* session = sessionValue.getDynamicObject())
         session->removeProperty("automationLanes");
+    if (!transformPackagePaths(
+            sessionValue,
+            packageDirectory,
+            true,
+            false,
+            validationError))
+        return juce::Result::fail(validationError);
     if (const auto result = writeJsonAtomically(sessionFile, sessionValue);
         result.failed())
         return result;
@@ -193,12 +325,13 @@ juce::Result ProjectFile::save(const Project& project, const juce::File& request
             "bundledDevicesV1",
             "bundledCompositionDevicesV1",
             "toneSnapshotsV1",
-            "renderReportsV1",
+            "renderReportsV2",
             "midiCompositionV1",
             "midiChannelPressureV1",
             "scenesV1",
             "compatibilityReportsV1",
-            "dawprojectV1"
+            "dawprojectV1",
+            "masteringAlbumV1"
         }));
     manifest->setProperty("savedAt", juce::Time::getCurrentTime().toISO8601(true));
 
@@ -303,7 +436,22 @@ std::optional<Project> ProjectFile::load(const juce::File& requestedPackageDirec
                              automation->getProperty("lanes"));
     }
 
-    return Project::fromVar(sessionValue, error);
+    if (!transformPackagePaths(
+            sessionValue,
+            packageDirectory,
+            false,
+            false,
+            error))
+        return std::nullopt;
+    auto project = Project::fromVar(sessionValue, error);
+    if (!project.has_value())
+        return std::nullopt;
+    if (!resolvePackageRelativeToneRenders(
+            *project,
+            packageDirectory,
+            error))
+        return std::nullopt;
+    return project;
 }
 
 std::optional<ProjectOpenResult> ProjectFile::loadForOpen(
@@ -452,7 +600,16 @@ juce::Result ProjectFile::writeRecoveryPoint(const Project& project, const juce:
     recovery->setProperty("schemaVersion", 1);
     recovery->setProperty("baseGeneration", baseGeneration);
     recovery->setProperty("writtenAt", juce::Time::getCurrentTime().toISO8601(true));
-    recovery->setProperty("project", project.toVar());
+    auto projectValue = project.toVar();
+    juce::String pathError;
+    if (!transformPackagePaths(
+            projectValue,
+            packageDirectory,
+            true,
+            false,
+            pathError))
+        return juce::Result::fail(pathError);
+    recovery->setProperty("project", projectValue);
     return writeJsonAtomically(recoveryDirectory.getChildFile("latest.json"), juce::var(recovery.release()));
 }
 

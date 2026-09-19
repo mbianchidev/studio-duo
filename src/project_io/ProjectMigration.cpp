@@ -196,6 +196,8 @@ std::optional<juce::var> ProjectMigration::migrateToCurrent(
     addEmptyArray(*object, "compatibilityReports");
     if (object->getProperty("metadata").isVoid())
         object->setProperty("metadata", ProjectMetadata {}.toVar());
+    if (object->getProperty("mastering").isVoid())
+        object->setProperty("mastering", MasteringAlbum {}.toVar());
     object->setProperty("formatVersion", Project::currentFormatVersion);
     return migrated;
 }

@@ -2,9 +2,8 @@
 
 Studio Duo is under active development. The current application includes the
 Phase 1 vertical slice, Phase 2 professional tracking and editing workflows, and
-the complete Phase 3 mixer and plugin platform. Phase 4 MIDI recording, piano
-roll, metal drum editing, bundled drum/guitar/bass devices, and DAWproject 1.0
-exchange are implemented. Mastering remains later roadmap work.
+the complete Phase 3 mixer and plugin platform, Phase 4 MIDI composition and
+DAWproject exchange, and Phase 5 mastering and release workflows.
 
 ## Current capabilities
 
@@ -50,6 +49,13 @@ exchange are implemented. Mastering remains later roadmap work.
 - Versioned `.studioduo` packages, generation saves, and recovery points
 - DAWproject 1.0 import/export with embedded media and plug-in state,
   official schema validation, scene preservation, and compatibility reports
+- Dedicated album mastering with alternate mixes, sequencing, gaps, overlaps,
+  fades, ISRC/release metadata, BS.1770/R128 loudness analysis, true peak,
+  correlation, WAV/FLAC/Ogg exports, deterministic dither, and signed reports
+- External licensed DDP encoder integration with sector/MCN validation,
+  fileset checks, SHA-256 delivery manifests, and signed reports
+- Content-addressed portable copies, relocatable package paths, transfer
+  validation, and hash-based missing-media repair
 - Deterministic 48 kHz, 24-bit stereo WAV export when active plugins are absent
 - In-app update checks, verified background downloads, and user-controlled
   restart installation on macOS and Windows
@@ -250,9 +256,11 @@ tracks. Click an insert to open its editor or use its **ON/OFF** control to
 bypass and restore it while audio is playing. Click a send or sidechain to open
 its routing editor.
 
-Use the sidebar arrow to collapse Session controls to an icon rail. **INSPECT**
-and **MIX** show or hide the fixed-size inspector and mixer. Their dividers also
-collapse when dragged closed and restore when dragged open or double-clicked.
+Use the single sidebar arrow to collapse Session controls to an icon rail. The
+inspector and mixer each keep their own collapse button on the panel edge; when
+hidden, **INSPECT** reappears at the right edge and **MIX** reappears above the
+bottom status bar. Their dividers also collapse when dragged closed and restore
+when dragged open or double-clicked.
 The processor search moves above its action buttons on narrow layouts.
 
 Double-click a track name in the inspector, timeline, or mixer to edit its name.
@@ -486,18 +494,49 @@ headers remain pinned.
 Right-click the timeline to place the playhead and open the context menu.
 Pressing Play at the project end rewinds before starting.
 
+## Mastering and release
+
+Open **MASTERING** from the main header. Add finished mixes with **+ SONG**,
+attach alternate mixes to the selected song, choose the active source, reorder
+the sequence, and edit gaps, overlaps, fades, gain, ISRC, album, artist,
+songwriter, label, catalog, MCN/EAN, release date, and genre fields.
+
+Reference files are stored separately and are excluded from album gain and
+release rendering. **ANALYZE ALBUM** reports integrated LUFS, loudness range,
+true peak, sample peak, and stereo correlation. Distribution presets only
+report targets and warnings; they never normalize the album automatically.
+
+**EXPORT MASTER** creates WAV, FLAC, compressed Ogg references, or a
+44.1 kHz / 16-bit CD WAV with deterministic TPDF dither. The completed file is
+decoded and measured again. An adjacent signed JSON report records source,
+settings, and output hashes plus final measurements and warnings.
+
+**EXPORT DDP** asks for a separately installed licensed encoder adapter and an
+empty destination. Studio Duo generates sector-aligned CUE/audio input,
+validates MCN/EAN and index positions, checks the returned DDP fileset, writes
+SHA-256 transfer checksums, and signs the delivery report. A licensed
+independent validator or replication plant must still accept the result.
+
+**PORTABLE COPY** gathers clips, mastering sources, references, and plugin
+state into a relocatable package with content hashes. **REPAIR FILES** scans a
+selected folder and restores missing resources by SHA-256, falling back to an
+exact filename only for legacy resources without a saved hash. See
+[mastering.md](mastering.md).
+
 ## Projects and export
 
 Studio Duo projects are versioned `.studioduo` directory packages. A save writes
 a new session generation before atomically replacing `manifest.json`; the latest
 complete state is also copied to `recovery/latest.json`.
 
-Project format version 8 stores the typed routing graph, separate automation
+Project format version 9 stores the typed routing graph, separate automation
 generations, content-addressed plugin state, compatibility policy, tone and
 mixer snapshots, render reports, ordinary MIDI clips and expressions, drum
 maps, pattern aliases, humanization state, MIDI routing templates, project
 metadata, scenes, persisted interchange reports, and channel-scoped MIDI
-pressure automation. Versions 1-7 migrate on load.
+pressure automation. It also stores the mastering album, source hashes,
+references, sequencing, release metadata, and final measurements. Versions
+1-8 migrate on load.
 See [project-format.md](project-format.md).
 
 Stereo WAV export is 48 kHz and 24-bit. Projects without processors use the

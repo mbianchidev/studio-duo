@@ -1875,6 +1875,34 @@ void SetProjectTransportCommand::apply(Project& project,
     project.loopEndSeconds = state.loopEndSeconds;
 }
 
+SetMasteringAlbumCommand::SetMasteringAlbumCommand(
+    MasteringAlbum before,
+    MasteringAlbum after)
+    : oldState(std::move(before)),
+      newState(std::move(after))
+{
+}
+
+juce::String SetMasteringAlbumCommand::name() const
+{
+    return "Edit mastering album";
+}
+
+bool SetMasteringAlbumCommand::perform(
+    Project& project,
+    juce::String& error)
+{
+    if (!MasteringAlbum::fromVar(newState.toVar(), error).has_value())
+        return false;
+    project.mastering = newState;
+    return true;
+}
+
+void SetMasteringAlbumCommand::undo(Project& project)
+{
+    project.mastering = oldState;
+}
+
 TrackMixState TrackMixState::fromTrack(const Track& track)
 {
     return {

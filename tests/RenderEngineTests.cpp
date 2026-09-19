@@ -5,6 +5,8 @@
 #include "render/RenderEngine.h"
 #include "reamp/ReampSnapshotService.h"
 
+#include <thread>
+
 void renderEngineTests()
 {
     juce::AudioBuffer<float> reference(2, 128);
@@ -254,5 +256,65 @@ void renderEngineTests()
                && editedTone.getSample(0, 0)
                       < linkedTone.getSample(0, 0) * 0.6f,
            "Plugin tone paths follow the current DI playlist instead of stale clip copies.");
+
+    auto backgroundProject = studio::Project::createDefault();
+    backgroundProject.metronomeEnabled = false;
+    backgroundProject.tracks[0].clips.push_back(parityClip);
+    const auto backgroundOutput =
+        juce::File::getSpecialLocation(juce::File::tempDirectory)
+            .getNonexistentChildFile(
+                "StudioDuoBackgroundExport",
+                ".wav",
+                false);
+    auto backgroundExported = false;
+    juce::String backgroundError;
+    studio::StudioAudioEngine backgroundEngine;
+    std::thread exportThread(
+        [&]
+        {
+            const auto result = backgroundEngine.renderToWav(
+                backgroundProject,
+                backgroundOutput,
+                48000.0);
+            backgroundExported = result.wasOk();
+            backgroundError = result.getErrorMessage();
+        });
+    exportThread.join();
+    expect(backgroundExported
+               && backgroundOutput.existsAsFile()
+               && backgroundOutput.getSize() > 44,
+           ("Stereo mix export can render on a worker thread without blocking the UI: "
+            + backgroundError)
+               .toRawUTF8());
+    backgroundOutput.deleteFile();
+
+    const auto backgroundPluginOutput =
+        juce::File::getSpecialLocation(juce::File::tempDirectory)
+            .getNonexistentChildFile(
+                "StudioDuoBackgroundPluginExport",
+                ".wav",
+                false);
+    backgroundExported = false;
+    backgroundError.clear();
+    std::thread pluginExportThread(
+        [&]
+        {
+            const auto result = backgroundEngine.renderToWav(
+                parityProject,
+                backgroundPluginOutput,
+                48000.0,
+                { parityRequest });
+            backgroundExported = result.wasOk();
+            backgroundError = result.getErrorMessage();
+        });
+    pluginExportThread.join();
+    expect(backgroundExported
+               && backgroundPluginOutput.existsAsFile()
+               && backgroundPluginOutput.getSize() > 44,
+           ("Plugin-inclusive mix export can render on a worker thread without blocking the UI: "
+            + backgroundError)
+               .toRawUTF8());
+    backgroundPluginOutput.deleteFile();
+    backgroundEngine.shutdown();
     paritySource.deleteFile();
 }

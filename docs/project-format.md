@@ -1,6 +1,6 @@
 # Studio Duo native project format
 
-Studio Duo format version 8 is a directory package with immutable generation
+Studio Duo format version 9 is a directory package with immutable generation
 files and content-addressed processor state.
 
 ```text
@@ -11,6 +11,7 @@ Project.studioduo/
   plugin-state/<sha256>.bin
   media/
   analysis/
+  portable-manifest.json
   recovery/latest.json
   recovery/in-process-active.json
   renders/tones/*.wav
@@ -39,9 +40,10 @@ The prior manifest and generation remain valid until step 5 succeeds.
 - generation number and save time
 - `requiredCapabilities`
 
-Version 8 manifests include `midiCompositionV1`,
+Version 9 manifests include `midiCompositionV1`,
 `midiChannelPressureV1`, `bundledCompositionDevicesV1`, `scenesV1`,
-`compatibilityReportsV1`, and `dawprojectV1`. Readers must reject a manifest
+`compatibilityReportsV1`, `renderReportsV2`, `dawprojectV1`, and
+`masteringAlbumV1`. Readers must reject a manifest
 version newer than they support rather than silently dropping MIDI, bundled
 output/cabinet state, scenes, or interchange diagnostics.
 
@@ -53,7 +55,7 @@ The session document stores transport, tempo and meter maps, tracks, audio and
 MIDI clips, take/comp state, edit groups, reamp routes, the typed routing graph,
 processor records, tone snapshots, mixer snapshots, render reports, drum maps,
 pattern aliases, MIDI routing templates, general project metadata, launch
-scenes, and structured compatibility reports. Automation lanes are stored
+scenes, structured compatibility reports, and the mastering album. Automation lanes are stored
 separately.
 
 External and bundled processor records retain a stable insert ID, format,
@@ -162,6 +164,27 @@ songwriter, producer, arranger, year, genre, copyright, website, and comment.
 The project `name` remains the title. These fields are native Studio Duo data
 and map to DAWproject metadata only at the interchange boundary.
 
+### Mastering album and media hashes
+
+The `mastering` object stores album/release metadata, output gain, ordered
+songs, alternate source mixes, the selected mix per song, gaps, overlaps,
+fades, gain, ISRC, relative index markers, and references. References remain
+outside album rendering and output gain.
+
+Audio clips and mastering resources can retain a SHA-256 `sourceHash`. Portable
+copy writes content-addressed files below `media/`, serializes package-local
+paths as `${PROJECT_DIR}/...`, and records relative path, size, hash, and object
+path in `portable-manifest.json`. Package loading resolves the token only to a
+safe child path. Transfer validation and repair reports remain explicit.
+
+### Render reports
+
+Mastering reports extend the original render-report fields with format, sample
+rate, bit depth, settings hash, integrated loudness, loudness range, true peak,
+sample peak, correlation, a public signing key, and an RSA signature. Reports
+are measured from the completed encoded file. The local signature detects
+changes; it is not a publisher or code-signing identity.
+
 ### Scenes
 
 The `scenes` array exists before the live session view. Each scene has a stable
@@ -212,7 +235,9 @@ disabled until explicit reload. Clean shutdown removes the marker.
   collections.
 - Version 7 gains version 8 `midiChannel: -1` defaults on existing automation
   targets; channel-pressure targets require `1..16`.
+- Version 8 gains version 9 empty mastering album data. Existing media hashes
+  remain optional and are populated during import, collection, or repair.
 - The manifest and referenced session format versions must agree.
 
-[`schema/project-v8.schema.json`](schema/project-v8.schema.json) documents the
+[`schema/project-v9.schema.json`](schema/project-v9.schema.json) documents the
 current public session envelope; older schema files remain historical.

@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://studioduo.dev/schema/render-report-v2.schema.json",
+  "title": "Studio Duo render report v2",
+  "type": "object",
+  "required": [
+    "id",
+    "scope",
+    "mode",
+    "status",
+    "createdAt"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "scope": {
+      "type": "string",
+      "minLength": 1
+    },
+    "mode": {
+      "enum": [
+        "offline",
+        "real-time"
+      ]
+    },
+    "status": {
+      "enum": [
+        "success",
+        "failed",
+        "cancelled"
+      ]
+    },
+    "outputFile": {
+      "type": "string"
+    },
+    "sourceHash": {
+      "type": "string"
+    },
+    "chainHash": {
+      "type": "string"
+    },
+    "outputHash": {
+      "type": "string"
+    },
+    "settingsHash": {
+      "type": "string"
+    },
+    "format": {
+      "type": "string"
+    },
+    "sampleRate": {
+      "type": "number",
+      "minimum": 0
+    },
+    "bitDepth": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "integratedLoudnessLufs": {
+      "type": "number"
+    },
+    "loudnessRangeLu": {
+      "type": "number",
+      "minimum": 0
+    },
+    "truePeakDbtp": {
+      "type": "number"
+    },
+    "samplePeakDbfs": {
+      "type": "number"
+    },
+    "correlation": {
+      "type": "number",
+      "minimum": -1,
+      "maximum": 1
+    },
+    "signingPublicKey": {
+      "type": "string"
+    },
+    "signature": {
+      "type": "string"
+    },
+    "warning": {
+      "type": "string"
+    },
+    "error": {
+      "type": "string"
+    },
+    "durationSeconds": {
+      "type": "number",
+      "minimum": 0
+    },
+    "createdAt": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

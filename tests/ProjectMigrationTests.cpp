@@ -45,6 +45,8 @@ void projectMigrationTests()
     auto hasSceneCapability = false;
     auto hasCompatibilityReportCapability = false;
     auto hasMidiChannelPressureCapability = false;
+    auto hasMasteringCapability = false;
+    auto hasRenderReportV2Capability = false;
     if (manifestObject != nullptr)
     {
         const auto required =
@@ -71,6 +73,14 @@ void projectMigrationTests()
                     hasMidiChannelPressureCapability
                     || capability.toString()
                         == "midiChannelPressureV1";
+                hasMasteringCapability =
+                    hasMasteringCapability
+                    || capability.toString()
+                        == "masteringAlbumV1";
+                hasRenderReportV2Capability =
+                    hasRenderReportV2Capability
+                    || capability.toString()
+                        == "renderReportsV2";
             }
         }
     }
@@ -83,8 +93,10 @@ void projectMigrationTests()
                && hasDawProjectCapability
                && hasSceneCapability
                && hasCompatibilityReportCapability
-               && hasMidiChannelPressureCapability,
-           "Version 8 manifest declares MIDI, channel-pressure, bundled-device, scene, report, DAWproject, and automation capabilities.");
+               && hasMidiChannelPressureCapability
+               && hasMasteringCapability
+               && hasRenderReportV2Capability,
+           "Version 9 manifest declares mastering, MIDI, channel-pressure, bundled-device, scene, report, DAWproject, and automation capabilities.");
 
     juce::String error;
     const auto loaded = studio::ProjectFile::load(package, error);
@@ -120,7 +132,20 @@ void projectMigrationTests()
                       ->getProperty("formatVersion")
                       == juce::var(
                           studio::Project::currentFormatVersion),
-           "Version 7 automation targets without MIDI channel metadata migrate to version 8.");
+           "Version 7 automation targets without MIDI channel metadata migrate to the current format.");
+
+    auto legacyVersionEight = project.toVar();
+    auto* legacyVersionEightObject =
+        legacyVersionEight.getDynamicObject();
+    legacyVersionEightObject->setProperty("formatVersion", 8);
+    legacyVersionEightObject->removeProperty("mastering");
+    error.clear();
+    const auto loadedLegacyVersionEight =
+        studio::Project::fromVar(legacyVersionEight, error);
+    expect(loadedLegacyVersionEight.has_value()
+               && loadedLegacyVersionEight->mastering.tracks.empty()
+               && loadedLegacyVersionEight->mastering.references.empty(),
+           "Version 8 projects migrate to version 9 with an empty mastering album.");
 
     auto versionSix = project.toVar();
     auto* versionSixObject = versionSix.getDynamicObject();

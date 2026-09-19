@@ -29,3 +29,4 @@ void transportTests();
 void updateTests();
 void midiTests();
 void dawProjectTests();
+void masteringTests();
