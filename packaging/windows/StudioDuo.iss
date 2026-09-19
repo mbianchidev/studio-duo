@@ -53,7 +53,7 @@ Source: "{#VCRedistPath}"; DestName: "vc_redist.x64.exe"; Flags: dontcopy noencr
 Source: "{#AppExecutable}"; DestDir: "{app}"; DestName: "Studio Duo.exe"; Flags: ignoreversion
 Source: "{#SourceDirectory}\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceDirectory}\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#LicenseDirectory}\*.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
+Source: "{#LicenseDirectory}\*"; DestDir: "{app}\licenses"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\Studio Duo"; Filename: "{app}\Studio Duo.exe"; WorkingDir: "{app}"

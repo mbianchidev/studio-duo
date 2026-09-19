@@ -49,6 +49,9 @@ foreach ($requiredFile in @(
     (Join-Path $repositoryRootPath 'LICENSE'),
     (Join-Path $licenseDirectory 'lame-COPYING.txt'),
     (Join-Path $licenseDirectory 'lame-NOTICE.txt'),
+    (Join-Path $licenseDirectory 'lame-config.h'),
+    (Join-Path $licenseDirectory 'lame-3.100-source.tar.gz'),
+    (Join-Path $licenseDirectory 'studio-duo-source.tar.gz'),
     (Join-Path $repositoryRootPath 'assets\branding\StudioDuo.ico')
 )) {
     if (-not (Test-Path -LiteralPath $requiredFile -PathType Leaf)) {

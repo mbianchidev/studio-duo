@@ -37,13 +37,16 @@ try {
         -Description 'Installing Studio Duo into the smoke-test directory' `
         -TimeoutSeconds 180
 
-    foreach ($licenseName in @('lame-COPYING.txt', 'lame-NOTICE.txt')) {
+    foreach ($licenseName in @(
+        'lame-COPYING.txt', 'lame-NOTICE.txt', 'lame-config.h',
+        'lame-3.100-source.tar.gz', 'studio-duo-source.tar.gz'
+    )) {
         $licensePath = Join-Path $installDirectory "licenses\$licenseName"
         if (-not (Test-Path -LiteralPath $licensePath -PathType Leaf)) {
-            throw "The installed MP3 encoder license is missing: $licensePath"
+            throw "Installed MP3 source/license material is missing: $licensePath"
         }
         if ((Get-Item -LiteralPath $licensePath).Length -eq 0) {
-            throw "The installed MP3 encoder license is empty: $licensePath"
+            throw "Installed MP3 source/license material is empty: $licensePath"
         }
     }
 

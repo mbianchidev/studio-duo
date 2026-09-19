@@ -299,19 +299,55 @@ configure_file(
     "${STUDIO_DUO_LAME_CONFIG_DIR}/lame-COPYING.txt"
     COPYONLY
 )
+configure_file(
+    "${STUDIO_DUO_LAME_CONFIG_DIR}/config.h"
+    "${STUDIO_DUO_LAME_CONFIG_DIR}/lame-config.h"
+    COPYONLY
+)
+get_filename_component(STUDIO_DUO_LAME_SOURCE_PARENT "${studio_duo_lame_SOURCE_DIR}" DIRECTORY)
+get_filename_component(STUDIO_DUO_LAME_SOURCE_NAME "${studio_duo_lame_SOURCE_DIR}" NAME)
+set(STUDIO_DUO_SOURCE_ARCHIVES
+    "${STUDIO_DUO_LAME_CONFIG_DIR}/lame-3.100-source.tar.gz"
+    "${STUDIO_DUO_LAME_CONFIG_DIR}/studio-duo-source.tar.gz"
+)
+add_custom_target(
+    StudioDuoSourceMaterials
+    COMMAND "${CMAKE_COMMAND}" -E chdir "${STUDIO_DUO_LAME_SOURCE_PARENT}"
+        "${CMAKE_COMMAND}" -E tar czf
+        "${STUDIO_DUO_LAME_CONFIG_DIR}/lame-3.100-source.tar.gz"
+        "${STUDIO_DUO_LAME_SOURCE_NAME}"
+    COMMAND "${CMAKE_COMMAND}" -E chdir "${CMAKE_CURRENT_SOURCE_DIR}"
+        "${CMAKE_COMMAND}" -E tar czf
+        "${STUDIO_DUO_LAME_CONFIG_DIR}/studio-duo-source.tar.gz"
+        CMakeLists.txt VERSION LICENSE README.md
+        src assets third_party docs packaging scripts tests
+    BYPRODUCTS ${STUDIO_DUO_SOURCE_ARCHIVES}
+    COMMENT "Packaging MP3 library and application source for rebuilding and relinking"
+    VERBATIM
+)
+add_dependencies(StudioDuo StudioDuoSourceMaterials)
+set_source_files_properties(${STUDIO_DUO_SOURCE_ARCHIVES} PROPERTIES GENERATED TRUE)
 file(CONFIGURE OUTPUT "${STUDIO_DUO_LAME_CONFIG_DIR}/lame-NOTICE.txt" CONTENT [=[
 Studio Duo includes the LAME 3.100 MP3 encoder, licensed under LGPL-2.0-or-later.
 Project: https://lame.sourceforge.io/
 Unmodified upstream source: https://downloads.sourceforge.net/project/lame/lame/3.100/lame-3.100.tar.gz
 SHA-256: ddfe36cab873794038ae2c1210557ad34857a4b6bdc515785d1da9e175b1da1e
 The bundled decoder (mpglib), executables, and assembly routines are not built.
-The native build definition and Studio Duo source needed to rebuild/relink are
-available at https://github.com/mbianchidev/studio-duo in CMakeLists.txt.
+The accompanying lame-3.100-source.tar.gz contains the complete library source,
+and lame-config.h records the scalar encoder build configuration.
+The accompanying studio-duo-source.tar.gz contains the application source,
+build scripts, assets, tests, and documentation needed to rebuild and relink.
+Extract the application archive into an empty directory and follow README.md
+or docs/development.md. Set FETCHCONTENT_SOURCE_DIR_STUDIO_DUO_LAME to the
+extracted library directory to rebuild with a modified encoder.
+The application source is also published at https://github.com/mbianchidev/studio-duo.
 See lame-COPYING.txt for the complete library license.
 ]=] @ONLY)
 set(STUDIO_DUO_LAME_LICENSE_FILES
     "${STUDIO_DUO_LAME_CONFIG_DIR}/lame-COPYING.txt"
     "${STUDIO_DUO_LAME_CONFIG_DIR}/lame-NOTICE.txt"
+    "${STUDIO_DUO_LAME_CONFIG_DIR}/lame-config.h"
+    ${STUDIO_DUO_SOURCE_ARCHIVES}
 )
 if(APPLE)
     set_source_files_properties(

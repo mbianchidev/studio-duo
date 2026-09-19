@@ -8,9 +8,14 @@ for CLAP hosting, and the Apache-2.0 ARA SDK 2.3.0 for ARA compatibility mode.
 MP3 export statically links the LGPL-2.0-or-later LAME 3.100 encoder from a
 SHA-256-pinned upstream archive. It builds without the command-line frontend,
 mpglib decoder, or architecture-specific assembly. No runtime encoder
-installation or network access is required. The upstream license and
-source/relinking notice are included in macOS bundle resources and the
-Windows installer's and portable ZIP's `licenses/` directory.
+installation or network access is required. The upstream license, scalar build
+configuration, complete library/application source archives, and relinking
+instructions are included in macOS bundle resources and the Windows installer's
+and portable ZIP's `licenses/` directory. Source archives are rebuilt with the
+application so they include the source used for that build, rather than relying
+solely on an upstream download URL. To rebuild against a modified encoder,
+extract both archives and set `FETCHCONTENT_SOURCE_DIR_STUDIO_DUO_LAME` to the
+extracted LAME directory.
 Phase 4 MIDI/editor workflows and bundled drum/guitar/bass devices are
 implemented. The dedicated DAWproject 1.0 translation, schema-validation, ZIP,
 scene, and compatibility-report layer is also implemented without runtime
