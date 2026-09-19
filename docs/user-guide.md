@@ -256,9 +256,11 @@ tracks. Click an insert to open its editor or use its **ON/OFF** control to
 bypass and restore it while audio is playing. Click a send or sidechain to open
 its routing editor.
 
-Use the sidebar arrow to collapse Session controls to an icon rail. **INSPECT**
-and **MIX** show or hide the fixed-size inspector and mixer. Their dividers also
-collapse when dragged closed and restore when dragged open or double-clicked.
+Use the single sidebar arrow to collapse Session controls to an icon rail. The
+inspector and mixer each keep their own collapse button on the panel edge; when
+hidden, **INSPECT** reappears at the right edge and **MIX** reappears above the
+bottom status bar. Their dividers also collapse when dragged closed and restore
+when dragged open or double-clicked.
 The processor search moves above its action buttons on narrow layouts.
 
 Double-click a track name in the inspector, timeline, or mixer to edit its name.

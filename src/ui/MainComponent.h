@@ -91,6 +91,8 @@ private:
     void beginSaveProject();
     void beginImportAudio();
     void beginExportMix();
+    void finishMixExport(const juce::File& destination,
+                         const juce::Result& result);
     void setMasteringWorkspaceVisible(bool visible);
     void showDawProjectMenu();
     void beginImportDawProject();
@@ -288,6 +290,7 @@ private:
     bool appShutdownPrepared = false;
     bool audioEngineInitialised = false;
     bool exportInProgress = false;
+    bool shutdownRequestedDuringExport = false;
     ExportInputBlocker exportInputBlocker;
     bool statusIsError = false;
     bool recordingFinalizationInProgress = false;
@@ -306,6 +309,7 @@ private:
     juce::String reducedIsolationMarkerSignature;
     std::optional<CompatibilityReport> transientCompatibilityReport;
     juce::ThreadPool compatibilityValidator { 1 };
+    juce::ThreadPool exportWorker { 1 };
 
     juce::TextButton newButton { "NEW" };
     juce::TextButton openButton { "OPEN" };
