@@ -1155,10 +1155,10 @@ bool AddRecordingTakeCommand::perform(Project& project, juce::String& error)
         project.tracks.insert(insertion, track);
     }
 
-    for (const auto& [parentId, ignored] : parentCollapseStates)
+    for (const auto& [parentId, collapsed] : parentCollapseStates)
         if (auto* parent = project.findTrack(parentId))
         {
-            parent->versionsCollapsed = true;
+            parent->versionsCollapsed = collapsed;
             const auto newest = std::max_element(
                 tracks.cbegin(),
                 tracks.cend(),

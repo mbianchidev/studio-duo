@@ -1492,7 +1492,7 @@ void multitrackRecordingTargets()
 void multitrackRecordingCommand()
 {
     auto project = studio::Project::createDefault();
-    project.tracks.front().versionsCollapsed = true;
+    project.tracks.front().versionsCollapsed = false;
     const auto firstParentId = project.tracks.front().id;
 
     studio::Track secondParent;
@@ -1533,9 +1533,9 @@ void multitrackRecordingCommand()
     expect(project.findTrack(firstTakeId) != nullptr
                && project.findTrack(secondTakeId) != nullptr,
            "A multitrack recording adds every captured take.");
-    expect(project.findTrack(firstParentId)->versionsCollapsed
+    expect(!project.findTrack(firstParentId)->versionsCollapsed
                && project.findTrack(secondParentId)->versionsCollapsed,
-           "Recording keeps every captured parent track collapsed.");
+           "Recording preserves each parent track's open or collapsed take-lane state.");
     expect(project.findTrack(firstParentId)->activeTakeTrackId
                    == firstTakeId
                && project.findTrack(secondParentId)->activeTakeTrackId
@@ -1545,7 +1545,7 @@ void multitrackRecordingCommand()
     expect(project.findTrack(firstTakeId) == nullptr
                && project.findTrack(secondTakeId) == nullptr,
            "Undo removes every take from a multitrack recording.");
-    expect(project.findTrack(firstParentId)->versionsCollapsed
+    expect(!project.findTrack(firstParentId)->versionsCollapsed
                && project.findTrack(secondParentId)->versionsCollapsed,
            "Undo restores parent lane collapse states.");
     expect(project.findTrack(firstParentId)->activeTakeTrackId.isEmpty()
@@ -1553,8 +1553,10 @@ void multitrackRecordingCommand()
            "Undo restores parent active take selections.");
     expect(history.redo(project, error), error.toRawUTF8());
     expect(project.findTrack(firstTakeId) != nullptr
-               && project.findTrack(secondTakeId) != nullptr,
-           "Redo restores every take from a multitrack recording.");
+               && project.findTrack(secondTakeId) != nullptr
+               && !project.findTrack(firstParentId)->versionsCollapsed
+               && project.findTrack(secondParentId)->versionsCollapsed,
+           "Redo restores every take without changing parent lane visibility.");
 }
 }
 

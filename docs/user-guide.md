@@ -170,10 +170,11 @@ position.
 Each completed pass creates grouped `v1`, `v2`, `v3`, and later child tracks
 below the recorded parent. The whole multitrack pass is one undoable command.
 Version tracks retain ordinary mute, solo, arm, split, trim, move, and delete
-behavior. New take families stay collapsed by default: the parent row plays the
-active take. Expanding the parent makes every unmuted take lane audible so takes
-can be layered and compared. Parent inserts are inherited by every take and are
-shown as inherited in the take inspector and mixer insert list.
+behavior. Recording preserves whether each parent's take lanes were open or
+collapsed before capture. A collapsed parent plays the active take; an expanded
+parent keeps every unmuted take lane visible and audible for layering and
+comparison. Parent inserts are inherited by every take and are shown as
+inherited in the take inspector and mixer insert list.
 
 Loop recording writes one continuous synchronized WAV per armed parent and
 creates one version lane per loop pass. Right-click a take clip to choose its

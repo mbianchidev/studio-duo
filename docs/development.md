@@ -601,7 +601,7 @@ the inspector provides palette shortcuts and a full HSV/RGB selector with live
 preview before one final undoable color change is recorded. Timeline headers
 and mixer-strip titles open a shared anchored editor that batches simultaneous
 name and color changes into one undoable command. The mixer separates title,
-volume-fader, and pan-knob hit zones: only the title opens that editor, while
+volume-fader, and linear-pan hit zones: only the title opens that editor, while
 fader and pan drags commit ordinary undoable mix-state commands.
 
 Recording creates flat-model child tracks with a stable `parentTrackId` and
@@ -610,6 +610,8 @@ engine mixing, but the timeline places them immediately below the parent and
 can hide them using the parent's persisted collapse state. Parent rows draw a
 subtle aggregate of child clips. Deleting a parent removes and restores the
 whole group atomically through undo.
+Recording, undo, and redo preserve each parent's pre-existing expanded or
+collapsed take-lane state instead of forcing newly recorded families closed.
 
 Version lanes are playlists rather than summed layers. With no explicit choice,
 the newest version plays; users can select another active take or build
