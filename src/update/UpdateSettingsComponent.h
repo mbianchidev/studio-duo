@@ -57,6 +57,8 @@ public:
         UpdateService& updateService,
         StudioPreferences& preferences,
         PluginCatalog& pluginCatalog,
+        std::function<void(const PluginCatalogEntry&)>
+            validatePlugin,
         std::function<void()> restartRequested,
         bool showUpdatesInitially,
         const juce::String& audioUnavailableReason = {});

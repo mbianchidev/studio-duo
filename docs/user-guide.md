@@ -728,6 +728,10 @@ The **VST Plug-ins** Settings tab lists active default and custom VST3 search
 folders. Defaults are scanned at startup unless **Scan plug-in folders at
 startup** is disabled. Add custom folders, remove either custom or default
 locations, restore all platform defaults, or run **Rescan now** manually.
+For deeper verification, choose one scanned external plug-in and run
+**Advanced Validate**. That explicit action launches the isolated compatibility
+validator for only the selected plug-in; ordinary folder scans remain
+filesystem-only.
 
 Every package is downloaded inside the Studio Duo application-data directory
 and must match the release manifest's filename, byte size, and SHA-256 checksum.

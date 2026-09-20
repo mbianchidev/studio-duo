@@ -728,6 +728,10 @@ and microphone initialization.
 The VST settings page can add/remove effective paths, restore defaults, and
 force a scan. `StudioPreferences::scanPluginsAtStartup` controls the delayed
 startup scan and defaults to enabled.
+The same page exposes explicit per-plug-in advanced validation. It reuses the
+existing `--validate-plugin <stable identifier>` child-process path for the
+selected catalog entry only, keeping deep instantiation checks separate from
+safe folder discovery.
 
 On macOS, CMake applies an ad-hoc signature with the stable designated
 requirement `dev.mbianchi.studioduo`. This keeps the TCC microphone grant tied

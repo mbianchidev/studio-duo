@@ -106,14 +106,18 @@ private:
 
 class VstPluginSettingsComponent final
     : public juce::Component,
-      private juce::ListBoxModel
+      private juce::ListBoxModel,
+      private juce::Timer
 {
 public:
     VstPluginSettingsComponent(
         PluginCatalog& catalogToUse,
-        StudioPreferences& preferencesToUse)
+        StudioPreferences& preferencesToUse,
+        std::function<void(const PluginCatalogEntry&)>
+            validationCallback)
         : catalog(catalogToUse),
           preferences(preferencesToUse),
+          validatePlugin(std::move(validationCallback)),
           list("VST3 search folders", this)
     {
         addAndMakeVisible(title);
@@ -154,6 +158,35 @@ public:
                         ? "Startup plug-in scan enabled."
                         : "Startup plug-in scan disabled.",
                     false);
+            }
+        };
+
+        addAndMakeVisible(pluginSelector);
+        pluginSelector.setTooltip(
+            "Choose one scanned plug-in for advanced isolated validation");
+        pluginSelector.onChange = [this]
+        {
+            validateSelected.setEnabled(
+                pluginSelector.getSelectedItemIndex() >= 0);
+        };
+        addAndMakeVisible(validateSelected);
+        validateSelected.setButtonText(
+            "ADVANCED VALIDATE");
+        validateSelected.setTooltip(
+            "Launch an isolated deep compatibility check for the selected plug-in");
+        validateSelected.onClick = [this]
+        {
+            const auto index =
+                pluginSelector.getSelectedItemIndex();
+            if (index >= 0
+                && index
+                    < static_cast<int>(
+                        validationEntries.size())
+                && validatePlugin)
+            {
+                validatePlugin(
+                    validationEntries[
+                        static_cast<std::size_t>(index)]);
             }
         };
 
@@ -201,6 +234,13 @@ public:
             juce::Label::textColourId,
             juce::Colour(StudioColours::secondaryText));
         refresh();
+        refreshPlugins();
+        startTimerHz(2);
+    }
+
+    ~VstPluginSettingsComponent() override
+    {
+        stopTimer();
     }
 
     void paint(juce::Graphics& graphics) override
@@ -215,6 +255,15 @@ public:
         title.setBounds(bounds.removeFromTop(36));
         scanAtStartup.setBounds(
             bounds.removeFromTop(32));
+        auto validationRow = bounds.removeFromTop(34);
+        pluginSelector.setBounds(
+            validationRow.removeFromLeft(
+                juce::jmax(
+                    180,
+                    validationRow.getWidth() - 170))
+                .reduced(2));
+        validateSelected.setBounds(
+            validationRow.reduced(2));
         bounds.removeFromTop(8);
         auto actions = bounds.removeFromBottom(36);
         addFolder.setBounds(
@@ -232,6 +281,12 @@ public:
     }
 
 private:
+    void timerCallback() override
+    {
+        if (lastCatalogRevision != catalog.revision())
+            refreshPlugins();
+    }
+
     int getNumRows() override
     {
         return paths.size();
@@ -321,6 +376,54 @@ private:
         repaint();
     }
 
+    void refreshPlugins()
+    {
+        const auto selectedIdentifier =
+            pluginSelector.getSelectedItemIndex() >= 0
+                && pluginSelector.getSelectedItemIndex()
+                    < static_cast<int>(
+                        validationEntries.size())
+            ? validationEntries[
+                  static_cast<std::size_t>(
+                      pluginSelector
+                          .getSelectedItemIndex())]
+                  .identifier
+            : juce::String();
+        validationEntries.clear();
+        pluginSelector.clear(
+            juce::dontSendNotification);
+        for (const auto& entry : catalog.entries())
+        {
+            if (entry.bundledDevice)
+                continue;
+            validationEntries.push_back(entry);
+            pluginSelector.addItem(
+                entry.name + " [" + entry.format + "]",
+                static_cast<int>(
+                    validationEntries.size()));
+        }
+        const auto selected = std::find_if(
+            validationEntries.cbegin(),
+            validationEntries.cend(),
+            [&selectedIdentifier](const auto& entry)
+            {
+                return entry.identifier
+                    == selectedIdentifier;
+            });
+        if (selected != validationEntries.cend())
+        {
+            pluginSelector.setSelectedItemIndex(
+                static_cast<int>(
+                    std::distance(
+                        validationEntries.cbegin(),
+                        selected)),
+                juce::dontSendNotification);
+        }
+        validateSelected.setEnabled(
+            pluginSelector.getSelectedItemIndex() >= 0);
+        lastCatalogRevision = catalog.revision();
+    }
+
     void chooseFolder()
     {
         chooser = std::make_unique<juce::FileChooser>(
@@ -384,8 +487,12 @@ private:
 
     PluginCatalog& catalog;
     StudioPreferences& preferences;
+    std::function<void(const PluginCatalogEntry&)>
+        validatePlugin;
     juce::Label title;
     juce::ToggleButton scanAtStartup;
+    juce::ComboBox pluginSelector;
+    juce::TextButton validateSelected;
     juce::ListBox list;
     juce::TextButton addFolder;
     juce::TextButton removeFolder;
@@ -395,6 +502,8 @@ private:
     juce::StringArray paths;
     juce::Array<bool> defaultFlags;
     std::unique_ptr<juce::FileChooser> chooser;
+    std::vector<PluginCatalogEntry> validationEntries;
+    std::uint64_t lastCatalogRevision = 0;
 };
 }
 
@@ -575,6 +684,8 @@ SettingsComponent::SettingsComponent(
     UpdateService& updateService,
     StudioPreferences& preferences,
     PluginCatalog& pluginCatalog,
+    std::function<void(const PluginCatalogEntry&)>
+        validatePlugin,
     std::function<void()> restartRequested,
     bool showUpdatesInitially,
     const juce::String& audioUnavailableReason)
@@ -616,7 +727,8 @@ SettingsComponent::SettingsComponent(
     vstPage =
         std::make_unique<VstPluginSettingsComponent>(
             pluginCatalog,
-            preferences);
+            preferences,
+            std::move(validatePlugin));
 
     addAndMakeVisible(tabs);
     tabs.setTabBarDepth(34);

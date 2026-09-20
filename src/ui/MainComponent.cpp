@@ -3619,6 +3619,12 @@ void MainComponent::showSettings(bool showUpdates)
         updateService,
         *preferences,
         pluginCatalog,
+        [safe = juce::Component::SafePointer<MainComponent>(this)](
+            const PluginCatalogEntry& entry)
+        {
+            if (safe != nullptr)
+                safe->validatePlugin(entry);
+        },
         [safe = juce::Component::SafePointer<MainComponent>(this)]
         {
             if (safe != nullptr)
