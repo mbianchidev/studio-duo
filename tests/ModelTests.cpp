@@ -1641,6 +1641,7 @@ int main(int argc, char* argv[])
     RUN_SUITE(uiIconTests);
     RUN_SUITE(timelineMarkerTests);
     RUN_SUITE(mixerPanelTests);
+    RUN_SUITE(infoPanelTests);
 
 #undef RUN_SUITE
 

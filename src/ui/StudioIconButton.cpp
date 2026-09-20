@@ -267,6 +267,13 @@ juce::Path createStudioIconPath(StudioIcon icon)
             path.closeSubPath();
             break;
 
+        case StudioIcon::info:
+            path.addEllipse(3.0f, 3.0f, 18.0f, 18.0f);
+            path.addEllipse(10.5f, 6.0f, 3.0f, 3.0f);
+            path.startNewSubPath(12.0f, 11.0f);
+            path.lineTo(12.0f, 18.0f);
+            break;
+
         case StudioIcon::add:
             path.startNewSubPath(4.0f, 12.0f);
             path.lineTo(20.0f, 12.0f);

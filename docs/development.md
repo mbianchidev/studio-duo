@@ -687,7 +687,9 @@ starting playback again.
 The transport buttons are centered on the window independently from the
 position readout. Metronome, time signature, and BPM form the adjacent
 right-hand transport group, while device/readiness status is owned by the
-top-right header.
+top-right `InfoPanelComponent`. `MainComponent::setStatus` appends deduplicated
+session entries; the callout displays newest-first history with per-entry
+removal and clear-all controls.
 
 The bottom-right **Inspect**, **Mixer**, and **Tracks** buttons are the sole
 visibility controls for the three docked areas. The edit toolbar owns undo,

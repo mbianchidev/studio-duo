@@ -38,3 +38,4 @@ void masteringTests();
 void uiIconTests();
 void timelineMarkerTests();
 void mixerPanelTests();
+void infoPanelTests();

@@ -1883,9 +1883,7 @@ MainComponent::MainComponent(bool startAudioOnLaunch)
         inspectorContent.addAndMakeVisible(*component);
     }
 
-    addAndMakeVisible(statusLabel);
-    statusLabel.setColour(juce::Label::textColourId, juce::Colour(StudioColours::secondaryText));
-    statusLabel.setJustificationType(juce::Justification::centredRight);
+    addAndMakeVisible(statusPanel);
 
     selectedTrackId = project.tracks.front().id;
     selectTrack(selectedTrackId);
@@ -2311,7 +2309,7 @@ void MainComponent::resized()
     layoutFileControls(topRow.removeFromLeft(200), 8);
     auto statusArea = topRow.removeFromRight(
         juce::jmin(360, topRow.getWidth() / 2));
-    statusLabel.setBounds(statusArea.reduced(8, 4));
+    statusPanel.setBounds(statusArea.reduced(8, 4));
     projectLabel.setBounds(topRow.reduced(8, 4));
 
     auto footerControls = status.reduced(8, 4);
@@ -9631,14 +9629,12 @@ void MainComponent::setStatus(const juce::String& message, bool error)
 {
     if (error
         && (!statusIsError
-            || statusLabel.getText() != message))
+            || statusPanel.latestMessage() != message))
     {
         logError("ui.status", message);
     }
     statusIsError = error;
-    statusLabel.setColour(juce::Label::textColourId,
-                          juce::Colour(error ? StudioColours::orange : StudioColours::secondaryText));
-    statusLabel.setText(message, juce::dontSendNotification);
+    statusPanel.pushMessage(message, error);
 }
 
 void MainComponent::showError(const juce::String& title, const juce::String& message)

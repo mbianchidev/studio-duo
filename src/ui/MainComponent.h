@@ -1,6 +1,7 @@
 #pragma once
 
 #include "StudioIconButton.h"
+#include "InfoPanelComponent.h"
 #include "StudioPanControl.h"
 #include "StudioTheme.h"
 #include "AutomationPanel.h"
@@ -534,7 +535,7 @@ private:
     std::unique_ptr<PluginBrowserComponent> pluginBrowser;
     std::unique_ptr<RoutingPanel> routingPanel;
     std::unique_ptr<PluginInsertPanel> insertPanel;
-    juce::Label statusLabel;
+    InfoPanelComponent statusPanel;
     std::unique_ptr<juce::FileChooser> fileChooser;
     std::unique_ptr<juce::DialogWindow> settingsWindow;
     std::unique_ptr<StudioPreferences> preferences;

@@ -207,7 +207,9 @@ zoom tools share the edit toolbar. Snap applies to clip, marker, and section
 dragging without introducing separate pointer/eraser tool modes.
 Transport buttons are centered independently from the position display;
 metronome, meter, and BPM sit immediately to their right. Audio readiness and
-device status appear at the top-right of the header.
+device status appear in the top-right info panel. The panel always shows the
+latest status or error; click it to open session history. Each message has its
+own clear icon, and the header trash icon clears all history.
 
 Right-click the **MARKERS / SECTIONS** lane above the bar ruler to add either a
 marker flag or a song section at that exact timeline position without moving

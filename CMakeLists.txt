@@ -399,6 +399,8 @@ target_sources(
         src/update/UpdateSettingsComponent.h
         src/ui/MainComponent.cpp
         src/ui/MainComponent.h
+        src/ui/InfoPanelComponent.cpp
+        src/ui/InfoPanelComponent.h
         src/ui/AudioExportOptionsComponent.cpp
         src/ui/AudioExportOptionsComponent.h
         src/ui/TransportSettingsComponent.cpp
@@ -815,6 +817,7 @@ if(STUDIO_DUO_BUILD_TESTS)
             tests/UiIconTests.cpp
             tests/TimelineMarkerTests.cpp
             tests/MixerPanelTests.cpp
+            tests/InfoPanelTests.cpp
             tests/DawProjectTests.cpp
             src/ui/TransportSettingsComponent.cpp
             src/ui/TransportSettingsComponent.h
@@ -830,6 +833,8 @@ if(STUDIO_DUO_BUILD_TESTS)
             src/ui/TimelineComponent.h
             src/ui/MixerPanel.cpp
             src/ui/MixerPanel.h
+            src/ui/InfoPanelComponent.cpp
+            src/ui/InfoPanelComponent.h
             src/ui/MainWindowSizing.cpp
             src/ui/MainWindowSizing.h
             src/update/StudioPreferences.cpp
