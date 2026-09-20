@@ -5156,118 +5156,108 @@ void MainComponent::validatePlugin(const PluginCatalogEntry& entry)
     });
 }
 
-void MainComponent::validateInstalledPlugins()
+void MainComponent::checkInstalledVstPlugins()
 {
-    auto plugins = pluginCatalog.entries();
-    std::erase_if(plugins, [](const auto& entry)
-    {
-        return entry.bundledDevice
-            || entry.identifier.isEmpty();
-    });
-    if (plugins.empty())
-    {
-        showError(
-            "Plug-in validation unavailable",
-            "Scan installed plug-ins before running compatibility validation.");
-        return;
-    }
+    auto folders =
+        pluginCatalog.defaultVst3SearchFolders();
+    folders.addArray(
+        pluginCatalog.customVst3SearchFolders());
+#if JUCE_MAC
+    folders.add("/Library/Audio/Plug-Ins/VST3");
+    folders.add(
+        juce::File::getSpecialLocation(
+            juce::File::userHomeDirectory)
+            .getChildFile("Library/Audio/Plug-Ins/VST3")
+            .getFullPathName());
+#elif JUCE_WINDOWS
+    const auto programFiles =
+        juce::File::getSpecialLocation(
+            juce::File::globalApplicationsDirectory);
+    folders.add(
+        programFiles
+            .getChildFile("Common Files/VST3")
+            .getFullPathName());
+    const auto localAppData =
+        juce::File::getSpecialLocation(
+            juce::File::userApplicationDataDirectory);
+    folders.add(
+        localAppData
+            .getChildFile("Programs/Common/VST3")
+            .getFullPathName());
+#endif
+    folders =
+        PluginSearchPaths::normalizeAndDeduplicate(
+            folders,
+            PluginSearchPaths::nativePathStyle());
     setStatus(
-        "Validating "
-        + juce::String(static_cast<int>(plugins.size()))
-        + " installed plug-ins...");
+        "Checking default and configured VST3 folders...",
+        false,
+        false);
     const juce::Component::SafePointer<MainComponent> safe(this);
     compatibilityValidator.addJob(
-        [safe, installedPlugins = std::move(plugins)]
+        [safe, folders]
     {
-        struct Outcome
+        juce::StringArray found;
+        juce::StringArray readableFolders;
+        juce::StringArray unavailableFolders;
+        for (const auto& path : folders)
         {
-            PluginCatalogEntry entry;
-            juce::String output;
-            int result = 1;
-        };
-        std::vector<Outcome> results;
-        results.reserve(installedPlugins.size());
-        for (const auto& entry : installedPlugins)
-        {
-            juce::ChildProcess process;
-            juce::StringArray arguments;
-            arguments.add(
-                juce::File::getSpecialLocation(
-                    juce::File::currentExecutableFile)
-                    .getFullPathName());
-            arguments.add("--validate-plugin");
-            arguments.add(entry.identifier);
-            auto output = juce::String();
-            auto result = 1;
-            if (!process.start(arguments))
+            const juce::File folder(path);
+            if (!folder.isDirectory()
+                || !folder.hasReadAccess())
             {
-                output =
-                    "Could not launch the compatibility validator.";
+                unavailableFolders.add(path);
+                continue;
             }
-            else if (!process.waitForProcessToFinish(60000))
-            {
-                process.kill();
-                output =
-                    "Compatibility validation timed out.";
-            }
-            else
-            {
-                output = process.readAllProcessOutput();
-                result =
-                    static_cast<int>(process.getExitCode());
-            }
-            results.push_back({
-                entry,
-                std::move(output),
-                result
-            });
+            readableFolders.add(path);
+            juce::Array<juce::File> candidates;
+            folder.findChildFiles(
+                candidates,
+                juce::File::findFilesAndDirectories,
+                true,
+                "*.vst3");
+            for (const auto& candidate : candidates)
+                found.addIfNotAlreadyThere(
+                    candidate.getFullPathName());
         }
+        found.sort(true);
         juce::MessageManager::callAsync(
             [safe,
-             validationResults = std::move(results)]
+             found,
+             readableFolders,
+             unavailableFolders]
             {
                 if (safe == nullptr)
                     return;
-                auto passed = 0;
-                auto failed = 0;
-                auto details = juce::String();
-                for (const auto& outcome : validationResults)
+                auto details =
+                    juce::String("Checked folders:\n");
+                for (const auto& folder : readableFolders)
+                    details << "• " << folder << "\n";
+                if (!unavailableFolders.isEmpty())
                 {
-                    const auto success = outcome.result == 0;
-                    safe->pluginCatalog.recordValidation(
-                        outcome.entry,
-                        success ? "pass" : "fail");
-                    if (success)
-                        ++passed;
-                    else
-                    {
-                        ++failed;
-                        details
-                            << outcome.entry.name
-                            << ": "
-                            << outcome.output.substring(0, 1000)
-                            << "\n\n";
-                    }
+                    details
+                        << "\nUnavailable default/configured folders:\n";
+                    for (const auto& folder : unavailableFolders)
+                        details << "• " << folder << "\n";
+                }
+                if (!found.isEmpty())
+                {
+                    details << "\nVST3 plug-ins found:\n";
+                    for (const auto& plugin : found)
+                        details << "• " << plugin << "\n";
                 }
                 safe->setStatus(
-                    juce::String(passed)
-                        + " plug-ins passed; "
-                        + juce::String(failed)
-                        + " failed compatibility validation.",
-                    failed > 0);
+                    found.isEmpty()
+                        ? "No installed VST3 plug-ins found in default or configured folders."
+                        : "Found "
+                            + juce::String(found.size())
+                            + " installed VST3 plug-in"
+                            + (found.size() == 1 ? "." : "s."),
+                    false);
                 juce::AlertWindow::showMessageBoxAsync(
-                    failed == 0
-                        ? juce::MessageBoxIconType::InfoIcon
-                        : juce::MessageBoxIconType::WarningIcon,
-                    "Installed plug-in compatibility",
-                    failed == 0
-                        ? juce::String(passed)
-                            + " installed plug-ins passed validation."
-                        : juce::String(passed)
-                            + " passed and "
-                            + juce::String(failed)
-                            + " failed.\n\n"
-                            + details.substring(0, 8000));
+                    juce::MessageBoxIconType::InfoIcon,
+                    "Installed VST3 plug-ins",
+                    details.substring(0, 12000));
             });
     });
 }
@@ -8129,8 +8119,8 @@ void MainComponent::showTrackingMenu()
         mixerSnapshots.addItem("No mixer snapshots", false, false, [] {});
     menu.addSubMenu("Recall mixer snapshot", mixerSnapshots);
     menu.addSeparator();
-    menu.addItem("Validate installed plug-ins",
-                 [this] { validateInstalledPlugins(); });
+    menu.addItem("Check installed VST3 plug-ins",
+                 [this] { checkInstalledVstPlugins(); });
 
     menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(trackingButton));
 }

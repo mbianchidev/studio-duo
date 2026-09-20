@@ -712,6 +712,13 @@ data directory with defaults merged on missing or invalid data. When enabled,
 ordinary project edits refresh `recovery/latest.json`; disabling it leaves
 manual project saves and explicit safety recovery points unchanged.
 
+The Tracking Setup installed-VST check is filesystem-only. It combines JUCE's
+native VST3 defaults, explicit macOS (`/Library/Audio/Plug-Ins/VST3` and the
+user Library equivalent) or Windows (`Program Files/Common Files/VST3` and
+LocalAppData `Programs/Common/VST3`) fallbacks, and configured custom VST3
+folders. It never launches a child app, instantiates a plug-in, or touches audio
+and microphone initialization.
+
 On macOS, CMake applies an ad-hoc signature with the stable designated
 requirement `dev.mbianchi.studioduo`. This keeps the TCC microphone grant tied
 to the app identity instead of the changing binary hash during local rebuilds.

@@ -536,9 +536,11 @@ opaque state, so the project restores after the source file is moved. Corrupt
 or truncated cabinet state reports a failed insert; Studio Duo never silently
 substitutes the default.
 
-**TEST** runs black-box public-standard compatibility checks in a separate
-process. **Tracking Setup > Validate installed plug-ins** runs the same isolated
-checks across the scanned external plug-in catalog and records pass/fail status.
+**TEST** runs black-box public-standard compatibility checks for the selected
+plug-in in a separate process. **Tracking Setup > Check installed VST3
+plug-ins** only searches readable platform-default and configured VST3 folders;
+it does not launch another Studio Duo process, load plug-ins, or initialize
+audio devices.
 
 ## Create reamp paths
 

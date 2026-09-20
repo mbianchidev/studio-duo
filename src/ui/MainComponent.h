@@ -155,7 +155,7 @@ private:
     void openPluginEditor(const juce::String& trackId,
                           const juce::String& insertId);
     void validatePlugin(const PluginCatalogEntry& entry);
-    void validateInstalledPlugins();
+    void checkInstalledVstPlugins();
     void changePluginMode(const juce::String& trackId,
                           const juce::String& insertId,
                           PluginBridgeMode mode);
