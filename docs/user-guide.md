@@ -200,7 +200,7 @@ visible as coloured bounds. When punch and loop are both enabled, punch takes
 priority for recording while ordinary playback keeps using the loop range.
 The bottom transport strip keeps position, Stop, Play/Pause, Record, Loop,
 loop-range, metronome, time signature, and tempo controls in compact grouped
-modules. **Inspect**, **Mix**, and **Tracks** switches at the far right own the
+modules. **Inspector**, **Mixer**, and **Tracks** switches at the far right own the
 three docked work areas. File and project tools remain in the top header, while
 undo, redo, scissors, trim, delete, Snap, a visible 1/4-1/32 grid selector, and
 zoom tools share the edit toolbar. Snap applies to clip, marker, and section
@@ -330,7 +330,7 @@ its routing editor.
 Use the single sidebar arrow to collapse Session controls to an icon rail. The
 expanded Session pane shows each action's icon and full name; collapsing it
 removes the labels and returns the same controls to compact icon-only buttons.
-The bottom **Inspect**, **Mix**, and **Tracks** switches are the only panel
+The bottom **Inspector**, **Mixer**, and **Tracks** switches are the only panel
 visibility buttons. Their dividers also collapse when dragged closed and restore
 when dragged open or double-clicked.
 The processor search moves above its action buttons on narrow layouts.

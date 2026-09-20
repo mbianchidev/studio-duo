@@ -438,12 +438,12 @@ private:
     };
     StudioIconButton inspectorPanelToggleButton {
         StudioIcon::inspect,
-        "Inspect",
+        "Inspector",
         "Show or hide the inspector"
     };
     StudioIconButton mixerPanelToggleButton {
         StudioIcon::mixer,
-        "Mix",
+        "Mixer",
         "Show or hide the mixer"
     };
 
