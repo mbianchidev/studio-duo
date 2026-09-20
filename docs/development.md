@@ -635,6 +635,10 @@ the shared center-origin pan renderer, which colors only the active span from
 center to the knob. Deterministic render coverage
 asserts that full-left and full-right pan move mono content to the matching
 output channel.
+Mixer dB readouts accept strict finite numeric input with an optional
+case-insensitive `dB` suffix, enforce the `-60.0..+12.0 dB` track range, round
+to 0.1 dB, and route the applied value through the existing undo and automation
+gesture path.
 
 Audio tracks persist their first hardware input, mono/stereo mode, and software
 monitoring state. The lock-free recorder copies only those selected callback
@@ -685,7 +689,7 @@ position readout. Metronome, time signature, and BPM form the adjacent
 right-hand transport group, while device/readiness status is owned by the
 top-right header.
 
-The bottom-right **Inspector**, **Mixer**, and **Tracks** buttons are the sole
+The bottom-right **Inspect**, **Mixer**, and **Tracks** buttons are the sole
 visibility controls for the three docked areas. The edit toolbar owns undo,
 redo, scissors, trim, delete, snap/grid, and zoom controls; no duplicate
 panel-edge buttons remain. Timeline snap converts edit positions through the

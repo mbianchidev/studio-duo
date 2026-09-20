@@ -1,6 +1,7 @@
 #include "MixerPanel.h"
 
 #include "StudioIconButton.h"
+#include "NumericInput.h"
 #include "StudioPanControl.h"
 #include "StudioTheme.h"
 
@@ -762,6 +763,81 @@ void MixerPanel::mouseDoubleClick(const juce::MouseEvent& event)
             const auto nameBounds = strip.reduced(8).withHeight(28);
             onEditTrack(track->id, localAreaToGlobal(nameBounds));
         }
+        return;
+    }
+
+    const auto decibelBounds = juce::Rectangle<int>(
+        strip.getX() + 12,
+        strip.getY() + 54,
+        strip.getWidth() - 24,
+        20);
+    if (decibelBounds.contains(event.getPosition())
+        && track->type != TrackType::folder
+        && track->type != TrackType::midi)
+    {
+        auto* dialog = new juce::AlertWindow(
+            "Set track volume",
+            "Enter a value from -60 to +12. The dB suffix is optional.",
+            juce::MessageBoxIconType::NoIcon);
+        dialog->addTextEditor(
+            "volume",
+            juce::String(track->volumeDecibels, 1)
+                + " dB",
+            "Volume");
+        dialog->addButton(
+            "Apply",
+            1,
+            juce::KeyPress(juce::KeyPress::returnKey));
+        dialog->addButton(
+            "Cancel",
+            0,
+            juce::KeyPress(juce::KeyPress::escapeKey));
+        dialog->centreAroundComponent(this, 420, 190);
+        const juce::Component::SafePointer<
+            juce::AlertWindow> dialogSafe(dialog);
+        const auto safe =
+            juce::Component::SafePointer<MixerPanel>(this);
+        const auto trackId = track->id;
+        const auto startingVolume = track->volumeDecibels;
+        dialog->enterModalState(
+            true,
+            juce::ModalCallbackFunction::create(
+                [safe,
+                 dialogSafe,
+                 trackId,
+                 startingVolume](int result)
+                {
+                    if (result != 1
+                        || safe == nullptr
+                        || dialogSafe == nullptr)
+                        return;
+                    const auto parsed = parseTrackDecibels(
+                        dialogSafe->getTextEditorContents(
+                            "volume"));
+                    if (!parsed.has_value())
+                    {
+                        juce::AlertWindow::showMessageBoxAsync(
+                            juce::MessageBoxIconType::WarningIcon,
+                            "Volume unavailable",
+                            "Enter a finite value from -60 to +12 dB.");
+                        return;
+                    }
+                    if (safe->onAutomationGestureStarted)
+                    {
+                        safe->onAutomationGestureStarted(
+                            trackId,
+                            AutomationTargetType::trackVolume,
+                            (startingVolume + 60.0f)
+                                / 72.0f);
+                    }
+                    if (safe->onVolumeChanged)
+                    {
+                        safe->onVolumeChanged(
+                            trackId,
+                            *parsed);
+                    }
+                }),
+            true);
         return;
     }
 

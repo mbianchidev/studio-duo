@@ -456,7 +456,7 @@ MainComponent::MainComponent(bool startAudioOnLaunch)
     configureButton(inspectorPanelToggleButton, "Show or hide the inspector");
     configureButton(mixerPanelToggleButton, "Show or hide the mixer");
     sessionPanelToggleButton.setVisibleLabel("Tracks");
-    inspectorPanelToggleButton.setVisibleLabel("Inspector");
+    inspectorPanelToggleButton.setVisibleLabel("Inspect");
     mixerPanelToggleButton.setVisibleLabel("Mixer");
     for (auto* button : {
              &sessionPanelToggleButton,
@@ -2316,13 +2316,13 @@ void MainComponent::resized()
 
     auto footerControls = status.reduced(8, 4);
     auto panelControls =
-        footerControls.removeFromRight(225);
+        footerControls.removeFromRight(270);
     inspectorPanelToggleButton.setBounds(
-        panelControls.removeFromLeft(75).reduced(2, 1));
+        panelControls.removeFromLeft(90).reduced(2, 1));
     mixerPanelToggleButton.setBounds(
-        panelControls.removeFromLeft(75).reduced(2, 1));
+        panelControls.removeFromLeft(90).reduced(2, 1));
     sessionPanelToggleButton.setBounds(
-        panelControls.removeFromLeft(75).reduced(2, 1));
+        panelControls.removeFromLeft(90).reduced(2, 1));
     constexpr auto transportWidth = 5 * 38;
     constexpr auto tempoWidth = 200;
     const auto positionWidth = juce::jlimit(

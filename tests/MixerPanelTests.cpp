@@ -2,6 +2,9 @@
 #include "TestSuites.h"
 
 #include "ui/MixerPanel.h"
+#include "ui/NumericInput.h"
+
+#include <cmath>
 
 namespace
 {
@@ -34,6 +37,27 @@ juce::MouseEvent mixerMouseEvent(
 
 void mixerPanelTests()
 {
+    expect(std::abs(
+               studio::parseDecibels("-6").value_or(99.0)
+               + 6.0) < 0.000001
+               && std::abs(
+                      studio::parseDecibels("-6 dB").value_or(99.0)
+                      + 6.0) < 0.000001
+               && std::abs(
+                      studio::parseDecibels("-6db").value_or(99.0)
+                      + 6.0) < 0.000001
+               && !studio::parseDecibels("-6 dBx").has_value(),
+           "Mixer dB input accepts an optional case-insensitive suffix and rejects trailing text.");
+    expect(std::abs(
+               studio::parseTrackDecibels("-6.24 dB")
+                   .value_or(99.0f)
+               + 6.2f) < 0.0001f
+               && studio::parseTrackDecibels("-60").has_value()
+               && studio::parseTrackDecibels("+12 dB").has_value()
+               && !studio::parseTrackDecibels("-60.1").has_value()
+               && !studio::parseTrackDecibels("12.1").has_value(),
+           "Mixer dB input enforces the real -60 to +12 range and 0.1 dB step.");
+
     auto project = studio::Project::createDefault();
     auto& track = project.tracks.front();
     track.pan = 0.0f;
