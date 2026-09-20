@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <initializer_list>
 #include <limits>
 #include <optional>
@@ -1079,12 +1080,13 @@ void transportTests()
     expect(sectionCommand.perform(sectionProject, sectionError),
            ("Section transport fixture configures 180 BPM, 3/8 and custom accents: "
             + sectionError).toRawUTF8());
-    studio::StudioAudioEngine sectionEngine;
-    expect(sectionEngine.updateProject(sectionProject).wasOk(),
+    // Keep the extra engine's real-time buffers off the smaller Windows stack.
+    auto sectionEngine = std::make_unique<studio::StudioAudioEngine>();
+    expect(sectionEngine->updateProject(sectionProject).wasOk(),
            "Section-aware metronome publishes a playback snapshot.");
-    sectionEngine.seekSeconds(0.0);
-    sectionEngine.play();
-    const auto sectionClick = sectionEngine.renderActiveBlockForTesting(73000);
+    sectionEngine->seekSeconds(0.0);
+    sectionEngine->play();
+    const auto sectionClick = sectionEngine->renderActiveBlockForTesting(73000);
     const auto sectionAccent = sectionClick.getMagnitude(0, 48000, 800);
     const auto sectionSubdivision = sectionClick.getMagnitude(0, 52000, 800);
     const auto secondBeat = sectionClick.getMagnitude(0, 56000, 800);
@@ -1100,25 +1102,25 @@ void transportTests()
     sectionProject.loopEnabled = true;
     sectionProject.loopStartSeconds = 0.95;
     sectionProject.loopEndSeconds = 1.1;
-    expect(sectionEngine.updateProject(sectionProject).wasOk(),
+    expect(sectionEngine->updateProject(sectionProject).wasOk(),
            "A configurable loop can cross a section click change.");
-    sectionEngine.seekSeconds(1.08);
-    sectionEngine.play();
-    const auto loopedClick = sectionEngine.renderActiveBlockForTesting(5000);
+    sectionEngine->seekSeconds(1.08);
+    sectionEngine->play();
+    const auto loopedClick = sectionEngine->renderActiveBlockForTesting(5000);
     expect(loopedClick.getMagnitude(0, 1100, 2000) < 0.000001f
                && loopedClick.getMagnitude(0, 3360, 800) > 0.1f,
            "Loop wrap re-evaluates section click state and restores accents at the section boundary.");
 
     sectionProject.metronomeEnabled = false;
-    expect(sectionEngine.updateProject(sectionProject).wasOk(),
+    expect(sectionEngine->updateProject(sectionProject).wasOk(),
            "The global click master gate updates with section overrides.");
-    sectionEngine.seekSeconds(1.0);
-    sectionEngine.play();
-    expect(sectionEngine.renderActiveBlockForTesting(800).getMagnitude(0, 800) < 0.000001f,
+    sectionEngine->seekSeconds(1.0);
+    sectionEngine->play();
+    expect(sectionEngine->renderActiveBlockForTesting(800).getMagnitude(0, 800) < 0.000001f,
            "Section click enablement cannot bypass the global CLICK-off control.");
     sectionProject.metronomeEnabled = true;
     juce::AudioBuffer<float> sectionExport;
-    expect(sectionEngine.renderToBuffer(sectionProject, sectionExport, 48000.0).wasOk()
+    expect(sectionEngine->renderToBuffer(sectionProject, sectionExport, 48000.0).wasOk()
                && sectionExport.getMagnitude(0, sectionExport.getNumSamples()) < 0.000001f,
            "Per-section click patterns never leak into audio exports.");
 
