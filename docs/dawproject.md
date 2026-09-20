@@ -7,7 +7,7 @@ model; translation keeps the two object models independent.
 
 ## Application workflow
 
-Open **DAWPROJECT** in the main header.
+Open **Export > DAWproject 1.0**.
 
 - **Import DAWproject 1.0...** selects a `.dawproject` ZIP and a destination
   `.studioduo` package. A successful import opens that new project.

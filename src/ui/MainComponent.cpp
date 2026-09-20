@@ -394,12 +394,8 @@ MainComponent::MainComponent(bool startAudioOnLaunch)
     configureButton(openButton, "Open a .studioduo project");
     configureButton(saveButton, "Save project (Command/Ctrl+S)");
     configureButton(
-        dawProjectButton,
-        "Import, export, view, or save a DAWproject 1.0 compatibility report");
-    configureButton(exportButton, "Export audio: format, quality, named-marker range, fades, and effects tail");
-    configureButton(
-        masteringButton,
-        "Open the album mastering, release export, DDP, and portable-copy workspace");
+        exportButton,
+        "Export audio, open mastering and release tools, or use DAWproject interchange");
     configureButton(
         settingsButton,
         "Configure audio, MIDI, and automatic updates");
@@ -475,12 +471,7 @@ MainComponent::MainComponent(bool startAudioOnLaunch)
     newButton.onClick = [this] { createNewProject(); };
     openButton.onClick = [this] { beginOpenProject(); };
     saveButton.onClick = [this] { beginSaveProject(); };
-    dawProjectButton.onClick = [this] { showDawProjectMenu(); };
-    exportButton.onClick = [this] { beginExportMix(); };
-    masteringButton.onClick = [this]
-    {
-        setMasteringWorkspaceVisible(!masteringWorkspaceVisible);
-    };
+    exportButton.onClick = [this] { showExportMenu(); };
     settingsButton.onClick = [this] { showSettings(); };
     undoButton.onClick = [this] { undo(); };
     redoButton.onClick = [this] { redo(); };
@@ -2210,12 +2201,8 @@ void MainComponent::resized()
                 area.removeFromLeft(38).reduced(3, verticalInset));
             saveButton.setBounds(
                 area.removeFromLeft(38).reduced(3, verticalInset));
-            dawProjectButton.setBounds(
-                area.removeFromLeft(108).reduced(3, verticalInset));
             exportButton.setBounds(
                 area.removeFromLeft(38).reduced(3, verticalInset));
-            masteringButton.setBounds(
-                area.removeFromLeft(96).reduced(3, verticalInset));
             settingsButton.setBounds(
                 area.removeFromLeft(38).reduced(3, verticalInset));
         };
@@ -2235,7 +2222,7 @@ void MainComponent::resized()
             tempoSlider.setBounds(area.reduced(3, verticalInset));
         };
 
-    layoutFileControls(topRow.removeFromLeft(400), 8);
+    layoutFileControls(topRow.removeFromLeft(200), 8);
     layoutEditControls(topRow.removeFromLeft(80), 8);
     projectLabel.setBounds(topRow.reduced(8, 4));
 
@@ -2981,34 +2968,57 @@ void MainComponent::chooseMixExportDestination(MixExportSettings settings)
     });
 }
 
-void MainComponent::showDawProjectMenu()
+void MainComponent::showExportMenu()
 {
     const auto hasReport = latestCompatibilityReport() != nullptr;
     juce::PopupMenu menu;
     menu.addItem(
-        "Import DAWproject 1.0...",
+        "Export audio...",
         !exportInProgress,
         false,
-        [this] { beginImportDawProject(); });
+        [this] { beginExportMix(); });
     menu.addItem(
+        masteringWorkspaceVisible
+            ? "Close mastering and release workspace"
+            : "Open mastering and release workspace",
+        !exportInProgress,
+        masteringWorkspaceVisible,
+        [this]
+        {
+            setMasteringWorkspaceVisible(
+                !masteringWorkspaceVisible);
+        });
+    menu.addSeparator();
+
+    juce::PopupMenu dawProjectMenu;
+    dawProjectMenu.addItem(
         "Export DAWproject 1.0...",
         !exportInProgress,
         false,
         [this] { beginExportDawProject(); });
-    menu.addSeparator();
-    menu.addItem(
+    dawProjectMenu.addItem(
+        "Import DAWproject 1.0...",
+        !exportInProgress,
+        false,
+        [this] { beginImportDawProject(); });
+    dawProjectMenu.addSeparator();
+    dawProjectMenu.addItem(
         "View latest compatibility report",
         hasReport,
         false,
         [this] { showLatestCompatibilityReport(); });
-    menu.addItem(
+    dawProjectMenu.addItem(
         "Save latest compatibility report...",
         hasReport,
         false,
         [this] { beginSaveCompatibilityReport(); });
+    menu.addSubMenu(
+        "DAWproject 1.0",
+        dawProjectMenu);
+
     menu.showMenuAsync(
         juce::PopupMenu::Options().withTargetComponent(
-            dawProjectButton));
+            exportButton));
 }
 
 void MainComponent::beginImportDawProject()
@@ -8917,9 +8927,6 @@ void MainComponent::setMasteringWorkspaceVisible(bool visible)
     if (visible)
         stopTransportAndRecording();
     masteringWorkspaceVisible = visible;
-    masteringButton.setToggleState(
-        visible,
-        juce::dontSendNotification);
     masteringWorkspace.setProjectPackage(projectPackage);
     masteringWorkspace.refresh();
     resized();

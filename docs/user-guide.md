@@ -560,7 +560,7 @@ Pressing Play at the project end rewinds before starting.
 
 ## Mastering and release
 
-Open **MASTERING** from the main header. Add finished mixes with **+ SONG**,
+Choose **Export > Open mastering and release workspace**. Add finished mixes with **+ SONG**,
 attach alternate mixes to the selected song, choose the active source, reorder
 the sequence, and edit gaps, overlaps, fades, gain, ISRC, album, artist,
 songwriter, label, catalog, MCN/EAN, release date, and genre fields.
@@ -606,10 +606,11 @@ See [project-format.md](project-format.md).
 
 ### Audio export
 
-**Export Audio** (up-arrow icon) opens audio settings before the destination chooser. WAV at 48 kHz,
+**Export > Export audio** opens audio settings before the destination chooser. WAV at 48 kHz,
 24-bit stereo remains the default. Choose WAV, AIFF, FLAC, Ogg Vorbis, or MP3;
 MP3 encoding is built in and requires no separate encoder installation.
-The same encoding controls are available under **MASTERING > EXPORT MASTER**.
+The same encoding controls are available in the mastering workspace under
+**EXPORT MASTER**.
 
 Select a supported sample rate and bit depth, stereo or mono, and the
 format-specific controls: MP3 constant bitrate or variable-bitrate quality,
@@ -656,7 +657,7 @@ previous file.
 
 ### DAWproject interchange
 
-Use **DAWPROJECT** in the main header to:
+Use **Export > DAWproject 1.0** to:
 
 - Import a `.dawproject` archive into a newly created `.studioduo` project
 - Export the open project as a deterministic `.dawproject` archive

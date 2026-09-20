@@ -99,7 +99,7 @@ private:
                          const juce::Result& result,
                          const MixExportSettings& settings);
     void setMasteringWorkspaceVisible(bool visible);
-    void showDawProjectMenu();
+    void showExportMenu();
     void beginImportDawProject();
     void chooseDawProjectImportDestination(
         const juce::File& sourceArchive);
@@ -337,13 +337,11 @@ private:
     StudioIconButton saveButton {
         StudioIcon::save, "Save project", "Save project (Command/Ctrl+S)"
     };
-    juce::TextButton dawProjectButton { "DAWPROJECT" };
     StudioIconButton exportButton {
         StudioIcon::exportFile,
-        "Export audio",
-        "Export audio: format, quality, named-marker range, fades, and effects tail"
+        "Export",
+        "Export audio, open mastering and release tools, or use DAWproject interchange"
     };
-    juce::TextButton masteringButton { "MASTERING" };
     StudioIconButton settingsButton {
         StudioIcon::settings,
         "Settings",

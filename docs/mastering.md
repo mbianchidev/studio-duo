@@ -1,13 +1,13 @@
 # Mastering and release
 
-Studio Duo's **MASTERING** workspace assembles several finished mixes into one
+Studio Duo's **Mastering and Release** workspace assembles several finished mixes into one
 release. It is separate from the arrangement and mixer: source mixes are
 treated as immutable release inputs, while sequencing, fades, metadata,
 analysis, exports, and collection remain part of the `.studioduo` project.
 
 ## Album workflow
 
-1. Open **MASTERING** in the main header.
+1. Choose **Export > Open mastering and release workspace**.
 2. Add each final mix with **+ SONG**.
 3. Add alternate mixes to the selected song with **+ ALT MIX**, then choose the
    active source from **Source mix**.
