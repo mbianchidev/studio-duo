@@ -134,13 +134,15 @@ cannot represent.
 
 1. Connect an interface with at least two inputs, build Studio Duo, and save a
    new project so recordings are written below its `media/` directory.
-2. Open **SETTINGS** > **Audio / MIDI** and enable both input channels.
+2. Open **Settings** (gear icon) > **Audio / MIDI** and enable both input
+   channels.
 3. Select two audio parent tracks. Assign different mono inputs in each track's
    inspector and arm both tracks with **R**.
-4. Press **REC**, send signal to both inputs, then press **STOP**.
+4. Press **Start Recording** (circle icon), send signal to both inputs, then
+   press **Stop** (square icon).
 5. Expand both parents. Each must contain a new version lane with clips sharing
-   the same timeline start and duration. One **UNDO** must remove both lanes;
-   one **REDO** must restore both.
+   the same timeline start and duration. One **Undo** (curved-left arrow) must
+   remove both lanes; one **Redo** (curved-right arrow) must restore both.
 6. Save, reopen, and confirm both version lanes, input assignments, and WAV
    references remain intact.
 
@@ -564,7 +566,7 @@ persisted gated-RMS comparison trim without changing raw batch-render levels.
 
 To test hardware calibration, physically route the configured reamp output back
 to the configured return input, enable both channels in
-**SETTINGS** > **Audio / MIDI**, choose **Calibrate round-trip latency**, and
+**Settings** (gear icon) > **Audio / MIDI**, choose **Calibrate round-trip latency**, and
 confirm a positive sample count appears. Record a sharp DI transient through
 the path with pre-roll longer than the reported latency; the DI and returned
 transient should align after capture.

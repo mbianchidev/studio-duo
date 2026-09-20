@@ -1631,6 +1631,7 @@ int main(int argc, char* argv[])
     RUN_SUITE(midiTests);
     RUN_SUITE(dawProjectTests);
     RUN_SUITE(masteringTests);
+    RUN_SUITE(uiIconTests);
 
 #undef RUN_SUITE
 

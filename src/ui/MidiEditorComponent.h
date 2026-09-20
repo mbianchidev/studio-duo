@@ -1,5 +1,6 @@
 #pragma once
 
+#include "StudioIconButton.h"
 #include "midi/MidiEditing.h"
 #include "model/ProjectModel.h"
 
@@ -117,16 +118,32 @@ private:
     juce::ComboBox gridSelector;
     juce::TextButton captureButton { "CAPTURE" };
     juce::TextButton humanizeButton { "HUMANIZE" };
-    juce::TextButton importMapButton { "IMPORT MAP" };
-    juce::TextButton editMapButton { "EDIT MAP" };
-    juce::TextButton closeButton { "CLOSE" };
+    StudioIconButton importMapButton {
+        StudioIcon::importFile,
+        "Import drum map",
+        "Import a Studio Duo drum-map JSON file"
+    };
+    StudioIconButton editMapButton {
+        StudioIcon::edit,
+        "Edit drum map row",
+        "Edit the selected drum-map row"
+    };
+    StudioIconButton closeButton {
+        StudioIcon::close,
+        "Close MIDI editor",
+        "Close the MIDI lower editor"
+    };
     juce::TextButton flamButton { "FLAM" };
     juce::TextButton rollButton { "ROLL" };
     juce::TextButton gravityButton { "GRAVITY" };
     juce::TextButton blastButton { "BLAST" };
     juce::TextButton doubleKickButton { "DOUBLE KICK" };
     juce::ComboBox patternSelector;
-    juce::TextButton expandPatternButton { "EXPAND" };
+    StudioIconButton expandPatternButton {
+        StudioIcon::expand,
+        "Expand pattern",
+        "Expand the selected alias into ordinary notes"
+    };
     juce::ComboBox routingTemplateSelector;
     juce::TextButton applyRoutingButton { "APPLY ROUTING" };
 

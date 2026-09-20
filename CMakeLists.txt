@@ -420,6 +420,8 @@ target_sources(
         src/ui/RoutingUiModel.h
         src/ui/RoutingPanel.cpp
         src/ui/RoutingPanel.h
+        src/ui/StudioIconButton.cpp
+        src/ui/StudioIconButton.h
         src/ui/StudioTheme.h
         src/ui/TimelineComponent.cpp
         src/ui/TimelineComponent.h
@@ -807,6 +809,7 @@ if(STUDIO_DUO_BUILD_TESTS)
             tests/SectionTransportTests.cpp
             tests/TransportSettingsTests.cpp
             tests/UpdateTests.cpp
+            tests/UiIconTests.cpp
             tests/DawProjectTests.cpp
             src/ui/TransportSettingsComponent.cpp
             src/ui/TransportSettingsComponent.h
@@ -815,6 +818,8 @@ if(STUDIO_DUO_BUILD_TESTS)
             src/ui/AudioExportOptionsComponent.h
             src/ui/RoutingUiModel.cpp
             src/ui/RoutingUiModel.h
+            src/ui/StudioIconButton.cpp
+            src/ui/StudioIconButton.h
             src/ui/MainWindowSizing.cpp
             src/ui/MainWindowSizing.h
             src/ui/MidiEditorComponent.cpp

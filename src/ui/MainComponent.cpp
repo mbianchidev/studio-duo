@@ -382,7 +382,8 @@ MainComponent::MainComponent(bool startAudioOnLaunch)
     {
         addAndMakeVisible(button);
         button.setTooltip(tooltip);
-        button.setWantsKeyboardFocus(false);
+        if (button.getButtonText().isNotEmpty())
+            button.setWantsKeyboardFocus(false);
         button.addKeyListener(this);
     };
 
@@ -408,20 +409,23 @@ MainComponent::MainComponent(bool startAudioOnLaunch)
         "Record armed audio, MIDI, and instrument tracks");
     configureButton(loopButton, "Enable or disable the configured loop");
     loopButton.setClickingTogglesState(true);
-    loopButton.setWantsKeyboardFocus(true);
     loopButton.setColour(juce::TextButton::buttonOnColourId, juce::Colour(StudioColours::raised));
     loopButton.setColour(juce::TextButton::textColourOnId, juce::Colour(StudioColours::orange));
     configureButton(loopRangeButton, "Configure loop start and end: seconds, musical positions, or markers");
-    loopRangeButton.setTitle("Configure loop range");
-    loopRangeButton.setWantsKeyboardFocus(true);
     configureButton(metronomeButton, "Toggle the metronome");
+    metronomeButton.setClickingTogglesState(true);
+    metronomeButton.setColour(
+        juce::TextButton::buttonOnColourId,
+        juce::Colour(StudioColours::raised));
+    metronomeButton.setColour(
+        juce::TextButton::textColourOnId,
+        juce::Colour(StudioColours::orange));
     configureButton(addTrackButton, "Add an audio, instrument, MIDI, aux, bus, folder, VCA, or control-room track");
     configureButton(addBusButton, "Add a stereo bus track");
     configureButton(importButton, "Import WAV, AIFF, FLAC, or MP3 audio");
     configureButton(duplicateTrackButton, "Duplicate the selected track and its edits");
     configureButton(deleteTrackButton, "Delete the selected track");
     configureButton(trackingButton, "Add or edit named markers, tempo, meter, punch, count-in, and click routing");
-    trackingButton.setWantsKeyboardFocus(true);
     configureButton(automationButton, "Edit and record mixer and plugin automation");
     configureButton(
         newMidiClipButton,
@@ -489,8 +493,6 @@ MainComponent::MainComponent(bool startAudioOnLaunch)
     mixerPanelToggleButton.setToggleState(
         true,
         juce::dontSendNotification);
-    inspectorPanelToggleButton.setButtonText(">");
-    mixerPanelToggleButton.setButtonText("v");
     muteButton.onClick = [this]
     {
         const auto* track = project.findTrack(selectedTrackId);
@@ -2040,15 +2042,15 @@ void MainComponent::resized()
     auto inspectorRestoreBounds = juce::Rectangle<int>();
     if (inspectorPanelWidth == 0)
         inspectorRestoreBounds =
-            editToolbar.removeFromRight(88);
-    auto zoomControls = editToolbar.removeFromRight(132);
-    zoomOutButton.setBounds(zoomControls.removeFromLeft(36).reduced(2));
+            editToolbar.removeFromRight(40);
+    auto zoomControls = editToolbar.removeFromRight(124);
+    zoomOutButton.setBounds(zoomControls.removeFromLeft(32).reduced(2));
     zoomResetButton.setBounds(zoomControls.removeFromLeft(60).reduced(2));
-    zoomInButton.setBounds(zoomControls.removeFromLeft(36).reduced(2));
-    trimClipStartButton.setBounds(editToolbar.removeFromLeft(108).reduced(2));
-    splitClipButton.setBounds(editToolbar.removeFromLeft(118).reduced(2));
-    trimClipEndButton.setBounds(editToolbar.removeFromLeft(108).reduced(2));
-    deleteClipButton.setBounds(editToolbar.removeFromLeft(96).reduced(2));
+    zoomInButton.setBounds(zoomControls.removeFromLeft(32).reduced(2));
+    trimClipStartButton.setBounds(editToolbar.removeFromLeft(38).reduced(2));
+    splitClipButton.setBounds(editToolbar.removeFromLeft(38).reduced(2));
+    trimClipEndButton.setBounds(editToolbar.removeFromLeft(38).reduced(2));
+    deleteClipButton.setBounds(editToolbar.removeFromLeft(38).reduced(2));
     timelineViewport.setBounds(bounds);
 
     auto topRow = header.reduced(14, 8);
@@ -2059,40 +2061,41 @@ void MainComponent::resized()
         [this](juce::Rectangle<int> area, int verticalInset)
         {
             newButton.setBounds(
-                area.removeFromLeft(58).reduced(3, verticalInset));
+                area.removeFromLeft(38).reduced(3, verticalInset));
             openButton.setBounds(
-                area.removeFromLeft(62).reduced(3, verticalInset));
+                area.removeFromLeft(38).reduced(3, verticalInset));
             saveButton.setBounds(
-                area.removeFromLeft(62).reduced(3, verticalInset));
+                area.removeFromLeft(38).reduced(3, verticalInset));
             dawProjectButton.setBounds(
                 area.removeFromLeft(108).reduced(3, verticalInset));
             exportButton.setBounds(
-                area.removeFromLeft(74).reduced(3, verticalInset));
+                area.removeFromLeft(38).reduced(3, verticalInset));
             masteringButton.setBounds(
                 area.removeFromLeft(96).reduced(3, verticalInset));
             settingsButton.setBounds(
-                area.removeFromLeft(84).reduced(3, verticalInset));
+                area.removeFromLeft(38).reduced(3, verticalInset));
         };
     const auto layoutEditControls =
         [this](juce::Rectangle<int> area, int verticalInset)
         {
             undoButton.setBounds(
-                area.removeFromLeft(62).reduced(3, verticalInset));
+                area.removeFromLeft(38).reduced(3, verticalInset));
             redoButton.setBounds(
-                area.removeFromLeft(62).reduced(3, verticalInset));
+                area.removeFromLeft(38).reduced(3, verticalInset));
         };
     const auto layoutTransportControls =
         [this](juce::Rectangle<int> area, int verticalInset)
         {
             playButton.setBounds(
-                area.removeFromLeft(66).reduced(3, verticalInset));
+                area.removeFromLeft(42).reduced(3, verticalInset));
             stopButton.setBounds(
-                area.removeFromLeft(62).reduced(3, verticalInset));
+                area.removeFromLeft(42).reduced(3, verticalInset));
             recordButton.setBounds(
-                area.removeFromLeft(58).reduced(3, verticalInset));
-            auto loopArea = area.removeFromLeft(76).reduced(3, verticalInset);
-            loopRangeButton.setBounds(loopArea.removeFromRight(20));
-            loopButton.setBounds(loopArea.withTrimmedRight(2));
+                area.removeFromLeft(42).reduced(3, verticalInset));
+            loopButton.setBounds(
+                area.removeFromLeft(42).reduced(3, verticalInset));
+            loopRangeButton.setBounds(
+                area.removeFromLeft(42).reduced(3, verticalInset));
         };
     const auto layoutTempoControls =
         [this](juce::Rectangle<int> area, int verticalInset)
@@ -2108,23 +2111,23 @@ void MainComponent::resized()
         topRow.removeFromTop(4);
         auto secondRow = topRow.removeFromTop(28);
 
-        layoutFileControls(firstRow.removeFromLeft(560), 1);
+        layoutFileControls(firstRow.removeFromLeft(400), 1);
         layoutTempoControls(firstRow.removeFromRight(180), 2);
         metronomeButton.setBounds(
-            firstRow.removeFromRight(78).reduced(3, 1));
+            firstRow.removeFromRight(42).reduced(3, 1));
         positionLabel.setBounds(firstRow.reduced(6, 2));
 
-        layoutEditControls(secondRow.removeFromLeft(128), 1);
-        layoutTransportControls(secondRow.removeFromLeft(270), 1);
+        layoutEditControls(secondRow.removeFromLeft(80), 1);
+        layoutTransportControls(secondRow.removeFromLeft(214), 1);
     }
     else
     {
-        layoutFileControls(topRow.removeFromLeft(560), 12);
-        layoutEditControls(topRow.removeFromLeft(128), 12);
-        layoutTransportControls(topRow.removeFromLeft(270), 9);
+        layoutFileControls(topRow.removeFromLeft(400), 12);
+        layoutEditControls(topRow.removeFromLeft(80), 12);
+        layoutTransportControls(topRow.removeFromLeft(214), 9);
         layoutTempoControls(topRow.removeFromRight(180), 10);
         metronomeButton.setBounds(
-            topRow.removeFromRight(78).reduced(3, 9));
+            topRow.removeFromRight(42).reduced(3, 9));
         positionLabel.setBounds(topRow.reduced(6, 8));
     }
 
@@ -2161,9 +2164,9 @@ void MainComponent::resized()
             mixerPanelToggleButton.setBounds(
                 getWidth()
                     - inspectorPanelWidth
-                    - 72,
+                    - 40,
                 status.getY() - 30,
-                64,
+                32,
                 24);
         }
     }
@@ -2281,9 +2284,19 @@ void MainComponent::timerCallback()
     positionLabel.setText(positionText(position, project),
                           juce::dontSendNotification);
     const auto playing = audioEngine.isPlaying();
-    playButton.setButtonText(playing ? "PAUSE" : "PLAY");
+    playButton.setIcon(playing ? StudioIcon::pause : StudioIcon::play);
+    playButton.setAccessibleLabel(playing ? "Pause" : "Play");
+    playButton.setTooltip(
+        playing ? "Pause playback (Space)" : "Play (Space)");
     const auto recording = hasActiveRecordingTargets();
-    recordButton.setButtonText(recording ? "STOP REC" : "REC");
+    recordButton.setIcon(
+        recording ? StudioIcon::stop : StudioIcon::record);
+    recordButton.setAccessibleLabel(
+        recording ? "Stop recording" : "Start recording");
+    recordButton.setTooltip(
+        recording
+            ? "Stop recording at the current position"
+            : "Record armed audio, MIDI, and instrument tracks");
     recordButton.setColour(juce::TextButton::buttonColourId,
                            juce::Colour(recording ? StudioColours::orange
                                                  : StudioColours::raised));
@@ -4216,7 +4229,10 @@ void MainComponent::stopTransportAndRecording()
             setStatus("Stopped, but plugin pipelines could not be reset.", true);
     }
 
-    recordButton.setButtonText("REC");
+    recordButton.setIcon(StudioIcon::record);
+    recordButton.setAccessibleLabel("Start recording");
+    recordButton.setTooltip(
+        "Record armed audio, MIDI, and instrument tracks");
     recordButton.setColour(juce::TextButton::buttonColourId,
                            juce::Colour(StudioColours::raised));
     timeline.clearRecordingPreviews();
@@ -4238,7 +4254,10 @@ void MainComponent::finishRecording()
     if (!pendingMidiTrackIds.empty())
         midiRecording = audioEngine.stopMidiRecording();
     recordingFinalizationInProgress = true;
-    recordButton.setButtonText("REC");
+    recordButton.setIcon(StudioIcon::record);
+    recordButton.setAccessibleLabel("Start recording");
+    recordButton.setTooltip(
+        "Record armed audio, MIDI, and instrument tracks");
     recordButton.setColour(juce::TextButton::buttonColourId,
                            juce::Colour(StudioColours::raised));
     timeline.clearRecordingPreviews();
@@ -8496,14 +8515,15 @@ void MainComponent::setLeftPanelCollapsed(bool collapsed)
 {
     leftPanelCollapsed = collapsed;
     leftPanelWidth = collapsed ? 64 : 286;
-    sessionPanelToggleButton.setButtonText(collapsed ? ">" : "<");
-    addTrackButton.setButtonText(collapsed ? "+" : "+ TRACK");
-    addBusButton.setButtonText(collapsed ? "B" : "+ BUS TRACK");
-    importButton.setButtonText(collapsed ? "I" : "IMPORT AUDIO");
-    duplicateTrackButton.setButtonText(collapsed ? "D" : "DUPLICATE TRACK");
-    deleteTrackButton.setButtonText(collapsed ? "X" : "DELETE TRACK");
-    trackingButton.setButtonText(collapsed ? "T" : "TRACKING SETUP");
-    automationButton.setButtonText(collapsed ? "A" : "AUTOMATION");
+    sessionPanelToggleButton.setIcon(
+        collapsed ? StudioIcon::chevronRight
+                  : StudioIcon::chevronLeft);
+    sessionPanelToggleButton.setAccessibleLabel(
+        collapsed ? "Expand session sidebar"
+                  : "Collapse session sidebar");
+    sessionPanelToggleButton.setTooltip(
+        collapsed ? "Expand the session sidebar"
+                  : "Collapse the session sidebar");
     resized();
     repaint();
 }
@@ -8511,8 +8531,13 @@ void MainComponent::setLeftPanelCollapsed(bool collapsed)
 void MainComponent::setInspectorPanelVisible(bool visible)
 {
     inspectorPanelWidth = visible ? 250 : 0;
-    inspectorPanelToggleButton.setButtonText(
-        visible ? ">" : "INSPECT");
+    inspectorPanelToggleButton.setIcon(
+        visible ? StudioIcon::chevronRight
+                : StudioIcon::chevronLeft);
+    inspectorPanelToggleButton.setAccessibleLabel(
+        visible ? "Hide inspector" : "Show inspector");
+    inspectorPanelToggleButton.setTooltip(
+        visible ? "Hide the inspector" : "Show the inspector");
     inspectorPanelToggleButton.setToggleState(
         visible,
         juce::dontSendNotification);
@@ -8523,8 +8548,13 @@ void MainComponent::setInspectorPanelVisible(bool visible)
 void MainComponent::setMixerPanelVisible(bool visible)
 {
     mixerPanelHeight = visible ? 220 : 0;
-    mixerPanelToggleButton.setButtonText(
-        visible ? "v" : "MIX");
+    mixerPanelToggleButton.setIcon(
+        visible ? StudioIcon::chevronDown
+                : StudioIcon::chevronUp);
+    mixerPanelToggleButton.setAccessibleLabel(
+        visible ? "Hide mixer" : "Show mixer");
+    mixerPanelToggleButton.setTooltip(
+        visible ? "Hide the mixer" : "Show the mixer");
     mixerPanelToggleButton.setToggleState(
         visible,
         juce::dontSendNotification);
@@ -8563,7 +8593,21 @@ void MainComponent::projectChanged(bool writeRecovery, bool markDirty)
     masteringWorkspace.setProjectPackage(projectPackage);
     projectLabel.setText(project.name + (dirty ? " *" : ""), juce::dontSendNotification);
     loopButton.setToggleState(project.loopEnabled, juce::dontSendNotification);
+    loopButton.setAccessibleLabel(
+        project.loopEnabled ? "Disable loop" : "Enable loop");
+    loopButton.setTooltip(
+        project.loopEnabled
+            ? "Disable the configured loop"
+            : "Enable the configured loop");
     metronomeButton.setToggleState(project.metronomeEnabled, juce::dontSendNotification);
+    metronomeButton.setAccessibleLabel(
+        project.metronomeEnabled
+            ? "Disable metronome"
+            : "Enable metronome");
+    metronomeButton.setTooltip(
+        project.metronomeEnabled
+            ? "Disable the metronome"
+            : "Enable the metronome");
     loopRangeButton.setTooltip(
         "Configure loop: " + juce::String(project.loopStartSeconds, 3) + " - "
         + juce::String(project.loopEndSeconds, 3) + " s ("

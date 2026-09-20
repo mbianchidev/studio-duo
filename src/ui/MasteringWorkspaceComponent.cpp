@@ -175,7 +175,7 @@ MasteringWorkspaceComponent::MasteringWorkspaceComponent()
         });
     };
 
-    for (auto* button : {
+    for (auto* button : std::initializer_list<juce::Button*> {
              &addSongButton,
              &addAlternateButton,
              &addReferenceButton,
@@ -189,7 +189,8 @@ MasteringWorkspaceComponent::MasteringWorkspaceComponent()
              &repairButton })
     {
         addAndMakeVisible(*button);
-        button->setWantsKeyboardFocus(false);
+        if (button->getButtonText().isNotEmpty())
+            button->setWantsKeyboardFocus(false);
     }
     addSongButton.onClick = [this] { chooseAudio(AddMode::song); };
     addAlternateButton.onClick =
@@ -1202,9 +1203,9 @@ void MasteringWorkspaceComponent::resized()
     addAlternateButton.setBounds(addRow.removeFromLeft(104).reduced(2));
     addReferenceButton.setBounds(addRow.reduced(2));
     auto orderRow = left.removeFromTop(34);
-    moveUpButton.setBounds(orderRow.removeFromLeft(62).reduced(2));
-    moveDownButton.setBounds(orderRow.removeFromLeft(70).reduced(2));
-    removeButton.setBounds(orderRow.removeFromLeft(92).reduced(2));
+    moveUpButton.setBounds(orderRow.removeFromLeft(38).reduced(2));
+    moveDownButton.setBounds(orderRow.removeFromLeft(38).reduced(2));
+    removeButton.setBounds(orderRow.removeFromLeft(38).reduced(2));
 
     auto album = bounds.removeFromLeft(
         juce::jmax(280, bounds.getWidth() / 2));

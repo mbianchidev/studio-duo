@@ -12,7 +12,7 @@ analysis, exports, and collection remain part of the `.studioduo` project.
 3. Add alternate mixes to the selected song with **+ ALT MIX**, then choose the
    active source from **Source mix**.
 4. Set the gap, overlap, fade-in, fade-out, and gain for each song. Reorder songs
-   with **UP** and **DOWN**.
+   with **Move Song Up** and **Move Song Down** (chevron icons).
 5. Enter album and song metadata. ISRC values are normalized to the 12-character
    form without spaces or hyphens.
 6. Add comparison material with **+ REFERENCE**. Reference files remain outside

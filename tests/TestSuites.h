@@ -35,3 +35,4 @@ void updateTests();
 void midiTests();
 void dawProjectTests();
 void masteringTests();
+void uiIconTests();

@@ -12,6 +12,7 @@ RoutingPanel::RoutingPanel()
 {
     addAndMakeVisible(addButton);
     addAndMakeVisible(trackButton);
+    trackButton.setTooltip("Configure routing for the selected track");
     addButton.onClick = [this] { showAddMenu(); };
     trackButton.onClick = [this] { showTrackMenu(); };
 }
@@ -69,7 +70,7 @@ void RoutingPanel::paint(juce::Graphics& graphics)
     graphics.fillAll(juce::Colour(StudioColours::panel));
     graphics.setColour(juce::Colour(StudioColours::secondaryText));
     graphics.setFont(juce::Font(juce::FontOptions(10.5f, juce::Font::bold)));
-    graphics.drawText("ROUTING", 0, 0, getWidth() - 112, 24,
+    graphics.drawText("ROUTING", 0, 0, getWidth() - 94, 24,
                       juce::Justification::centredLeft);
 
     const auto routes = displayedRoutes();
@@ -113,7 +114,7 @@ void RoutingPanel::resized()
 {
     auto header = getLocalBounds().removeFromTop(24);
     trackButton.setBounds(header.removeFromRight(56).reduced(2));
-    addButton.setBounds(header.removeFromRight(50).reduced(2));
+    addButton.setBounds(header.removeFromRight(34).reduced(2));
 }
 
 void RoutingPanel::mouseDown(const juce::MouseEvent& event)

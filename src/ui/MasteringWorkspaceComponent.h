@@ -1,5 +1,6 @@
 #pragma once
 
+#include "StudioIconButton.h"
 #include "mastering/MasteringEngine.h"
 #include "mastering/MasteringReleaseService.h"
 #include "model/ProjectModel.h"
@@ -88,9 +89,21 @@ private:
     juce::TextButton addSongButton { "+ SONG" };
     juce::TextButton addAlternateButton { "+ ALT MIX" };
     juce::TextButton addReferenceButton { "+ REFERENCE" };
-    juce::TextButton moveUpButton { "UP" };
-    juce::TextButton moveDownButton { "DOWN" };
-    juce::TextButton removeButton { "REMOVE" };
+    StudioIconButton moveUpButton {
+        StudioIcon::chevronUp,
+        "Move song up",
+        "Move the selected song earlier in the album"
+    };
+    StudioIconButton moveDownButton {
+        StudioIcon::chevronDown,
+        "Move song down",
+        "Move the selected song later in the album"
+    };
+    StudioIconButton removeButton {
+        StudioIcon::deleteItem,
+        "Remove mastering item",
+        "Remove the selected song, alternate mix, or reference"
+    };
 
     juce::Label albumSectionLabel;
     juce::Label albumTitleLabel;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "RoutingUiModel.h"
+#include "StudioIconButton.h"
 #include "model/ProjectCommands.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
@@ -39,7 +40,11 @@ private:
     const Project* project = nullptr;
     juce::String trackId;
     juce::StringArray hardwareOutputs;
-    juce::TextButton addButton { "ADD" };
+    StudioIconButton addButton {
+        StudioIcon::route,
+        "Add route",
+        "Add a MIDI, send, sidechain, or direct hardware route"
+    };
     juce::TextButton trackButton { "TRACK" };
 };
 }

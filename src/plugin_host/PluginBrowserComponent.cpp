@@ -103,13 +103,13 @@ void PluginBrowserComponent::resized()
         bounds.removeFromTop(6);
     }
     auto controls = bounds.removeFromTop(30);
-    scanButton.setBounds(controls.removeFromRight(58));
+    scanButton.setBounds(controls.removeFromRight(34));
     controls.removeFromRight(6);
-    pathsButton.setBounds(controls.removeFromRight(52));
+    pathsButton.setBounds(controls.removeFromRight(34));
     controls.removeFromRight(6);
     validateButton.setBounds(controls.removeFromRight(48));
     controls.removeFromRight(6);
-    addButton.setBounds(controls.removeFromRight(48));
+    addButton.setBounds(controls.removeFromRight(34));
     controls.removeFromRight(6);
     if (getWidth() >= 340)
         search.setBounds(controls);
@@ -211,8 +211,16 @@ void PluginBrowserComponent::listBoxItemDoubleClicked(int row, const juce::Mouse
 void PluginBrowserComponent::timerCallback()
 {
     progressValue = catalog.progress();
-    scanButton.setButtonText(catalog.isScanning() ? "CANCEL" : "SCAN");
-    pathsButton.setEnabled(!catalog.isScanning());
+    const auto scanning = catalog.isScanning();
+    scanButton.setIcon(
+        scanning ? StudioIcon::close : StudioIcon::scan);
+    scanButton.setAccessibleLabel(
+        scanning ? "Cancel plugin scan" : "Scan plugins");
+    scanButton.setTooltip(
+        scanning
+            ? "Cancel the current plugin scan"
+            : "Scan default VST3, Audio Unit, and CLAP locations in a worker process");
+    pathsButton.setEnabled(!scanning);
 
     const auto currentRevision = catalog.revision();
     if (currentRevision == lastRevision)

@@ -557,9 +557,9 @@ void MidiEditorComponent::resized()
     gridSelector.setBounds(first.removeFromLeft(76).reduced(2));
     captureButton.setBounds(first.removeFromLeft(78).reduced(2));
     humanizeButton.setBounds(first.removeFromLeft(92).reduced(2));
-    importMapButton.setBounds(first.removeFromLeft(96).reduced(2));
-    editMapButton.setBounds(first.removeFromLeft(82).reduced(2));
-    closeButton.setBounds(first.removeFromRight(64).reduced(2));
+    importMapButton.setBounds(first.removeFromLeft(36).reduced(2));
+    editMapButton.setBounds(first.removeFromLeft(36).reduced(2));
+    closeButton.setBounds(first.removeFromRight(36).reduced(2));
 
     flamButton.setBounds(second.removeFromLeft(66).reduced(2));
     rollButton.setBounds(second.removeFromLeft(66).reduced(2));
@@ -567,7 +567,7 @@ void MidiEditorComponent::resized()
     blastButton.setBounds(second.removeFromLeft(66).reduced(2));
     doubleKickButton.setBounds(second.removeFromLeft(100).reduced(2));
     patternSelector.setBounds(second.removeFromLeft(142).reduced(2));
-    expandPatternButton.setBounds(second.removeFromLeft(78).reduced(2));
+    expandPatternButton.setBounds(second.removeFromLeft(36).reduced(2));
     routingTemplateSelector.setBounds(second.removeFromLeft(154).reduced(2));
     applyRoutingButton.setBounds(second.removeFromLeft(112).reduced(2));
 }

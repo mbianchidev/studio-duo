@@ -91,10 +91,11 @@ trackpad scrolling and pinch gestures zoom the same view.
 
 ## Start a session
 
-1. Open **SETTINGS** > **Audio / MIDI** and enable the required hardware inputs
-   and outputs.
-2. Add audio, instrument, or MIDI tracks with **+ TRACK**. Import WAV, AIFF,
-   FLAC, MP3, or Ogg Vorbis files with **IMPORT AUDIO**, or select a MIDI/instrument track
+1. Open **Settings** (gear icon) > **Audio / MIDI** and enable the required
+   hardware inputs and outputs.
+2. Add audio, instrument, or MIDI tracks with **Add Track** (plus icon). Import
+   WAV, AIFF, FLAC, MP3, or Ogg Vorbis files with **Import Audio** (down-arrow
+   icon), or select a MIDI/instrument track
    and use **NEW MIDI CLIP**.
 3. Select a track to configure its input, mono or stereo capture, monitoring,
    volume, pan, color, inserts, and output.
@@ -107,7 +108,8 @@ than running during window construction. On Windows, MIDI discovery is checked
 in a separate process before the main app creates its audio manager; a failed
 check leaves the window open with audio disabled and a diagnostic message.
 On macOS, the system may request microphone access at that point. Use
-**SETTINGS** > **Audio / MIDI** to enable inputs or change the active device. On
+**Settings** (gear icon) > **Audio / MIDI** to enable inputs or change the
+active device. On
 the first Windows launch, Studio Duo prefers a native ASIO driver over generic
 compatibility wrappers, enables every hardware input, and uses the driver's
 current sample rate and default buffer size. Before automatically opening an
@@ -118,7 +120,8 @@ native ASIO driver before compatibility wrappers, so an unavailable legacy
 driver does not hide a working interface. If no ASIO driver can start, Studio
 Duo reports the fallback
 in the status bar and opens shared Windows Audio so recording remains
-available. Opening **SETTINGS** > **Audio / MIDI** rescans all backends and
+available. Opening **Settings** (gear icon) > **Audio / MIDI** rescans all
+backends and
 selects one with input devices when the current backend is empty. When no audio
 device is open, Settings starts with shared **Windows Audio** instead of
 automatically retrying a possibly failing ASIO driver.
@@ -152,15 +155,16 @@ aliasing the source family.
 ## Record and manage takes
 
 Each timeline track header has **M**, **S**, and **R** controls for mute, solo,
-and record arm. **REC** captures every armed audio parent into a separate,
-sample-aligned WAV. If no track is armed, the selected audio track becomes the
-single recording target.
+and record arm. **Start Recording** (circle icon) captures every armed audio
+parent into a separate, sample-aligned WAV. If no track is armed, the selected
+audio track becomes the single recording target.
 
-Press **REC** again or **STOP** to finish every active recording at the same
-audio callback boundary. The timeline draws a live waveform from lock-free peak
-buckets while recording. Stopping flushes each WAV before its clip is added; the
-inspector identifies the saved filename and the status bar reports completion.
-The playhead stays at the recording stop position.
+Press **Stop Recording** (square icon) or **Stop** (square icon) to finish every
+active recording at the same audio callback boundary. The timeline draws a live
+waveform from lock-free peak buckets while recording. Stopping flushes each WAV
+before its clip is added; the inspector identifies the saved filename and the
+status bar reports completion. The playhead stays at the recording stop
+position.
 
 Each completed pass creates grouped `v1`, `v2`, `v3`, and later child tracks
 below the recorded parent. The whole multitrack pass is one undoable command.
@@ -178,7 +182,7 @@ playback to the active playlist.
 
 ## Configure transport and linked editing
 
-**TRACKING SETUP** manages:
+**Tracking Setup** (flag icon) manages:
 
 - Named sections/markers and section-specific transport settings
 - Tempo and meter changes at the playhead
@@ -198,8 +202,9 @@ at that exact timeline position without moving the playhead.
 
 ### Set an arbitrary loop
 
-Use the **...** button beside **LOOP**, or **TRACKING SETUP > Configure loop
-range**. The **LOOP** button still switches the saved loop on/off in one click.
+Use **Configure Loop Range** (sliders icon) beside **Loop**, or **Tracking Setup
+> Configure loop range**. The **Loop** button still switches the saved loop
+on/off in one click.
 The editor accepts timeline seconds, musical positions (`bar:beat:tick`, with
 one-based bars/beats and 0-959 ticks), or two named markers. It can also use the
 whole project or selected audio/MIDI clip. There is no fixed bar or section
@@ -218,7 +223,7 @@ boundaries. Loop-range export uses these same saved bounds.
 ### Section tempo, meter and click
 
 New projects start in **4/4**. Right-click a named marker and choose **Tempo,
-time signature and click**, or use its submenu in **TRACKING SETUP**.
+time signature and click**, or use its submenu in **Tracking Setup** (flag icon).
 **Create + timing** / **Save + timing** opens the same settings after adding or editing
 a marker.
 
@@ -303,19 +308,20 @@ its routing editor.
 
 Use the single sidebar arrow to collapse Session controls to an icon rail. The
 inspector and mixer each keep their own collapse button on the panel edge; when
-hidden, **INSPECT** reappears at the right edge and **MIX** reappears above the
-bottom status bar. Their dividers also collapse when dragged closed and restore
-when dragged open or double-clicked.
+hidden, a left chevron restores the inspector at the right edge and an up
+chevron restores the mixer above the bottom status bar. Their dividers also
+collapse when dragged closed and restore when dragged open or double-clicked.
 The processor search moves above its action buttons on narrow layouts.
 
 Double-click a track name in the inspector, timeline, or mixer to edit its name.
 **COLOR** provides palette choices and an HSV/RGB picker. Appearance changes are
 persistent and undoable.
 
-Use **+ TRACK** for audio, aux, bus, folder, VCA, and control-room tracks.
-**+ BUS TRACK** remains a direct bus shortcut. Select a root track and
-choose **OUTPUT** in the inspector. Audio, instrument, aux, and bus tracks can
-feed a bus or the master. Buses can feed later buses. Destinations that would
+Use **Add Track** (plus icon) for audio, aux, bus, folder, VCA, and
+control-room tracks.
+**Add Bus Track** (routing icon) remains a direct bus shortcut. Select a root
+track and choose **OUTPUT** in the inspector. Audio, instrument, aux, and bus
+tracks can feed a bus or the master. Buses can feed later buses. Destinations that would
 create a cycle are excluded.
 
 The routing panel adds pre-fader and post-fader sends, plugin sidechains, and
@@ -323,9 +329,9 @@ direct hardware outputs. Click a route to change tap, level, mute, enablement,
 or remove it. Aux and bus tracks sum every incoming path. The graph rejects
 cycles across main routes, sends, and sidechains.
 
-**+ TRACK** also creates instrument and MIDI tracks. Enable a MIDI input in
-**SETTINGS** > **Audio / MIDI**, then arm a MIDI or instrument track with **R**
-to receive it while the transport is running or stopped. MIDI and instrument
+**Add Track** also creates instrument and MIDI tracks. Enable a MIDI input in
+**Settings** (gear icon) > **Audio / MIDI**, then arm a MIDI or instrument track
+with **R** to receive it while the transport is running or stopped. MIDI and instrument
 tracks can add independent MIDI destinations without replacing an instrument
 track's audio output. MIDI track inserts process events before they are sent
 downstream; standard and CLAP
@@ -335,7 +341,8 @@ of channels 1-16; the metal multi-output template uses those filters.
 
 ## Record and edit MIDI
 
-Arm any combination of root MIDI and instrument tracks, then press **REC**.
+Arm any combination of root MIDI and instrument tracks, then press **Start
+Recording** (circle icon).
 Studio Duo records the same enabled hardware MIDI input delivered to live
 routing while audio tracks can record in the same pass. Stopping creates
 ordinary beat-based MIDI clips through one undoable command. Loop passes become
@@ -399,7 +406,7 @@ assigned track faders without changing signal routing.
 
 A control-room track receives the master monitor path without entering exports.
 Its menu selects monitor hardware, dim, mono, mute, and inserts. Metronome
-hardware routing remains separate in **TRACKING SETUP** and is never included in
+hardware routing remains separate in **Tracking Setup** (flag icon) and is never included in
 the final render.
 Mixer strips show separate pre-fader and post-fader meters. Plugin and bridge
 latencies are aligned at every summing point and at the exact insert targeted by
@@ -407,7 +414,7 @@ each sidechain.
 
 ## Automate controls and plugin parameters
 
-Choose **AUTOMATION** to open the lane editor for the selected track.
+Choose **Automation** (curve icon) to open the lane editor for the selected track.
 
 - Select read, touch, latch, write, trim, or preview mode.
 - Arm writing with **WRITE ARM**.
@@ -500,7 +507,7 @@ and advertised ARA capability without proprietary source code.
 
 ## Create reamp paths
 
-Select a DI parent in **TRACKING SETUP** and create a hardware or plugin tone
+Select a DI parent in **Tracking Setup** (flag icon) and create a hardware or plugin tone
 path.
 
 A hardware path sends the processed DI to an interface output and records the
@@ -512,7 +519,7 @@ A plugin path creates a non-destructive audio track that references the active
 DI playlist. Add inserts to that track to build the tone without replacing the
 source DI.
 
-For a selected tone path, **TRACKING SETUP** can:
+For a selected tone path, **Tracking Setup** (flag icon) can:
 
 - Capture named snapshots of routing, processor state, level, and automation
 - Recall a snapshot with undo and its stored level-match trim
@@ -586,7 +593,7 @@ See [project-format.md](project-format.md).
 
 ### Audio export
 
-**EXPORT** opens audio settings before the destination chooser. WAV at 48 kHz,
+**Export Audio** (up-arrow icon) opens audio settings before the destination chooser. WAV at 48 kHz,
 24-bit stereo remains the default. Choose WAV, AIFF, FLAC, Ogg Vorbis, or MP3;
 MP3 encoding is built in and requires no separate encoder installation.
 The same encoding controls are available under **MASTERING > EXPORT MASTER**.
@@ -664,7 +671,7 @@ boundary.
 
 Studio Duo checks the official release feed once shortly after launch. When a
 new version is available, the app prompts without interrupting the current
-project. Open **SETTINGS** > **Updates** to check again, download manually, or
+project. Open **Settings** (gear icon) > **Updates** to check again, download manually, or
 change **Download updates automatically**. Automatic downloads are enabled by
 default.
 
@@ -706,7 +713,7 @@ If the app closes during startup, run the installed executable from PowerShell:
 
 Use the actual executable path for a portable or custom installation.
 `--safe-audio` skips automatic audio and MIDI initialization for this launch
-without deleting the saved setup. Open **SETTINGS** > **Audio / MIDI** and
+without deleting the saved setup. Open **Settings** (gear icon) > **Audio / MIDI** and
 choose **Windows Audio** or another working driver. Share the newest ordinary
 log and any matching crash report when reporting the problem.
 MIDI discovery failures also leave **Updates** available without loading audio

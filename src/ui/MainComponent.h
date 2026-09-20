@@ -1,5 +1,6 @@
 #pragma once
 
+#include "StudioIconButton.h"
 #include "StudioTheme.h"
 #include "AutomationPanel.h"
 #include "MixerPanel.h"
@@ -322,37 +323,115 @@ private:
     juce::ThreadPool compatibilityValidator { 1 };
     juce::ThreadPool exportWorker { 1 };
 
-    juce::TextButton newButton { "NEW" };
-    juce::TextButton openButton { "OPEN" };
-    juce::TextButton saveButton { "SAVE" };
+    StudioIconButton newButton {
+        StudioIcon::newFile, "New project", "Create a new project"
+    };
+    StudioIconButton openButton {
+        StudioIcon::openFolder, "Open project", "Open a .studioduo project"
+    };
+    StudioIconButton saveButton {
+        StudioIcon::save, "Save project", "Save project (Command/Ctrl+S)"
+    };
     juce::TextButton dawProjectButton { "DAWPROJECT" };
-    juce::TextButton exportButton { "EXPORT" };
+    StudioIconButton exportButton {
+        StudioIcon::exportFile,
+        "Export audio",
+        "Export audio: format, quality, named-marker range, fades, and effects tail"
+    };
     juce::TextButton masteringButton { "MASTERING" };
-    juce::TextButton settingsButton { "SETTINGS" };
-    juce::TextButton undoButton { "UNDO" };
-    juce::TextButton redoButton { "REDO" };
-    juce::TextButton playButton { "PLAY" };
-    juce::TextButton stopButton { "STOP" };
-    juce::TextButton recordButton { "REC" };
-    juce::TextButton loopButton { "LOOP" };
-    juce::TextButton loopRangeButton { "..." };
-    juce::ToggleButton metronomeButton { "CLICK" };
+    StudioIconButton settingsButton {
+        StudioIcon::settings,
+        "Settings",
+        "Configure audio, MIDI, and automatic updates"
+    };
+    StudioIconButton undoButton {
+        StudioIcon::undo, "Undo", "Undo (Command/Ctrl+Z)"
+    };
+    StudioIconButton redoButton {
+        StudioIcon::redo, "Redo", "Redo (Command/Ctrl+Shift+Z)"
+    };
+    StudioIconButton playButton {
+        StudioIcon::play, "Play", "Play (Space)"
+    };
+    StudioIconButton stopButton {
+        StudioIcon::stop,
+        "Stop",
+        "Stop playback; recordings stop at the current position"
+    };
+    StudioIconButton recordButton {
+        StudioIcon::record,
+        "Start recording",
+        "Record armed audio, MIDI, and instrument tracks"
+    };
+    StudioIconButton loopButton {
+        StudioIcon::loop,
+        "Enable loop",
+        "Enable the configured loop"
+    };
+    StudioIconButton loopRangeButton {
+        StudioIcon::sliders,
+        "Configure loop range",
+        "Configure loop start and end: seconds, musical positions, or markers"
+    };
+    StudioIconButton metronomeButton {
+        StudioIcon::metronome,
+        "Enable metronome",
+        "Enable the metronome"
+    };
     juce::Slider tempoSlider;
     juce::Label tempoLabel;
     juce::Label positionLabel;
     juce::Label projectLabel;
 
-    juce::TextButton addTrackButton { "+ TRACK" };
-    juce::TextButton addBusButton { "+ BUS TRACK" };
-    juce::TextButton importButton { "IMPORT AUDIO" };
-    juce::TextButton duplicateTrackButton { "DUPLICATE TRACK" };
-    juce::TextButton deleteTrackButton { "DELETE TRACK" };
-    juce::TextButton trackingButton { "TRACKING SETUP" };
-    juce::TextButton automationButton { "AUTOMATION" };
+    StudioIconButton addTrackButton {
+        StudioIcon::add,
+        "Add track",
+        "Add an audio, instrument, MIDI, aux, bus, folder, VCA, or control-room track"
+    };
+    StudioIconButton addBusButton {
+        StudioIcon::bus, "Add bus track", "Add a stereo bus track"
+    };
+    StudioIconButton importButton {
+        StudioIcon::importFile,
+        "Import audio",
+        "Import WAV, AIFF, FLAC, or MP3 audio"
+    };
+    StudioIconButton duplicateTrackButton {
+        StudioIcon::duplicate,
+        "Duplicate track",
+        "Duplicate the selected track and its edits"
+    };
+    StudioIconButton deleteTrackButton {
+        StudioIcon::deleteItem,
+        "Delete track",
+        "Delete the selected track"
+    };
+    StudioIconButton trackingButton {
+        StudioIcon::marker,
+        "Tracking setup",
+        "Add or edit named markers, tempo, meter, punch, count-in, and click routing"
+    };
+    StudioIconButton automationButton {
+        StudioIcon::automation,
+        "Automation",
+        "Edit and record mixer and plugin automation"
+    };
     juce::TextButton newMidiClipButton { "NEW MIDI CLIP" };
-    juce::TextButton sessionPanelToggleButton { "<" };
-    juce::TextButton inspectorPanelToggleButton { "INSPECT" };
-    juce::TextButton mixerPanelToggleButton { "MIX" };
+    StudioIconButton sessionPanelToggleButton {
+        StudioIcon::chevronLeft,
+        "Collapse session sidebar",
+        "Collapse the session sidebar"
+    };
+    StudioIconButton inspectorPanelToggleButton {
+        StudioIcon::chevronRight,
+        "Hide inspector",
+        "Hide the inspector"
+    };
+    StudioIconButton mixerPanelToggleButton {
+        StudioIcon::chevronDown,
+        "Hide mixer",
+        "Hide the mixer"
+    };
 
     juce::Component inspectorContent;
     juce::Viewport inspectorViewport;
@@ -373,13 +452,37 @@ private:
     juce::TextButton soloButton { "SOLO" };
     juce::TextButton armButton { "ARM" };
     juce::TextButton trackColourButton { "COLOR" };
-    juce::TextButton splitClipButton { "SPLIT @ PLAYHEAD" };
-    juce::TextButton deleteClipButton { "DELETE CLIP" };
-    juce::TextButton trimClipStartButton { "TRIM LEFT [" };
-    juce::TextButton trimClipEndButton { "TRIM RIGHT ]" };
-    juce::TextButton zoomOutButton { "-" };
+    StudioIconButton splitClipButton {
+        StudioIcon::split,
+        "Split clip",
+        "Split the selected clip at the playhead"
+    };
+    StudioIconButton deleteClipButton {
+        StudioIcon::deleteItem,
+        "Delete clip",
+        "Delete the selected clip"
+    };
+    StudioIconButton trimClipStartButton {
+        StudioIcon::trimStart,
+        "Trim clip start",
+        "Trim selected clip start to playhead ([)"
+    };
+    StudioIconButton trimClipEndButton {
+        StudioIcon::trimEnd,
+        "Trim clip end",
+        "Trim selected clip end to playhead (])"
+    };
+    StudioIconButton zoomOutButton {
+        StudioIcon::zoomOut,
+        "Zoom out",
+        "Zoom timeline out (Command/Ctrl+-)"
+    };
     juce::TextButton zoomResetButton { "100%" };
-    juce::TextButton zoomInButton { "+" };
+    StudioIconButton zoomInButton {
+        StudioIcon::zoomIn,
+        "Zoom in",
+        "Zoom timeline in (Command/Ctrl++)"
+    };
 
     juce::Viewport timelineViewport;
     TimelineComponent timeline;
