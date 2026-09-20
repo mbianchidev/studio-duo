@@ -20,6 +20,12 @@ hardening remains before the complete DAW described in the
 
 - Sample-aligned multitrack recording, punch, loop, count-in, tempo maps, and
   routed metronome
+- Named timeline markers with undoable editing and whole-project, loop,
+  marker-to-marker, or custom-range audio export
+- Editable loop bounds in seconds, bars/beats/ticks, or marker positions, plus
+  section-specific tempo, time signature, and click/accent patterns
+- WAV, AIFF, FLAC, Ogg Vorbis, and built-in MP3 encoding with sample-rate,
+  bit-depth, mono/stereo, bitrate/quality, peak-normalization, and dither controls
 - Take lanes, comping, linked multitrack edits, transient tools, elastic audio,
   fades, crossfades, and consolidation
 - Cycle-safe sends, per-insert sidechains, auxes, nested buses, folders, VCAs,
@@ -42,7 +48,7 @@ hardening remains before the complete DAW described in the
   validation, deterministic ZIP output, media and plug-in state transfer,
   preserved scenes, and object-specific compatibility reports
 - Dedicated multi-song mastering with alternate source mixes, gaps, overlaps,
-  fades, metadata, BS.1770/R128 loudness analysis, true peak, WAV/FLAC/Ogg
+  fades, metadata, BS.1770/R128 loudness analysis, true peak, configurable audio
   export, deterministic TPDF dither, signed reports, and external licensed DDP
   encoder integration
 - Content-addressed portable copies with package-relative media paths,
@@ -106,4 +112,7 @@ option. On Windows, Studio Duo uses JUCE's dual-licensed Steinberg ASIO SDK
 headers under their GPLv3 option. Signalsmith Stretch 1.1.0, CLAP 1.2.10, and
 clap-helpers are MIT licensed. libsamplerate 0.2.2 is BSD-2-Clause licensed.
 ARA SDK 2.3.0 is Apache-2.0 licensed.
+The bundled, encoder-only LAME 3.100 library is LGPL-2.0-or-later licensed;
+its license, library and application source archives, scalar build configuration,
+and rebuilding/relinking notice ship with the application.
 The vendored DAWproject 1.0 schemas and upstream XML example are MIT licensed.

@@ -4,12 +4,142 @@
 #include "reamp/ReampSnapshotService.h"
 
 #include <algorithm>
+#include <cmath>
 #include <numeric>
 
 namespace studio
 {
 namespace
 {
+bool validSongSection(const SongSection& section)
+{
+    return section.id.trim().isNotEmpty()
+        && section.name.trim().isNotEmpty()
+        && std::isfinite(section.timeSeconds)
+        && section.timeSeconds >= 0.0;
+}
+
+void insertSongSection(std::vector<SongSection>& sections,
+                       const SongSection& section)
+{
+    const auto insertion = std::lower_bound(
+        sections.begin(),
+        sections.end(),
+        section.timeSeconds,
+        [](const auto& existing, double position)
+        {
+            return existing.timeSeconds < position;
+        });
+    sections.insert(insertion, section);
+}
+
+template <typename Change>
+bool hasSectionPoint(const std::vector<Change>& changes,
+                     const juce::String& sectionId)
+{
+    return std::any_of(changes.cbegin(), changes.cend(),
+                       [&sectionId](const auto& change)
+                       {
+                           return change.sectionId == sectionId;
+                       });
+}
+
+template <typename Change>
+void removeSectionPoints(std::vector<Change>& changes,
+                         const juce::String& sectionId)
+{
+    changes.erase(
+        std::remove_if(changes.begin(), changes.end(),
+                       [&sectionId](const auto& change)
+                       {
+                           return change.sectionId == sectionId;
+                       }),
+        changes.end());
+}
+
+template <typename Change>
+void sortTransportChanges(std::vector<Change>& changes)
+{
+    std::stable_sort(changes.begin(), changes.end(),
+                     [](const auto& left, const auto& right)
+                     {
+                         return left.timeSeconds < right.timeSeconds;
+                     });
+}
+
+template <typename Change>
+bool moveSectionPoints(std::vector<Change>& changes,
+                       const SongSection& section,
+                       const juce::String& mapName,
+                       juce::String& error)
+{
+    if (std::any_of(
+            changes.cbegin(), changes.cend(),
+            [&section](const auto& change)
+            {
+                return change.sectionId != section.id
+                    && juce::exactlyEqual(change.timeSeconds, section.timeSeconds);
+            }))
+    {
+        error = "Moving the section would collide with an existing " + mapName + " point.";
+        return false;
+    }
+    for (auto& change : changes)
+        if (change.sectionId == section.id)
+            change.timeSeconds = section.timeSeconds;
+    sortTransportChanges(changes);
+    return true;
+}
+
+template <typename Change, typename ApplySettings>
+bool setSectionPoint(std::vector<Change>& changes,
+                     const SongSection& section,
+                     bool enabled,
+                     ApplySettings applySettings,
+                     const juce::String& mapName,
+                     juce::String& error)
+{
+    if (!enabled)
+    {
+        removeSectionPoints(changes, section.id);
+        return true;
+    }
+
+    auto target = std::find_if(
+        changes.begin(), changes.end(),
+        [&section](const auto& change)
+        {
+            return change.sectionId == section.id;
+        });
+    for (auto candidate = changes.begin(); candidate != changes.end(); ++candidate)
+    {
+        if (candidate == target
+            || !juce::exactlyEqual(candidate->timeSeconds, section.timeSeconds))
+            continue;
+        if (candidate->sectionId.isNotEmpty())
+        {
+            error = "The section cannot overwrite another section's " + mapName + " point.";
+            return false;
+        }
+        if (target != changes.end())
+        {
+            error = "Multiple " + mapName + " points collide with the section position.";
+            return false;
+        }
+        target = candidate;
+    }
+    if (target == changes.end())
+    {
+        changes.emplace_back();
+        target = changes.end() - 1;
+    }
+    target->timeSeconds = section.timeSeconds;
+    target->sectionId = section.id;
+    applySettings(*target);
+    sortTransportChanges(changes);
+    return true;
+}
+
 bool hasMainAudioOutput(TrackType type)
 {
     return type == TrackType::audio
@@ -218,24 +348,17 @@ bool AddSongSectionCommand::perform(Project& project, juce::String& error)
             return existing.id == section.id
                 || std::abs(existing.timeSeconds - section.timeSeconds) < 0.0001;
         });
-    if (section.id.isEmpty()
-        || section.name.isEmpty()
-        || section.timeSeconds < 0.0
+    if (!validSongSection(section)
         || duplicate != project.sections.cend())
     {
-        error = "A song section needs a name and a unique non-negative timeline position.";
+        error = "A song section needs a unique ID, a name, and a unique finite non-negative timeline position.";
         return false;
     }
+    if (section.clickSettings.has_value()
+        && !section.clickSettings->validate(error))
+        return false;
 
-    const auto insertion = std::lower_bound(
-        project.sections.begin(),
-        project.sections.end(),
-        section.timeSeconds,
-        [](const auto& existing, double position)
-        {
-            return existing.timeSeconds < position;
-        });
-    project.sections.insert(insertion, section);
+    insertSongSection(project.sections, section);
     return true;
 }
 
@@ -249,6 +372,251 @@ void AddSongSectionCommand::undo(Project& project)
                            return existing.id == section.id;
                        }),
         project.sections.end());
+}
+
+SetSongSectionCommand::SetSongSectionCommand(
+    SongSection before,
+    SongSection after)
+    : oldSection(std::move(before)),
+      newSection(std::move(after))
+{
+    newSection.name = newSection.name.trim();
+}
+
+juce::String SetSongSectionCommand::name() const
+{
+    return "Edit song section";
+}
+
+bool SetSongSectionCommand::perform(Project& project, juce::String& error)
+{
+    if (oldSection.id != newSection.id
+        || !validSongSection(oldSection)
+        || !validSongSection(newSection))
+    {
+        error = "A song section edit must keep its ID and have a name and a finite non-negative timeline position.";
+        return false;
+    }
+
+    const auto section = std::find_if(
+        project.sections.begin(),
+        project.sections.end(),
+        [this](const auto& existing)
+        {
+            return existing.id == oldSection.id;
+        });
+    if (section == project.sections.end())
+    {
+        error = "The song section no longer exists.";
+        return false;
+    }
+    if (!project.validateTransport(error))
+        return false;
+    const auto duplicate = std::any_of(
+        project.sections.cbegin(),
+        project.sections.cend(),
+        [this](const auto& existing)
+        {
+            return existing.id != newSection.id
+                && std::abs(existing.timeSeconds - newSection.timeSeconds)
+                       < 0.0001;
+        });
+    if (duplicate)
+    {
+        error = "Song sections require unique timeline positions.";
+        return false;
+    }
+
+    const auto movesPosition = !juce::exactlyEqual(section->timeSeconds, newSection.timeSeconds);
+    const auto movesTempo = movesPosition
+        && hasSectionPoint(project.tempoChanges, oldSection.id);
+    const auto movesMeter = movesPosition
+        && hasSectionPoint(project.meterChanges, oldSection.id);
+    auto replacement = newSection;
+    replacement.clickSettings = section->clickSettings;
+    auto candidate = project;
+    *candidate.findSection(oldSection.id) = replacement;
+    if ((movesTempo
+         && !moveSectionPoints(candidate.tempoChanges, replacement, "tempo", error))
+        || (movesMeter
+            && !moveSectionPoints(candidate.meterChanges, replacement, "meter", error))
+        || !candidate.validateTransport(error))
+        return false;
+
+    if (!capturedOriginal)
+    {
+        oldSection = *section;
+        if (movesTempo)
+            oldTempoChanges = project.tempoChanges;
+        if (movesMeter)
+            oldMeterChanges = project.meterChanges;
+        capturedOriginal = true;
+    }
+    project.sections.erase(section);
+    insertSongSection(project.sections, replacement);
+    if (movesTempo)
+        project.tempoChanges = std::move(candidate.tempoChanges);
+    if (movesMeter)
+        project.meterChanges = std::move(candidate.meterChanges);
+    return true;
+}
+
+void SetSongSectionCommand::undo(Project& project)
+{
+    if (!capturedOriginal)
+        return;
+
+    const auto section = std::find_if(
+        project.sections.begin(),
+        project.sections.end(),
+        [this](const auto& existing)
+        {
+            return existing.id == oldSection.id;
+        });
+    if (section != project.sections.end())
+    {
+        project.sections.erase(section);
+        insertSongSection(project.sections, oldSection);
+        if (oldTempoChanges.has_value())
+            project.tempoChanges = *oldTempoChanges;
+        if (oldMeterChanges.has_value())
+            project.meterChanges = *oldMeterChanges;
+    }
+}
+
+RemoveSongSectionCommand::RemoveSongSectionCommand(
+    juce::String sectionToRemove)
+    : sectionId(std::move(sectionToRemove))
+{
+}
+
+juce::String RemoveSongSectionCommand::name() const
+{
+    return "Remove song section";
+}
+
+bool RemoveSongSectionCommand::perform(Project& project, juce::String& error)
+{
+    const auto section = std::find_if(
+        project.sections.begin(),
+        project.sections.end(),
+        [this](const auto& existing)
+        {
+            return existing.id == sectionId;
+        });
+    if (sectionId.trim().isEmpty() || section == project.sections.end())
+    {
+        error = "The song section no longer exists.";
+        return false;
+    }
+    if (!removedSection.has_value())
+    {
+        removedSection = *section;
+        if (hasSectionPoint(project.tempoChanges, sectionId))
+            oldTempoChanges = project.tempoChanges;
+        if (hasSectionPoint(project.meterChanges, sectionId))
+            oldMeterChanges = project.meterChanges;
+    }
+    removeSectionPoints(project.tempoChanges, sectionId);
+    removeSectionPoints(project.meterChanges, sectionId);
+    project.sections.erase(section);
+    return true;
+}
+
+void RemoveSongSectionCommand::undo(Project& project)
+{
+    if (removedSection.has_value())
+    {
+        insertSongSection(project.sections, *removedSection);
+        if (oldTempoChanges.has_value())
+            project.tempoChanges = *oldTempoChanges;
+        if (oldMeterChanges.has_value())
+            project.meterChanges = *oldMeterChanges;
+    }
+}
+
+SetSectionTransportCommand::SetSectionTransportCommand(
+    juce::String targetSectionId,
+    SectionTransportSettings replacementSettings)
+    : sectionId(std::move(targetSectionId)),
+      settings(std::move(replacementSettings))
+{
+}
+
+juce::String SetSectionTransportCommand::name() const
+{
+    return "Change section transport settings";
+}
+
+bool SetSectionTransportCommand::perform(Project& project, juce::String& error)
+{
+    auto* section = project.findSection(sectionId);
+    if (section == nullptr)
+    {
+        error = "The song section no longer exists.";
+        return false;
+    }
+    if (!project.validateTransport(error))
+        return false;
+
+    auto candidate = project;
+    auto* candidateSection = candidate.findSection(sectionId);
+    if (!setSectionPoint(
+            candidate.tempoChanges, *candidateSection, settings.tempoBpm.has_value(),
+            [this](auto& change)
+            {
+                change.bpm = *settings.tempoBpm;
+            },
+            "tempo", error)
+        || !setSectionPoint(
+            candidate.meterChanges, *candidateSection, settings.timeSignature.has_value(),
+            [this](auto& change)
+            {
+                change.numerator = settings.timeSignature->numerator;
+                change.denominator = settings.timeSignature->denominator;
+            },
+            "meter", error))
+        return false;
+    if (settings.tempoBpm.has_value())
+    {
+        const auto point = std::find_if(
+            candidate.tempoChanges.begin(), candidate.tempoChanges.end(),
+            [this](const auto& change)
+            {
+                return change.sectionId == sectionId;
+            });
+        // Incoming ramps are stored on the preceding actual tempo point.
+        if (point != candidate.tempoChanges.begin())
+            (point - 1)->rampToNext = settings.rampFromPrevious;
+        else if (candidateSection->timeSeconds > 0.0 && settings.rampFromPrevious)
+            candidate.tempoChanges.insert(
+                candidate.tempoChanges.begin(), { 0.0, candidate.tempo, true });
+    }
+    candidateSection->clickSettings = settings.clickSettings;
+    if (!candidate.validateTransport(error))
+        return false;
+
+    if (!capturedOriginal)
+    {
+        oldTempoChanges = project.tempoChanges;
+        oldMeterChanges = project.meterChanges;
+        oldClickSettings = section->clickSettings;
+        capturedOriginal = true;
+    }
+    project.tempoChanges = std::move(candidate.tempoChanges);
+    project.meterChanges = std::move(candidate.meterChanges);
+    section->clickSettings = std::move(candidateSection->clickSettings);
+    return true;
+}
+
+void SetSectionTransportCommand::undo(Project& project)
+{
+    auto* section = project.findSection(sectionId);
+    if (!capturedOriginal || section == nullptr)
+        return;
+    project.tempoChanges = oldTempoChanges;
+    project.meterChanges = oldMeterChanges;
+    section->clickSettings = oldClickSettings;
 }
 
 AddTrackCommand::AddTrackCommand(Track trackToAdd)
@@ -1837,7 +2205,7 @@ juce::String SetProjectTransportCommand::name() const
 
 bool SetProjectTransportCommand::perform(Project& project, juce::String& error)
 {
-    Project candidate;
+    auto candidate = project;
     apply(candidate, newState);
     if (!candidate.validateTransport(error))
         return false;

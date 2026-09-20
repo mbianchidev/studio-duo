@@ -63,6 +63,58 @@ private:
     SongSection section;
 };
 
+class SetSongSectionCommand final : public ProjectCommand
+{
+public:
+    SetSongSectionCommand(SongSection before, SongSection after);
+
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    SongSection oldSection;
+    SongSection newSection;
+    std::optional<std::vector<TempoChange>> oldTempoChanges;
+    std::optional<std::vector<MeterChange>> oldMeterChanges;
+    bool capturedOriginal = false;
+};
+
+class RemoveSongSectionCommand final : public ProjectCommand
+{
+public:
+    explicit RemoveSongSectionCommand(juce::String sectionId);
+
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    juce::String sectionId;
+    std::optional<SongSection> removedSection;
+    std::optional<std::vector<TempoChange>> oldTempoChanges;
+    std::optional<std::vector<MeterChange>> oldMeterChanges;
+};
+
+class SetSectionTransportCommand final : public ProjectCommand
+{
+public:
+    SetSectionTransportCommand(juce::String sectionId,
+                               SectionTransportSettings settings);
+
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    juce::String sectionId;
+    SectionTransportSettings settings;
+    std::vector<TempoChange> oldTempoChanges;
+    std::vector<MeterChange> oldMeterChanges;
+    std::optional<SectionClickSettings> oldClickSettings;
+    bool capturedOriginal = false;
+};
+
 class AddTrackCommand final : public ProjectCommand
 {
 public:

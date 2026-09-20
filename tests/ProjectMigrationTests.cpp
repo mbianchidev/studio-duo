@@ -47,6 +47,7 @@ void projectMigrationTests()
     auto hasMidiChannelPressureCapability = false;
     auto hasMasteringCapability = false;
     auto hasRenderReportV2Capability = false;
+    auto hasSectionTransportCapability = false;
     if (manifestObject != nullptr)
     {
         const auto required =
@@ -81,6 +82,8 @@ void projectMigrationTests()
                     hasRenderReportV2Capability
                     || capability.toString()
                         == "renderReportsV2";
+                hasSectionTransportCapability = hasSectionTransportCapability
+                    || capability.toString() == "sectionTransportV1";
             }
         }
     }
@@ -95,8 +98,9 @@ void projectMigrationTests()
                && hasCompatibilityReportCapability
                && hasMidiChannelPressureCapability
                && hasMasteringCapability
-               && hasRenderReportV2Capability,
-           "Version 9 manifest declares mastering, MIDI, channel-pressure, bundled-device, scene, report, DAWproject, and automation capabilities.");
+               && hasRenderReportV2Capability
+               && hasSectionTransportCapability,
+           "Current manifests declare section transport and existing mastering, MIDI, device and interchange capabilities.");
 
     juce::String error;
     const auto loaded = studio::ProjectFile::load(package, error);
@@ -145,7 +149,26 @@ void projectMigrationTests()
     expect(loadedLegacyVersionEight.has_value()
                && loadedLegacyVersionEight->mastering.tracks.empty()
                && loadedLegacyVersionEight->mastering.references.empty(),
-           "Version 8 projects migrate to version 9 with an empty mastering album.");
+           "Version 8 projects migrate to the current format with an empty mastering album.");
+
+    auto legacyNineProject = studio::Project::createDefault();
+    legacyNineProject.sections.push_back({ "legacy-marker", "Legacy", 1.0 });
+    legacyNineProject.tempoChanges = { { 1.0, 140.0, false } };
+    legacyNineProject.loopStartSeconds = 1.25;
+    legacyNineProject.loopEndSeconds = 6.75;
+    auto legacyNine = legacyNineProject.toVar();
+    legacyNine.getDynamicObject()->setProperty("formatVersion", 9);
+    const auto loadedNine = studio::Project::fromVar(legacyNine, error);
+    expect(loadedNine && loadedNine->timeSignatureNumerator == 4
+               && loadedNine->timeSignatureDenominator == 4
+               && loadedNine->sections.size() == 1
+               && !loadedNine->sections.front().clickSettings
+               && loadedNine->tempoChanges.front().sectionId.isEmpty()
+               && loadedNine->tempoChanges == legacyNineProject.tempoChanges
+               && loadedNine->loopStartSeconds == 1.25
+               && loadedNine->loopEndSeconds == 6.75
+               && static_cast<int>(loadedNine->toVar()["formatVersion"]) == 10,
+           "Version 9 projects retain their loop/maps and 4/4 default without inventing section overrides.");
 
     auto versionSix = project.toVar();
     auto* versionSixObject = versionSix.getDynamicObject();

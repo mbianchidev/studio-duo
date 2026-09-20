@@ -1,6 +1,7 @@
 #define AppName "Studio Duo"
 #define AppVersion GetEnv("STUDIO_DUO_VERSION")
 #define AppExecutable GetEnv("STUDIO_DUO_EXECUTABLE")
+#define LicenseDirectory GetEnv("STUDIO_DUO_LICENSE_DIRECTORY")
 #define SourceDirectory GetEnv("STUDIO_DUO_SOURCE_DIRECTORY")
 #define OutputDirectory GetEnv("STUDIO_DUO_INSTALLER_OUTPUT_DIRECTORY")
 #define VCRedistPath GetEnv("STUDIO_DUO_VC_REDIST")
@@ -52,6 +53,7 @@ Source: "{#VCRedistPath}"; DestName: "vc_redist.x64.exe"; Flags: dontcopy noencr
 Source: "{#AppExecutable}"; DestDir: "{app}"; DestName: "Studio Duo.exe"; Flags: ignoreversion
 Source: "{#SourceDirectory}\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceDirectory}\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#LicenseDirectory}\*"; DestDir: "{app}\licenses"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\Studio Duo"; Filename: "{app}\Studio Duo.exe"; WorkingDir: "{app}"

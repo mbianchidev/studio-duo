@@ -1,5 +1,6 @@
 #include "MasteringWorkspaceComponent.h"
 
+#include "AudioExportOptionsComponent.h"
 #include "StudioTheme.h"
 
 #include <juce_cryptography/juce_cryptography.h>
@@ -199,7 +200,7 @@ MasteringWorkspaceComponent::MasteringWorkspaceComponent()
     moveDownButton.onClick = [this] { moveSelectedTrack(1); };
     removeButton.onClick = [this] { removeSelectedTrack(); };
     analyseButton.onClick = [this] { analyseAlbum(); };
-    exportButton.onClick = [this] { showExportMenu(); };
+    exportButton.onClick = [this] { showExportOptions(); };
     ddpButton.onClick = [this] { beginDdpExport(); };
     portableButton.onClick = [this] { beginPortableCopy(); };
     repairButton.onClick = [this] { beginRepair(); };
@@ -676,88 +677,110 @@ void MasteringWorkspaceComponent::analyseAlbum()
     });
 }
 
-void MasteringWorkspaceComponent::showExportMenu()
+void MasteringWorkspaceComponent::showExportOptions()
 {
-    juce::PopupMenu menu;
-    menu.addItem(1, "WAV master - 48 kHz / 24-bit");
-    menu.addItem(2, "FLAC master - 48 kHz / 24-bit");
-    menu.addItem(3, "Ogg reference - 48 kHz");
-    menu.addItem(4, "Audio CD WAV - 44.1 kHz / 16-bit TPDF");
-    menu.showMenuAsync(
-        juce::PopupMenu::Options()
-            .withTargetComponent(&exportButton),
+    if (project == nullptr)
+        return;
+    if (operationInProgress.load(std::memory_order_acquire))
+    {
+        setStatus("Wait for the current mastering operation to finish.", true);
+        return;
+    }
+    MixExportSettings initial;
+    initial.audio = lastExportSettings;
+    AudioExportOptionsComponent::show(
+        nullptr, initial, *this,
         [safe = juce::Component::SafePointer<
-             MasteringWorkspaceComponent>(this)](int choice)
+             MasteringWorkspaceComponent>(this),
+         projectId = project->id](MixExportSettings choice)
         {
-            if (safe == nullptr || choice == 0)
+            if (safe == nullptr)
                 return;
-            if (choice == 1 || choice == 4)
-                safe->beginExport(MasteringExportFormat::wav);
-            else if (choice == 2)
-                safe->beginExport(MasteringExportFormat::flac);
-            else
-                safe->beginExport(
-                    MasteringExportFormat::oggReference);
-            safe->exportButton.getProperties().set(
-                "cdPreset",
-                choice == 4);
+            if (safe->project == nullptr || safe->project->id != projectId)
+            {
+                safe->setStatus("The mastering project changed while choosing export settings.", true);
+                return;
+            }
+            MasteringExportSettings settings;
+            static_cast<AudioExportSettings&>(settings) = choice.audio;
+            settings.distributionPresetId =
+                settings.format == AudioExportFormat::wav
+                    && settings.sampleRate == 44100.0
+                    && settings.bitDepth == 16
+                    && settings.channels == 2
+                ? "cd"
+                : "streaming-balanced";
+            safe->beginExport(std::move(settings));
         });
 }
 
 void MasteringWorkspaceComponent::beginExport(
-    MasteringExportFormat format)
+    MasteringExportSettings settings)
 {
-    const juce::String extension =
-        format == MasteringExportFormat::wav
-        ? ".wav"
-        : format == MasteringExportFormat::flac ? ".flac" : ".ogg";
+    if (project == nullptr)
+        return;
+    const auto extension = AudioExport::extension(settings.format);
     chooser = std::make_unique<juce::FileChooser>(
         "Export mastering release",
         juce::File::getSpecialLocation(
             juce::File::userMusicDirectory)
             .getChildFile(
-                (project != nullptr
-                     && project->mastering.title.isNotEmpty()
+                juce::File::createLegalFileName(
+                    project->mastering.title.isNotEmpty()
                      ? project->mastering.title
                      : juce::String("Studio-Duo-Master"))
-                + extension),
-        "*" + extension,
+                + "." + extension),
+        "*." + extension,
         true,
         false,
         this);
     chooser->launchAsync(
         juce::FileBrowserComponent::saveMode
-            | juce::FileBrowserComponent::canSelectFiles,
+            | juce::FileBrowserComponent::canSelectFiles
+            | juce::FileBrowserComponent::warnAboutOverwriting,
         [safe = juce::Component::SafePointer<
              MasteringWorkspaceComponent>(this),
-         format](const juce::FileChooser& completed)
+         settings,
+         projectId = project->id,
+         extension](const juce::FileChooser& completed)
         {
             if (safe == nullptr)
                 return;
             const auto file = completed.getResult();
-            if (file != juce::File())
-            {
-                MasteringExportSettings settings;
-                settings.format = format;
-                settings.sampleRate = 48000.0;
-                settings.bitDepth = 24;
-                settings.distributionPresetId =
-                    "streaming-balanced";
-                if (format
-                    == MasteringExportFormat::oggReference)
-                    settings.bitDepth = 32;
-                if (static_cast<bool>(
-                        safe->exportButton.getProperties()
-                            .getWithDefault("cdPreset", false)))
-                {
-                    settings.sampleRate = 44100.0;
-                    settings.bitDepth = 16;
-                    settings.dither = MasteringDither::tpdf;
-                    settings.distributionPresetId = "cd";
-                }
-                safe->exportTo(file, settings);
-            }
             safe->chooser.reset();
+            if (file == juce::File())
+                return;
+            if (safe->project == nullptr || safe->project->id != projectId)
+            {
+                safe->setStatus("The mastering project changed while choosing the export destination.", true);
+                return;
+            }
+            const auto destination = file.withFileExtension(extension);
+            if (destination != file && destination.existsAsFile())
+            {
+                juce::AlertWindow::showAsync(
+                    juce::MessageBoxOptions()
+                        .withIconType(juce::MessageBoxIconType::WarningIcon)
+                        .withTitle("Replace existing master?")
+                        .withMessage("The selected format will write "
+                                     + destination.getFullPathName()
+                                     + ". Replace this file and its render report?")
+                        .withButton("Replace")
+                        .withButton("Cancel"),
+                    [safe, destination, settings, projectId](int choice)
+                    {
+                        if (choice != 1 || safe == nullptr)
+                            return;
+                        if (safe->project == nullptr || safe->project->id != projectId)
+                        {
+                            safe->setStatus("The mastering project changed before export.", true);
+                            return;
+                        }
+                        safe->exportTo(destination, settings);
+                    });
+                return;
+            }
+            safe->exportTo(destination, settings);
         });
 }
 
@@ -770,6 +793,7 @@ void MasteringWorkspaceComponent::exportTo(
     if (!beginOperation(
             "Rendering " + destination.getFileName() + "..."))
         return;
+    lastExportSettings = settings;
     const auto album = project->mastering;
     const auto projectId = project->id;
     const auto fingerprint = albumFingerprint(album);
@@ -796,7 +820,8 @@ void MasteringWorkspaceComponent::exportTo(
                  error,
                  projectId,
                  fingerprint,
-                 destination]
+                 destination,
+                 settings]
                 {
                     if (safe == nullptr)
                         return;
@@ -814,14 +839,8 @@ void MasteringWorkspaceComponent::exportTo(
                             == fingerprint;
                     safe->analysisLabel.setText(
                         "Exported "
-                            + report->format.toUpperCase()
+                            + AudioExport::description(settings)
                             + " - "
-                            + juce::String(
-                                  report->sampleRate / 1000.0,
-                                  1)
-                            + " kHz / "
-                            + juce::String(report->bitDepth)
-                            + "-bit - "
                             + (report->integratedLoudnessLufs.has_value()
                                    ? juce::String(
                                          *report->integratedLoudnessLufs,

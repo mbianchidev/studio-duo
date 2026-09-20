@@ -67,6 +67,7 @@ struct TempoChange
     double timeSeconds = 0.0;
     double bpm = 120.0;
     bool rampToNext = false;
+    juce::String sectionId {};
 
     bool operator==(const TempoChange& other) const noexcept;
     [[nodiscard]] juce::var toVar() const;
@@ -78,10 +79,43 @@ struct MeterChange
     double timeSeconds = 0.0;
     int numerator = 4;
     int denominator = 4;
+    juce::String sectionId {};
 
     bool operator==(const MeterChange& other) const noexcept;
     [[nodiscard]] juce::var toVar() const;
     static std::optional<MeterChange> fromVar(const juce::var& value, juce::String& error);
+};
+
+struct SectionClickSettings
+{
+    bool enabled = true;
+    int subdivision = 1;
+    float level = 0.65f;
+    float accentLevel = 1.0f;
+    std::vector<int> accentBeats { 1 };
+
+    [[nodiscard]] bool validate(juce::String& error) const;
+    [[nodiscard]] juce::var toVar() const;
+    static std::optional<SectionClickSettings> fromVar(
+        const juce::var& value,
+        juce::String& error);
+    bool operator==(const SectionClickSettings& other) const;
+};
+
+struct SectionTimeSignature
+{
+    int numerator = 4;
+    int denominator = 4;
+
+    bool operator==(const SectionTimeSignature&) const = default;
+};
+
+struct SectionTransportSettings
+{
+    std::optional<double> tempoBpm {};
+    bool rampFromPrevious = false;
+    std::optional<SectionTimeSignature> timeSignature {};
+    std::optional<SectionClickSettings> clickSettings {};
 };
 
 struct SongSection
@@ -89,6 +123,7 @@ struct SongSection
     juce::String id { juce::Uuid().toString() };
     juce::String name { "Section" };
     double timeSeconds = 0.0;
+    std::optional<SectionClickSettings> clickSettings {};
 
     [[nodiscard]] juce::var toVar() const;
     static std::optional<SongSection> fromVar(const juce::var& value,
@@ -454,7 +489,7 @@ struct RenderReport
 class Project
 {
 public:
-    static constexpr int currentFormatVersion = 9;
+    static constexpr int currentFormatVersion = 10;
 
     juce::String id { juce::Uuid().toString() };
     juce::String name { "Untitled" };
@@ -496,6 +531,8 @@ public:
 
     static Project createDefault();
 
+    [[nodiscard]] SongSection* findSection(const juce::String& sectionId);
+    [[nodiscard]] const SongSection* findSection(const juce::String& sectionId) const;
     [[nodiscard]] Track* findTrack(const juce::String& trackId);
     [[nodiscard]] const Track* findTrack(const juce::String& trackId) const;
     [[nodiscard]] RoutingConnection* findRoutingConnection(
@@ -535,6 +572,10 @@ public:
     [[nodiscard]] std::optional<std::vector<juce::String>> routingGraphOrder(
         juce::String& error) const;
     [[nodiscard]] std::optional<std::vector<juce::String>> routingOrder(
+        juce::String& error) const;
+    [[nodiscard]] SectionClickSettings clickSettingsAt(double seconds) const;
+    [[nodiscard]] std::optional<SectionTransportSettings> sectionTransportSettings(
+        const juce::String& sectionId,
         juce::String& error) const;
     [[nodiscard]] double tempoAt(double seconds) const noexcept;
     [[nodiscard]] MeterChange meterAt(double seconds) const noexcept;

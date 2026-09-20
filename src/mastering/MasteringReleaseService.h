@@ -2,21 +2,12 @@
 
 #include "MasteringEngine.h"
 #include "model/ProjectModel.h"
+#include "render/AudioExport.h"
 
 namespace studio
 {
-enum class MasteringExportFormat
-{
-    wav,
-    flac,
-    oggReference
-};
-
-enum class MasteringDither
-{
-    none,
-    tpdf
-};
+using MasteringExportFormat = AudioExportFormat;
+using MasteringDither = AudioExportDither;
 
 struct MasteringDistributionPreset
 {
@@ -26,12 +17,8 @@ struct MasteringDistributionPreset
     std::optional<double> maximumTruePeakDbtp;
 };
 
-struct MasteringExportSettings
+struct MasteringExportSettings : AudioExportSettings
 {
-    MasteringExportFormat format = MasteringExportFormat::wav;
-    double sampleRate = 48000.0;
-    int bitDepth = 24;
-    MasteringDither dither = MasteringDither::none;
     juce::String distributionPresetId;
 
     [[nodiscard]] juce::var toVar() const;

@@ -18,9 +18,64 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(STUDIO_DUO_BUILD_TESTS "Build Studio Duo tests" ON)
+option(STUDIO_DUO_AUDIO_EXPORT_TESTS_ONLY "Build only the headless audio export regression tests" OFF)
 set(STUDIO_DUO_BUNDLE_ID "dev.mbianchi.studioduo")
 
 include(FetchContent)
+
+# Official LAME 3.100 source (LGPL-2.0-or-later); no executable or decoder is built.
+# The archive hash is also published by Buildroot's package/lame/lame.hash.
+FetchContent_Declare(
+    studio_duo_lame
+    URL https://downloads.sourceforge.net/project/lame/lame/3.100/lame-3.100.tar.gz
+    URL_HASH SHA256=ddfe36cab873794038ae2c1210557ad34857a4b6bdc515785d1da9e175b1da1e
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+)
+FetchContent_MakeAvailable(studio_duo_lame)
+
+# A scalar, encoder-only build avoids platform assembly and mpglib entirely.
+# Do not use configMS.h: it enables x86 intrinsics even for universal builds.
+set(STUDIO_DUO_LAME_CONFIG_DIR "${CMAKE_CURRENT_BINARY_DIR}/studio-duo-lame")
+file(MAKE_DIRECTORY "${STUDIO_DUO_LAME_CONFIG_DIR}")
+file(CONFIGURE OUTPUT "${STUDIO_DUO_LAME_CONFIG_DIR}/config.h" CONTENT [=[
+#ifndef STUDIO_DUO_LAME_CONFIG_H
+#define STUDIO_DUO_LAME_CONFIG_H
+#include <stdint.h>
+#define STDC_HEADERS 1
+#define HAVE_STDINT_H 1
+#define HAVE_ERRNO_H 1
+#define HAVE_FCNTL_H 1
+#define HAVE_LIMITS_H 1
+#define LAME_LIBRARY_BUILD 1
+#define NOANALYSIS 1
+typedef float ieee754_float32_t;
+typedef double ieee754_float64_t;
+typedef long double ieee854_float80_t;
+#endif
+]=] @ONLY)
+set(STUDIO_DUO_LAME_SOURCES
+    VbrTag.c bitstream.c encoder.c fft.c gain_analysis.c id3tag.c
+    lame.c newmdct.c presets.c psymodel.c quantize.c quantize_pvt.c
+    reservoir.c set_get.c tables.c takehiro.c util.c vbrquantize.c version.c
+)
+list(TRANSFORM STUDIO_DUO_LAME_SOURCES PREPEND "${studio_duo_lame_SOURCE_DIR}/libmp3lame/")
+add_library(StudioDuoMp3Encoder STATIC ${STUDIO_DUO_LAME_SOURCES})
+target_include_directories(
+    StudioDuoMp3Encoder
+    PUBLIC "${studio_duo_lame_SOURCE_DIR}/include"
+    PRIVATE "${STUDIO_DUO_LAME_CONFIG_DIR}" "${studio_duo_lame_SOURCE_DIR}/libmp3lame"
+)
+target_compile_definitions(StudioDuoMp3Encoder PRIVATE HAVE_CONFIG_H=1)
+set_target_properties(
+    StudioDuoMp3Encoder
+    PROPERTIES C_STANDARD 99 C_STANDARD_REQUIRED TRUE POSITION_INDEPENDENT_CODE TRUE
+)
+if(MSVC)
+    target_compile_definitions(StudioDuoMp3Encoder PRIVATE _CRT_SECURE_NO_WARNINGS=1)
+else()
+    target_link_libraries(StudioDuoMp3Encoder PRIVATE m)
+endif()
+
 find_package(JUCE CONFIG QUIET)
 
 if(NOT TARGET juce::juce_gui_extra)
@@ -31,6 +86,38 @@ if(NOT TARGET juce::juce_gui_extra)
         GIT_SHALLOW TRUE
     )
     FetchContent_MakeAvailable(JUCE)
+endif()
+
+if(STUDIO_DUO_BUILD_TESTS OR STUDIO_DUO_AUDIO_EXPORT_TESTS_ONLY)
+    enable_testing()
+    juce_add_console_app(StudioDuoAudioExportTests PRODUCT_NAME "Studio Duo Audio Export Tests")
+    target_sources(
+        StudioDuoAudioExportTests
+        PRIVATE tests/AudioExportTests.cpp src/render/AudioExport.cpp src/render/AudioExport.h
+    )
+    target_include_directories(StudioDuoAudioExportTests PRIVATE src)
+    target_compile_definitions(
+        StudioDuoAudioExportTests
+        PRIVATE
+            STUDIO_DUO_AUDIO_EXPORT_TEST_MAIN=1
+            JUCE_USE_CURL=0
+            JUCE_WEB_BROWSER=0
+            JUCE_USE_MP3AUDIOFORMAT=1
+    )
+    target_link_libraries(
+        StudioDuoAudioExportTests
+        PRIVATE
+            juce::juce_audio_formats
+            juce::juce_recommended_config_flags
+            juce::juce_recommended_warning_flags
+            StudioDuoMp3Encoder
+    )
+    add_test(NAME StudioDuoAudioExportTests COMMAND StudioDuoAudioExportTests)
+    set_tests_properties(StudioDuoAudioExportTests PROPERTIES TIMEOUT 30)
+endif()
+
+if(STUDIO_DUO_AUDIO_EXPORT_TESTS_ONLY)
+    return()
 endif()
 
 FetchContent_Declare(
@@ -141,6 +228,8 @@ set(STUDIO_DUO_MODEL_SOURCES
     src/model/LinkedEditModel.h
     src/model/ProjectCommands.cpp
     src/model/ProjectCommands.h
+    src/model/TransportEditing.cpp
+    src/model/TransportEditing.h
     src/model/ProjectModel.cpp
     src/model/ProjectModel.h
     src/project_io/ProjectFile.cpp
@@ -151,6 +240,8 @@ set(STUDIO_DUO_MODEL_SOURCES
     src/project_io/ProjectMigration.h
     src/reamp/ReampSnapshotService.cpp
     src/reamp/ReampSnapshotService.h
+    src/render/AudioExport.cpp
+    src/render/AudioExport.h
 )
 
 set(STUDIO_DUO_PLUGIN_SOURCES
@@ -205,6 +296,77 @@ juce_add_gui_app(
 
 juce_generate_juce_header(StudioDuo)
 
+configure_file(
+    "${studio_duo_lame_SOURCE_DIR}/COPYING"
+    "${STUDIO_DUO_LAME_CONFIG_DIR}/lame-COPYING.txt"
+    COPYONLY
+)
+configure_file(
+    "${STUDIO_DUO_LAME_CONFIG_DIR}/config.h"
+    "${STUDIO_DUO_LAME_CONFIG_DIR}/lame-config.h"
+    COPYONLY
+)
+get_filename_component(STUDIO_DUO_LAME_SOURCE_PARENT "${studio_duo_lame_SOURCE_DIR}" DIRECTORY)
+get_filename_component(STUDIO_DUO_LAME_SOURCE_NAME "${studio_duo_lame_SOURCE_DIR}" NAME)
+set(STUDIO_DUO_SOURCE_ARCHIVES
+    "${STUDIO_DUO_LAME_CONFIG_DIR}/lame-3.100-source.tar.gz"
+    "${STUDIO_DUO_LAME_CONFIG_DIR}/studio-duo-source.tar.gz"
+)
+add_custom_target(
+    StudioDuoSourceMaterials
+    COMMAND "${CMAKE_COMMAND}" -E chdir "${STUDIO_DUO_LAME_SOURCE_PARENT}"
+        "${CMAKE_COMMAND}" -E tar czf
+        "${STUDIO_DUO_LAME_CONFIG_DIR}/lame-3.100-source.tar.gz"
+        "${STUDIO_DUO_LAME_SOURCE_NAME}"
+    COMMAND "${CMAKE_COMMAND}" -E chdir "${CMAKE_CURRENT_SOURCE_DIR}"
+        "${CMAKE_COMMAND}" -E tar czf
+        "${STUDIO_DUO_LAME_CONFIG_DIR}/studio-duo-source.tar.gz"
+        CMakeLists.txt VERSION LICENSE README.md
+        src assets third_party docs packaging scripts tests
+    BYPRODUCTS ${STUDIO_DUO_SOURCE_ARCHIVES}
+    COMMENT "Packaging MP3 library and application source for rebuilding and relinking"
+    VERBATIM
+)
+add_dependencies(StudioDuo StudioDuoSourceMaterials)
+set_source_files_properties(${STUDIO_DUO_SOURCE_ARCHIVES} PROPERTIES GENERATED TRUE)
+file(CONFIGURE OUTPUT "${STUDIO_DUO_LAME_CONFIG_DIR}/lame-NOTICE.txt" CONTENT [=[
+Studio Duo includes the LAME 3.100 MP3 encoder, licensed under LGPL-2.0-or-later.
+Project: https://lame.sourceforge.io/
+Unmodified upstream source: https://downloads.sourceforge.net/project/lame/lame/3.100/lame-3.100.tar.gz
+SHA-256: ddfe36cab873794038ae2c1210557ad34857a4b6bdc515785d1da9e175b1da1e
+The bundled decoder (mpglib), executables, and assembly routines are not built.
+The accompanying lame-3.100-source.tar.gz contains the complete library source,
+and lame-config.h records the scalar encoder build configuration.
+The accompanying studio-duo-source.tar.gz contains the application source,
+build scripts, assets, tests, and documentation needed to rebuild and relink.
+Extract the application archive into an empty directory and follow README.md
+or docs/development.md. Set FETCHCONTENT_SOURCE_DIR_STUDIO_DUO_LAME to the
+extracted library directory to rebuild with a modified encoder.
+The application source is also published at https://github.com/mbianchidev/studio-duo.
+See lame-COPYING.txt for the complete library license.
+]=] @ONLY)
+set(STUDIO_DUO_LAME_LICENSE_FILES
+    "${STUDIO_DUO_LAME_CONFIG_DIR}/lame-COPYING.txt"
+    "${STUDIO_DUO_LAME_CONFIG_DIR}/lame-NOTICE.txt"
+    "${STUDIO_DUO_LAME_CONFIG_DIR}/lame-config.h"
+    ${STUDIO_DUO_SOURCE_ARCHIVES}
+)
+if(APPLE)
+    set_source_files_properties(
+        ${STUDIO_DUO_LAME_LICENSE_FILES}
+        PROPERTIES MACOSX_PACKAGE_LOCATION "Resources/licenses"
+    )
+    target_sources(StudioDuo PRIVATE ${STUDIO_DUO_LAME_LICENSE_FILES})
+else()
+    add_custom_command(
+        TARGET StudioDuo POST_BUILD
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_FILE_DIR:StudioDuo>/licenses"
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            ${STUDIO_DUO_LAME_LICENSE_FILES} "$<TARGET_FILE_DIR:StudioDuo>/licenses"
+        VERBATIM
+    )
+endif()
+
 target_sources(
     StudioDuo
     PRIVATE
@@ -235,6 +397,11 @@ target_sources(
         src/update/UpdateSettingsComponent.h
         src/ui/MainComponent.cpp
         src/ui/MainComponent.h
+        src/ui/AudioExportOptionsComponent.cpp
+        src/ui/AudioExportOptionsComponent.h
+        src/ui/TransportSettingsComponent.cpp
+        src/ui/TransportSettingsComponent.h
+        src/ui/NumericInput.h
         src/ui/MainWindowSizing.cpp
         src/ui/MainWindowSizing.h
         src/ui/MasteringWorkspaceComponent.cpp
@@ -295,6 +462,7 @@ target_compile_definitions(
     StudioDuo
     PRIVATE
         JUCE_REPORT_APP_USAGE=0
+        JUCE_USE_MP3AUDIOFORMAT=1
         JUCE_USE_CURL=0
         JUCE_WEB_BROWSER=0
         JUCE_STRICT_REFCOUNTEDPOINTER=1
@@ -331,6 +499,7 @@ target_link_libraries(
         SampleRate::samplerate
         StudioDuoBrandData
         StudioDuoDawProjectSchemaData
+        StudioDuoMp3Encoder
     PUBLIC
         juce::juce_recommended_config_flags
         juce::juce_recommended_lto_flags
@@ -627,13 +796,23 @@ if(STUDIO_DUO_BUILD_TESTS)
             tests/WindowsCrashHandlerTests.cpp
             tests/ReampSnapshotTests.cpp
             tests/RenderEngineTests.cpp
+            tests/AudioExportOptionsTests.cpp
+            tests/AudioExportTests.cpp
             tests/MasteringTests.cpp
             tests/PluginCompatibilityTests.cpp
             tests/ProjectMigrationTests.cpp
             tests/WindowSizingTests.cpp
             tests/TransportTests.cpp
+            tests/TransportEditingTests.cpp
+            tests/SectionTransportTests.cpp
+            tests/TransportSettingsTests.cpp
             tests/UpdateTests.cpp
             tests/DawProjectTests.cpp
+            src/ui/TransportSettingsComponent.cpp
+            src/ui/TransportSettingsComponent.h
+            src/ui/NumericInput.h
+            src/ui/AudioExportOptionsComponent.cpp
+            src/ui/AudioExportOptionsComponent.h
             src/ui/RoutingUiModel.cpp
             src/ui/RoutingUiModel.h
             src/ui/MainWindowSizing.cpp
@@ -695,6 +874,7 @@ if(STUDIO_DUO_BUILD_TESTS)
             JUCE_USE_CURL=0
             JUCE_WEB_BROWSER=0
             JUCE_PLUGINHOST_VST=0
+            JUCE_USE_MP3AUDIOFORMAT=1
             JUCE_PLUGINHOST_VST3=1
             JUCE_PLUGINHOST_ARA=1
             JUCE_MODAL_LOOPS_PERMITTED=1
@@ -761,6 +941,7 @@ if(STUDIO_DUO_BUILD_TESTS)
             clap-helpers
             SampleRate::samplerate
             StudioDuoDawProjectSchemaData
+            StudioDuoMp3Encoder
         PUBLIC
             juce::juce_recommended_config_flags
             juce::juce_recommended_warning_flags

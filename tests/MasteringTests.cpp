@@ -370,7 +370,7 @@ void masteringTests()
             signingDirectory,
             exportError);
     exportSettings.format =
-        studio::MasteringExportFormat::oggReference;
+        studio::MasteringExportFormat::oggVorbis;
     exportSettings.bitDepth = 32;
     const auto oggReference =
         renderDirectory.getChildFile("reference.ogg");
@@ -408,6 +408,48 @@ void masteringTests()
             + " "
             + signatureError)
                .toRawUTF8());
+
+    exportSettings.format = studio::MasteringExportFormat::mp3;
+    const auto mp3Master = renderDirectory.getChildFile("reference.mp3");
+    const auto mp3Report = studio::MasteringReleaseService::exportMaster(
+        renderAlbum,
+        mp3Master,
+        exportSettings,
+        signingDirectory,
+        exportError);
+    expect(mp3Report.has_value()
+               && mp3Master.existsAsFile()
+               && mp3Report->format == "mp3"
+               && mp3Report->integratedLoudnessLufs.has_value()
+               && studio::MasteringReleaseService::verifyReport(
+                   *mp3Report, signingDirectory, signatureError),
+           ("MP3 masters are encoded, remeasured and signed like lossless releases: "
+            + exportError).toRawUTF8());
+
+    exportSettings.format = studio::MasteringExportFormat::aiff;
+    exportSettings.bitDepth = 24;
+    exportSettings.channels = 1;
+    exportSettings.normalizePeak = true;
+    exportSettings.normalizePeakDbfs = -3.0;
+    const auto aiffMaster = renderDirectory.getChildFile("normalized.aiff");
+    const auto aiffReport = studio::MasteringReleaseService::exportMaster(
+        renderAlbum, aiffMaster, exportSettings, signingDirectory, exportError);
+    juce::AudioFormatManager exportFormats;
+    exportFormats.registerBasicFormats();
+    auto aiffReader = std::unique_ptr<juce::AudioFormatReader>(
+        exportFormats.createReaderFor(aiffMaster));
+    expect(aiffReport.has_value() && aiffReader != nullptr
+               && aiffReport->format == "aiff"
+               && aiffReader->numChannels == 1
+               && aiffReader->bitsPerSample == 24
+               && std::abs(aiffReport->samplePeakDbfs + 3.0) < 0.01
+               && studio::MasteringReleaseService::verifyReport(
+                   *aiffReport, signingDirectory, signatureError)
+               && static_cast<int>(exportSettings.toVar().getProperty("channels", 0)) == 1
+               && static_cast<bool>(exportSettings.toVar().getProperty("normalizePeak", false)),
+           ("Mastering shares AIFF, mono and explicit peak normalization with mix export: "
+            + exportError).toRawUTF8());
+    aiffReader.reset();
 
     auto ddpAlbum = renderAlbum;
     ddpAlbum.tracks[0].gapBeforeSeconds = 2.0;

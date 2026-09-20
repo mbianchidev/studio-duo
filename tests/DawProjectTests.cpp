@@ -2573,6 +2573,43 @@ void unsupportedDataIsReported()
 }
 }
 
+namespace
+{
+void sectionTransportInterchange()
+{
+    const auto root = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("StudioDuoSectionInterchange", {}, false);
+    expect(root.createDirectory(), "Section interchange directory can be created.");
+    auto project = studio::Project::createDefault();
+    project.metronomeEnabled = false;
+    studio::SongSection section { "section-timing", "Section", 1.0 };
+    section.clickSettings = studio::SectionClickSettings {};
+    section.clickSettings->accentBeats = { 1, 4, 6 };
+    project.sections.push_back(section);
+    project.tempoChanges = { { 1.0, 150.0, false, section.id } };
+    project.meterChanges = { { 1.0, 7, 8, section.id } };
+    const auto package = root.getChildFile("source.studioduo");
+    expect(studio::ProjectFile::save(project, package).wasOk(),
+           "Section timing and click settings save natively.");
+    const auto archive = root.getChildFile("section.dawproject");
+    const auto exported = studio::DawProjectIO::exportProject(project, package, archive);
+    expect(exported.succeeded()
+               && reportContains(exported.report, "unsupported.section-click", section.id)
+               && reportContains(exported.report, "unsupported.section-transport-link", section.id),
+           "DAWproject explicitly reports section click and editing associations it cannot represent.");
+    const auto imported = studio::DawProjectIO::importProject(
+        archive, root.getChildFile("imported.studioduo"));
+    expect(imported.succeeded() && imported.project
+               && std::abs(imported.project->tempoAt(0.5) - 120.0) < 0.000001
+               && std::abs(imported.project->tempoAt(1.5) - 150.0) < 0.000001
+               && imported.project->meterAt(0.5).numerator == 4
+               && imported.project->meterAt(1.5).numerator == 7
+               && imported.project->meterAt(1.5).denominator == 8,
+           "Section BPM and time signature remain audible-equivalent through standard DAWproject maps.");
+    root.deleteRecursively();
+}
+}
+
 void dawProjectTests()
 {
     nativeSceneAndReportPersistence();
@@ -2591,4 +2628,5 @@ void dawProjectTests()
     exportPayloadSnapshotAndVerification();
     nativePluginStateContainerRoundTrip();
     unsupportedDataIsReported();
+    sectionTransportInterchange();
 }

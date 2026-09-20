@@ -38,6 +38,7 @@ function Get-FullPath {
 
 $repositoryRootPath = Get-FullPath $RepositoryRoot
 $executablePath = Get-FullPath $Executable
+$licenseDirectory = Join-Path (Split-Path -Parent $executablePath) 'licenses'
 $outputDirectoryPath = Get-FullPath $OutputDirectory
 $installerScript = Join-Path $repositoryRootPath 'packaging\windows\StudioDuo.iss'
 
@@ -46,6 +47,11 @@ foreach ($requiredFile in @(
     $installerScript,
     (Join-Path $repositoryRootPath 'README.md'),
     (Join-Path $repositoryRootPath 'LICENSE'),
+    (Join-Path $licenseDirectory 'lame-COPYING.txt'),
+    (Join-Path $licenseDirectory 'lame-NOTICE.txt'),
+    (Join-Path $licenseDirectory 'lame-config.h'),
+    (Join-Path $licenseDirectory 'lame-3.100-source.tar.gz'),
+    (Join-Path $licenseDirectory 'studio-duo-source.tar.gz'),
     (Join-Path $repositoryRootPath 'assets\branding\StudioDuo.ico')
 )) {
     if (-not (Test-Path -LiteralPath $requiredFile -PathType Leaf)) {
@@ -119,6 +125,7 @@ try {
     $installerEnvironment = @{
         STUDIO_DUO_VERSION = $Version
         STUDIO_DUO_EXECUTABLE = $executablePath
+        STUDIO_DUO_LICENSE_DIRECTORY = $licenseDirectory
         STUDIO_DUO_SOURCE_DIRECTORY = $repositoryRootPath
         STUDIO_DUO_INSTALLER_OUTPUT_DIRECTORY = $outputDirectoryPath
         STUDIO_DUO_VC_REDIST = $vcRedist
