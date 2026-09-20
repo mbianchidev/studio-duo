@@ -453,9 +453,21 @@ private:
     juce::Label panLabel;
     juce::Slider volumeSlider;
     juce::Slider panSlider;
-    juce::TextButton muteButton { "MUTE" };
-    juce::TextButton soloButton { "SOLO" };
-    juce::TextButton armButton { "ARM" };
+    StudioIconButton muteButton {
+        StudioIcon::mute,
+        "Mute track",
+        "Mute selected track"
+    };
+    StudioIconButton soloButton {
+        StudioIcon::solo,
+        "Solo track",
+        "Solo selected track"
+    };
+    StudioIconButton armButton {
+        StudioIcon::record,
+        "Arm track",
+        "Arm audio tracks for recording or MIDI and instrument tracks for live input"
+    };
     juce::TextButton trackColourButton { "COLOR" };
     StudioIconButton splitClipButton {
         StudioIcon::split,
@@ -499,7 +511,7 @@ private:
     std::unique_ptr<PanelResizer> mixerPanelResizer;
     int leftPanelWidth = 286;
     int inspectorPanelWidth = 250;
-    int mixerPanelHeight = 220;
+    int mixerPanelHeight = 260;
     int midiEditorHeight = 330;
     bool leftPanelCollapsed = false;
     bool masteringWorkspaceVisible = false;

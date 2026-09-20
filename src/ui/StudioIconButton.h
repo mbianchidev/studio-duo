@@ -22,6 +22,9 @@ enum class StudioIcon
     loop,
     loopRange,
     metronome,
+    mute,
+    solo,
+    volume,
     add,
     bus,
     importFile,
@@ -61,6 +64,9 @@ inline constexpr std::array allStudioIcons {
     StudioIcon::loop,
     StudioIcon::loopRange,
     StudioIcon::metronome,
+    StudioIcon::mute,
+    StudioIcon::solo,
+    StudioIcon::volume,
     StudioIcon::add,
     StudioIcon::bus,
     StudioIcon::importFile,
@@ -86,6 +92,11 @@ inline constexpr std::array allStudioIcons {
 };
 
 [[nodiscard]] juce::Path createStudioIconPath(StudioIcon icon);
+void drawStudioIcon(juce::Graphics& graphics,
+                    StudioIcon icon,
+                    juce::Rectangle<float> bounds,
+                    juce::Colour colour,
+                    float strokeWidth = 1.5f);
 
 class StudioIconButton final : public juce::TextButton
 {

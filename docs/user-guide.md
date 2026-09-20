@@ -155,10 +155,10 @@ aliasing the source family.
 
 ## Record and manage takes
 
-Each timeline track header has **M**, **S**, and **R** controls for mute, solo,
-and record arm. **Start Recording** (circle icon) captures every armed audio
-parent into a separate, sample-aligned WAV. If no track is armed, the selected
-audio track becomes the single recording target.
+Each timeline track header has speaker-mute, headphones-solo, and record-circle
+controls plus a compact horizontal dB fader. **Start Recording** (circle icon)
+captures every armed audio parent into a separate, sample-aligned WAV. If no
+track is armed, the selected audio track becomes the single recording target.
 
 Press **Stop Recording** (square icon) or **Stop** (square icon) to finish every
 active recording at the same audio callback boundary. The timeline draws a live
@@ -198,6 +198,9 @@ All settings are persistent and undoable. The transport shows the current
 tempo and meter at the playhead, and the timeline keeps punch and loop ranges
 visible as coloured bounds. When punch and loop are both enabled, punch takes
 priority for recording while ordinary playback keeps using the loop range.
+The bottom transport strip keeps position, Stop, Play/Pause, Record, Loop,
+loop-range, metronome, and tempo controls together while file and project tools
+remain in the top header.
 
 Right-click the **MARKERS / SECTIONS** lane above the bar ruler to add either a
 marker flag or a song section at that exact timeline position without moving
@@ -300,7 +303,9 @@ curves remain visible on the clip.
 ## Mix and route tracks
 
 The inspector and lower mixer expose gain, pan, mute, and solo. Gain defaults to
-`0.0 dB`; pan defaults to `Center`. Drag mixer faders and pan knobs to edit them.
+`0.0 dB`; pan defaults to `Center`. Mixer strips expose dedicated mute, solo,
+and record-arm icons plus a boxed dB readout and calibrated fader scale. Drag
+faders vertically and pan controls horizontally to edit them.
 Double-click a fader lane to return to `0.0 dB` or a pan knob to return to
 center. Solo is exclusive: selecting a new solo clears the previous solo, and
 clicking the active solo again restores normal playback.
@@ -313,7 +318,7 @@ its routing editor.
 Use the single sidebar arrow to collapse Session controls to an icon rail. The
 inspector and mixer each keep their own collapse button on the panel edge; when
 hidden, a left chevron restores the inspector at the right edge and an up
-chevron restores the mixer above the bottom status bar. Their dividers also
+chevron restores the mixer above the bottom transport strip. Their dividers also
 collapse when dragged closed and restore when dragged open or double-clicked.
 The processor search moves above its action buttons on narrow layouts.
 
@@ -335,7 +340,8 @@ cycles across main routes, sends, and sidechains.
 
 **Add Track** also creates instrument and MIDI tracks. Enable a MIDI input in
 **Settings** (gear icon) > **Audio / MIDI**, then arm a MIDI or instrument track
-with **R** to receive it while the transport is running or stopped. MIDI and instrument
+with its record-circle control to receive it while the transport is running or
+stopped. MIDI and instrument
 tracks can add independent MIDI destinations without replacing an instrument
 track's audio output. MIDI track inserts process events before they are sent
 downstream; standard and CLAP

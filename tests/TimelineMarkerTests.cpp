@@ -109,4 +109,53 @@ void timelineMarkerTests()
         false));
     expect(markerAdds == 1 && sectionEdits == 0,
            "Double-clicking the shared ruler adds a marker flag without treating the underlying song section as a marker.");
+
+    const auto sectionPosition = juce::Point<float>(
+        timeline.xForSeconds(0.5),
+        30.0f);
+    timeline.mouseDoubleClick(mouseEvent(
+        timeline,
+        sectionPosition,
+        sectionPosition,
+        2,
+        false));
+    expect(markerAdds == 1 && sectionEdits == 1,
+           "The dedicated section row edits its song section without creating a marker.");
+
+    juce::String mutedTrack;
+    timeline.onTrackMute = [&mutedTrack](const juce::String& trackId)
+    {
+        mutedTrack = trackId;
+    };
+    const juce::Point<float> muteControl(35.0f, 139.0f);
+    timeline.mouseDown(mouseEvent(
+        timeline,
+        muteControl,
+        muteControl,
+        1,
+        false));
+    expect(mutedTrack == project.tracks.front().id,
+           "Timeline track mute icons target the clicked track.");
+
+    auto volume = -100.0f;
+    timeline.onTrackVolumeChanged =
+        [&volume](const juce::String&, float value)
+    {
+        volume = value;
+    };
+    const juce::Point<float> volumeControl(164.0f, 139.0f);
+    timeline.mouseDown(mouseEvent(
+        timeline,
+        volumeControl,
+        volumeControl,
+        1,
+        false));
+    timeline.mouseUp(mouseEvent(
+        timeline,
+        volumeControl,
+        volumeControl,
+        1,
+        false));
+    expect(volume > 11.9f,
+           "Timeline track volume faders expose their dB range through direct manipulation.");
 }

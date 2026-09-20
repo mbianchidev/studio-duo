@@ -25,6 +25,9 @@ public:
     std::function<void(const juce::String&,
                        AutomationTargetType,
                        float)> onAutomationGestureStarted;
+    std::function<void(const juce::String&)> onTrackMute;
+    std::function<void(const juce::String&)> onTrackSolo;
+    std::function<void(const juce::String&)> onTrackArm;
     std::function<void(const juce::String&, float)> onVolumeChanged;
     std::function<void(const juce::String&, float)> onPanChanged;
     std::function<void(const juce::String&, const juce::String&)> onPluginOpen;
@@ -69,6 +72,7 @@ private:
     std::vector<StudioAudioEngine::TrackMeterSnapshot> meters;
     juce::String draggingVolumeTrack;
     juce::String draggingPanTrack;
+    float dragStartX = 0.0f;
     float dragStartY = 0.0f;
     float dragStartVolume = 0.0f;
     float dragPreviewVolume = 0.0f;

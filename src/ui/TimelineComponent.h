@@ -39,6 +39,10 @@ public:
     std::function<void(const juce::String&)> onTrackMute;
     std::function<void(const juce::String&)> onTrackSolo;
     std::function<void(const juce::String&)> onTrackArm;
+    std::function<void(const juce::String&, float)>
+        onTrackVolumeGestureStarted;
+    std::function<void(const juce::String&, float)>
+        onTrackVolumeChanged;
     std::function<void(const juce::String&, juce::Rectangle<int>)> onEditTrack;
     std::function<void(const juce::String&)> onToggleTrackVersions;
     std::function<void(const juce::String&)> onDuplicateTrack;
@@ -146,6 +150,7 @@ private:
     const Project* project = nullptr;
     juce::String selectedTrackId;
     juce::String selectedClipId;
+    juce::String draggingTrackVolumeId;
     juce::String draggedMarkerId;
     juce::String draggedClipId;
     juce::String hoveredClipId;
@@ -154,6 +159,7 @@ private:
     double playheadSeconds = 0.0;
     double markerDragOriginalSeconds = 0.0;
     double markerDragPreviewSeconds = 0.0;
+    float dragPreviewTrackVolume = 0.0f;
     std::vector<RecordingPreview> recordingPreviews;
     double pixelsPerSecond = 96.0;
     int viewportPositionX = 0;
@@ -177,8 +183,11 @@ private:
 
     static constexpr double minimumPixelsPerSecond = 24.0;
     static constexpr double maximumPixelsPerSecond = 9600.0;
+    static constexpr int markerLaneHeight = 20;
     static constexpr int sectionLaneHeight = 24;
-    static constexpr int rulerHeight = 60;
+    static constexpr int timelineRulerTop =
+        markerLaneHeight + sectionLaneHeight;
+    static constexpr int rulerHeight = 80;
     static constexpr int trackHeaderWidth = 176;
     static constexpr int trackHeight = 88;
     static constexpr int addTrackHeight = 44;

@@ -8,6 +8,8 @@
 #include "model/ProjectModel.h"
 #include "plugin_host/PluginFormats.h"
 
+#include <cmath>
+
 namespace
 {
 studio::MidiRoutingTemplate makeRoutingTemplate(
@@ -562,6 +564,40 @@ void routingEngineTests()
         expect(read && check.getSample(0, 0) > 0.19f,
                "Routing test source WAV contains the expected signal.");
     }
+
+    auto panProject = studio::Project::createDefault();
+    panProject.metronomeEnabled = false;
+    auto& panTrack = panProject.tracks.front();
+    panTrack.clips.clear();
+    studio::AudioClip panClip;
+    panClip.sourceFile = sourceFile;
+    panClip.durationSeconds = 0.01;
+    panClip.sourceLengthSeconds = 0.01;
+    panClip.sourceRangeEndSeconds = 0.01;
+    panTrack.clips.push_back(panClip);
+    studio::StudioAudioEngine panEngine;
+    juce::AudioBuffer<float> rightPan;
+    panTrack.pan = 1.0f;
+    expect(panEngine.renderToBuffer(
+               panProject,
+               rightPan,
+               48000.0)
+               .wasOk()
+               && std::abs(rightPan.getSample(0, 100))
+                      < 0.001f
+               && rightPan.getSample(1, 100) > 0.19f,
+           "Full-right track pan moves mono content to the right channel.");
+    juce::AudioBuffer<float> leftPan;
+    panTrack.pan = -1.0f;
+    expect(panEngine.renderToBuffer(
+               panProject,
+               leftPan,
+               48000.0)
+               .wasOk()
+               && leftPan.getSample(0, 100) > 0.19f
+               && std::abs(leftPan.getSample(1, 100))
+                      < 0.001f,
+           "Full-left track pan moves mono content to the left channel.");
 
     auto takeProject = studio::Project::createDefault();
     takeProject.metronomeEnabled = false;

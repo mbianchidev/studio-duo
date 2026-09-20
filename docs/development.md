@@ -140,7 +140,7 @@ represent.
 2. Open **Settings** (gear icon) > **Audio / MIDI** and enable both input
    channels.
 3. Select two audio parent tracks. Assign different mono inputs in each track's
-   inspector and arm both tracks with **R**.
+   inspector and arm both tracks with their record-circle controls.
 4. Press **Start Recording** (circle icon), send signal to both inputs, then
    press **Stop** (square icon).
 5. Expand both parents. Each must contain a new version lane with clips sharing
@@ -629,8 +629,10 @@ be suspended without deleting their membership or settings.
 The left track-header context menu targets the clicked parent or version lane.
 Delete removes one version or the complete parent group, while the master
 remains protected. The lower mixer filters out child lanes and exposes an
-interactive pan knob for each parent channel; drag vertically to change pan or
-double-click to reset center.
+interactive pan knob for each parent channel; drag horizontally toward the
+intended channel or double-click to reset center. Deterministic render coverage
+asserts that full-left and full-right pan move mono content to the matching
+output channel.
 
 Audio tracks persist their first hardware input, mono/stereo mode, and software
 monitoring state. The lock-free recorder copies only those selected callback
@@ -666,7 +668,10 @@ pixels-per-second value and keep the playhead centered.
 
 The timeline component receives the viewport's horizontal position and paints
 track headers at that offset, while clips and grid content remain in timeline
-coordinates. The UI timer follows an active playhead with a right-side margin,
+coordinates. Markers, song sections, and musical ruler labels occupy separate
+stacked rows. The top application header contains project/file tools; the
+bottom transport strip owns position, transport, loop, metronome, and tempo
+controls. The UI timer follows an active playhead with a right-side margin,
 grows the view during long recordings, and rewinds a completed transport before
 starting playback again.
 

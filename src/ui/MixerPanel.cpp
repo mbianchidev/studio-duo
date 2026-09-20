@@ -1,5 +1,6 @@
 #include "MixerPanel.h"
 
+#include "StudioIconButton.h"
 #include "StudioTheme.h"
 
 #include <algorithm>
@@ -7,6 +8,17 @@
 
 namespace studio
 {
+namespace
+{
+constexpr int stripWidth = 112;
+constexpr int stripGap = 8;
+constexpr int stripTop = 34;
+constexpr int stripControlY = 28;
+constexpr int stripControlSize = 22;
+constexpr int stripFaderTop = 80;
+constexpr int stripBottomControls = 54;
+}
+
 class MixerPanel::ItemList final : public juce::Component
 {
 public:
@@ -271,8 +283,6 @@ void MixerPanel::paint(juce::Graphics& graphics)
     if (project == nullptr || project->tracks.empty())
         return;
 
-    constexpr auto stripWidth = 112;
-    constexpr auto gap = 8;
     const auto itemListLeft = itemsViewport.getX();
     auto x = 14;
 
@@ -280,7 +290,18 @@ void MixerPanel::paint(juce::Graphics& graphics)
     {
         if (x + stripWidth > itemListLeft - 36)
             break;
-        const juce::Rectangle<int> strip(x, 34, stripWidth, getHeight() - 44);
+        const juce::Rectangle<int> strip(
+            x,
+            stripTop,
+            stripWidth,
+            getHeight() - 44);
+        const auto faderTop =
+            strip.getY() + stripFaderTop;
+        const auto faderHeight = juce::jmax(
+            24,
+            strip.getHeight()
+                - stripFaderTop
+                - stripBottomControls);
         const auto selected = track->id == selectedTrack;
         graphics.setColour(juce::Colour(selected ? 0xff292e32 : StudioColours::raised));
         graphics.fillRoundedRectangle(strip.toFloat(), 5.0f);
@@ -306,35 +327,35 @@ void MixerPanel::paint(juce::Graphics& graphics)
                 std::max(meter->postFaderLeft, meter->postFaderRight));
             graphics.setColour(juce::Colour(StudioColours::window));
             graphics.fillRect(strip.getX() + 4,
-                              strip.getY() + 46,
+                              faderTop,
                               3,
-                              strip.getHeight() - 112);
+                              faderHeight);
             graphics.fillRect(strip.getRight() - 7,
-                              strip.getY() + 46,
+                              faderTop,
                               3,
-                              strip.getHeight() - 112);
+                              faderHeight);
             graphics.setColour(juce::Colour(StudioColours::amber));
             graphics.fillRect(
                 strip.getX() + 4,
-                strip.getY() + 46
+                faderTop
                     + static_cast<int>((1.0f - pre)
                                        * static_cast<float>(
-                                           strip.getHeight() - 112)),
+                                           faderHeight)),
                 3,
                 static_cast<int>(pre
                                  * static_cast<float>(
-                                     strip.getHeight() - 112)));
+                                     faderHeight)));
             graphics.setColour(juce::Colour(StudioColours::green));
             graphics.fillRect(
                 strip.getRight() - 7,
-                strip.getY() + 46
+                faderTop
                     + static_cast<int>((1.0f - post)
                                        * static_cast<float>(
-                                           strip.getHeight() - 112)),
+                                           faderHeight)),
                 3,
                 static_cast<int>(post
                                  * static_cast<float>(
-                                     strip.getHeight() - 112)));
+                                     faderHeight)));
         }
 
         graphics.setColour(track->colour);
@@ -346,8 +367,6 @@ void MixerPanel::paint(juce::Graphics& graphics)
                                 juce::Justification::centred,
                                 1);
 
-        const auto faderTop = strip.getY() + 46;
-        const auto faderHeight = strip.getHeight() - 112;
         graphics.setColour(juce::Colour(StudioColours::window));
         graphics.fillRoundedRectangle(static_cast<float>(strip.getCentreX() - 3),
                                       static_cast<float>(faderTop),
@@ -372,24 +391,104 @@ void MixerPanel::paint(juce::Graphics& graphics)
                                       7.0f,
                                       3.5f);
 
-        juce::String state;
-        if (track->type != TrackType::audio)
-            state << trackTypeToString(track->type).toUpperCase() << " ";
-        if (track->muted)
-            state << "M ";
-        if (track->solo)
-            state << "S ";
-        if (track->armed)
-            state << "R";
-        graphics.setColour(track->armed ? juce::Colour(StudioColours::orange)
-                                        : juce::Colour(StudioColours::secondaryText));
-        graphics.setFont(10.5f);
-        graphics.drawText(state.trimEnd(),
-                          strip.getX() + 8,
-                          strip.getY() + 25,
-                          strip.getWidth() - 16,
-                          18,
-                          juce::Justification::centred);
+        const auto drawControl = [&graphics, &strip](
+                                     int offset,
+                                     StudioIcon icon,
+                                     bool active,
+                                     juce::Colour activeColour)
+        {
+            const juce::Rectangle<float> bounds(
+                static_cast<float>(strip.getX() + offset),
+                static_cast<float>(
+                    strip.getY() + stripControlY),
+                static_cast<float>(stripControlSize),
+                static_cast<float>(stripControlSize));
+            graphics.setColour(
+                active ? activeColour
+                       : juce::Colour(StudioColours::window));
+            graphics.fillRoundedRectangle(bounds, 4.0f);
+            drawStudioIcon(
+                graphics,
+                icon,
+                bounds.reduced(5.0f),
+                active ? juce::Colours::white
+                       : juce::Colour(
+                           StudioColours::secondaryText),
+                1.3f);
+        };
+        drawControl(
+            12,
+            StudioIcon::mute,
+            track->muted,
+            juce::Colour(StudioColours::amber));
+        drawControl(
+            45,
+            StudioIcon::solo,
+            track->solo,
+            juce::Colour(StudioColours::green));
+        if (track->type == TrackType::audio
+            || track->type == TrackType::instrument
+            || track->type == TrackType::midi)
+        {
+            drawControl(
+                78,
+                StudioIcon::record,
+                track->armed,
+                juce::Colour(StudioColours::orange));
+        }
+
+        const juce::Rectangle<float> decibelBounds(
+            static_cast<float>(strip.getX() + 12),
+            static_cast<float>(strip.getY() + 54),
+            static_cast<float>(strip.getWidth() - 24),
+            20.0f);
+        graphics.setColour(juce::Colour(StudioColours::window));
+        graphics.fillRoundedRectangle(decibelBounds, 3.0f);
+        graphics.setColour(juce::Colour(StudioColours::border));
+        graphics.drawRoundedRectangle(decibelBounds, 3.0f, 1.0f);
+        graphics.setColour(juce::Colour(StudioColours::text));
+        graphics.setFont(
+            juce::Font(juce::FontOptions(10.0f,
+                                         juce::Font::bold)));
+        graphics.drawText(
+            juce::String(volumeValue, 1) + " dB",
+            decibelBounds.toNearestInt(),
+            juce::Justification::centred);
+
+        graphics.setColour(
+            juce::Colour(StudioColours::secondaryText));
+        graphics.setFont(juce::Font(juce::FontOptions(7.5f)));
+        for (const auto tick : { 12, 0, -12,
+                                 -24, -48, -60 })
+        {
+            const auto tickNormalised = juce::jmap(
+                static_cast<float>(tick),
+                -60.0f,
+                12.0f,
+                1.0f,
+                0.0f);
+            const auto tickY = faderTop
+                + static_cast<int>(
+                    tickNormalised
+                    * static_cast<float>(faderHeight));
+            graphics.drawHorizontalLine(
+                tickY,
+                static_cast<float>(
+                    strip.getCentreX() + 9),
+                static_cast<float>(
+                    strip.getCentreX() + 13));
+            if (tick == 0 || tick == -24
+                || tick == -60)
+            {
+                graphics.drawText(
+                    juce::String(tick),
+                    strip.getCentreX() + 15,
+                    tickY - 6,
+                    24,
+                    12,
+                    juce::Justification::centredLeft);
+            }
+        }
 
         const auto panValue = track->id == draggingPanTrack
             ? dragPreviewPan
@@ -398,18 +497,9 @@ void MixerPanel::paint(juce::Graphics& graphics)
             ? juce::String("C")
             : juce::String(static_cast<int>(std::round(std::abs(panValue) * 100.0f)))
                 + (panValue < 0.0f ? "% L" : "% R");
-        graphics.setColour(juce::Colour(StudioColours::secondaryText));
-        graphics.setFont(juce::Font(juce::FontOptions(9.0f)));
-        graphics.drawText(juce::String(volumeValue, 1) + " dB",
-                          strip.getX() + 6,
-                          faderTop + faderHeight + 2,
-                          strip.getWidth() - 12,
-                          16,
-                          juce::Justification::centred);
-
         const juce::Point<float> panCentre(static_cast<float>(strip.getCentreX()),
-                                           static_cast<float>(strip.getBottom() - 35));
-        constexpr auto panRadius = 12.0f;
+                                           static_cast<float>(strip.getBottom() - 33));
+        constexpr auto panRadius = 9.0f;
         graphics.setColour(juce::Colour(StudioColours::window));
         graphics.fillEllipse(panCentre.x - panRadius,
                              panCentre.y - panRadius,
@@ -447,12 +537,12 @@ void MixerPanel::paint(juce::Graphics& graphics)
         graphics.setColour(juce::Colour(StudioColours::secondaryText));
         graphics.drawText(panText,
                           strip.getX() + 6,
-                          strip.getBottom() - 18,
+                          strip.getBottom() - 16,
                           strip.getWidth() - 12,
                           14,
                           juce::Justification::centred);
 
-        x += stripWidth + gap;
+        x += stripWidth + stripGap;
     }
 
     graphics.setColour(juce::Colour(StudioColours::border));
@@ -502,9 +592,9 @@ void MixerPanel::mouseDown(const juce::MouseEvent& event)
     if (project == nullptr || event.position.y < 34.0f)
         return;
 
-    constexpr auto stripWidth = 112;
-    constexpr auto gap = 8;
-    const auto index = static_cast<int>((event.position.x - 14.0f) / (stripWidth + gap));
+    const auto index = static_cast<int>(
+        (event.position.x - 14.0f)
+        / (stripWidth + stripGap));
     const auto tracks = mixerTracks();
     if (index < 0 || index >= static_cast<int>(tracks.size()))
         return;
@@ -512,14 +602,44 @@ void MixerPanel::mouseDown(const juce::MouseEvent& event)
     const auto* track = tracks[static_cast<std::size_t>(index)];
     if (onTrackSelected)
         onTrackSelected(track->id);
+    const juce::Rectangle<int> strip(
+                                     14 + index * (stripWidth + stripGap),
+                                     stripTop,
+                                     stripWidth,
+                                     getHeight() - 44);
+    const auto localX =
+        static_cast<int>(event.position.x)
+        - strip.getX();
+    const auto localY =
+        static_cast<int>(event.position.y)
+        - strip.getY();
+    if (localY >= stripControlY
+        && localY
+            < stripControlY + stripControlSize)
+    {
+        if (localX >= 12
+            && localX < 12 + stripControlSize
+            && onTrackMute)
+            onTrackMute(track->id);
+        else if (localX >= 45
+                 && localX < 45 + stripControlSize
+                 && onTrackSolo)
+            onTrackSolo(track->id);
+        else if (localX >= 78
+                 && localX < 78 + stripControlSize
+                 && (track->type == TrackType::audio
+                     || track->type
+                         == TrackType::instrument
+                     || track->type == TrackType::midi)
+                 && onTrackArm)
+            onTrackArm(track->id);
+        return;
+    }
+
     if (track->type == TrackType::folder
         || track->type == TrackType::midi)
         return;
 
-    const juce::Rectangle<int> strip(14 + index * (stripWidth + gap),
-                                     34,
-                                     stripWidth,
-                                     getHeight() - 44);
     draggingVolumeTrack.clear();
     draggingPanTrack.clear();
     if (track->type != TrackType::vca
@@ -527,6 +647,7 @@ void MixerPanel::mouseDown(const juce::MouseEvent& event)
             >= static_cast<float>(strip.getBottom() - 60))
     {
         draggingPanTrack = track->id;
+        dragStartX = event.position.x;
         dragStartY = event.position.y;
         dragStartPan = track->pan;
         dragPreviewPan = track->pan;
@@ -538,8 +659,13 @@ void MixerPanel::mouseDown(const juce::MouseEvent& event)
         return;
     }
 
-    const auto faderTop = strip.getY() + 46;
-    const auto faderHeight = strip.getHeight() - 112;
+    const auto faderTop =
+        strip.getY() + stripFaderTop;
+    const auto faderHeight = juce::jmax(
+        24,
+        strip.getHeight()
+            - stripFaderTop
+            - stripBottomControls);
     if (event.position.y >= static_cast<float>(faderTop - 8)
         && event.position.y <= static_cast<float>(faderTop + faderHeight + 8))
     {
@@ -576,7 +702,8 @@ void MixerPanel::mouseDrag(const juce::MouseEvent& event)
     dragPreviewPan = juce::jlimit(
         -1.0f,
         1.0f,
-        dragStartPan + (dragStartY - event.position.y) / 80.0f);
+        dragStartPan
+            + (event.position.x - dragStartX) / 56.0f);
     repaint();
 }
 
@@ -608,15 +735,16 @@ void MixerPanel::mouseDoubleClick(const juce::MouseEvent& event)
     if (project == nullptr || event.position.y < 34.0f)
         return;
 
-    constexpr auto stripWidth = 112;
-    constexpr auto gap = 8;
-    const auto index = static_cast<int>((event.position.x - 14.0f) / (stripWidth + gap));
+    const auto index = static_cast<int>(
+        (event.position.x - 14.0f)
+        / (stripWidth + stripGap));
     const auto tracks = mixerTracks();
     if (index < 0 || index >= static_cast<int>(tracks.size()))
         return;
 
-    const juce::Rectangle<int> strip(14 + index * (stripWidth + gap),
-                                     34,
+    const juce::Rectangle<int> strip(
+                                     14 + index * (stripWidth + stripGap),
+                                     stripTop,
                                      stripWidth,
                                      getHeight() - 44);
     const auto* track = tracks[static_cast<std::size_t>(index)];
@@ -642,8 +770,13 @@ void MixerPanel::mouseDoubleClick(const juce::MouseEvent& event)
         return;
     }
 
-    const auto faderTop = strip.getY() + 46;
-    const auto faderHeight = strip.getHeight() - 112;
+    const auto faderTop =
+        strip.getY() + stripFaderTop;
+    const auto faderHeight = juce::jmax(
+        24,
+        strip.getHeight()
+            - stripFaderTop
+            - stripBottomControls);
     if (track->type != TrackType::folder
         && track->type != TrackType::midi
         && event.position.y >= static_cast<float>(faderTop - 8)

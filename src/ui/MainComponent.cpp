@@ -24,6 +24,9 @@ namespace studio
 {
 namespace
 {
+constexpr int mainHeaderHeight = 64;
+constexpr int transportFooterHeight = 44;
+
 bool sameAutomationTarget(const AutomationTarget& left,
                           const AutomationTarget& right)
 {
@@ -1277,6 +1280,21 @@ MainComponent::MainComponent(bool startAudioOnLaunch)
     mixer = std::make_unique<MixerPanel>();
     mixer->setProject(&project);
     mixer->onTrackSelected = [this](const auto& trackId) { selectTrack(trackId); };
+    mixer->onTrackMute = [this](const auto& trackId)
+    {
+        if (timeline.onTrackMute)
+            timeline.onTrackMute(trackId);
+    };
+    mixer->onTrackSolo = [this](const auto& trackId)
+    {
+        if (timeline.onTrackSolo)
+            timeline.onTrackSolo(trackId);
+    };
+    mixer->onTrackArm = [this](const auto& trackId)
+    {
+        if (timeline.onTrackArm)
+            timeline.onTrackArm(trackId);
+    };
     mixer->onEditTrack = [this](const auto& trackId, auto targetArea)
     {
         selectTrack(trackId);
@@ -1345,6 +1363,24 @@ MainComponent::MainComponent(bool startAudioOnLaunch)
         }
         else
             activeAutomationGesture.reset();
+    };
+    timeline.onTrackVolumeGestureStarted =
+        [this](const auto& trackId, float volume)
+    {
+        if (mixer->onAutomationGestureStarted)
+        {
+            mixer->onAutomationGestureStarted(
+                trackId,
+                AutomationTargetType::trackVolume,
+                static_cast<float>(
+                    normalizedDecibels(volume)));
+        }
+    };
+    timeline.onTrackVolumeChanged =
+        [this](const auto& trackId, float volume)
+    {
+        if (mixer->onVolumeChanged)
+            mixer->onVolumeChanged(trackId, volume);
     };
     mixer->onPanChanged = [this](const auto& trackId, float pan)
     {
@@ -1930,27 +1966,37 @@ void MainComponent::paint(juce::Graphics& graphics)
     graphics.fillAll(juce::Colour(StudioColours::window));
 
     auto bounds = getLocalBounds();
-    const auto header = bounds.removeFromTop(76);
+    const auto header = bounds.removeFromTop(mainHeaderHeight);
+    const auto footer =
+        bounds.removeFromBottom(transportFooterHeight);
     graphics.setColour(juce::Colour(StudioColours::panel));
     graphics.fillRect(header);
+    graphics.fillRect(footer);
     graphics.setColour(juce::Colour(StudioColours::border));
     graphics.drawHorizontalLine(header.getBottom() - 1, 0.0f, static_cast<float>(getWidth()));
+    graphics.drawHorizontalLine(
+        footer.getY(),
+        0.0f,
+        static_cast<float>(getWidth()));
     if (brandLogo != nullptr)
     {
         brandLogo->drawWithin(graphics,
-                              juce::Rectangle<float>(16.0f, 12.0f, 52.0f, 52.0f),
+                              juce::Rectangle<float>(12.0f, 10.0f, 42.0f, 42.0f),
                               juce::RectanglePlacement::centred,
                               1.0f);
     }
 
-    const auto bodyTop = 76;
+    const auto bodyTop = mainHeaderHeight;
     constexpr auto resizerThickness = 6;
     const auto showMidiEditor =
         project.findMidiClip(selectedClipId) != nullptr;
     const auto lowerPanelHeight = showMidiEditor
         ? midiEditorHeight
         : mixerPanelHeight;
-    const auto lowerPanelTop = getHeight() - 28 - lowerPanelHeight;
+    const auto lowerPanelTop =
+        getHeight()
+        - transportFooterHeight
+        - lowerPanelHeight;
     const auto bodyBottom = lowerPanelTop - resizerThickness;
     const auto inspectorLeft = getWidth() - inspectorPanelWidth;
     graphics.setColour(juce::Colour(StudioColours::panel));
@@ -2019,16 +2065,17 @@ void MainComponent::paint(juce::Graphics& graphics)
 
     graphics.setColour(juce::Colour(StudioColours::text));
     graphics.setFont(juce::Font(juce::FontOptions(12.0f, juce::Font::bold)));
-    graphics.drawText("STUDIO", 18, 11, 78, 18, juce::Justification::centredLeft);
+    graphics.drawText("STUDIO", 60, 15, 54, 18, juce::Justification::centredLeft);
     graphics.setColour(juce::Colour(StudioColours::orange));
-    graphics.drawText("DUO", 74, 11, 48, 18, juce::Justification::centredLeft);
+    graphics.drawText("DUO", 60, 31, 54, 18, juce::Justification::centredLeft);
 }
 
 void MainComponent::resized()
 {
     auto bounds = getLocalBounds();
-    auto header = bounds.removeFromTop(76);
-    auto status = bounds.removeFromBottom(28);
+    auto header = bounds.removeFromTop(mainHeaderHeight);
+    auto status =
+        bounds.removeFromBottom(transportFooterHeight);
     constexpr auto resizerThickness = 6;
     const auto showMidiEditor =
         project.findMidiClip(selectedClipId) != nullptr;
@@ -2045,7 +2092,6 @@ void MainComponent::resized()
     auto inspectorResizerBounds = bounds.removeFromRight(
         resizerThickness);
 
-    statusLabel.setBounds(status.reduced(10, 0));
     mixer->setBounds(lowerPanelBounds);
     mixer->setVisible(!showMidiEditor && mixerPanelHeight > 0);
     midiEditor.setBounds(lowerPanelBounds);
@@ -2074,8 +2120,7 @@ void MainComponent::resized()
     timelineViewport.setBounds(bounds);
 
     auto topRow = header.reduced(14, 8);
-    auto brand = topRow.removeFromLeft(170);
-    projectLabel.setBounds(brand.withTrimmedLeft(60).withTrimmedTop(24).withHeight(28));
+    topRow.removeFromLeft(126);
 
     const auto layoutFileControls =
         [this](juce::Rectangle<int> area, int verticalInset)
@@ -2103,20 +2148,6 @@ void MainComponent::resized()
             redoButton.setBounds(
                 area.removeFromLeft(38).reduced(3, verticalInset));
         };
-    const auto layoutTransportControls =
-        [this](juce::Rectangle<int> area, int verticalInset)
-        {
-            playButton.setBounds(
-                area.removeFromLeft(42).reduced(3, verticalInset));
-            stopButton.setBounds(
-                area.removeFromLeft(42).reduced(3, verticalInset));
-            recordButton.setBounds(
-                area.removeFromLeft(42).reduced(3, verticalInset));
-            loopButton.setBounds(
-                area.removeFromLeft(42).reduced(3, verticalInset));
-            loopRangeButton.setBounds(
-                area.removeFromLeft(42).reduced(3, verticalInset));
-        };
     const auto layoutTempoControls =
         [this](juce::Rectangle<int> area, int verticalInset)
         {
@@ -2125,31 +2156,53 @@ void MainComponent::resized()
             tempoSlider.setBounds(area.reduced(3, verticalInset));
         };
 
-    if (topRow.getWidth() < 1160)
-    {
-        auto firstRow = topRow.removeFromTop(28);
-        topRow.removeFromTop(4);
-        auto secondRow = topRow.removeFromTop(28);
+    layoutFileControls(topRow.removeFromLeft(400), 8);
+    layoutEditControls(topRow.removeFromLeft(80), 8);
+    projectLabel.setBounds(topRow.reduced(8, 4));
 
-        layoutFileControls(firstRow.removeFromLeft(400), 1);
-        layoutTempoControls(firstRow.removeFromRight(180), 2);
-        metronomeButton.setBounds(
-            firstRow.removeFromRight(42).reduced(3, 1));
-        positionLabel.setBounds(firstRow.reduced(6, 2));
-
-        layoutEditControls(secondRow.removeFromLeft(80), 1);
-        layoutTransportControls(secondRow.removeFromLeft(214), 1);
-    }
-    else
-    {
-        layoutFileControls(topRow.removeFromLeft(400), 12);
-        layoutEditControls(topRow.removeFromLeft(80), 12);
-        layoutTransportControls(topRow.removeFromLeft(214), 9);
-        layoutTempoControls(topRow.removeFromRight(180), 10);
-        metronomeButton.setBounds(
-            topRow.removeFromRight(42).reduced(3, 9));
-        positionLabel.setBounds(topRow.reduced(6, 8));
-    }
+    auto footerControls = status.reduced(8, 4);
+    auto tempoControls =
+        footerControls.removeFromRight(184);
+    layoutTempoControls(tempoControls, 2);
+    const auto transportWidth = 6 * 38;
+    const auto positionWidth = 150;
+    const auto clusterWidth =
+        positionWidth + transportWidth;
+    const auto clusterX = juce::jmax(
+        footerControls.getX(),
+        status.getCentreX() - clusterWidth / 2);
+    juce::Rectangle<int> transportCluster(
+        clusterX,
+        footerControls.getY(),
+        juce::jmin(
+            clusterWidth,
+            tempoControls.getX() - clusterX - 8),
+        footerControls.getHeight());
+    positionLabel.setBounds(
+        transportCluster.removeFromLeft(
+            juce::jmin(
+                positionWidth,
+                transportCluster.getWidth())));
+    auto transportButtons = transportCluster;
+    stopButton.setBounds(
+        transportButtons.removeFromLeft(38).reduced(3, 1));
+    playButton.setBounds(
+        transportButtons.removeFromLeft(38).reduced(3, 1));
+    recordButton.setBounds(
+        transportButtons.removeFromLeft(38).reduced(3, 1));
+    loopButton.setBounds(
+        transportButtons.removeFromLeft(38).reduced(3, 1));
+    loopRangeButton.setBounds(
+        transportButtons.removeFromLeft(38).reduced(3, 1));
+    metronomeButton.setBounds(
+        transportButtons.removeFromLeft(38).reduced(3, 1));
+    statusLabel.setBounds(
+        status.getX() + 10,
+        status.getY(),
+        juce::jmax(
+            80,
+            clusterX - status.getX() - 18),
+        status.getHeight());
 
     sessionPanelToggleButton.setBounds(
         leftPanelCollapsed ? left.getX() + 4 : left.getRight() - 40,
@@ -2233,10 +2286,10 @@ void MainComponent::resized()
     panSlider.setBounds(mixControls.reduced(5, 0));
     inspector.removeFromTop(14);
     auto toggles = inspector.removeFromTop(34);
-    muteButton.setBounds(toggles.removeFromLeft(52).reduced(2));
-    soloButton.setBounds(toggles.removeFromLeft(52).reduced(2));
-    armButton.setBounds(toggles.removeFromLeft(52).reduced(2));
-    trackColourButton.setBounds(toggles.removeFromLeft(52).reduced(2));
+    muteButton.setBounds(toggles.removeFromLeft(40).reduced(2));
+    soloButton.setBounds(toggles.removeFromLeft(40).reduced(2));
+    armButton.setBounds(toggles.removeFromLeft(40).reduced(2));
+    trackColourButton.setBounds(toggles.removeFromLeft(76).reduced(2));
     inspector.removeFromTop(10);
     routingPanel->setBounds(inspector.removeFromTop(154));
     inspector.removeFromTop(10);
@@ -2249,8 +2302,8 @@ void MainComponent::resized()
     mixerPanelToggleButton.toFront(false);
     masteringWorkspace.setBounds(
         getLocalBounds()
-            .withTrimmedTop(76)
-            .withTrimmedBottom(28));
+            .withTrimmedTop(mainHeaderHeight)
+            .withTrimmedBottom(transportFooterHeight));
     masteringWorkspace.setVisible(masteringWorkspaceVisible);
     if (masteringWorkspaceVisible)
         masteringWorkspace.toFront(false);
@@ -6549,11 +6602,28 @@ void MainComponent::updateInspector()
     panSlider.setValue(track->pan, juce::dontSendNotification);
     muteButton.setColour(juce::TextButton::buttonColourId,
                          juce::Colour(track->muted ? StudioColours::amber : StudioColours::raised));
+    muteButton.setAccessibleLabel(
+        track->muted ? "Unmute track" : "Mute track");
+    muteButton.setTooltip(
+        track->muted
+            ? "Unmute the selected track"
+            : "Mute selected track");
     soloButton.setColour(juce::TextButton::buttonColourId,
                          juce::Colour(track->solo ? StudioColours::green : StudioColours::raised));
+    soloButton.setAccessibleLabel(
+        track->solo ? "Unsolo track" : "Solo track");
+    soloButton.setTooltip(
+        track->solo
+            ? "Disable solo on the selected track"
+            : "Solo selected track");
     armButton.setColour(juce::TextButton::buttonColourId,
                         juce::Colour(track->armed ? StudioColours::orange : StudioColours::raised));
-    armButton.setButtonText(track->armed ? "ARMED" : "ARM");
+    armButton.setAccessibleLabel(
+        track->armed ? "Disarm track" : "Arm track");
+    armButton.setTooltip(
+        track->armed
+            ? "Disarm the selected track"
+            : "Arm audio tracks for recording or MIDI and instrument tracks for live input");
     const auto colourButtonBackground = track->type != TrackType::master
         ? track->colour
         : juce::Colour(StudioColours::raised);
@@ -8726,7 +8796,7 @@ void MainComponent::setInspectorPanelVisible(bool visible)
 
 void MainComponent::setMixerPanelVisible(bool visible)
 {
-    mixerPanelHeight = visible ? 220 : 0;
+    mixerPanelHeight = visible ? 260 : 0;
     mixerPanelToggleButton.setIcon(
         visible ? StudioIcon::chevronDown
                 : StudioIcon::chevronUp);

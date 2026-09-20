@@ -157,6 +157,49 @@ juce::Path createStudioIconPath(StudioIcon icon)
             path.addEllipse(14.5f, 15.5f, 3.0f, 3.0f);
             break;
 
+        case StudioIcon::mute:
+            path.startNewSubPath(3.0f, 9.0f);
+            path.lineTo(7.0f, 9.0f);
+            path.lineTo(12.0f, 5.0f);
+            path.lineTo(12.0f, 19.0f);
+            path.lineTo(7.0f, 15.0f);
+            path.lineTo(3.0f, 15.0f);
+            path.closeSubPath();
+            path.startNewSubPath(15.0f, 8.0f);
+            path.lineTo(21.0f, 16.0f);
+            path.startNewSubPath(21.0f, 8.0f);
+            path.lineTo(15.0f, 16.0f);
+            break;
+
+        case StudioIcon::solo:
+            path.startNewSubPath(4.0f, 13.0f);
+            path.cubicTo(4.0f, 4.0f, 20.0f, 4.0f, 20.0f, 13.0f);
+            path.startNewSubPath(4.0f, 12.0f);
+            path.lineTo(4.0f, 19.0f);
+            path.lineTo(8.0f, 19.0f);
+            path.lineTo(8.0f, 13.0f);
+            path.closeSubPath();
+            path.startNewSubPath(20.0f, 12.0f);
+            path.lineTo(20.0f, 19.0f);
+            path.lineTo(16.0f, 19.0f);
+            path.lineTo(16.0f, 13.0f);
+            path.closeSubPath();
+            break;
+
+        case StudioIcon::volume:
+            path.startNewSubPath(3.0f, 9.0f);
+            path.lineTo(7.0f, 9.0f);
+            path.lineTo(12.0f, 5.0f);
+            path.lineTo(12.0f, 19.0f);
+            path.lineTo(7.0f, 15.0f);
+            path.lineTo(3.0f, 15.0f);
+            path.closeSubPath();
+            path.startNewSubPath(15.0f, 9.0f);
+            path.cubicTo(18.0f, 10.0f, 18.0f, 14.0f, 15.0f, 15.0f);
+            path.startNewSubPath(17.0f, 6.0f);
+            path.cubicTo(23.0f, 9.0f, 23.0f, 15.0f, 17.0f, 18.0f);
+            break;
+
         case StudioIcon::add:
             path.startNewSubPath(4.0f, 12.0f);
             path.lineTo(20.0f, 12.0f);
@@ -336,6 +379,30 @@ juce::Path createStudioIconPath(StudioIcon icon)
     return path;
 }
 
+void drawStudioIcon(juce::Graphics& graphics,
+                    StudioIcon icon,
+                    juce::Rectangle<float> bounds,
+                    juce::Colour colour,
+                    float strokeWidth)
+{
+    auto path = createStudioIconPath(icon);
+    path.scaleToFit(bounds.getX(),
+                    bounds.getY(),
+                    bounds.getWidth(),
+                    bounds.getHeight(),
+                    true);
+    graphics.setColour(colour);
+    if (usesFill(icon))
+        graphics.fillPath(path);
+    else
+        graphics.strokePath(
+            path,
+            juce::PathStrokeType(
+                strokeWidth,
+                juce::PathStrokeType::curved,
+                juce::PathStrokeType::rounded));
+}
+
 StudioIconButton::StudioIconButton(StudioIcon initialIcon,
                                    juce::String accessibleLabel,
                                    juce::String tooltip)
@@ -374,19 +441,12 @@ void StudioIconButton::paintButton(juce::Graphics& graphics,
 {
     juce::TextButton::paintButton(graphics, highlighted, down);
 
-    auto path = createStudioIconPath(icon);
     const auto side = static_cast<float>(
         std::min(getWidth(), getHeight()));
     const auto inset = juce::jmax(4.0f, side * 0.23f);
     auto iconBounds = getLocalBounds().toFloat()
         .withSizeKeepingCentre(side, side)
         .reduced(inset);
-    path.scaleToFit(iconBounds.getX(),
-                    iconBounds.getY(),
-                    iconBounds.getWidth(),
-                    iconBounds.getHeight(),
-                    true);
-
     auto colour = findColour(
         getToggleState()
             ? juce::TextButton::textColourOnId
@@ -397,16 +457,11 @@ void StudioIconButton::paintButton(juce::Graphics& graphics,
         colour = colour.darker(0.08f);
     else if (highlighted)
         colour = colour.brighter(0.08f);
-    graphics.setColour(colour);
-
-    if (usesFill(icon))
-        graphics.fillPath(path);
-    else
-        graphics.strokePath(
-            path,
-            juce::PathStrokeType(
-                juce::jmax(1.35f, iconBounds.getWidth() / 11.0f),
-                juce::PathStrokeType::curved,
-                juce::PathStrokeType::rounded));
+    drawStudioIcon(
+        graphics,
+        icon,
+        iconBounds,
+        colour,
+        juce::jmax(1.35f, iconBounds.getWidth() / 11.0f));
 }
 }
