@@ -605,10 +605,11 @@ void routingEngineTests()
     panClip.sourceLengthSeconds = 0.01;
     panClip.sourceRangeEndSeconds = 0.01;
     panTrack.clips.push_back(panClip);
-    studio::StudioAudioEngine panEngine;
+    auto panEngine =
+        std::make_unique<studio::StudioAudioEngine>();
     juce::AudioBuffer<float> rightPan;
     panTrack.pan = 1.0f;
-    expect(panEngine.renderToBuffer(
+    expect(panEngine->renderToBuffer(
                panProject,
                rightPan,
                48000.0)
@@ -619,7 +620,7 @@ void routingEngineTests()
            "Full-right track pan moves mono content to the right channel.");
     juce::AudioBuffer<float> leftPan;
     panTrack.pan = -1.0f;
-    expect(panEngine.renderToBuffer(
+    expect(panEngine->renderToBuffer(
                panProject,
                leftPan,
                48000.0)
