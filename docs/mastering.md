@@ -123,5 +123,4 @@ a hash fall back to an exact filename match. Unresolved files remain explicit
 report entries; Studio Duo never silently substitutes different media.
 
 Mastering data and media hashes were introduced in format 9 and remain in
-format 10. Version 8 and
-older projects migrate with an empty mastering album.
+format 11. Version 8 and older projects migrate with an empty mastering album.

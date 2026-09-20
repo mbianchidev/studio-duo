@@ -810,6 +810,7 @@ if(STUDIO_DUO_BUILD_TESTS)
             tests/TransportSettingsTests.cpp
             tests/UpdateTests.cpp
             tests/UiIconTests.cpp
+            tests/TimelineMarkerTests.cpp
             tests/DawProjectTests.cpp
             src/ui/TransportSettingsComponent.cpp
             src/ui/TransportSettingsComponent.h
@@ -820,6 +821,8 @@ if(STUDIO_DUO_BUILD_TESTS)
             src/ui/RoutingUiModel.h
             src/ui/StudioIconButton.cpp
             src/ui/StudioIconButton.h
+            src/ui/TimelineComponent.cpp
+            src/ui/TimelineComponent.h
             src/ui/MainWindowSizing.cpp
             src/ui/MainWindowSizing.h
             src/ui/MidiEditorComponent.cpp

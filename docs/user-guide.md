@@ -9,6 +9,7 @@ DAWproject exchange, and Phase 5 mastering and release workflows.
 
 - CoreAudio, ASIO, and WASAPI device selection
 - Tempo and meter maps with jump or ramp changes
+- Draggable named marker flags for labels, navigation, loops, and exports
 - Persistent song-section placeholders on the timeline ruler
 - Routed metronome with accents and subdivisions
 - Punch, count-in, pre-roll, post-roll, and loop transport
@@ -184,7 +185,8 @@ playback to the active playlist.
 
 **Tracking Setup** (flag icon) manages:
 
-- Named sections/markers and section-specific transport settings
+- Independent named marker flags
+- Song sections and section-specific transport settings
 - Tempo and meter changes at the playhead
 - Jump and ramp tempo transitions
 - Punch points, count-in, pre-roll, and post-roll
@@ -197,12 +199,13 @@ tempo and meter at the playhead, and the timeline keeps punch and loop ranges
 visible as coloured bounds. When punch and loop are both enabled, punch takes
 priority for recording while ordinary playback keeps using the loop range.
 
-Right-click the **MARKERS / SECTIONS** lane above the bar ruler to create a named section
-at that exact timeline position without moving the playhead.
+Right-click the **MARKERS / SECTIONS** lane above the bar ruler to add either a
+marker flag or a song section at that exact timeline position without moving
+the playhead. Marker flags can also be dragged directly along the lane.
 
 ### Set an arbitrary loop
 
-Use **Configure Loop Range** (sliders icon) beside **Loop**, or **Tracking Setup
+Use **Configure Loop Range** (loop-range icon) beside **Loop**, or **Tracking Setup
 > Configure loop range**. The **Loop** button still switches the saved loop
 on/off in one click.
 The editor accepts timeline seconds, musical positions (`bar:beat:tick`, with
@@ -222,10 +225,11 @@ boundaries. Loop-range export uses these same saved bounds.
 
 ### Section tempo, meter and click
 
-New projects start in **4/4**. Right-click a named marker and choose **Tempo,
-time signature and click**, or use its submenu in **Tracking Setup** (flag icon).
+New projects start in **4/4**. Right-click a song section and choose **Tempo,
+time signature and click**, or use its section submenu in **Tracking Setup**
+(flag icon).
 **Create + timing** / **Save + timing** opens the same settings after adding or editing
-a marker.
+a section.
 
 Each section can set BPM, an incoming tempo ramp, a time signature, and a click
 override. BPM uses quarter notes; meter beats use the selected denominator.
@@ -233,13 +237,13 @@ Click settings include on/off, 1-8 subdivisions per meter beat, normal/accent
 levels, and a comma-separated list of accented beats. For example, use `1,4`
 in 6/8 or `1,4,6` in 7/8; an empty list gives an unaccented click.
 
-Changes begin at the marker and continue until the next applicable change.
-Unconfigured markers do not reset the clock or click. Clearing an override
+Changes begin at the section boundary and continue until the next applicable
+change. Unconfigured sections do not reset the clock or click. Clearing an override
 inherits previous settings or the project's defaults. The global **CLICK**
 button remains the master mute: section settings cannot force it on. Clicks
 remain excluded from mix exports.
 
-Section-owned tempo/meter points move with their marker; deleting the marker
+Section-owned tempo/meter points move with their section; deleting the section
 removes those owned changes, not unrelated manual points. Moving into another
 tempo/meter point reports a collision instead of overwriting it. These edits,
 click patterns and loop bounds support undo/redo and native project persistence.
@@ -581,14 +585,15 @@ Studio Duo projects are versioned `.studioduo` directory packages. A save writes
 a new session generation before atomically replacing `manifest.json`; the latest
 complete state is also copied to `recovery/latest.json`.
 
-Project format version 10 stores the typed routing graph, separate automation
+Project format version 11 stores the typed routing graph, separate automation
 generations, content-addressed plugin state, compatibility policy, tone and
 mixer snapshots, render reports, ordinary MIDI clips and expressions, drum
 maps, pattern aliases, humanization state, MIDI routing templates, project
 metadata, scenes, persisted interchange reports, and channel-scoped MIDI
 pressure automation. It also stores the mastering album, source hashes,
-references, sequencing, release metadata, final measurements, section-owned
-tempo/meter points and per-section click patterns. Versions 1-9 migrate on load.
+references, sequencing, release metadata, final measurements, independent
+marker flags, section-owned tempo/meter points and per-section click patterns.
+Versions 1-10 migrate on load.
 See [project-format.md](project-format.md).
 
 ### Audio export
@@ -623,10 +628,11 @@ to the exported file, including its tail, without changing timeline clips.
 
 Create named **Start** and **End** markers using **TRACKING SETUP > Add marker
 at playhead**, or double-click empty space in the timeline marker lane. Enter a
-name and position in seconds. Existing song sections are these same markers:
-they survive saving, reopening, and DAWproject exchange. Use the marker's context
-menu, double-click its label, or the tracking menu to rename/move/delete it;
-all changes support undo and redo. In export settings, choose **Between markers**
+name and position in seconds. Markers are independent flags rather than song
+sections; they survive saving, reopening, dragging, and DAWproject exchange.
+Use the marker's context menu, double-click its label, drag its flag, or use the
+tracking menu to rename/move/delete it; all changes support undo and redo. In
+export settings, choose **Between markers**
 and select the start and end names. Names can repeat; each choice also shows its
 position and uses a stable marker ID. Missing markers or an end at/before the
 start are rejected rather than falling back to the entire project.

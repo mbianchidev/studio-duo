@@ -139,8 +139,8 @@ std::optional<juce::Range<double>> TransportEditing::markerRange(
     const juce::String& endMarkerId, juce::String& error)
 {
     error.clear();
-    const auto* start = project.findSection(startMarkerId);
-    const auto* end = project.findSection(endMarkerId);
+    const auto* start = project.findMarker(startMarkerId);
+    const auto* end = project.findMarker(endMarkerId);
     if (start == nullptr || end == nullptr || startMarkerId.isEmpty() || endMarkerId.isEmpty())
     {
         error = "Choose existing start and end markers. A selected marker is missing.";

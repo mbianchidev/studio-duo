@@ -11,6 +11,28 @@ namespace studio
 {
 namespace
 {
+bool validProjectMarker(const ProjectMarker& marker)
+{
+    return marker.id.trim().isNotEmpty()
+        && marker.name.trim().isNotEmpty()
+        && std::isfinite(marker.timeSeconds)
+        && marker.timeSeconds >= 0.0;
+}
+
+void insertProjectMarker(std::vector<ProjectMarker>& markers,
+                         const ProjectMarker& marker)
+{
+    const auto insertion = std::lower_bound(
+        markers.begin(),
+        markers.end(),
+        marker.timeSeconds,
+        [](const auto& existing, double position)
+        {
+            return existing.timeSeconds < position;
+        });
+    markers.insert(insertion, marker);
+}
+
 bool validSongSection(const SongSection& section)
 {
     return section.id.trim().isNotEmpty()
@@ -325,6 +347,132 @@ void BatchProjectCommand::undo(Project& project)
     for (auto iterator = commands.rbegin(); iterator != commands.rend(); ++iterator)
         if (*iterator != nullptr)
             (*iterator)->undo(project);
+}
+
+AddProjectMarkerCommand::AddProjectMarkerCommand(
+    ProjectMarker markerToAdd)
+    : marker(std::move(markerToAdd))
+{
+}
+
+juce::String AddProjectMarkerCommand::name() const
+{
+    return "Add marker";
+}
+
+bool AddProjectMarkerCommand::perform(Project& project,
+                                      juce::String& error)
+{
+    marker.name = marker.name.trim();
+    if (!validProjectMarker(marker)
+        || project.findMarker(marker.id) != nullptr)
+    {
+        error = "A marker needs a unique ID, a name, and a finite non-negative timeline position.";
+        return false;
+    }
+    insertProjectMarker(project.markers, marker);
+    return true;
+}
+
+void AddProjectMarkerCommand::undo(Project& project)
+{
+    std::erase_if(project.markers, [this](const auto& existing)
+    {
+        return existing.id == marker.id;
+    });
+}
+
+SetProjectMarkerCommand::SetProjectMarkerCommand(
+    ProjectMarker before,
+    ProjectMarker after)
+    : oldMarker(std::move(before)),
+      newMarker(std::move(after))
+{
+    newMarker.name = newMarker.name.trim();
+}
+
+juce::String SetProjectMarkerCommand::name() const
+{
+    return "Edit marker";
+}
+
+bool SetProjectMarkerCommand::perform(Project& project,
+                                      juce::String& error)
+{
+    if (oldMarker.id != newMarker.id
+        || !validProjectMarker(oldMarker)
+        || !validProjectMarker(newMarker))
+    {
+        error = "A marker edit must keep its ID and have a name and a finite non-negative timeline position.";
+        return false;
+    }
+    const auto marker = std::find_if(
+        project.markers.begin(),
+        project.markers.end(),
+        [this](const auto& existing)
+        {
+            return existing.id == oldMarker.id;
+        });
+    if (marker == project.markers.end())
+    {
+        error = "The marker no longer exists.";
+        return false;
+    }
+    project.markers.erase(marker);
+    insertProjectMarker(project.markers, newMarker);
+    return true;
+}
+
+void SetProjectMarkerCommand::undo(Project& project)
+{
+    const auto marker = std::find_if(
+        project.markers.begin(),
+        project.markers.end(),
+        [this](const auto& existing)
+        {
+            return existing.id == oldMarker.id;
+        });
+    if (marker == project.markers.end())
+        return;
+    project.markers.erase(marker);
+    insertProjectMarker(project.markers, oldMarker);
+}
+
+RemoveProjectMarkerCommand::RemoveProjectMarkerCommand(
+    juce::String markerToRemove)
+    : markerId(std::move(markerToRemove))
+{
+}
+
+juce::String RemoveProjectMarkerCommand::name() const
+{
+    return "Remove marker";
+}
+
+bool RemoveProjectMarkerCommand::perform(Project& project,
+                                         juce::String& error)
+{
+    const auto marker = std::find_if(
+        project.markers.begin(),
+        project.markers.end(),
+        [this](const auto& existing)
+        {
+            return existing.id == markerId;
+        });
+    if (markerId.trim().isEmpty() || marker == project.markers.end())
+    {
+        error = "The marker no longer exists.";
+        return false;
+    }
+    removedMarker = *marker;
+    project.markers.erase(marker);
+    return true;
+}
+
+void RemoveProjectMarkerCommand::undo(Project& project)
+{
+    if (removedMarker.has_value())
+        insertProjectMarker(project.markers, *removedMarker);
 }
 
 AddSongSectionCommand::AddSongSectionCommand(SongSection sectionToAdd)

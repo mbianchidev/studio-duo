@@ -56,10 +56,15 @@ studio::Project transportProject()
     project.timeSignatureDenominator = 4;
     project.tempoChanges.clear();
     project.meterChanges.clear();
+    project.markers = {
+        { "start-marker", "Boundary", 0.0 },
+        { "middle-marker", "Section", 4.0 },
+        { "end-marker", "Boundary", 8.0 }
+    };
     project.sections = {
-        { "start-marker", "Boundary", 0.0, {} },
-        { "middle-marker", "Section", 4.0, {} },
-        { "end-marker", "Boundary", 8.0, {} }
+        { "start-marker", "Start", 0.0, {} },
+        { "middle-marker", "Middle", 4.0, {} },
+        { "end-marker", "End", 8.0, {} }
     };
     project.loopEnabled = false;
     project.loopStartSeconds = 0.0;
@@ -203,13 +208,13 @@ void invalidLoopInputIsNotDiscarded()
 void loopMarkerIdsAndPendingConversions()
 {
     auto project = transportProject();
-    project.sections = {
-        { "end-marker", "Boundary", 8.0, {} },
-        { "first-marker", "Boundary", 1.0001, {} },
-        { "second-marker", "Boundary", 1.0002, {} }
+    project.markers = {
+        { "end-marker", "Boundary", 8.0 },
+        { "first-marker", "Boundary", 1.0001 },
+        { "second-marker", "Boundary", 1.0002 }
     };
     studio::LoopSettingsComponent component(project, 48000.0);
-    project.sections.clear();
+    project.markers.clear();
     select(component, "loop.mode", 3);
     auto& first = control<juce::ComboBox>(component, "loop.startMarker");
     auto& last = control<juce::ComboBox>(component, "loop.endMarker");
@@ -247,17 +252,17 @@ void loopMarkerIdsAndPendingConversions()
     expect(value && near(value->startSeconds, 1.0) && near(value->endSeconds, 3.0),
            "Leaving an untouched pending marker selection restores the previous valid range.");
 
-    plain.sections.resize(1);
+    plain.markers.resize(1);
     studio::LoopSettingsComponent insufficient(plain, 48000.0);
     expect(!control<juce::ComboBox>(insufficient, "loop.mode").isItemEnabled(3),
            "Marker mode requires at least two distinct stable IDs.");
 
     auto duplicates = transportProject();
-    duplicates.sections = {
-        { "boundary-one", "Boundary", 1.0, {} },
-        { "boundary-two", "Boundary", 1.0, {} },
-        { "boundary-three", "Boundary", 1.0, {} },
-        { "end-marker", "End", 8.0, {} }
+    duplicates.markers = {
+        { "boundary-one", "Boundary", 1.0 },
+        { "boundary-two", "Boundary", 1.0 },
+        { "boundary-three", "Boundary", 1.0 },
+        { "end-marker", "End", 8.0 }
     };
     studio::LoopSettingsComponent repeated(duplicates, 48000.0);
     select(repeated, "loop.mode", 3);
@@ -375,12 +380,12 @@ void sectionInheritanceAndClearing()
                && control<juce::TextEditor>(component, "section.bpm").getText() == "unfinished",
            "Malformed custom drafts are preserved, never silently clamped.");
 
-    studio::SectionSettingsComponent genericMarker(project, "end-marker");
-    value = genericMarker.settings(error);
+    studio::SectionSettingsComponent genericSection(project, "end-marker");
+    value = genericSection.settings(error);
     expect(value && !value->tempoBpm && !value->timeSignature && !value->clickSettings
-               && control<juce::TextEditor>(genericMarker, "section.bpm").getText() == "150"
-               && control<juce::ComboBox>(genericMarker, "section.subdivision").getSelectedId() == 7,
-           "A generic later marker inherits earlier explicit settings without owning or resetting them.");
+               && control<juce::TextEditor>(genericSection, "section.bpm").getText() == "150"
+               && control<juce::ComboBox>(genericSection, "section.subdivision").getSelectedId() == 7,
+           "A generic later section inherits earlier explicit settings without owning or resetting them.");
 }
 
 void sectionGlobalClickAndValidation()

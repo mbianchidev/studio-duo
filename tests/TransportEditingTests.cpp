@@ -70,7 +70,7 @@ void transportEditingTests()
                    { true, 0.0, 8.0 }, std::numeric_limits<double>::quiet_NaN()).failed(),
            "Loop configuration requires a finite positive sample rate.");
 
-    project.sections = { { "end", "Boundary", 7.375 }, { "start", "Boundary", 1.25 } };
+    project.markers = { { "end", "Boundary", 7.375 }, { "start", "Boundary", 1.25 } };
     const auto markers = studio::TransportEditing::markerRange(project, "start", "end", error);
     expect(markers.has_value() && std::abs(markers->getStart() - 1.25) < 1.0e-9
                && std::abs(markers->getEnd() - 7.375) < 1.0e-9,

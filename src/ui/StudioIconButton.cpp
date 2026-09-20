@@ -78,23 +78,21 @@ juce::Path createStudioIconPath(StudioIcon icon)
             break;
 
         case StudioIcon::settings:
-            path.addEllipse(8.0f, 8.0f, 8.0f, 8.0f);
-            path.startNewSubPath(12.0f, 2.0f);
-            path.lineTo(12.0f, 6.0f);
-            path.startNewSubPath(12.0f, 18.0f);
-            path.lineTo(12.0f, 22.0f);
-            path.startNewSubPath(2.0f, 12.0f);
-            path.lineTo(6.0f, 12.0f);
-            path.startNewSubPath(18.0f, 12.0f);
-            path.lineTo(22.0f, 12.0f);
-            path.startNewSubPath(5.0f, 5.0f);
-            path.lineTo(8.0f, 8.0f);
-            path.startNewSubPath(16.0f, 16.0f);
-            path.lineTo(19.0f, 19.0f);
-            path.startNewSubPath(19.0f, 5.0f);
-            path.lineTo(16.0f, 8.0f);
-            path.startNewSubPath(8.0f, 16.0f);
-            path.lineTo(5.0f, 19.0f);
+            for (int index = 0; index < 24; ++index)
+            {
+                const auto angle = juce::MathConstants<float>::twoPi
+                    * static_cast<float>(index) / 24.0f;
+                const auto toothPhase = index % 3;
+                const auto radius = toothPhase == 1 ? 10.0f : 8.0f;
+                const auto point = juce::Point<float>(12.0f, 12.0f)
+                    .getPointOnCircumference(radius, angle);
+                if (index == 0)
+                    path.startNewSubPath(point);
+                else
+                    path.lineTo(point);
+            }
+            path.closeSubPath();
+            path.addEllipse(8.5f, 8.5f, 7.0f, 7.0f);
             break;
 
         case StudioIcon::undo:
@@ -135,16 +133,17 @@ juce::Path createStudioIconPath(StudioIcon icon)
             addChevron(path, 9.0f, 16.0f, 5.0f, 16.0f, 5.0f, 20.0f);
             break;
 
-        case StudioIcon::sliders:
-            path.startNewSubPath(3.0f, 6.0f);
-            path.lineTo(21.0f, 6.0f);
-            path.addEllipse(7.0f, 3.0f, 6.0f, 6.0f);
-            path.startNewSubPath(3.0f, 12.0f);
-            path.lineTo(21.0f, 12.0f);
-            path.addEllipse(14.0f, 9.0f, 6.0f, 6.0f);
-            path.startNewSubPath(3.0f, 18.0f);
-            path.lineTo(21.0f, 18.0f);
-            path.addEllipse(4.0f, 15.0f, 6.0f, 6.0f);
+        case StudioIcon::loopRange:
+            path.startNewSubPath(6.0f, 8.0f);
+            path.cubicTo(8.0f, 4.0f, 15.0f, 4.0f, 18.0f, 8.0f);
+            addChevron(path, 14.0f, 8.0f, 18.0f, 8.0f, 18.0f, 4.0f);
+            path.startNewSubPath(18.0f, 16.0f);
+            path.cubicTo(16.0f, 20.0f, 9.0f, 20.0f, 6.0f, 16.0f);
+            addChevron(path, 10.0f, 16.0f, 6.0f, 16.0f, 6.0f, 20.0f);
+            path.startNewSubPath(3.0f, 5.0f);
+            path.lineTo(3.0f, 19.0f);
+            path.startNewSubPath(21.0f, 5.0f);
+            path.lineTo(21.0f, 19.0f);
             break;
 
         case StudioIcon::metronome:

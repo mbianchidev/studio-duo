@@ -347,6 +347,38 @@ std::optional<SectionClickSettings> SectionClickSettings::fromVar(
     return settings;
 }
 
+juce::var ProjectMarker::toVar() const
+{
+    auto object = std::make_unique<juce::DynamicObject>();
+    object->setProperty("id", id);
+    object->setProperty("name", name);
+    object->setProperty("timeSeconds", timeSeconds);
+    return juce::var(object.release());
+}
+
+std::optional<ProjectMarker> ProjectMarker::fromVar(
+    const juce::var& value,
+    juce::String& error)
+{
+    const auto* object = requireObject(value, error, "Project marker");
+    if (object == nullptr)
+        return std::nullopt;
+
+    ProjectMarker marker;
+    marker.id = object->getProperty("id").toString();
+    marker.name = object->getProperty("name").toString().trim();
+    marker.timeSeconds = numberProperty(*object, "timeSeconds", 0.0);
+    if (marker.id.trim().isEmpty()
+        || marker.name.isEmpty()
+        || !std::isfinite(marker.timeSeconds)
+        || marker.timeSeconds < 0.0)
+    {
+        error = "Project markers require an ID, a name, and a finite non-negative position.";
+        return std::nullopt;
+    }
+    return marker;
+}
+
 juce::var SongSection::toVar() const
 {
     auto object = std::make_unique<juce::DynamicObject>();
@@ -1781,6 +1813,29 @@ Project Project::createDefault()
     return project;
 }
 
+ProjectMarker* Project::findMarker(const juce::String& markerId)
+{
+    const auto marker = std::find_if(
+        markers.begin(), markers.end(),
+        [&markerId](const auto& candidate)
+        {
+            return candidate.id == markerId;
+        });
+    return marker != markers.end() ? &*marker : nullptr;
+}
+
+const ProjectMarker* Project::findMarker(
+    const juce::String& markerId) const
+{
+    const auto marker = std::find_if(
+        markers.cbegin(), markers.cend(),
+        [&markerId](const auto& candidate)
+        {
+            return candidate.id == markerId;
+        });
+    return marker != markers.cend() ? &*marker : nullptr;
+}
+
 SongSection* Project::findSection(const juce::String& sectionId)
 {
     const auto section = std::find_if(
@@ -2454,6 +2509,30 @@ bool Project::validateTransport(juce::String& error) const
         return false;
     }
 
+    for (std::size_t index = 0; index < markers.size(); ++index)
+    {
+        const auto& marker = markers[index];
+        if (marker.id.trim().isEmpty()
+            || marker.name.trim().isEmpty()
+            || !std::isfinite(marker.timeSeconds)
+            || marker.timeSeconds < 0.0)
+        {
+            error = "Project markers require an ID, a name, and a finite non-negative position.";
+            return false;
+        }
+        if (std::any_of(
+                markers.cbegin(),
+                markers.cbegin() + static_cast<std::ptrdiff_t>(index),
+                [&marker](const auto& previous)
+                {
+                    return previous.id == marker.id;
+                }))
+        {
+            error = "Project markers require unique IDs.";
+            return false;
+        }
+    }
+
     for (std::size_t index = 0; index < sections.size(); ++index)
     {
         const auto& section = sections[index];
@@ -2629,6 +2708,10 @@ juce::var Project::toVar() const
     for (const auto& change : meterChanges)
         meterValues.add(change.toVar());
     object->setProperty("meterChanges", juce::var(meterValues));
+    juce::Array<juce::var> markerValues;
+    for (const auto& marker : markers)
+        markerValues.add(marker.toVar());
+    object->setProperty("markers", juce::var(markerValues));
     juce::Array<juce::var> sectionValues;
     for (const auto& section : sections)
         sectionValues.add(section.toVar());
@@ -2777,6 +2860,38 @@ std::optional<Project> Project::fromVar(const juce::var& value, juce::String& er
                          {
                              return left.timeSeconds < right.timeSeconds;
                          });
+    }
+    const auto markerValues = object->getProperty("markers");
+    if (markerValues.isArray())
+    {
+        for (const auto& markerValue : *markerValues.getArray())
+        {
+            auto marker = ProjectMarker::fromVar(
+                markerValue,
+                error);
+            if (!marker.has_value())
+                return std::nullopt;
+            const auto duplicate = std::find_if(
+                project.markers.cbegin(),
+                project.markers.cend(),
+                [&marker](const auto& existing)
+                {
+                    return existing.id == marker->id;
+                });
+            if (duplicate != project.markers.cend())
+            {
+                error = "Project markers require unique IDs.";
+                return std::nullopt;
+            }
+            project.markers.push_back(std::move(*marker));
+        }
+        std::stable_sort(
+            project.markers.begin(),
+            project.markers.end(),
+            [](const auto& left, const auto& right)
+            {
+                return left.timeSeconds < right.timeSeconds;
+            });
     }
     const auto sectionValues = object->getProperty("sections");
     if (sectionValues.isArray())

@@ -52,7 +52,7 @@ void edit(AudioExportOptionsComponent& component, const char* id, const char* te
 studio::Project markerProject()
 {
     auto project = studio::Project::createDefault();
-    project.sections = {
+    project.markers = {
         { "marker-end", "Boundary", 6.0 },
         { "marker-start", "Boundary", 1.0 },
         { "marker-middle", "Middle", 3.0 }
@@ -263,7 +263,7 @@ void markerRangesUseStableSnapshots()
 {
     auto project = markerProject();
     AudioExportOptionsComponent component(project, {});
-    project.sections.clear();
+    project.markers.clear();
     select(component, "export.range", 3);
     juce::String error;
     auto selected = component.settings(error);
@@ -299,7 +299,7 @@ void markerRangesUseStableSnapshots()
            "Choosing an available replacement marker resolves the stale selection.");
 
     auto singleMarker = markerProject();
-    singleMarker.sections.resize(1);
+    singleMarker.markers.resize(1);
     AudioExportOptionsComponent insufficient(singleMarker, {});
     expect(!control<juce::ComboBox>(insufficient, "export.range").isItemEnabled(3)
                && control<juce::Label>(insufficient, "export.markerHint").getText().contains("two"),
@@ -309,7 +309,7 @@ void markerRangesUseStableSnapshots()
            "Programmatically selecting an unavailable marker range is also rejected.");
 
     auto identicalLabels = markerProject();
-    identicalLabels.sections = {
+    identicalLabels.markers = {
         { "first-boundary", "Boundary", 1.0 },
         { "second-boundary", "Boundary", 1.0 },
         { "end-boundary", "Boundary", 6.0 }
@@ -325,8 +325,8 @@ void markerRangesUseStableSnapshots()
                && selector.getSelectedId() == 2
                && selector.getItemText(0) != selector.getItemText(1),
            "Even equal-name, equal-time markers have distinct labels and preserve the selected stable ID.");
-    identicalLabels.sections[0].timeSeconds = 1.0001;
-    identicalLabels.sections[1].timeSeconds = 1.0002;
+    identicalLabels.markers[0].timeSeconds = 1.0001;
+    identicalLabels.markers[1].timeSeconds = 1.0002;
     AudioExportOptionsComponent roundedLabels(identicalLabels, duplicateSelection);
     const auto& roundedSelector = control<juce::ComboBox>(roundedLabels, "export.startMarker");
     selected = roundedLabels.settings(error);

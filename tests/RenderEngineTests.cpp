@@ -445,13 +445,13 @@ void renderEngineTests()
                    rangeProject, rangeAudio, 48000.0, { 0.0, 0.1 / 48000.0, 0.0 }).failed(),
            "Invalid, non-finite, reversed, and sub-sample export ranges fail explicitly.");
 
-    studio::SongSection startMarker;
+    studio::ProjectMarker startMarker;
     startMarker.name = "Boundary";
     startMarker.timeSeconds = 101.0 / 48000.0;
-    studio::SongSection endMarker;
+    studio::ProjectMarker endMarker;
     endMarker.name = "Boundary";
     endMarker.timeSeconds = 557.0 / 48000.0;
-    rangeProject.sections = { startMarker, endMarker };
+    rangeProject.markers = { startMarker, endMarker };
     studio::MixExportSettings mixSettings;
     mixSettings.range = studio::MixExportRange::markers;
     mixSettings.startMarkerId = startMarker.id;

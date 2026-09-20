@@ -171,6 +171,36 @@ void TimelineComponent::paint(juce::Graphics& graphics)
                           juce::Justification::centredLeft,
                           true);
     }
+    for (const auto& marker : project->markers)
+    {
+        const auto markerSeconds = marker.id == draggedMarkerId
+            ? markerDragPreviewSeconds
+            : marker.timeSeconds;
+        const auto x = secondsToX(markerSeconds);
+        graphics.setColour(juce::Colour(StudioColours::text));
+        graphics.drawVerticalLine(static_cast<int>(x),
+                                  2.0f,
+                                  static_cast<float>(sectionLaneHeight - 2));
+        juce::Path flag;
+        flag.startNewSubPath(x, 2.0f);
+        flag.lineTo(x + 9.0f, 5.5f);
+        flag.lineTo(x, 9.0f);
+        flag.closeSubPath();
+        graphics.fillPath(flag);
+        graphics.setFont(juce::Font(juce::FontOptions(10.0f,
+                                                      juce::Font::bold)));
+        graphics.drawText(marker.name,
+                          static_cast<int>(x) + 11,
+                          0,
+                          juce::jmax(
+                              0,
+                              getWidth()
+                                  - static_cast<int>(x)
+                                  - 12),
+                          sectionLaneHeight,
+                          juce::Justification::centredLeft,
+                          true);
+    }
 
     const auto drawRangeFill = [this, &graphics](
                                    double startSeconds,
@@ -1086,7 +1116,27 @@ void TimelineComponent::mouseDown(const juce::MouseEvent& event)
     }
 
     if (event.position.y < static_cast<float>(sectionLaneHeight))
+    {
+        const auto inTrackHeader =
+            event.position.x
+                >= static_cast<float>(viewportPositionX)
+            && event.position.x
+                < static_cast<float>(
+                    viewportPositionX + trackHeaderWidth);
+        if (!inTrackHeader && project != nullptr)
+        {
+            draggedMarkerId = markerIdAt(event.position);
+            if (const auto* marker =
+                    project->findMarker(draggedMarkerId))
+            {
+                markerDragOriginalSeconds = marker->timeSeconds;
+                markerDragPreviewSeconds = marker->timeSeconds;
+                setMouseCursor(
+                    juce::MouseCursor::DraggingHandCursor);
+            }
+        }
         return;
+    }
 
     const auto inTrackHeader = event.position.x >= static_cast<float>(viewportPositionX)
         && event.position.x < static_cast<float>(viewportPositionX + trackHeaderWidth);
@@ -1250,18 +1300,16 @@ void TimelineComponent::mouseDoubleClick(const juce::MouseEvent& event)
     {
         if (!event.mods.isPopupMenu())
         {
-            const auto sectionId = sectionIdAt(event.position);
-            if (sectionId.isNotEmpty())
+            const auto markerId = markerIdAt(event.position);
+            if (markerId.isNotEmpty())
             {
-                const auto editSection = onEditSectionRequested;
-                if (editSection)
-                    editSection(sectionId);
+                if (onEditMarkerRequested)
+                    onEditMarkerRequested(markerId);
             }
-            else
+            else if (onAddMarkerRequested)
             {
-                const auto addSection = onAddSectionRequested;
-                if (addSection)
-                    addSection(xToSeconds(event.position.x));
+                onAddMarkerRequested(
+                    xToSeconds(event.position.x));
             }
         }
         return;
@@ -1327,6 +1375,15 @@ void TimelineComponent::mouseDoubleClick(const juce::MouseEvent& event)
 
 void TimelineComponent::mouseDrag(const juce::MouseEvent& event)
 {
+    if (draggedMarkerId.isNotEmpty())
+    {
+        markerDragPreviewSeconds = juce::jmax(
+            0.0,
+            xToSeconds(event.position.x));
+        repaint();
+        return;
+    }
+
     if (draggedClipId.isEmpty())
         return;
 
@@ -1431,6 +1488,24 @@ void TimelineComponent::mouseDrag(const juce::MouseEvent& event)
 
 void TimelineComponent::mouseUp(const juce::MouseEvent&)
 {
+    if (draggedMarkerId.isNotEmpty())
+    {
+        if (std::abs(
+                markerDragPreviewSeconds
+                - markerDragOriginalSeconds)
+                > 0.0001
+            && onMoveMarkerRequested)
+        {
+            onMoveMarkerRequested(
+                draggedMarkerId,
+                markerDragPreviewSeconds);
+        }
+        draggedMarkerId.clear();
+        setMouseCursor(juce::MouseCursor::NormalCursor);
+        repaint();
+        return;
+    }
+
     if (draggedClipId.isNotEmpty())
     {
         if (dragMode == DragMode::move
@@ -1489,12 +1564,21 @@ void TimelineComponent::mouseUp(const juce::MouseEvent&)
 
 void TimelineComponent::mouseMove(const juce::MouseEvent& event)
 {
+    if (event.position.y >= 0.0f
+        && event.position.y
+            < static_cast<float>(sectionLaneHeight)
+        && markerIdAt(event.position).isNotEmpty())
+    {
+        setMouseCursor(juce::MouseCursor::DraggingHandCursor);
+        return;
+    }
     updateHoverState(event.position);
 }
 
 void TimelineComponent::mouseExit(const juce::MouseEvent&)
 {
-    if (draggedClipId.isNotEmpty())
+    if (draggedMarkerId.isNotEmpty()
+        || draggedClipId.isNotEmpty())
         return;
 
     const auto changed = hoveredClipId.isNotEmpty()
@@ -1550,7 +1634,24 @@ void TimelineComponent::showContextMenu(const juce::MouseEvent& event)
     {
         juce::PopupMenu menu;
         const auto safeThis = juce::Component::SafePointer<TimelineComponent>(this);
+        const auto markerId = markerIdAt(event.position);
         const auto sectionId = sectionIdAt(event.position);
+        if (markerId.isNotEmpty())
+        {
+            menu.addItem("Rename marker...", [safeThis, markerId]
+            {
+                if (safeThis != nullptr
+                    && safeThis->onEditMarkerRequested)
+                    safeThis->onEditMarkerRequested(markerId);
+            });
+            menu.addItem("Remove marker", [safeThis, markerId]
+            {
+                if (safeThis != nullptr
+                    && safeThis->onRemoveMarkerRequested)
+                    safeThis->onRemoveMarkerRequested(markerId);
+            });
+            menu.addSeparator();
+        }
         if (sectionId.isNotEmpty())
         {
             menu.addItem("Tempo, time signature and click...", [safeThis, sectionId]
@@ -1558,12 +1659,12 @@ void TimelineComponent::showContextMenu(const juce::MouseEvent& event)
                 if (safeThis != nullptr && safeThis->onConfigureSectionRequested)
                     safeThis->onConfigureSectionRequested(sectionId);
             });
-            menu.addItem("Rename / move marker...", [safeThis, sectionId]
+            menu.addItem("Rename / move section...", [safeThis, sectionId]
             {
                 if (safeThis != nullptr && safeThis->onEditSectionRequested)
                     safeThis->onEditSectionRequested(sectionId);
             });
-            menu.addItem("Remove marker", [safeThis, sectionId]
+            menu.addItem("Remove section", [safeThis, sectionId]
             {
                 if (safeThis != nullptr && safeThis->onRemoveSectionRequested)
                     safeThis->onRemoveSectionRequested(sectionId);
@@ -1572,6 +1673,13 @@ void TimelineComponent::showContextMenu(const juce::MouseEvent& event)
         }
         menu.addItem(
             "Add marker here...",
+            [safeThis, position = xToSeconds(event.position.x)]
+            {
+                if (safeThis != nullptr && safeThis->onAddMarkerRequested)
+                    safeThis->onAddMarkerRequested(position);
+            });
+        menu.addItem(
+            "Add section here...",
             [safeThis, position = xToSeconds(event.position.x)]
             {
                 if (safeThis != nullptr && safeThis->onAddSectionRequested)
@@ -1962,6 +2070,43 @@ void TimelineComponent::showContextMenu(const juce::MouseEvent& event)
     repaint();
 }
 
+juce::String TimelineComponent::markerIdAt(
+    juce::Point<float> position) const
+{
+    if (project == nullptr
+        || position.y < 0.0f
+        || position.y
+            >= static_cast<float>(sectionLaneHeight)
+        || position.x
+            < static_cast<float>(
+                viewportPositionX + trackHeaderWidth)
+        || position.x >= static_cast<float>(getWidth()))
+        return {};
+
+    const juce::Font font(
+        juce::FontOptions(10.0f, juce::Font::bold));
+    for (auto index = project->markers.size(); index > 0; --index)
+    {
+        const auto& marker = project->markers[index - 1];
+        const auto x = secondsToX(
+            marker.id == draggedMarkerId
+                ? markerDragPreviewSeconds
+                : marker.timeSeconds);
+        const auto labelWidth =
+            juce::GlyphArrangement::getStringWidth(
+                font,
+                marker.name);
+        const juce::Rectangle<float> bounds(
+            x - 4.0f,
+            0.0f,
+            16.0f + labelWidth,
+            static_cast<float>(sectionLaneHeight));
+        if (bounds.contains(position))
+            return marker.id;
+    }
+    return {};
+}
+
 juce::String TimelineComponent::sectionIdAt(juce::Point<float> position) const
 {
     if (project == nullptr
@@ -1971,7 +2116,6 @@ juce::String TimelineComponent::sectionIdAt(juce::Point<float> position) const
         || position.x >= static_cast<float>(getWidth()))
         return {};
 
-    const juce::Font font(juce::FontOptions(10.0f, juce::Font::bold));
     for (auto index = project->sections.size(); index > 0; --index)
     {
         const auto& section = project->sections[index - 1];
@@ -1979,12 +2123,10 @@ juce::String TimelineComponent::sectionIdAt(juce::Point<float> position) const
         const auto nextX = index < project->sections.size()
             ? secondsToX(project->sections[index].timeSeconds)
             : static_cast<float>(getWidth());
-        const auto labelEndX = startX + 10.0f
-            + juce::GlyphArrangement::getStringWidth(font, section.name);
         const juce::Rectangle<float> bounds(
-            startX - 3.0f,
+            startX,
             0.0f,
-            std::max(6.0f, std::min(labelEndX, nextX) - startX + 3.0f),
+            std::max(1.0f, nextX - startX),
             static_cast<float>(sectionLaneHeight));
         if (bounds.contains(position))
             return section.id;

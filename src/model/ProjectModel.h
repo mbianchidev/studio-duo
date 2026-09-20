@@ -118,6 +118,17 @@ struct SectionTransportSettings
     std::optional<SectionClickSettings> clickSettings {};
 };
 
+struct ProjectMarker
+{
+    juce::String id { juce::Uuid().toString() };
+    juce::String name { "Marker" };
+    double timeSeconds = 0.0;
+
+    [[nodiscard]] juce::var toVar() const;
+    static std::optional<ProjectMarker> fromVar(const juce::var& value,
+                                                juce::String& error);
+};
+
 struct SongSection
 {
     juce::String id { juce::Uuid().toString() };
@@ -489,7 +500,7 @@ struct RenderReport
 class Project
 {
 public:
-    static constexpr int currentFormatVersion = 10;
+    static constexpr int currentFormatVersion = 11;
 
     juce::String id { juce::Uuid().toString() };
     juce::String name { "Untitled" };
@@ -500,6 +511,7 @@ public:
     int timeSignatureDenominator = 4;
     std::vector<TempoChange> tempoChanges;
     std::vector<MeterChange> meterChanges;
+    std::vector<ProjectMarker> markers;
     std::vector<SongSection> sections;
     bool metronomeEnabled = true;
     int metronomeSubdivision = 1;
@@ -531,6 +543,9 @@ public:
 
     static Project createDefault();
 
+    [[nodiscard]] ProjectMarker* findMarker(const juce::String& markerId);
+    [[nodiscard]] const ProjectMarker* findMarker(
+        const juce::String& markerId) const;
     [[nodiscard]] SongSection* findSection(const juce::String& sectionId);
     [[nodiscard]] const SongSection* findSection(const juce::String& sectionId) const;
     [[nodiscard]] Track* findTrack(const juce::String& trackId);

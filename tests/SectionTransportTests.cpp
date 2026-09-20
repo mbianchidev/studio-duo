@@ -97,7 +97,7 @@ void defaultsAndClickInheritance()
 {
     auto project = sectionProject();
     const auto& constProject = project;
-    expect(studio::Project::currentFormatVersion == 10
+    expect(studio::Project::currentFormatVersion == 11
                && project.timeSignatureNumerator == 4
                && project.timeSignatureDenominator == 4
                && project.meterAt(100.0).numerator == 4
@@ -135,7 +135,7 @@ void defaultsAndClickInheritance()
                && project.clickSettingsAt(6.0) == *verse.clickSettings
                && project.clickSettingsAt(7.9) == *verse.clickSettings
                && !project.metronomeEnabled,
-           "Click overrides start at their section boundary and pass through generic markers without changing the global gate.");
+           "Click overrides start at their section boundary and pass through generic sections without changing the global gate.");
 
     studio::SectionTransportSettings outro;
     outro.clickSettings = studio::SectionClickSettings {
@@ -157,7 +157,7 @@ void defaultsAndClickInheritance()
     error.clear();
     expect(!project.sectionTransportSettings("missing", error).has_value()
                && error.isNotEmpty(),
-           "Reading settings for an absent marker reports an explicit error.");
+           "Reading settings for an absent section reports an explicit error.");
     expect(project.validateTransport(error),
            "Accent indices up to 32 remain valid even when the current meter has fewer beats.");
     expect(applySettings(project, commands, "outro", {})
@@ -212,7 +212,7 @@ void sectionBoundariesAndRoundTrip()
                && savedSettings->tempoBpm == settings.tempoBpm
                && savedSettings->timeSignature == settings.timeSignature
                && savedSettings->clickSettings == settings.clickSettings,
-           "Format 10 round trips preserve section IDs, positions, owned maps, and every click option.");
+           "Format 11 round trips preserve section IDs, positions, owned maps, and every click option.");
 
     auto manualTempo = project.tempoChanges.front();
     auto manualMeter = project.meterChanges.front();
@@ -402,7 +402,7 @@ void movingAndRemovingOwnedSections()
     expect(commands.perform(
                std::make_unique<studio::SetSongSectionCommand>(original, moved),
                project, error),
-           "A configured section can move between generic markers.");
+           "A configured section can move between generic sections.");
     const auto* tempo = ownedChange(project.tempoChanges, "verse");
     const auto* meter = ownedChange(project.meterChanges, "verse");
     expect(tempo != nullptr && meter != nullptr
@@ -450,7 +450,7 @@ void movingAndRemovingOwnedSections()
                && commands.undo(project)
                && project.tempoChanges == manualTempo
                && project.meterChanges == manualMeter,
-           "Moving and removing generic markers never adopt, move, or remove coincident manual transport points.");
+           "Moving and removing generic sections never adopt, move, or remove coincident manual transport points.");
 }
 
 void collisionsAndInvalidSettings()
@@ -479,7 +479,7 @@ void collisionsAndInvalidSettings()
         moved.timeSeconds = position;
         expectRejected(project, commands,
                        std::make_unique<studio::SetSongSectionCommand>(original, moved),
-                       "Marker, tempo, and meter collisions reject section movement without changing project or history.");
+                       "Section, tempo, and meter collisions reject section movement without changing project or history.");
     }
     expectRejected(project, commands,
                    std::make_unique<studio::SetSectionTransportCommand>("missing", settings),
@@ -648,7 +648,7 @@ void serializedValidationAndLegacyMaps()
                && closeTo(loaded->tempoAt(2.5), legacy.tempoAt(2.5))
                && loaded->meterAt(6.0) == legacy.meterAt(6.0)
                && !loaded->findSection("verse")->clickSettings.has_value(),
-           "Legacy-style unowned maps and generic markers keep their existing time math and inheritance.");
+           "Legacy-style unowned maps and generic sections keep their existing time math and inheritance.");
     studio::CommandStack commands;
     expect(applySettings(legacy, commands, "verse", {})
                && snapshot(legacy) == original

@@ -50,6 +50,47 @@ private:
     std::vector<std::unique_ptr<ProjectCommand>> commands;
 };
 
+class AddProjectMarkerCommand final : public ProjectCommand
+{
+public:
+    explicit AddProjectMarkerCommand(ProjectMarker markerToAdd);
+
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    ProjectMarker marker;
+};
+
+class SetProjectMarkerCommand final : public ProjectCommand
+{
+public:
+    SetProjectMarkerCommand(ProjectMarker before, ProjectMarker after);
+
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    ProjectMarker oldMarker;
+    ProjectMarker newMarker;
+};
+
+class RemoveProjectMarkerCommand final : public ProjectCommand
+{
+public:
+    explicit RemoveProjectMarkerCommand(juce::String markerId);
+
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    juce::String markerId;
+    std::optional<ProjectMarker> removedMarker;
+};
+
 class AddSongSectionCommand final : public ProjectCommand
 {
 public:

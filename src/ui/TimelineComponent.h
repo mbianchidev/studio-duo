@@ -50,6 +50,10 @@ public:
     std::function<void(const juce::String&, double, double, double)> onClipTrimmed;
     std::function<void(double)> onSeek;
     std::function<void(double, double)> onZoomRequested;
+    std::function<void(double)> onAddMarkerRequested;
+    std::function<void(const juce::String&)> onEditMarkerRequested;
+    std::function<void(const juce::String&)> onRemoveMarkerRequested;
+    std::function<void(const juce::String&, double)> onMoveMarkerRequested;
     std::function<void(double)> onAddSectionRequested;
     std::function<void(const juce::String&)> onEditSectionRequested;
     std::function<void(const juce::String&)> onRemoveSectionRequested;
@@ -110,6 +114,7 @@ private:
         fadeOutCurve
     };
 
+    [[nodiscard]] juce::String markerIdAt(juce::Point<float> position) const;
     [[nodiscard]] juce::String sectionIdAt(juce::Point<float> position) const;
     [[nodiscard]] std::vector<Hit> clipHits() const;
     [[nodiscard]] std::vector<const Track*> visibleTracks() const;
@@ -141,11 +146,14 @@ private:
     const Project* project = nullptr;
     juce::String selectedTrackId;
     juce::String selectedClipId;
+    juce::String draggedMarkerId;
     juce::String draggedClipId;
     juce::String hoveredClipId;
     juce::String dragOriginalTrackId;
     juce::String dragPreviewTrackId;
     double playheadSeconds = 0.0;
+    double markerDragOriginalSeconds = 0.0;
+    double markerDragPreviewSeconds = 0.0;
     std::vector<RecordingPreview> recordingPreviews;
     double pixelsPerSecond = 96.0;
     int viewportPositionX = 0;

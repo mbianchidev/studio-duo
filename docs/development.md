@@ -85,7 +85,7 @@ metadata, and atomic publication. Mix and mastering exports share this path.
 `ui/AudioExportOptionsComponent` exposes only compatible sample rates, bit depths,
 and quality controls and validates numeric text before opening the save chooser.
 
-`RenderEngine::resolveRange` resolves existing `SongSection` IDs rather than
+`RenderEngine::resolveRange` resolves existing `ProjectMarker` IDs rather than
 marker names or menu indices. `StudioAudioEngine::renderRangeToBuffer` retains
 timeline coordinates, renders the preceding processor history, discards the
 compensated prefix, and captures the selected sample interval. It cuts source
@@ -114,7 +114,9 @@ maps. The loop editor stores resolved seconds, not a hard-coded bar count or
 live marker reference. `TransportSettingsComponent` supplies separate loop and
 section dialogs; native fields use the shared strict `NumericInput` parser.
 
-Format 10 gives tempo/meter points an optional stable `sectionId` owner and
+Format 11 stores draggable `ProjectMarker` flags separately from `SongSection`
+ranges. It retains the format-10 optional `sectionId` owner on tempo/meter
+points and
 sections optional `SectionClickSettings`. Section commands atomically preserve
 ownership across edits, movement, deletion, undo and redo. Manual map points
 remain independent. Old projects gain no overrides on migration.
@@ -122,13 +124,14 @@ remain independent. Old projects gain no overrides on migration.
 The audio snapshot strips editor ownership into scalar tempo/meter events and
 compiles click overrides into scalar events with 32-bit accent masks. Metronome
 lookup allocates nothing on the callback, follows tempo/meter changes and loop
-wrap, and remains behind the global CLICK gate. Generic markers are neutral;
+wrap, and remains behind the global CLICK gate. Unconfigured sections are neutral;
 explicit click changes persist until the next explicit override. Both render
 paths continue excluding click audio.
 
-DAWproject exports retain audible tempo/meter maps while issuing object-specific
-warnings for marker-editing associations and click patterns that its schema
-cannot represent.
+DAWproject exports standalone timeline markers and retains audible tempo/meter
+maps while issuing object-specific warnings for Studio Duo section ranges,
+section-editing associations, and click patterns that its schema cannot
+represent.
 
 ## Manual multitrack recording test
 

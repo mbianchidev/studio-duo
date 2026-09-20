@@ -212,6 +212,11 @@ private:
     void showTrackingMenu();
     void showLoopSettings();
     bool applyLoopSettings(const LoopRangeSettings& settings);
+    void promptProjectMarker(double position,
+                             const juce::String& markerId = {});
+    void moveProjectMarker(const juce::String& markerId,
+                           double position);
+    void removeProjectMarker(const juce::String& markerId);
     void showSectionSettings(const juce::String& sectionId);
     void removeSongSection(const juce::String& sectionId);
     void showAutomationPanel();
@@ -369,7 +374,7 @@ private:
         "Enable the configured loop"
     };
     StudioIconButton loopRangeButton {
-        StudioIcon::sliders,
+        StudioIcon::loopRange,
         "Configure loop range",
         "Configure loop start and end: seconds, musical positions, or markers"
     };
@@ -409,7 +414,7 @@ private:
     StudioIconButton trackingButton {
         StudioIcon::marker,
         "Tracking setup",
-        "Add or edit named markers, tempo, meter, punch, count-in, and click routing"
+        "Add or edit markers, song sections, tempo, meter, punch, count-in, and click routing"
     };
     StudioIconButton automationButton {
         StudioIcon::automation,

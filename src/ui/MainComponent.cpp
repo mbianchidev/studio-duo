@@ -425,7 +425,9 @@ MainComponent::MainComponent(bool startAudioOnLaunch)
     configureButton(importButton, "Import WAV, AIFF, FLAC, or MP3 audio");
     configureButton(duplicateTrackButton, "Duplicate the selected track and its edits");
     configureButton(deleteTrackButton, "Delete the selected track");
-    configureButton(trackingButton, "Add or edit named markers, tempo, meter, punch, count-in, and click routing");
+    configureButton(
+        trackingButton,
+        "Add or edit markers, song sections, tempo, meter, punch, count-in, and click routing");
     configureButton(automationButton, "Edit and record mixer and plugin automation");
     configureButton(
         newMidiClipButton,
@@ -1083,6 +1085,24 @@ MainComponent::MainComponent(bool startAudioOnLaunch)
     timeline.onZoomRequested = [this](double factor, double focalSeconds)
     {
         zoomTimeline(factor, false, focalSeconds);
+    };
+    timeline.onAddMarkerRequested = [this](double position)
+    {
+        promptProjectMarker(position);
+    };
+    timeline.onEditMarkerRequested = [this](const auto& markerId)
+    {
+        promptProjectMarker(0.0, markerId);
+    };
+    timeline.onRemoveMarkerRequested = [this](const auto& markerId)
+    {
+        removeProjectMarker(markerId);
+    };
+    timeline.onMoveMarkerRequested = [this](
+        const auto& markerId,
+        double position)
+    {
+        moveProjectMarker(markerId, position);
     };
     timeline.onAddSectionRequested = [this](double position)
     {
@@ -6918,7 +6938,7 @@ void MainComponent::showSectionSettings(const juce::String& sectionId)
     }
     if (project.findSection(sectionId) == nullptr)
     {
-        showError("Section settings unavailable", "The selected marker no longer exists.");
+        showError("Section settings unavailable", "The selected section no longer exists.");
         return;
     }
     SectionSettingsComponent::show(
@@ -6962,12 +6982,43 @@ void MainComponent::showTrackingMenu()
 {
     const auto position = audioEngine.positionSeconds();
     juce::PopupMenu menu;
-    menu.addSectionHeader("Named markers / song sections");
+    menu.addSectionHeader("Named markers");
     menu.addItem("Add marker at playhead...", [this, position]
+    {
+        promptProjectMarker(position);
+    });
+    juce::PopupMenu markers;
+    for (const auto& marker : project.markers)
+    {
+        juce::PopupMenu actions;
+        actions.addItem("Go to marker", [this, markerId = marker.id]
+        {
+            const auto found = std::find_if(
+                project.markers.cbegin(), project.markers.cend(),
+                [&markerId](const auto& candidate) { return candidate.id == markerId; });
+            if (found != project.markers.cend() && timeline.onSeek)
+                timeline.onSeek(found->timeSeconds);
+        });
+        actions.addItem("Rename / move marker...", [this, markerId = marker.id]
+        {
+            promptProjectMarker(0.0, markerId);
+        });
+        actions.addItem("Delete marker", [this, markerId = marker.id]
+        {
+            removeProjectMarker(markerId);
+        });
+        markers.addSubMenu(
+            marker.name + " (" + juce::String(marker.timeSeconds, 3) + " s)",
+            actions);
+    }
+    menu.addSubMenu("Edit or navigate markers", markers, !project.markers.empty());
+    menu.addSeparator();
+    menu.addSectionHeader("Song sections");
+    menu.addItem("Add section at playhead...", [this, position]
     {
         promptSongSection(position);
     });
-    juce::PopupMenu markers;
+    juce::PopupMenu sections;
     for (const auto& section : project.sections)
     {
         juce::PopupMenu actions;
@@ -6975,27 +7026,25 @@ void MainComponent::showTrackingMenu()
         {
             showSectionSettings(sectionId);
         });
-        actions.addItem("Go to marker", [this, sectionId = section.id]
+        actions.addItem("Go to section", [this, sectionId = section.id]
         {
-            const auto found = std::find_if(
-                project.sections.cbegin(), project.sections.cend(),
-                [&sectionId](const auto& candidate) { return candidate.id == sectionId; });
-            if (found != project.sections.cend() && timeline.onSeek)
+            const auto* found = project.findSection(sectionId);
+            if (found != nullptr && timeline.onSeek)
                 timeline.onSeek(found->timeSeconds);
         });
-        actions.addItem("Rename / move marker...", [this, sectionId = section.id]
+        actions.addItem("Rename / move section...", [this, sectionId = section.id]
         {
             promptSongSection(0.0, sectionId);
         });
-        actions.addItem("Delete marker", [this, sectionId = section.id]
+        actions.addItem("Delete section", [this, sectionId = section.id]
         {
             removeSongSection(sectionId);
         });
-        markers.addSubMenu(
+        sections.addSubMenu(
             section.name + " (" + juce::String(section.timeSeconds, 3) + " s)",
             actions);
     }
-    menu.addSubMenu("Edit or navigate markers", markers, !project.sections.empty());
+    menu.addSubMenu("Edit or navigate sections", sections, !project.sections.empty());
     menu.addSeparator();
     menu.addSectionHeader("Tempo and meter");
     menu.addItem("Add tempo change at playhead...", [this] { promptTempoChange(); });
@@ -7720,6 +7769,136 @@ void MainComponent::showTrackingMenu()
     menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(trackingButton));
 }
 
+void MainComponent::promptProjectMarker(
+    double position,
+    const juce::String& markerId)
+{
+    std::optional<ProjectMarker> before;
+    if (markerId.isNotEmpty())
+    {
+        const auto* marker = project.findMarker(markerId);
+        if (marker == nullptr)
+        {
+            showError(
+                "Marker unavailable",
+                "The selected marker no longer exists.");
+            return;
+        }
+        before = *marker;
+        position = marker->timeSeconds;
+    }
+    auto* dialog = new juce::AlertWindow(
+        before.has_value() ? "Edit named marker" : "Add named marker",
+        "Markers are draggable timeline flags used for labels, navigation, and export ranges.",
+        juce::MessageBoxIconType::NoIcon);
+    dialog->addTextEditor(
+        "name",
+        before.has_value()
+            ? before->name
+            : "Marker "
+                + juce::String(
+                    static_cast<int>(
+                        project.markers.size() + 1)),
+        "Name");
+    dialog->addTextEditor(
+        "position",
+        juce::String(position, 9),
+        "Position (seconds)");
+    dialog->addButton(
+        before.has_value() ? "Save" : "Create",
+        1,
+        juce::KeyPress(juce::KeyPress::returnKey));
+    dialog->addButton(
+        "Cancel",
+        0,
+        juce::KeyPress(juce::KeyPress::escapeKey));
+    dialog->centreAroundComponent(&trackingButton, 500, 250);
+    const juce::Component::SafePointer<juce::AlertWindow>
+        dialogSafe(dialog);
+    dialog->enterModalState(
+        true,
+        juce::ModalCallbackFunction::create(
+            [safe = juce::Component::SafePointer<MainComponent>(
+                 this),
+             dialogSafe,
+             before](int result)
+            {
+                if (result != 1
+                    || safe == nullptr
+                    || dialogSafe == nullptr)
+                    return;
+
+                auto marker =
+                    before.value_or(ProjectMarker {});
+                marker.name =
+                    dialogSafe->getTextEditorContents("name")
+                        .trim();
+                const auto positionText =
+                    dialogSafe
+                        ->getTextEditorContents("position")
+                        .trim()
+                        .toStdString();
+                const auto conversion = std::from_chars(
+                    positionText.data(),
+                    positionText.data()
+                        + positionText.size(),
+                    marker.timeSeconds);
+                if (marker.name.isEmpty()
+                    || conversion.ec != std::errc()
+                    || conversion.ptr
+                        != positionText.data()
+                            + positionText.size()
+                    || !std::isfinite(marker.timeSeconds)
+                    || marker.timeSeconds < 0.0)
+                {
+                    safe->showError(
+                        "Marker unavailable",
+                        "Enter a name and a finite, non-negative position in seconds.");
+                    return;
+                }
+                if (before.has_value())
+                {
+                    safe->perform(
+                        std::make_unique<
+                            SetProjectMarkerCommand>(
+                            *before,
+                            std::move(marker)));
+                }
+                else
+                {
+                    safe->perform(
+                        std::make_unique<
+                            AddProjectMarkerCommand>(
+                            std::move(marker)));
+                }
+            }),
+        true);
+}
+
+void MainComponent::moveProjectMarker(
+    const juce::String& markerId,
+    double position)
+{
+    const auto* marker = project.findMarker(markerId);
+    if (marker == nullptr
+        || !std::isfinite(position)
+        || position < 0.0)
+        return;
+    auto moved = *marker;
+    moved.timeSeconds = position;
+    perform(std::make_unique<SetProjectMarkerCommand>(
+        *marker,
+        std::move(moved)));
+}
+
+void MainComponent::removeProjectMarker(
+    const juce::String& markerId)
+{
+    perform(
+        std::make_unique<RemoveProjectMarkerCommand>(
+            markerId));
+}
+
 void MainComponent::promptSongSection(double position,
                                       const juce::String& sectionId)
 {
@@ -7731,21 +7910,21 @@ void MainComponent::promptSongSection(double position,
             [&sectionId](const auto& section) { return section.id == sectionId; });
         if (found == project.sections.cend())
         {
-            showError("Marker unavailable", "The selected marker no longer exists.");
+            showError("Section unavailable", "The selected section no longer exists.");
             return;
         }
         before = *found;
         position = before->timeSeconds;
     }
     auto* dialog = new juce::AlertWindow(
-        before.has_value() ? "Edit named marker" : "Add named marker",
-        "Name a timeline position, such as Start or End, for navigation and export ranges.",
+        before.has_value() ? "Edit song section" : "Add song section",
+        "Sections define named song ranges and can own tempo, meter, and click settings.",
         juce::MessageBoxIconType::NoIcon);
     dialog->addTextEditor(
         "name",
         before.has_value()
             ? before->name
-            : "Marker " + juce::String(static_cast<int>(project.sections.size() + 1)),
+            : "Section " + juce::String(static_cast<int>(project.sections.size() + 1)),
         "Name");
     dialog->addTextEditor("position", juce::String(position, 9), "Position (seconds)");
     dialog->addButton(before.has_value() ? "Save" : "Create",
@@ -7777,7 +7956,7 @@ void MainComponent::promptSongSection(double position,
                     || !std::isfinite(section.timeSeconds)
                     || section.timeSeconds < 0.0)
                 {
-                    safe->showError("Marker unavailable",
+                    safe->showError("Section unavailable",
                                     "Enter a name and a finite, non-negative position in seconds.");
                     return;
                 }

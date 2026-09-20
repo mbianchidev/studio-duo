@@ -29,6 +29,10 @@ void serializationRoundTrip()
         { 0.0, 4, 4 },
         { 8.0, 7, 8 }
     };
+    project.markers = {
+        { juce::Uuid().toString(), "Start", 1.0 },
+        { juce::Uuid().toString(), "End", 7.5 }
+    };
     project.sections = {
         { juce::Uuid().toString(), "Intro", 0.0 },
         { juce::Uuid().toString(), "Verse", 8.0 }
@@ -128,10 +132,13 @@ void serializationRoundTrip()
                && decoded->meterChanges[1].numerator == 7,
            "Tempo and meter maps survive serialization.");
     expect(decoded.has_value()
+               && decoded->markers.size() == 2
+               && decoded->markers[0].name == "Start"
+               && std::abs(decoded->markers[1].timeSeconds - 7.5) < 0.0001
                && decoded->sections.size() == 2
                && decoded->sections[0].name == "Intro"
                && std::abs(decoded->sections[1].timeSeconds - 8.0) < 0.0001,
-           "Song sections survive serialization.");
+           "Timeline markers and song sections survive serialization independently.");
     expect(decoded.has_value()
                && !decoded->metronomeEnabled
                && decoded->metronomeSubdivision == 2
@@ -1632,6 +1639,7 @@ int main(int argc, char* argv[])
     RUN_SUITE(dawProjectTests);
     RUN_SUITE(masteringTests);
     RUN_SUITE(uiIconTests);
+    RUN_SUITE(timelineMarkerTests);
 
 #undef RUN_SUITE
 
