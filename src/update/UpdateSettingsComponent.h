@@ -1,5 +1,6 @@
 #pragma once
 
+#include "StudioPreferences.h"
 #include "UpdateService.h"
 #include "audio/StudioAudioDeviceManager.h"
 
@@ -53,6 +54,7 @@ public:
     SettingsComponent(
         StudioAudioDeviceManager* deviceManager,
         UpdateService& updateService,
+        StudioPreferences& preferences,
         std::function<void()> restartRequested,
         bool showUpdatesInitially,
         const juce::String& audioUnavailableReason = {});
@@ -64,6 +66,7 @@ public:
 private:
     std::unique_ptr<juce::AudioDeviceSelectorComponent> audioPage;
     juce::Label audioUnavailableLabel;
+    std::unique_ptr<juce::Component> generalPage;
     std::unique_ptr<UpdateSettingsComponent> updatePage;
     juce::TabbedComponent tabs {
         juce::TabbedButtonBar::TabsAtTop

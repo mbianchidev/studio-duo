@@ -66,8 +66,9 @@ or resolved into loop/export ranges. They do not own transport settings or
 define song ranges.
 
 `sections` stores named song-range boundaries. A section starts at its
-`timeSeconds` and extends to the next section or timeline end. Sections are
-managed independently from marker flags.
+`timeSeconds`; optional `endTimeSeconds` stores a user-resized end, otherwise
+the section extends to the next section or timeline end. Sections are managed
+independently from marker flags and cannot overlap the next section.
 
 `tempoChanges` and `meterChanges` remain the authoritative timeline maps.
 Their optional `sectionId` binds a point to a named section with the same

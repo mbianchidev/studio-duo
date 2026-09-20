@@ -334,6 +334,8 @@ private:
 
 MainComponent::MainComponent(bool startAudioOnLaunch)
 {
+    preferences =
+        std::make_unique<StudioPreferences>();
     setLookAndFeel(&theme);
     setOpaque(true);
     setWantsKeyboardFocus(true);
@@ -449,9 +451,29 @@ MainComponent::MainComponent(bool startAudioOnLaunch)
              &automationButton,
              &newMidiClipButton })
         button->setShowLabel(true);
-    configureButton(sessionPanelToggleButton, "Collapse or expand the session sidebar");
+    configureButton(sessionPanelToggleButton, "Show or hide the session tracks pane");
     configureButton(inspectorPanelToggleButton, "Show or hide the inspector");
     configureButton(mixerPanelToggleButton, "Show or hide the mixer");
+    sessionPanelToggleButton.setVisibleLabel("Tracks");
+    inspectorPanelToggleButton.setVisibleLabel("Inspect");
+    mixerPanelToggleButton.setVisibleLabel("Mix");
+    for (auto* button : {
+             &sessionPanelToggleButton,
+             &inspectorPanelToggleButton,
+             &mixerPanelToggleButton })
+    {
+        button->setShowLabel(true);
+        button->setClickingTogglesState(true);
+        button->setColour(
+            juce::TextButton::buttonColourId,
+            juce::Colour(StudioColours::transport));
+        button->setColour(
+            juce::TextButton::buttonOnColourId,
+            juce::Colour(StudioColours::transportRaised));
+        button->setColour(
+            juce::TextButton::textColourOnId,
+            juce::Colour(StudioColours::text));
+    }
     configureButton(muteButton, "Mute selected track");
     configureButton(soloButton, "Solo selected track");
     configureButton(
@@ -505,6 +527,9 @@ MainComponent::MainComponent(bool startAudioOnLaunch)
         true,
         juce::dontSendNotification);
     mixerPanelToggleButton.setToggleState(
+        true,
+        juce::dontSendNotification);
+    sessionPanelToggleButton.setToggleState(
         true,
         juce::dontSendNotification);
     muteButton.onClick = [this]
@@ -785,7 +810,7 @@ MainComponent::MainComponent(bool startAudioOnLaunch)
     volumeSlider.setNumDecimalPlacesToDisplay(1);
     volumeSlider.setTextValueSuffix(" dB");
     configureInspectorSlider(panSlider, -1.0, 1.0, 0.01);
-    panSlider.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
+    panSlider.setSliderStyle(juce::Slider::LinearHorizontal);
     panSlider.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 76, 24);
     panSlider.setDoubleClickReturnValue(true, 0.0);
     panSlider.textFromValueFunction = [](double value)
@@ -1160,6 +1185,16 @@ MainComponent::MainComponent(bool startAudioOnLaunch)
     timeline.onConfigureSectionRequested = [this](const auto& sectionId)
     {
         showSectionSettings(sectionId);
+    };
+    timeline.onSectionRangeChanged = [this](
+        const auto& sectionId,
+        double startSeconds,
+        double endSeconds)
+    {
+        setSongSectionRange(
+            sectionId,
+            startSeconds,
+            endSeconds);
     };
     timeline.onSplitSelected = [this] { splitSelectedClip(); };
     timeline.onTrimStartSelected = [this] { trimSelectedClipStartToPlayhead(); };
@@ -2048,6 +2083,15 @@ void MainComponent::paint(juce::Graphics& graphics)
             static_cast<float>(footer.getY() + 7),
             static_cast<float>(footer.getBottom() - 7));
     }
+    if (inspectorPanelToggleButton.getWidth() > 0)
+    {
+        graphics.setColour(
+            juce::Colour(StudioColours::border));
+        graphics.drawVerticalLine(
+            inspectorPanelToggleButton.getX() - 6,
+            static_cast<float>(footer.getY() + 7),
+            static_cast<float>(footer.getBottom() - 7));
+    }
     if (brandLogo != nullptr)
     {
         brandLogo->drawWithin(graphics,
@@ -2175,14 +2219,15 @@ void MainComponent::resized()
         juce::jmax(1, inspectorViewport.getWidth() - 8),
         juce::jmax(900, inspectorViewport.getHeight()));
     auto editToolbar = bounds.removeFromTop(38).reduced(7, 4);
-    auto inspectorRestoreBounds = juce::Rectangle<int>();
-    if (inspectorPanelWidth == 0)
-        inspectorRestoreBounds =
-            editToolbar.removeFromRight(40);
     auto zoomControls = editToolbar.removeFromRight(124);
     zoomOutButton.setBounds(zoomControls.removeFromLeft(32).reduced(2));
     zoomResetButton.setBounds(zoomControls.removeFromLeft(60).reduced(2));
     zoomInButton.setBounds(zoomControls.removeFromLeft(32).reduced(2));
+    undoButton.setBounds(
+        editToolbar.removeFromLeft(38).reduced(2));
+    redoButton.setBounds(
+        editToolbar.removeFromLeft(38).reduced(2));
+    editToolbar.removeFromLeft(8);
     trimClipStartButton.setBounds(editToolbar.removeFromLeft(38).reduced(2));
     splitClipButton.setBounds(editToolbar.removeFromLeft(38).reduced(2));
     trimClipEndButton.setBounds(editToolbar.removeFromLeft(38).reduced(2));
@@ -2206,14 +2251,6 @@ void MainComponent::resized()
             settingsButton.setBounds(
                 area.removeFromLeft(38).reduced(3, verticalInset));
         };
-    const auto layoutEditControls =
-        [this](juce::Rectangle<int> area, int verticalInset)
-        {
-            undoButton.setBounds(
-                area.removeFromLeft(38).reduced(3, verticalInset));
-            redoButton.setBounds(
-                area.removeFromLeft(38).reduced(3, verticalInset));
-        };
     const auto layoutTempoControls =
         [this](juce::Rectangle<int> area, int verticalInset)
         {
@@ -2223,29 +2260,38 @@ void MainComponent::resized()
         };
 
     layoutFileControls(topRow.removeFromLeft(200), 8);
-    layoutEditControls(topRow.removeFromLeft(80), 8);
     projectLabel.setBounds(topRow.reduced(8, 4));
 
     auto footerControls = status.reduced(8, 4);
+    auto panelControls =
+        footerControls.removeFromRight(174);
+    inspectorPanelToggleButton.setBounds(
+        panelControls.removeFromLeft(58).reduced(2, 1));
+    mixerPanelToggleButton.setBounds(
+        panelControls.removeFromLeft(58).reduced(2, 1));
+    sessionPanelToggleButton.setBounds(
+        panelControls.removeFromLeft(58).reduced(2, 1));
     auto tempoControls =
-        footerControls.removeFromRight(226);
+        footerControls.removeFromRight(190);
     meterLabel.setBounds(
-        tempoControls.removeFromLeft(48).reduced(2, 1));
+        tempoControls.removeFromLeft(42).reduced(2, 1));
     layoutTempoControls(tempoControls, 2);
     const auto transportWidth = 6 * 38;
     const auto positionWidth = 190;
-    const auto clusterWidth =
-        positionWidth + transportWidth;
-    const auto clusterX = juce::jmax(
-        footerControls.getX(),
-        status.getCentreX() - clusterWidth / 2);
+    const auto clusterWidth = positionWidth + transportWidth;
+    const auto statusWidth = juce::jmax(
+        90,
+        (footerControls.getWidth() - clusterWidth) / 2);
+    statusLabel.setBounds(
+        footerControls.removeFromLeft(
+            juce::jmin(
+                statusWidth,
+                footerControls.getWidth())));
     juce::Rectangle<int> transportCluster(
-        clusterX,
-        footerControls.getY(),
-        juce::jmin(
-            clusterWidth,
-            tempoControls.getX() - clusterX - 8),
-        footerControls.getHeight());
+        footerControls.removeFromLeft(
+            juce::jmin(
+                clusterWidth,
+                footerControls.getWidth())));
     positionLabel.setBounds(
         transportCluster.removeFromLeft(
             juce::jmin(
@@ -2260,58 +2306,11 @@ void MainComponent::resized()
         transportButtons.removeFromLeft(38).reduced(3, 1));
     loopButton.setBounds(
         transportButtons.removeFromLeft(38).reduced(3, 1));
-    loopRangeButton.setBounds(
-        transportButtons.removeFromLeft(38).reduced(3, 1));
     metronomeButton.setBounds(
         transportButtons.removeFromLeft(38).reduced(3, 1));
-    statusLabel.setBounds(
-        status.getX() + 10,
-        status.getY(),
-        juce::jmax(
-            80,
-            clusterX - status.getX() - 18),
-        status.getHeight());
-
-    sessionPanelToggleButton.setBounds(
-        leftPanelCollapsed ? left.getX() + 4 : left.getRight() - 40,
-        left.getY() + 7,
-        leftPanelCollapsed ? 56 : 32,
-        26);
-    if (inspectorPanelWidth > 0)
-    {
-        inspectorPanelToggleButton.setBounds(
-            right.getRight() - 40,
-            right.getY() + 7,
-            32,
-            26);
-    }
-    else
-    {
-        inspectorPanelToggleButton.setBounds(
-            inspectorRestoreBounds.reduced(4, 0));
-    }
-    if (!showMidiEditor)
-    {
-        if (mixerPanelHeight > 0)
-        {
-            mixerPanelToggleButton.setBounds(
-                lowerPanelBounds.getRight() - 40,
-                lowerPanelBounds.getY() + 5,
-                32,
-                24);
-        }
-        else
-        {
-            mixerPanelToggleButton.setBounds(
-                getWidth()
-                    - inspectorPanelWidth
-                    - 40,
-                status.getY() - 30,
-                32,
-                24);
-        }
-    }
-    mixerPanelToggleButton.setVisible(!showMidiEditor);
+    loopRangeButton.setBounds(
+        transportButtons.removeFromLeft(38).reduced(3, 1));
+    mixerPanelToggleButton.setEnabled(!showMidiEditor);
     auto sessionPanel = left.reduced(leftPanelCollapsed ? 8 : 14, 42);
     addTrackButton.setBounds(sessionPanel.removeFromTop(34));
     sessionPanel.removeFromTop(8);
@@ -3478,6 +3477,7 @@ void MainComponent::showSettings(bool showUpdates)
     auto settings = std::make_unique<SettingsComponent>(
         deviceManager.get(),
         updateService,
+        *preferences,
         [safe = juce::Component::SafePointer<MainComponent>(this)]
         {
             if (safe != nullptr)
@@ -5065,54 +5065,118 @@ void MainComponent::validatePlugin(const PluginCatalogEntry& entry)
     });
 }
 
-void MainComponent::validateScreamForge()
+void MainComponent::validateInstalledPlugins()
 {
-    setStatus("Validating installed Scream Forge formats...");
-    const juce::Component::SafePointer<MainComponent> safe(this);
-    compatibilityValidator.addJob([safe]
+    auto plugins = pluginCatalog.entries();
+    std::erase_if(plugins, [](const auto& entry)
     {
-        juce::ChildProcess process;
-        juce::StringArray arguments;
-        arguments.add(
-            juce::File::getSpecialLocation(
-                juce::File::currentExecutableFile)
-                .getFullPathName());
-        arguments.add("--validate-scream-forge");
-        auto output = juce::String();
-        auto result = 1;
-        if (!process.start(arguments))
+        return entry.bundledDevice
+            || entry.identifier.isEmpty();
+    });
+    if (plugins.empty())
+    {
+        showError(
+            "Plug-in validation unavailable",
+            "Scan installed plug-ins before running compatibility validation.");
+        return;
+    }
+    setStatus(
+        "Validating "
+        + juce::String(static_cast<int>(plugins.size()))
+        + " installed plug-ins...");
+    const juce::Component::SafePointer<MainComponent> safe(this);
+    compatibilityValidator.addJob(
+        [safe, installedPlugins = std::move(plugins)]
+    {
+        struct Outcome
         {
-            output = "Could not launch the Scream Forge validator.";
-        }
-        else if (!process.waitForProcessToFinish(120000))
+            PluginCatalogEntry entry;
+            juce::String output;
+            int result = 1;
+        };
+        std::vector<Outcome> results;
+        results.reserve(installedPlugins.size());
+        for (const auto& entry : installedPlugins)
         {
-            process.kill();
-            output = "Scream Forge validation timed out.";
-        }
-        else
-        {
-            output = process.readAllProcessOutput();
-            result = static_cast<int>(process.getExitCode());
+            juce::ChildProcess process;
+            juce::StringArray arguments;
+            arguments.add(
+                juce::File::getSpecialLocation(
+                    juce::File::currentExecutableFile)
+                    .getFullPathName());
+            arguments.add("--validate-plugin");
+            arguments.add(entry.identifier);
+            auto output = juce::String();
+            auto result = 1;
+            if (!process.start(arguments))
+            {
+                output =
+                    "Could not launch the compatibility validator.";
+            }
+            else if (!process.waitForProcessToFinish(60000))
+            {
+                process.kill();
+                output =
+                    "Compatibility validation timed out.";
+            }
+            else
+            {
+                output = process.readAllProcessOutput();
+                result =
+                    static_cast<int>(process.getExitCode());
+            }
+            results.push_back({
+                entry,
+                std::move(output),
+                result
+            });
         }
         juce::MessageManager::callAsync(
-            [safe, output, result]
+            [safe,
+             validationResults = std::move(results)]
             {
                 if (safe == nullptr)
                     return;
-                const auto unavailable = result == 2;
+                auto passed = 0;
+                auto failed = 0;
+                auto details = juce::String();
+                for (const auto& outcome : validationResults)
+                {
+                    const auto success = outcome.result == 0;
+                    safe->pluginCatalog.recordValidation(
+                        outcome.entry,
+                        success ? "pass" : "fail");
+                    if (success)
+                        ++passed;
+                    else
+                    {
+                        ++failed;
+                        details
+                            << outcome.entry.name
+                            << ": "
+                            << outcome.output.substring(0, 1000)
+                            << "\n\n";
+                    }
+                }
                 safe->setStatus(
-                    unavailable
-                        ? "Scream Forge is not installed."
-                        : result == 0
-                            ? "Installed Scream Forge formats passed validation."
-                            : "Scream Forge compatibility validation failed.",
-                    result == 1);
+                    juce::String(passed)
+                        + " plug-ins passed; "
+                        + juce::String(failed)
+                        + " failed compatibility validation.",
+                    failed > 0);
                 juce::AlertWindow::showMessageBoxAsync(
-                    result == 0
+                    failed == 0
                         ? juce::MessageBoxIconType::InfoIcon
                         : juce::MessageBoxIconType::WarningIcon,
-                    "Scream Forge compatibility",
-                    output.substring(0, 8000));
+                    "Installed plug-in compatibility",
+                    failed == 0
+                        ? juce::String(passed)
+                            + " installed plug-ins passed validation."
+                        : juce::String(passed)
+                            + " passed and "
+                            + juce::String(failed)
+                            + " failed.\n\n"
+                            + details.substring(0, 8000));
             });
     });
 }
@@ -7147,6 +7211,47 @@ void MainComponent::removeSongSection(const juce::String& sectionId)
     perform(std::make_unique<RemoveSongSectionCommand>(sectionId));
 }
 
+void MainComponent::setSongSectionRange(
+    const juce::String& sectionId,
+    double startSeconds,
+    double endSeconds)
+{
+    const auto* section = project.findSection(sectionId);
+    if (section == nullptr
+        || !std::isfinite(startSeconds)
+        || !std::isfinite(endSeconds)
+        || startSeconds < 0.0
+        || endSeconds <= startSeconds)
+        return;
+    if (hasActiveRecordingTargets()
+        || audioEngine.isRecording()
+        || recordingFinalizationInProgress)
+    {
+        juce::String error;
+        const auto settings =
+            project.sectionTransportSettings(
+                sectionId,
+                error);
+        if (settings
+            && (settings->tempoBpm
+                || settings->timeSignature
+                || settings->clickSettings))
+        {
+            showError(
+                "Section edit unavailable",
+                "Stop recording before moving or resizing a section with transport settings.");
+            return;
+        }
+    }
+    auto after = *section;
+    after.timeSeconds = startSeconds;
+    after.endTimeSeconds = endSeconds;
+    perform(
+        std::make_unique<SetSongSectionCommand>(
+            *section,
+            std::move(after)));
+}
+
 void MainComponent::showTrackingMenu()
 {
     const auto position = audioEngine.positionSeconds();
@@ -7932,8 +8037,8 @@ void MainComponent::showTrackingMenu()
         mixerSnapshots.addItem("No mixer snapshots", false, false, [] {});
     menu.addSubMenu("Recall mixer snapshot", mixerSnapshots);
     menu.addSeparator();
-    menu.addItem("Validate installed Scream Forge",
-                 [this] { validateScreamForge(); });
+    menu.addItem("Validate installed plug-ins",
+                 [this] { validateInstalledPlugins(); });
 
     menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(trackingButton));
 }
@@ -8096,11 +8201,18 @@ void MainComponent::promptSongSection(double position,
             : "Section " + juce::String(static_cast<int>(project.sections.size() + 1)),
         "Name");
     dialog->addTextEditor("position", juce::String(position, 9), "Position (seconds)");
+    dialog->addTextEditor(
+        "end",
+        before.has_value()
+                && before->endTimeSeconds.has_value()
+            ? juce::String(*before->endTimeSeconds, 9)
+            : juce::String(),
+        "End (seconds, optional)");
     dialog->addButton(before.has_value() ? "Save" : "Create",
                       1, juce::KeyPress(juce::KeyPress::returnKey));
     dialog->addButton(before.has_value() ? "Save + timing" : "Create + timing", 2);
     dialog->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
-    dialog->centreAroundComponent(&trackingButton, 500, 270);
+    dialog->centreAroundComponent(&trackingButton, 500, 310);
     const juce::Component::SafePointer<juce::AlertWindow> dialogSafe(dialog);
     dialog->enterModalState(
         true,
@@ -8119,14 +8231,43 @@ void MainComponent::promptSongSection(double position,
                     positionText.data(),
                     positionText.data() + positionText.size(),
                     section.timeSeconds);
+                const auto endText =
+                    dialogSafe
+                        ->getTextEditorContents("end")
+                        .trim()
+                        .toStdString();
+                section.endTimeSeconds.reset();
+                auto validEnd = true;
+                if (!endText.empty())
+                {
+                    auto endSeconds = 0.0;
+                    const auto endConversion =
+                        std::from_chars(
+                            endText.data(),
+                            endText.data()
+                                + endText.size(),
+                            endSeconds);
+                    validEnd =
+                        endConversion.ec == std::errc()
+                        && endConversion.ptr
+                            == endText.data()
+                                + endText.size()
+                        && std::isfinite(endSeconds)
+                        && endSeconds
+                            > section.timeSeconds;
+                    if (validEnd)
+                        section.endTimeSeconds =
+                            endSeconds;
+                }
                 if (section.name.isEmpty()
                     || conversion.ec != std::errc()
                     || conversion.ptr != positionText.data() + positionText.size()
                     || !std::isfinite(section.timeSeconds)
-                    || section.timeSeconds < 0.0)
+                    || section.timeSeconds < 0.0
+                    || !validEnd)
                 {
                     safe->showError("Section unavailable",
-                                    "Enter a name and a finite, non-negative position in seconds.");
+                                    "Enter a name, a finite non-negative start, and an optional end after the start.");
                     return;
                 }
                 if (before && !juce::exactlyEqual(before->timeSeconds, section.timeSeconds)
@@ -8863,15 +9004,14 @@ void MainComponent::setLeftPanelCollapsed(bool collapsed)
 {
     leftPanelCollapsed = collapsed;
     leftPanelWidth = collapsed ? 64 : 286;
-    sessionPanelToggleButton.setIcon(
-        collapsed ? StudioIcon::chevronRight
-                  : StudioIcon::chevronLeft);
     sessionPanelToggleButton.setAccessibleLabel(
-        collapsed ? "Expand session sidebar"
-                  : "Collapse session sidebar");
+        collapsed ? "Show tracks" : "Hide tracks");
     sessionPanelToggleButton.setTooltip(
-        collapsed ? "Expand the session sidebar"
-                  : "Collapse the session sidebar");
+        collapsed ? "Show the session tracks pane"
+                  : "Hide the session tracks pane");
+    sessionPanelToggleButton.setToggleState(
+        !collapsed,
+        juce::dontSendNotification);
     for (auto* button : {
              &addTrackButton,
              &addBusButton,
@@ -8889,9 +9029,6 @@ void MainComponent::setLeftPanelCollapsed(bool collapsed)
 void MainComponent::setInspectorPanelVisible(bool visible)
 {
     inspectorPanelWidth = visible ? 250 : 0;
-    inspectorPanelToggleButton.setIcon(
-        visible ? StudioIcon::chevronRight
-                : StudioIcon::chevronLeft);
     inspectorPanelToggleButton.setAccessibleLabel(
         visible ? "Hide inspector" : "Show inspector");
     inspectorPanelToggleButton.setTooltip(
@@ -8906,9 +9043,6 @@ void MainComponent::setInspectorPanelVisible(bool visible)
 void MainComponent::setMixerPanelVisible(bool visible)
 {
     mixerPanelHeight = visible ? 260 : 0;
-    mixerPanelToggleButton.setIcon(
-        visible ? StudioIcon::chevronDown
-                : StudioIcon::chevronUp);
     mixerPanelToggleButton.setAccessibleLabel(
         visible ? "Hide mixer" : "Show mixer");
     mixerPanelToggleButton.setTooltip(
@@ -8978,7 +9112,10 @@ void MainComponent::projectChanged(bool writeRecovery, bool markDirty)
                                                       pluginRuntimeRequests()); result.failed())
         setStatus(result.getErrorMessage(), true);
 
-    if (writeRecovery && projectPackage.exists())
+    if (writeRecovery
+        && projectPackage.exists()
+        && preferences != nullptr
+        && preferences->autosaveEnabled())
         if (const auto result = ProjectFile::writeRecoveryPoint(project, projectPackage); result.failed())
             setStatus(result.getErrorMessage(), true);
 }

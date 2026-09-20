@@ -135,6 +135,7 @@ struct SongSection
     juce::String name { "Section" };
     double timeSeconds = 0.0;
     std::optional<SectionClickSettings> clickSettings {};
+    std::optional<double> endTimeSeconds {};
 
     [[nodiscard]] juce::var toVar() const;
     static std::optional<SongSection> fromVar(const juce::var& value,

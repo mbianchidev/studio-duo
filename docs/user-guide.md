@@ -46,7 +46,7 @@ DAWproject exchange, and Phase 5 mastering and release workflows.
 - Bundled guitar and bass amps with real nonlinear/tone DSP, embedded cabinets,
   validated custom cabinet loading, persistent IR state, and automation
 - Tone and mixer snapshots, level-matched A/B, stale detection, freeze, print,
-  plugin-inclusive rendering, batch reports, and Scream Forge validation
+  plugin-inclusive rendering, batch reports, and installed plug-in validation
 - Versioned `.studioduo` packages, generation saves, and recovery points
 - DAWproject 1.0 import/export with embedded media and plug-in state,
   official schema validation, scene preservation, and compatibility reports
@@ -200,11 +200,14 @@ visible as coloured bounds. When punch and loop are both enabled, punch takes
 priority for recording while ordinary playback keeps using the loop range.
 The bottom transport strip keeps position, Stop, Play/Pause, Record, Loop,
 loop-range, metronome, time signature, and tempo controls in compact grouped
-modules while file and project tools remain in the top header.
+modules. **Inspect**, **Mix**, and **Tracks** switches at the far right own the
+three docked work areas. File and project tools remain in the top header, while
+undo, redo, scissors, trim, delete, and zoom tools share the edit toolbar.
 
 Right-click the **MARKERS / SECTIONS** lane above the bar ruler to add either a
 marker flag or a song section at that exact timeline position without moving
-the playhead. Marker flags can also be dragged directly along the lane.
+the playhead. Marker flags can be dragged directly. Drag a section body to move
+the complete range, or drag its bright right edge to resize it.
 
 ### Set an arbitrary loop
 
@@ -305,8 +308,10 @@ curves remain visible on the clip.
 The inspector and lower mixer expose gain, pan, mute, and solo. Gain defaults to
 `0.0 dB`; pan defaults to `Center`. Mixer strips expose dedicated mute, solo,
 and record-arm icons plus a boxed dB readout and calibrated fader scale. Drag
-faders vertically and pan controls horizontally to edit them.
-Double-click a fader lane to return to `0.0 dB` or a pan knob to return to
+faders vertically and the linear left/right pan controls horizontally to edit
+them. Wide pre/post meters and the current post-fader peak make every track's
+level visible at a glance.
+Double-click a fader lane to return to `0.0 dB` or a pan control to return to
 center. Solo is exclusive: selecting a new solo clears the previous solo, and
 clicking the active solo again restores normal playback.
 
@@ -318,10 +323,9 @@ its routing editor.
 Use the single sidebar arrow to collapse Session controls to an icon rail. The
 expanded Session pane shows each action's icon and full name; collapsing it
 removes the labels and returns the same controls to compact icon-only buttons.
-The inspector and mixer each keep their own collapse button on the panel edge; when
-hidden, a left chevron restores the inspector at the right edge and an up
-chevron restores the mixer above the bottom transport strip. Their dividers also
-collapse when dragged closed and restore when dragged open or double-clicked.
+The bottom **Inspect**, **Mix**, and **Tracks** switches are the only panel
+visibility buttons. Their dividers also collapse when dragged closed and restore
+when dragged open or double-clicked.
 The processor search moves above its action buttons on narrow layouts.
 
 Double-click a track name in the inspector, timeline, or mixer to edit its name.
@@ -514,8 +518,8 @@ or truncated cabinet state reports a failed insert; Studio Duo never silently
 substitutes the default.
 
 **TEST** runs black-box public-standard compatibility checks in a separate
-process. The tracking menu can validate installed Scream Forge VST3, Audio Unit,
-and advertised ARA capability without proprietary source code.
+process. **Tracking Setup > Validate installed plug-ins** runs the same isolated
+checks across the scanned external plug-in catalog and records pass/fail status.
 
 ## Create reamp paths
 
@@ -689,6 +693,11 @@ new version is available, the app prompts without interrupting the current
 project. Open **Settings** (gear icon) > **Updates** to check again, download manually, or
 change **Download updates automatically**. Automatic downloads are enabled by
 default.
+
+The **General** Settings tab includes **Autosave project recovery after edits**.
+It is enabled by default and persists across launches. Autosave updates the
+recovery copy inside an already-saved `.studioduo` package; manual Save still
+publishes the durable project generation.
 
 Every package is downloaded inside the Studio Duo application-data directory
 and must match the release manifest's filename, byte size, and SHA-256 checksum.

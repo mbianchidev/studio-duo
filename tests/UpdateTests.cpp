@@ -1,4 +1,5 @@
 #include "update/UpdateManifest.h"
+#include "update/StudioPreferences.h"
 #include "TestHarness.h"
 #include "TestSuites.h"
 
@@ -135,10 +136,45 @@ void manifestParsing()
              .has_value(),
         "Portable Windows builds do not advertise an in-place update.");
 }
+
+void preferencePersistence()
+{
+    const auto directory =
+        juce::File::getSpecialLocation(
+            juce::File::tempDirectory)
+            .getNonexistentChildFile(
+                "StudioDuoPreferences",
+                {},
+                false);
+    const auto file =
+        directory.getChildFile("preferences.json");
+    {
+        studio::StudioPreferences preferences(file);
+        expect(preferences.autosaveEnabled(),
+               "Autosave recovery defaults to enabled.");
+        expect(preferences.setAutosaveEnabled(false).wasOk()
+                   && !preferences.autosaveEnabled(),
+               "Autosave recovery can be disabled and persisted.");
+    }
+    {
+        studio::StudioPreferences preferences(file);
+        expect(!preferences.autosaveEnabled(),
+               "Autosave recovery preference survives reload.");
+    }
+    file.replaceWithText("{\"autosaveEnabled\":\"invalid\"}");
+    {
+        studio::StudioPreferences preferences(file);
+        expect(preferences.autosaveEnabled()
+                   && preferences.status().isNotEmpty(),
+               "Invalid preference data reports the problem and restores defaults.");
+    }
+    directory.deleteRecursively();
+}
 }
 
 void updateTests()
 {
     semanticVersionComparison();
     manifestParsing();
+    preferencePersistence();
 }

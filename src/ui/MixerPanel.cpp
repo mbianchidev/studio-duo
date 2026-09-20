@@ -328,11 +328,11 @@ void MixerPanel::paint(juce::Graphics& graphics)
             graphics.setColour(juce::Colour(StudioColours::window));
             graphics.fillRect(strip.getX() + 4,
                               faderTop,
-                              3,
+                              6,
                               faderHeight);
-            graphics.fillRect(strip.getRight() - 7,
+            graphics.fillRect(strip.getRight() - 10,
                               faderTop,
-                              3,
+                              6,
                               faderHeight);
             graphics.setColour(juce::Colour(StudioColours::amber));
             graphics.fillRect(
@@ -341,18 +341,23 @@ void MixerPanel::paint(juce::Graphics& graphics)
                     + static_cast<int>((1.0f - pre)
                                        * static_cast<float>(
                                            faderHeight)),
-                3,
+                6,
                 static_cast<int>(pre
                                  * static_cast<float>(
                                      faderHeight)));
-            graphics.setColour(juce::Colour(StudioColours::green));
+            graphics.setColour(
+                post > 0.9f
+                    ? juce::Colour(StudioColours::orange)
+                    : post > 0.7f
+                        ? juce::Colour(StudioColours::amber)
+                        : juce::Colour(StudioColours::green));
             graphics.fillRect(
-                strip.getRight() - 7,
+                strip.getRight() - 10,
                 faderTop
                     + static_cast<int>((1.0f - post)
                                        * static_cast<float>(
                                            faderHeight)),
-                3,
+                6,
                 static_cast<int>(post
                                  * static_cast<float>(
                                      faderHeight)));
@@ -489,6 +494,29 @@ void MixerPanel::paint(juce::Graphics& graphics)
                     juce::Justification::centredLeft);
             }
         }
+        if (meter != meters.cend())
+        {
+            const auto peak = juce::jlimit(
+                0.0f,
+                1.0f,
+                std::max(
+                    meter->postFaderLeft,
+                    meter->postFaderRight));
+            const auto peakDb = juce::Decibels::gainToDecibels(
+                peak,
+                -60.0f);
+            graphics.setColour(
+                juce::Colour(StudioColours::secondaryText));
+            graphics.setFont(
+                juce::Font(juce::FontOptions(8.0f)));
+            graphics.drawText(
+                juce::String(peakDb, 1) + " dB",
+                strip.getX() + 12,
+                faderTop + faderHeight + 2,
+                strip.getWidth() - 24,
+                12,
+                juce::Justification::centred);
+        }
 
         const auto panValue = track->id == draggingPanTrack
             ? dragPreviewPan
@@ -497,43 +525,66 @@ void MixerPanel::paint(juce::Graphics& graphics)
             ? juce::String("C")
             : juce::String(static_cast<int>(std::round(std::abs(panValue) * 100.0f)))
                 + (panValue < 0.0f ? "% L" : "% R");
-        const juce::Point<float> panCentre(static_cast<float>(strip.getCentreX()),
-                                           static_cast<float>(strip.getBottom() - 33));
-        constexpr auto panRadius = 9.0f;
+        const auto panY =
+            static_cast<float>(strip.getBottom() - 32);
+        const auto panLeft =
+            static_cast<float>(strip.getX() + 18);
+        const auto panRight =
+            static_cast<float>(strip.getRight() - 18);
         graphics.setColour(juce::Colour(StudioColours::window));
-        graphics.fillEllipse(panCentre.x - panRadius,
-                             panCentre.y - panRadius,
-                             panRadius * 2.0f,
-                             panRadius * 2.0f);
-        graphics.setColour(std::abs(panValue) < 0.005f
-                               ? juce::Colour(StudioColours::secondaryText)
-                               : track->colour);
-        graphics.drawEllipse(panCentre.x - panRadius,
-                             panCentre.y - panRadius,
-                             panRadius * 2.0f,
-                             panRadius * 2.0f,
-                             1.5f);
-        const auto angle = juce::jmap(panValue,
-                                     -1.0f,
-                                     1.0f,
-                                     -juce::MathConstants<float>::pi * 0.75f,
-                                     juce::MathConstants<float>::pi * 0.75f);
-        const juce::Point<float> marker(panCentre.x + std::sin(angle) * 8.0f,
-                                        panCentre.y - std::cos(angle) * 8.0f);
-        graphics.drawLine(panCentre.x, panCentre.y, marker.x, marker.y, 2.0f);
-        graphics.setFont(juce::Font(juce::FontOptions(8.0f, juce::Font::bold)));
-        graphics.drawText("L",
-                          static_cast<int>(panCentre.x - 30.0f),
-                          static_cast<int>(panCentre.y - 8.0f),
-                          12,
-                          16,
-                          juce::Justification::centred);
-        graphics.drawText("R",
-                          static_cast<int>(panCentre.x + 18.0f),
-                          static_cast<int>(panCentre.y - 8.0f),
-                          12,
-                          16,
-                          juce::Justification::centred);
+        graphics.drawLine(
+            panLeft,
+            panY,
+            panRight,
+            panY,
+            5.0f);
+        graphics.setColour(juce::Colour(StudioColours::border));
+        graphics.drawLine(
+            panLeft,
+            panY,
+            panRight,
+            panY,
+            1.5f);
+        graphics.drawVerticalLine(
+            strip.getCentreX(),
+            panY - 5.0f,
+            panY + 5.0f);
+        const auto panX = juce::jmap(
+            panValue,
+            -1.0f,
+            1.0f,
+            panLeft,
+            panRight);
+        graphics.setColour(
+            std::abs(panValue) < 0.005f
+                ? juce::Colour(StudioColours::text)
+                : track->colour);
+        graphics.fillRoundedRectangle(
+            panX - 5.0f,
+            panY - 7.0f,
+            10.0f,
+            14.0f,
+            3.0f);
+        graphics.setColour(
+            juce::Colour(StudioColours::secondaryText));
+        graphics.setFont(
+            juce::Font(
+                juce::FontOptions(8.0f,
+                                  juce::Font::bold)));
+        graphics.drawText(
+            "L",
+            strip.getX() + 4,
+            strip.getBottom() - 41,
+            12,
+            16,
+            juce::Justification::centred);
+        graphics.drawText(
+            "R",
+            strip.getRight() - 16,
+            strip.getBottom() - 41,
+            12,
+            16,
+            juce::Justification::centred);
         graphics.setColour(juce::Colour(StudioColours::secondaryText));
         graphics.drawText(panText,
                           strip.getX() + 6,

@@ -387,6 +387,8 @@ juce::var SongSection::toVar() const
     object->setProperty("timeSeconds", timeSeconds);
     if (clickSettings.has_value())
         object->setProperty("clickSettings", clickSettings->toVar());
+    if (endTimeSeconds.has_value())
+        object->setProperty("endTimeSeconds", *endTimeSeconds);
     return juce::var(object.release());
 }
 
@@ -408,10 +410,19 @@ std::optional<SongSection> SongSection::fromVar(const juce::var& value,
         if (!section.clickSettings.has_value())
             return std::nullopt;
     }
+    if (object->hasProperty("endTimeSeconds"))
+        section.endTimeSeconds = numberProperty(
+            *object,
+            "endTimeSeconds",
+            section.timeSeconds);
     if (section.id.trim().isEmpty()
         || section.name.isEmpty()
         || !std::isfinite(section.timeSeconds)
-        || section.timeSeconds < 0.0)
+        || section.timeSeconds < 0.0
+        || (section.endTimeSeconds.has_value()
+            && (!std::isfinite(*section.endTimeSeconds)
+                || *section.endTimeSeconds
+                    <= section.timeSeconds)))
     {
         error = "Song sections require an ID, a name, and a finite non-negative position.";
         return std::nullopt;
@@ -2547,6 +2558,24 @@ bool Project::validateTransport(juce::String& error) const
         if (section.clickSettings.has_value()
             && !section.clickSettings->validate(error))
             return false;
+        if (section.endTimeSeconds.has_value()
+            && (!std::isfinite(*section.endTimeSeconds)
+                || *section.endTimeSeconds
+                    <= section.timeSeconds))
+        {
+            error =
+                "Song section ends must be finite and after their starts.";
+            return false;
+        }
+        if (section.endTimeSeconds.has_value()
+            && index + 1 < sections.size()
+            && *section.endTimeSeconds
+                > sections[index + 1].timeSeconds)
+        {
+            error =
+                "Song sections cannot overlap the next section.";
+            return false;
+        }
         if (std::any_of(
                 sections.cbegin(),
                 sections.cbegin() + static_cast<std::ptrdiff_t>(index),
@@ -2652,7 +2681,13 @@ double Project::lengthSeconds() const noexcept
 {
     double length = 8.0;
     for (const auto& section : sections)
+    {
         length = std::max(length, section.timeSeconds);
+        if (section.endTimeSeconds.has_value())
+            length = std::max(
+                length,
+                *section.endTimeSeconds);
+    }
     for (const auto& track : tracks)
     {
         for (const auto& clip : track.clips)

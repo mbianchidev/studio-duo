@@ -44,6 +44,7 @@ void timelineMarkerTests()
     project.sections = {
         { "section", "Verse", 0.0 }
     };
+    project.sections.front().endTimeSeconds = 4.0;
 
     studio::TimelineComponent timeline;
     timeline.setBounds(0, 0, 1200, 400);
@@ -121,6 +122,73 @@ void timelineMarkerTests()
         false));
     expect(markerAdds == 1 && sectionEdits == 1,
            "The dedicated section row edits its song section without creating a marker.");
+
+    auto rangeStart = -1.0;
+    auto rangeEnd = -1.0;
+    timeline.onSectionRangeChanged =
+        [&rangeStart, &rangeEnd](
+            const juce::String&,
+            double start,
+            double end)
+    {
+        rangeStart = start;
+        rangeEnd = end;
+    };
+    const auto sectionBody = juce::Point<float>(
+        timeline.xForSeconds(1.0),
+        30.0f);
+    const auto movedSection = juce::Point<float>(
+        timeline.xForSeconds(2.0),
+        30.0f);
+    timeline.mouseDown(mouseEvent(
+        timeline,
+        sectionBody,
+        sectionBody,
+        1,
+        false));
+    timeline.mouseDrag(mouseEvent(
+        timeline,
+        movedSection,
+        sectionBody,
+        1,
+        true));
+    timeline.mouseUp(mouseEvent(
+        timeline,
+        movedSection,
+        sectionBody,
+        1,
+        true));
+    expect(std::abs(rangeStart - 1.0) < 0.000001
+               && std::abs(rangeEnd - 5.0) < 0.000001,
+           "Dragging a section body moves its complete range.");
+
+    const auto sectionEnd = juce::Point<float>(
+        timeline.xForSeconds(4.0),
+        30.0f);
+    const auto resizedSection = juce::Point<float>(
+        timeline.xForSeconds(6.0),
+        30.0f);
+    timeline.mouseDown(mouseEvent(
+        timeline,
+        sectionEnd,
+        sectionEnd,
+        1,
+        false));
+    timeline.mouseDrag(mouseEvent(
+        timeline,
+        resizedSection,
+        sectionEnd,
+        1,
+        true));
+    timeline.mouseUp(mouseEvent(
+        timeline,
+        resizedSection,
+        sectionEnd,
+        1,
+        true));
+    expect(std::abs(rangeStart) < 0.000001
+               && std::abs(rangeEnd - 6.0) < 0.000001,
+           "Dragging a section end resizes the range.");
 
     juce::String mutedTrack;
     timeline.onTrackMute = [&mutedTrack](const juce::String& trackId)

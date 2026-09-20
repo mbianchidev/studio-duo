@@ -57,6 +57,7 @@
           "id": { "type": "string", "minLength": 1 },
           "name": { "type": "string", "minLength": 1 },
           "timeSeconds": { "type": "number", "minimum": 0 },
+          "endTimeSeconds": { "type": "number", "minimum": 0 },
           "clickSettings": { "$ref": "#/$defs/clickSettings" }
         },
         "additionalProperties": true

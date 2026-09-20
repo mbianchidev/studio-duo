@@ -212,6 +212,49 @@ juce::Path createStudioIconPath(StudioIcon icon)
             path.addEllipse(14.0f, 13.0f, 6.0f, 5.0f);
             break;
 
+        case StudioIcon::inspect:
+            path.addRoundedRectangle(
+                3.0f,
+                4.0f,
+                18.0f,
+                16.0f,
+                2.0f);
+            path.startNewSubPath(15.0f, 4.0f);
+            path.lineTo(15.0f, 20.0f);
+            path.startNewSubPath(17.5f, 8.0f);
+            path.lineTo(19.0f, 8.0f);
+            path.startNewSubPath(17.5f, 12.0f);
+            path.lineTo(19.0f, 12.0f);
+            break;
+
+        case StudioIcon::mixer:
+            path.startNewSubPath(5.0f, 3.0f);
+            path.lineTo(5.0f, 21.0f);
+            path.startNewSubPath(12.0f, 3.0f);
+            path.lineTo(12.0f, 21.0f);
+            path.startNewSubPath(19.0f, 3.0f);
+            path.lineTo(19.0f, 21.0f);
+            path.addRoundedRectangle(2.5f, 7.0f, 5.0f, 5.0f, 1.5f);
+            path.addRoundedRectangle(9.5f, 13.0f, 5.0f, 5.0f, 1.5f);
+            path.addRoundedRectangle(16.5f, 5.0f, 5.0f, 5.0f, 1.5f);
+            break;
+
+        case StudioIcon::tracks:
+            for (int row = 0; row < 3; ++row)
+            {
+                const auto y = 5.0f
+                    + static_cast<float>(row) * 7.0f;
+                path.addRoundedRectangle(
+                    3.0f,
+                    y,
+                    4.0f,
+                    4.0f,
+                    1.0f);
+                path.startNewSubPath(10.0f, y + 2.0f);
+                path.lineTo(21.0f, y + 2.0f);
+            }
+            break;
+
         case StudioIcon::add:
             path.startNewSubPath(4.0f, 12.0f);
             path.lineTo(20.0f, 12.0f);

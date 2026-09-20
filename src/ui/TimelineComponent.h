@@ -62,6 +62,8 @@ public:
     std::function<void(const juce::String&)> onEditSectionRequested;
     std::function<void(const juce::String&)> onRemoveSectionRequested;
     std::function<void(const juce::String&)> onConfigureSectionRequested;
+    std::function<void(const juce::String&, double, double)>
+        onSectionRangeChanged;
     std::function<void()> onSplitSelected;
     std::function<void()> onTrimStartSelected;
     std::function<void()> onTrimEndSelected;
@@ -118,8 +120,18 @@ private:
         fadeOutCurve
     };
 
+    enum class SectionDragMode
+    {
+        none,
+        move,
+        resizeEnd
+    };
+
     [[nodiscard]] juce::String markerIdAt(juce::Point<float> position) const;
     [[nodiscard]] juce::String sectionIdAt(juce::Point<float> position) const;
+    [[nodiscard]] double sectionEndSeconds(
+        std::size_t index,
+        double fallback) const noexcept;
     [[nodiscard]] std::vector<Hit> clipHits() const;
     [[nodiscard]] std::vector<const Track*> visibleTracks() const;
     [[nodiscard]] int trackIndexAt(float y) const noexcept;
@@ -152,6 +164,7 @@ private:
     juce::String selectedClipId;
     juce::String draggingTrackVolumeId;
     juce::String draggedMarkerId;
+    juce::String draggedSectionId;
     juce::String draggedClipId;
     juce::String hoveredClipId;
     juce::String dragOriginalTrackId;
@@ -159,6 +172,10 @@ private:
     double playheadSeconds = 0.0;
     double markerDragOriginalSeconds = 0.0;
     double markerDragPreviewSeconds = 0.0;
+    double sectionDragOriginalStart = 0.0;
+    double sectionDragOriginalEnd = 0.0;
+    double sectionDragPreviewStart = 0.0;
+    double sectionDragPreviewEnd = 0.0;
     float dragPreviewTrackVolume = 0.0f;
     std::vector<RecordingPreview> recordingPreviews;
     double pixelsPerSecond = 96.0;
@@ -180,6 +197,8 @@ private:
     float dragPreviewFadeCurve = 0.0f;
     DragMode dragMode = DragMode::none;
     DragMode hoveredDragMode = DragMode::none;
+    SectionDragMode sectionDragMode =
+        SectionDragMode::none;
 
     static constexpr double minimumPixelsPerSecond = 24.0;
     static constexpr double maximumPixelsPerSecond = 9600.0;

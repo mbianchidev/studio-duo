@@ -30,6 +30,8 @@
 
 namespace studio
 {
+class StudioPreferences;
+
 class MainComponent final : public juce::Component,
                             private juce::Timer,
                             private juce::KeyListener,
@@ -151,7 +153,7 @@ private:
     void openPluginEditor(const juce::String& trackId,
                           const juce::String& insertId);
     void validatePlugin(const PluginCatalogEntry& entry);
-    void validateScreamForge();
+    void validateInstalledPlugins();
     void changePluginMode(const juce::String& trackId,
                           const juce::String& insertId,
                           PluginBridgeMode mode);
@@ -218,6 +220,9 @@ private:
                            double position);
     void removeProjectMarker(const juce::String& markerId);
     void showSectionSettings(const juce::String& sectionId);
+    void setSongSectionRange(const juce::String& sectionId,
+                             double startSeconds,
+                             double endSeconds);
     void removeSongSection(const juce::String& sectionId);
     void showAutomationPanel();
     void promptSongSection(double position,
@@ -426,19 +431,19 @@ private:
         "Create an ordinary editable MIDI clip at the playhead (Command/Ctrl+Shift+N)"
     };
     StudioIconButton sessionPanelToggleButton {
-        StudioIcon::chevronLeft,
-        "Collapse session sidebar",
-        "Collapse the session sidebar"
+        StudioIcon::tracks,
+        "Tracks",
+        "Show or hide the session tracks pane"
     };
     StudioIconButton inspectorPanelToggleButton {
-        StudioIcon::chevronRight,
-        "Hide inspector",
-        "Hide the inspector"
+        StudioIcon::inspect,
+        "Inspect",
+        "Show or hide the inspector"
     };
     StudioIconButton mixerPanelToggleButton {
-        StudioIcon::chevronDown,
-        "Hide mixer",
-        "Hide the mixer"
+        StudioIcon::mixer,
+        "Mix",
+        "Show or hide the mixer"
     };
 
     juce::Component inspectorContent;
@@ -525,6 +530,7 @@ private:
     juce::Label statusLabel;
     std::unique_ptr<juce::FileChooser> fileChooser;
     std::unique_ptr<juce::DialogWindow> settingsWindow;
+    std::unique_ptr<StudioPreferences> preferences;
     UpdateSnapshot latestUpdateSnapshot;
     juce::String lastAvailabilityPromptVersion;
     juce::String lastReadyPromptVersion;

@@ -172,6 +172,7 @@ void defaultsAndClickInheritance()
 void sectionBoundariesAndRoundTrip()
 {
     auto project = sectionProject();
+    project.findSection("verse")->endTimeSeconds = 5.5;
     studio::SectionTransportSettings settings;
     settings.tempoBpm = 180.0;
     settings.timeSignature = studio::SectionTimeSignature { 7, 8 };
@@ -206,13 +207,15 @@ void sectionBoundariesAndRoundTrip()
                && loadedSection->id == "verse"
                && loadedSection->name == "Verse"
                && closeTo(loadedSection->timeSeconds, 4.0)
+               && loadedSection->endTimeSeconds.has_value()
+               && closeTo(*loadedSection->endTimeSeconds, 5.5)
                && loaded->tempoChanges == project.tempoChanges
                && loaded->meterChanges == project.meterChanges
                && savedSettings.has_value()
                && savedSettings->tempoBpm == settings.tempoBpm
                && savedSettings->timeSignature == settings.timeSignature
                && savedSettings->clickSettings == settings.clickSettings,
-           "Format 11 round trips preserve section IDs, positions, owned maps, and every click option.");
+           "Format 11 round trips preserve section IDs, resizable ranges, owned maps, and every click option.");
 
     auto manualTempo = project.tempoChanges.front();
     auto manualMeter = project.meterChanges.front();

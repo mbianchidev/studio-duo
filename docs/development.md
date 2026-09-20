@@ -629,7 +629,7 @@ be suspended without deleting their membership or settings.
 The left track-header context menu targets the clicked parent or version lane.
 Delete removes one version or the complete parent group, while the master
 remains protected. The lower mixer filters out child lanes and exposes an
-interactive pan knob for each parent channel; drag horizontally toward the
+interactive linear pan control for each parent channel; drag horizontally toward the
 intended channel or double-click to reset center. Deterministic render coverage
 asserts that full-left and full-right pan move mono content to the matching
 output channel.
@@ -677,6 +677,16 @@ without changing actions, tooltips, or focus behavior. The UI timer follows an
 active playhead with a right-side margin,
 grows the view during long recordings, and rewinds a completed transport before
 starting playback again.
+
+The bottom-right **Inspect**, **Mix**, and **Tracks** buttons are the sole
+visibility controls for the three docked areas. The edit toolbar owns undo,
+redo, scissors, trim, delete, and zoom controls; no duplicate panel-edge
+buttons remain.
+
+`StudioPreferences` persists the autosave-recovery toggle in the application
+data directory with defaults merged on missing or invalid data. When enabled,
+ordinary project edits refresh `recovery/latest.json`; disabling it leaves
+manual project saves and explicit safety recovery points unchanged.
 
 On macOS, CMake applies an ad-hoc signature with the stable designated
 requirement `dev.mbianchi.studioduo`. This keeps the TCC microphone grant tied

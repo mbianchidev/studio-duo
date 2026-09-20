@@ -4,6 +4,107 @@
 
 namespace studio
 {
+namespace
+{
+class GeneralSettingsComponent final : public juce::Component
+{
+public:
+    explicit GeneralSettingsComponent(
+        StudioPreferences& preferencesToUse)
+        : preferences(preferencesToUse)
+    {
+        addAndMakeVisible(title);
+        title.setText(
+            "Project preferences",
+            juce::dontSendNotification);
+        title.setFont(
+            juce::Font(
+                juce::FontOptions(22.0f,
+                                  juce::Font::bold)));
+
+        addAndMakeVisible(autosave);
+        autosave.setButtonText(
+            "Autosave project recovery after edits");
+        autosave.setTooltip(
+            "Write the latest project state to the package recovery copy after each edit.");
+        autosave.setToggleState(
+            preferences.autosaveEnabled(),
+            juce::dontSendNotification);
+        autosave.onClick = [this]
+        {
+            const auto enabled =
+                autosave.getToggleState();
+            const auto result =
+                preferences.setAutosaveEnabled(enabled);
+            if (result.failed())
+            {
+                autosave.setToggleState(
+                    !enabled,
+                    juce::dontSendNotification);
+                status.setText(
+                    result.getErrorMessage(),
+                    juce::dontSendNotification);
+                status.setColour(
+                    juce::Label::textColourId,
+                    juce::Colour(StudioColours::orange));
+                return;
+            }
+            status.setText(
+                enabled
+                    ? "Autosave recovery is enabled."
+                    : "Autosave recovery is disabled.",
+                juce::dontSendNotification);
+            status.setColour(
+                juce::Label::textColourId,
+                juce::Colour(
+                    StudioColours::secondaryText));
+        };
+
+        addAndMakeVisible(help);
+        help.setText(
+            "Autosave writes a recovery copy inside saved .studioduo projects. "
+            "Manual Save still creates the durable project generation.",
+            juce::dontSendNotification);
+        help.setColour(
+            juce::Label::textColourId,
+            juce::Colour(StudioColours::secondaryText));
+        help.setJustificationType(
+            juce::Justification::topLeft);
+
+        addAndMakeVisible(status);
+        status.setText(
+            preferences.status(),
+            juce::dontSendNotification);
+        status.setColour(
+            juce::Label::textColourId,
+            juce::Colour(StudioColours::secondaryText));
+    }
+
+    void paint(juce::Graphics& graphics) override
+    {
+        graphics.fillAll(
+            juce::Colour(StudioColours::panel));
+    }
+
+    void resized() override
+    {
+        auto bounds = getLocalBounds().reduced(24);
+        title.setBounds(bounds.removeFromTop(36));
+        bounds.removeFromTop(18);
+        autosave.setBounds(bounds.removeFromTop(32));
+        help.setBounds(bounds.removeFromTop(58));
+        status.setBounds(bounds.removeFromTop(28));
+    }
+
+private:
+    StudioPreferences& preferences;
+    juce::Label title;
+    juce::ToggleButton autosave;
+    juce::Label help;
+    juce::Label status;
+};
+}
+
 UpdateSettingsComponent::UpdateSettingsComponent(
     UpdateService& service,
     std::function<void()> restartCallback)
@@ -179,6 +280,7 @@ void UpdateSettingsComponent::refresh(
 SettingsComponent::SettingsComponent(
     StudioAudioDeviceManager* deviceManager,
     UpdateService& updateService,
+    StudioPreferences& preferences,
     std::function<void()> restartRequested,
     bool showUpdatesInitially,
     const juce::String& audioUnavailableReason)
@@ -214,10 +316,18 @@ SettingsComponent::SettingsComponent(
     updatePage = std::make_unique<UpdateSettingsComponent>(
         updateService,
         std::move(restartRequested));
+    generalPage =
+        std::make_unique<GeneralSettingsComponent>(
+            preferences);
 
     addAndMakeVisible(tabs);
     tabs.setTabBarDepth(34);
     tabs.setOutline(1);
+    tabs.addTab(
+        "General",
+        juce::Colour(StudioColours::panel),
+        generalPage.get(),
+        false);
     tabs.addTab(
         "Audio / MIDI",
         juce::Colour(StudioColours::panel),
@@ -245,6 +355,6 @@ void SettingsComponent::resized()
 
 void SettingsComponent::showUpdates()
 {
-    tabs.setCurrentTabIndex(1);
+    tabs.setCurrentTabIndex(2);
 }
 }

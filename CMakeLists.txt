@@ -391,6 +391,8 @@ target_sources(
         src/update/UpdateInstaller.h
         src/update/UpdateManifest.cpp
         src/update/UpdateManifest.h
+        src/update/StudioPreferences.cpp
+        src/update/StudioPreferences.h
         src/update/UpdateService.cpp
         src/update/UpdateService.h
         src/update/UpdateSettingsComponent.cpp
@@ -828,6 +830,8 @@ if(STUDIO_DUO_BUILD_TESTS)
             src/ui/MixerPanel.h
             src/ui/MainWindowSizing.cpp
             src/ui/MainWindowSizing.h
+            src/update/StudioPreferences.cpp
+            src/update/StudioPreferences.h
             src/ui/MidiEditorComponent.cpp
             src/ui/MidiEditorComponent.h
             src/audio/StudioAudioDeviceManager.cpp

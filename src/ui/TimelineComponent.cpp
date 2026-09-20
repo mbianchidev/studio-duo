@@ -156,10 +156,15 @@ void TimelineComponent::paint(juce::Graphics& graphics)
     for (std::size_t index = 0; index < project->sections.size(); ++index)
     {
         const auto& section = project->sections[index];
-        const auto startX = secondsToX(section.timeSeconds);
-        const auto endSeconds = index + 1 < project->sections.size()
-            ? project->sections[index + 1].timeSeconds
-            : maximumSeconds;
+        const auto dragging =
+            section.id == draggedSectionId;
+        const auto startSeconds = dragging
+            ? sectionDragPreviewStart
+            : section.timeSeconds;
+        const auto endSeconds = dragging
+            ? sectionDragPreviewEnd
+            : sectionEndSeconds(index, maximumSeconds);
+        const auto startX = secondsToX(startSeconds);
         const auto endX = secondsToX(endSeconds);
         const auto colour = sectionColours[index % sectionColours.size()];
         graphics.setColour(colour.withAlpha(0.18f));
@@ -180,6 +185,12 @@ void TimelineComponent::paint(juce::Graphics& graphics)
                           sectionLaneHeight,
                           juce::Justification::centredLeft,
                           true);
+        graphics.setColour(colour.brighter(0.2f));
+        graphics.fillRect(
+            endX - 3.0f,
+            static_cast<float>(markerLaneHeight + 3),
+            3.0f,
+            static_cast<float>(sectionLaneHeight - 6));
     }
     for (const auto& marker : project->markers)
     {
@@ -1237,6 +1248,62 @@ void TimelineComponent::mouseDown(const juce::MouseEvent& event)
         }
         return;
     }
+    if (event.position.y
+        < static_cast<float>(timelineRulerTop))
+    {
+        const auto inTrackHeader =
+            event.position.x
+                >= static_cast<float>(viewportPositionX)
+            && event.position.x
+                < static_cast<float>(
+                    viewportPositionX + trackHeaderWidth);
+        if (!inTrackHeader && project != nullptr)
+        {
+            draggedSectionId = sectionIdAt(event.position);
+            const auto section = std::find_if(
+                project->sections.cbegin(),
+                project->sections.cend(),
+                [this](const auto& candidate)
+                {
+                    return candidate.id
+                        == draggedSectionId;
+                });
+            if (section != project->sections.cend())
+            {
+                const auto index = static_cast<std::size_t>(
+                    std::distance(
+                        project->sections.cbegin(),
+                        section));
+                sectionDragOriginalStart =
+                    section->timeSeconds;
+                sectionDragOriginalEnd =
+                    sectionEndSeconds(
+                        index,
+                        project->timelineEndSeconds()
+                            + 8.0);
+                sectionDragPreviewStart =
+                    sectionDragOriginalStart;
+                sectionDragPreviewEnd =
+                    sectionDragOriginalEnd;
+                dragStartX = event.position.x;
+                const auto endX =
+                    secondsToX(sectionDragOriginalEnd);
+                sectionDragMode =
+                    std::abs(event.position.x - endX)
+                            <= 7.0f
+                        ? SectionDragMode::resizeEnd
+                        : SectionDragMode::move;
+                setMouseCursor(
+                    sectionDragMode
+                            == SectionDragMode::resizeEnd
+                        ? juce::MouseCursor::
+                              LeftRightResizeCursor
+                        : juce::MouseCursor::
+                              DraggingHandCursor);
+            }
+        }
+        return;
+    }
 
     const auto inTrackHeader = event.position.x >= static_cast<float>(viewportPositionX)
         && event.position.x < static_cast<float>(viewportPositionX + trackHeaderWidth);
@@ -1565,6 +1632,78 @@ void TimelineComponent::mouseDrag(const juce::MouseEvent& event)
         return;
     }
 
+    if (draggedSectionId.isNotEmpty()
+        && project != nullptr)
+    {
+        const auto section = std::find_if(
+            project->sections.cbegin(),
+            project->sections.cend(),
+            [this](const auto& candidate)
+            {
+                return candidate.id == draggedSectionId;
+            });
+        if (section == project->sections.cend())
+            return;
+        const auto index = static_cast<std::size_t>(
+            std::distance(
+                project->sections.cbegin(),
+                section));
+        const auto nextStart =
+            index + 1 < project->sections.size()
+                ? project->sections[index + 1].timeSeconds
+                : std::numeric_limits<double>::infinity();
+        auto minimumStart = 0.0;
+        if (index > 0)
+        {
+            const auto& previous =
+                project->sections[index - 1];
+            minimumStart =
+                previous.endTimeSeconds.value_or(
+                    previous.timeSeconds + 0.0001);
+        }
+        if (sectionDragMode == SectionDragMode::move)
+        {
+            const auto duration =
+                sectionDragOriginalEnd
+                - sectionDragOriginalStart;
+            const auto requested =
+                sectionDragOriginalStart
+                + static_cast<double>(
+                      event.position.x - dragStartX)
+                    / pixelsPerSecond;
+            const auto maximumStart =
+                std::isfinite(nextStart)
+                    ? juce::jmax(
+                          minimumStart,
+                          nextStart - duration)
+                    : requested;
+            sectionDragPreviewStart =
+                std::isfinite(nextStart)
+                    ? juce::jlimit(
+                          minimumStart,
+                          maximumStart,
+                          requested)
+                    : juce::jmax(
+                          minimumStart,
+                          requested);
+            sectionDragPreviewEnd =
+                sectionDragPreviewStart + duration;
+        }
+        else if (sectionDragMode
+                 == SectionDragMode::resizeEnd)
+        {
+            const auto requested = juce::jmax(
+                sectionDragPreviewStart + 0.01,
+                xToSeconds(event.position.x));
+            sectionDragPreviewEnd =
+                std::isfinite(nextStart)
+                    ? juce::jmin(nextStart, requested)
+                    : requested;
+        }
+        repaint();
+        return;
+    }
+
     if (draggedClipId.isEmpty())
         return;
 
@@ -1699,6 +1838,31 @@ void TimelineComponent::mouseUp(const juce::MouseEvent&)
         return;
     }
 
+    if (draggedSectionId.isNotEmpty())
+    {
+        const auto sectionId = draggedSectionId;
+        draggedSectionId.clear();
+        sectionDragMode = SectionDragMode::none;
+        if ((std::abs(
+                 sectionDragPreviewStart
+                 - sectionDragOriginalStart)
+                 > 0.0001
+             || std::abs(
+                    sectionDragPreviewEnd
+                    - sectionDragOriginalEnd)
+                    > 0.0001)
+            && onSectionRangeChanged)
+        {
+            onSectionRangeChanged(
+                sectionId,
+                sectionDragPreviewStart,
+                sectionDragPreviewEnd);
+        }
+        setMouseCursor(juce::MouseCursor::NormalCursor);
+        repaint();
+        return;
+    }
+
     if (draggedClipId.isNotEmpty())
     {
         if (dragMode == DragMode::move
@@ -1765,6 +1929,40 @@ void TimelineComponent::mouseMove(const juce::MouseEvent& event)
         setMouseCursor(juce::MouseCursor::DraggingHandCursor);
         return;
     }
+    if (event.position.y
+            >= static_cast<float>(markerLaneHeight)
+        && event.position.y
+            < static_cast<float>(timelineRulerTop)
+        && project != nullptr)
+    {
+        const auto sectionId = sectionIdAt(event.position);
+        const auto section = std::find_if(
+            project->sections.cbegin(),
+            project->sections.cend(),
+            [&sectionId](const auto& candidate)
+            {
+                return candidate.id == sectionId;
+            });
+        if (section != project->sections.cend())
+        {
+            const auto index = static_cast<std::size_t>(
+                std::distance(
+                    project->sections.cbegin(),
+                    section));
+            const auto endX = secondsToX(
+                sectionEndSeconds(
+                    index,
+                    project->timelineEndSeconds() + 8.0));
+            setMouseCursor(
+                std::abs(event.position.x - endX)
+                        <= 7.0f
+                    ? juce::MouseCursor::
+                          LeftRightResizeCursor
+                    : juce::MouseCursor::
+                          DraggingHandCursor);
+            return;
+        }
+    }
     updateHoverState(event.position);
 }
 
@@ -1772,6 +1970,7 @@ void TimelineComponent::mouseExit(const juce::MouseEvent&)
 {
     if (draggingTrackVolumeId.isNotEmpty()
         || draggedMarkerId.isNotEmpty()
+        || draggedSectionId.isNotEmpty()
         || draggedClipId.isNotEmpty())
         return;
 
@@ -2320,19 +2519,43 @@ juce::String TimelineComponent::sectionIdAt(juce::Point<float> position) const
     for (auto index = project->sections.size(); index > 0; --index)
     {
         const auto& section = project->sections[index - 1];
-        const auto startX = secondsToX(section.timeSeconds);
-        const auto nextX = index < project->sections.size()
-            ? secondsToX(project->sections[index].timeSeconds)
-            : static_cast<float>(getWidth());
+        const auto dragging =
+            section.id == draggedSectionId;
+        const auto startX = secondsToX(
+            dragging
+                ? sectionDragPreviewStart
+                : section.timeSeconds);
+        const auto endX = secondsToX(
+            dragging
+                ? sectionDragPreviewEnd
+                : sectionEndSeconds(
+                    index - 1,
+                    xToSeconds(
+                        static_cast<float>(getWidth()))));
         const juce::Rectangle<float> bounds(
             startX,
             static_cast<float>(markerLaneHeight),
-            std::max(1.0f, nextX - startX),
+            std::max(1.0f, endX - startX + 4.0f),
             static_cast<float>(sectionLaneHeight));
         if (bounds.contains(position))
             return section.id;
     }
     return {};
+}
+
+double TimelineComponent::sectionEndSeconds(
+    std::size_t index,
+    double fallback) const noexcept
+{
+    if (project == nullptr
+        || index >= project->sections.size())
+        return fallback;
+    const auto& section = project->sections[index];
+    if (section.endTimeSeconds.has_value())
+        return *section.endTimeSeconds;
+    return index + 1 < project->sections.size()
+        ? project->sections[index + 1].timeSeconds
+        : fallback;
 }
 
 std::vector<TimelineComponent::Hit> TimelineComponent::clipHits() const
