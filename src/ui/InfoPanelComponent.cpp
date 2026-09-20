@@ -209,21 +209,35 @@ void InfoPanelComponent::pushMessage(
             true),
         error
     });
+    displayedMessage = entries.back().message;
+    displayedError = error;
+    displayedEntryId = entries.back().id;
     if (entries.size() > 200)
         entries.erase(entries.begin());
     repaint();
 }
 
+void InfoPanelComponent::setLiveMessage(
+    juce::String message,
+    bool error)
+{
+    message = message.trim();
+    if (message.isEmpty())
+        return;
+    displayedMessage = std::move(message);
+    displayedError = error;
+    displayedEntryId.reset();
+    repaint();
+}
+
 juce::String InfoPanelComponent::latestMessage() const
 {
-    return entries.empty()
-        ? juce::String()
-        : entries.back().message;
+    return displayedMessage;
 }
 
 bool InfoPanelComponent::latestIsError() const noexcept
 {
-    return !entries.empty() && entries.back().error;
+    return displayedError;
 }
 
 std::size_t InfoPanelComponent::historySize() const noexcept
@@ -239,16 +253,37 @@ InfoPanelComponent::history() const noexcept
 
 void InfoPanelComponent::removeEntry(std::uint64_t id)
 {
+    const auto removedDisplayed =
+        displayedEntryId.has_value()
+        && *displayedEntryId == id;
     std::erase_if(entries, [id](const auto& entry)
     {
         return entry.id == id;
     });
+    if (removedDisplayed)
+    {
+        if (entries.empty())
+        {
+            displayedMessage.clear();
+            displayedError = false;
+            displayedEntryId.reset();
+        }
+        else
+        {
+            displayedMessage = entries.back().message;
+            displayedError = entries.back().error;
+            displayedEntryId = entries.back().id;
+        }
+    }
     repaint();
 }
 
 void InfoPanelComponent::clearHistory()
 {
     entries.clear();
+    displayedMessage.clear();
+    displayedError = false;
+    displayedEntryId.reset();
     repaint();
 }
 

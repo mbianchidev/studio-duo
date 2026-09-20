@@ -696,7 +696,9 @@ position readout. Metronome, time signature, and BPM form the adjacent
 right-hand transport group, while device/readiness status is owned by the
 top-right `InfoPanelComponent`. `MainComponent::setStatus` appends deduplicated
 session entries; the callout displays newest-first history with per-entry
-removal and clear-all controls.
+removal and clear-all controls. High-frequency live progress uses display-only
+updates, so one recording operation contributes only its final saved event to
+history.
 
 The bottom-right **Inspect**, **Mixer**, and **Tracks** buttons are the sole
 visibility controls for the three docked areas. The edit toolbar owns undo,

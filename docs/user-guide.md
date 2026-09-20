@@ -210,7 +210,9 @@ Transport buttons are centered independently from the position display;
 metronome, meter, and BPM sit immediately to their right. Audio readiness and
 device status appear in the top-right info panel. The panel always shows the
 latest status or error; click it to open session history. Each message has its
-own clear icon, and the header trash icon clears all history.
+own clear icon, and the header trash icon clears all history. Live progress,
+such as the changing recording duration, updates the panel without creating a
+new history row; the completed saved-take result is stored once.
 
 Right-click the **MARKERS / SECTIONS** lane above the bar ruler to add either a
 marker flag or a song section at that exact timeline position without moving

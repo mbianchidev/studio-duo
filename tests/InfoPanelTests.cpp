@@ -25,4 +25,14 @@ void infoPanelTests()
                && panel.latestMessage().isEmpty()
                && !panel.latestIsError(),
            "The info panel can clear all history.");
+
+    panel.setLiveMessage("Recording 1 track, 1.0 s.", false);
+    panel.setLiveMessage("Recording 1 track, 1.1 s.", false);
+    expect(panel.historySize() == 0
+               && panel.latestMessage().contains("1.1"),
+           "Live progress replaces the display without creating history entries.");
+    panel.pushMessage("Saved 1 audio take.", false);
+    expect(panel.historySize() == 1
+               && panel.latestMessage() == "Saved 1 audio take.",
+           "A completed recording contributes one final history event.");
 }

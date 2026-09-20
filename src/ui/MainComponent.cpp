@@ -2634,7 +2634,9 @@ void MainComponent::timerCallback()
                       + juce::String(static_cast<int>(trackCount))
                       + (trackCount == 1 ? " track, " : " tracks, ")
                       + juce::String(duration, 1)
-                      + " s. Press STOP REC or STOP to finish.");
+                      + " s. Press STOP REC or STOP to finish.",
+                  false,
+                  false);
         updateTimelineSize();
     }
 
@@ -4471,7 +4473,9 @@ void MainComponent::toggleRecording()
                          == 1
                          ? " track."
                          : " synchronized tracks.")
-                  + " Press REC or STOP to finish.");
+                  + " Press REC or STOP to finish.",
+              false,
+              false);
 }
 
 void MainComponent::stopTransportAndRecording()
@@ -4525,7 +4529,9 @@ void MainComponent::finishRecording()
                 + juce::String(static_cast<int>(pendingTargets.size()))
                 + (pendingTargets.size() == 1
                        ? " WAV..."
-                       : " synchronized WAVs..."));
+                       : " synchronized WAVs..."),
+        false,
+        false);
 
     if (pendingTargets.empty())
     {
@@ -9649,7 +9655,9 @@ bool MainComponent::hasActiveRecordingTargets() const noexcept
         || !activeMidiRecordingTrackIds.empty();
 }
 
-void MainComponent::setStatus(const juce::String& message, bool error)
+void MainComponent::setStatus(const juce::String& message,
+                              bool error,
+                              bool addToHistory)
 {
     if (error
         && (!statusIsError
@@ -9658,7 +9666,10 @@ void MainComponent::setStatus(const juce::String& message, bool error)
         logError("ui.status", message);
     }
     statusIsError = error;
-    statusPanel.pushMessage(message, error);
+    if (addToHistory)
+        statusPanel.pushMessage(message, error);
+    else
+        statusPanel.setLiveMessage(message, error);
 }
 
 void MainComponent::showError(const juce::String& title, const juce::String& message)

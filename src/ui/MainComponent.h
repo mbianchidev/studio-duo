@@ -283,7 +283,9 @@ private:
     [[nodiscard]] Track makeRecordingVersionTrack(const Track& parent) const;
     Track* recordingTrack();
     [[nodiscard]] bool hasActiveRecordingTargets() const noexcept;
-    void setStatus(const juce::String& message, bool error = false);
+    void setStatus(const juce::String& message,
+                   bool error = false,
+                   bool addToHistory = true);
     void showError(const juce::String& title, const juce::String& message);
     static juce::String positionText(double seconds, const Project& project);
 
