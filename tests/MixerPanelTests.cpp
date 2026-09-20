@@ -124,4 +124,39 @@ void mixerPanelTests()
         false));
     expect(mutedTrack == track.id,
            "Mixer strip mute icons target the clicked track.");
+
+    auto appliedVolume = 99.0f;
+    mixer.onVolumeChanged =
+        [&appliedVolume](const juce::String&, float value)
+    {
+        appliedVolume = value;
+    };
+    const juce::Point<float> decibelReadout(70.0f, 98.0f);
+    mixer.mouseDown(mixerMouseEvent(
+        mixer,
+        decibelReadout,
+        decibelReadout,
+        false));
+    juce::TextEditor* inlineEditor = nullptr;
+    for (auto index = 0;
+         index < mixer.getNumChildComponents();
+         ++index)
+    {
+        if (auto* editor = dynamic_cast<juce::TextEditor*>(
+                mixer.getChildComponent(index));
+            editor != nullptr && editor->isVisible())
+        {
+            inlineEditor = editor;
+            break;
+        }
+    }
+    if (inlineEditor != nullptr)
+    {
+        inlineEditor->setText("-6db", false);
+        if (inlineEditor->onReturnKey)
+            inlineEditor->onReturnKey();
+    }
+    expect(inlineEditor != nullptr
+               && std::abs(appliedVolume + 6.0f) < 0.0001f,
+           "Clicking the mixer dB readout edits and applies volume inline.");
 }

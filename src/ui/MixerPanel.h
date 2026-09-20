@@ -28,6 +28,9 @@ public:
     std::function<void(const juce::String&)> onTrackMute;
     std::function<void(const juce::String&)> onTrackSolo;
     std::function<void(const juce::String&)> onTrackArm;
+    std::function<void(const juce::String&)> onToggleTrackVersions;
+    std::function<void(const juce::String&)> onDuplicateTrack;
+    std::function<void(const juce::String&)> onDeleteTrack;
     std::function<void(const juce::String&, float)> onVolumeChanged;
     std::function<void(const juce::String&, float)> onPanChanged;
     std::function<void(const juce::String&, const juce::String&)> onPluginOpen;
@@ -64,6 +67,11 @@ private:
     [[nodiscard]] std::vector<const Track*> mixerTracks() const;
     [[nodiscard]] std::vector<Item> items() const;
     void refreshItems();
+    void beginVolumeEdit(const Track& track,
+                         juce::Rectangle<int> bounds);
+    void commitVolumeEdit();
+    void cancelVolumeEdit();
+    void showTrackContextMenu(const juce::MouseEvent& event);
 
     const Project* project = nullptr;
     juce::String selectedTrack;
@@ -79,6 +87,9 @@ private:
     float dragStartPan = 0.0f;
     float dragPreviewPan = 0.0f;
     int dragFaderHeight = 1;
+    juce::TextEditor volumeEditor;
+    juce::String editingVolumeTrack;
+    bool committingVolumeEdit = false;
     juce::Viewport itemsViewport;
     std::unique_ptr<ItemList> itemList;
 };

@@ -1412,6 +1412,21 @@ MainComponent::MainComponent(bool startAudioOnLaunch)
         if (timeline.onTrackArm)
             timeline.onTrackArm(trackId);
     };
+    mixer->onToggleTrackVersions = [this](const auto& trackId)
+    {
+        if (timeline.onToggleTrackVersions)
+            timeline.onToggleTrackVersions(trackId);
+    };
+    mixer->onDuplicateTrack = [this](const auto& trackId)
+    {
+        if (timeline.onDuplicateTrack)
+            timeline.onDuplicateTrack(trackId);
+    };
+    mixer->onDeleteTrack = [this](const auto& trackId)
+    {
+        if (timeline.onDeleteTrack)
+            timeline.onDeleteTrack(trackId);
+    };
     mixer->onEditTrack = [this](const auto& trackId, auto targetArea)
     {
         selectTrack(trackId);

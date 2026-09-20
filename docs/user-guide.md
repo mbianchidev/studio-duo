@@ -319,8 +319,9 @@ faders vertically and the linear left/right pan controls horizontally to edit
 them. Mixer and inspector panners share the same center-origin display: only
 the active side between center and the knob is colored. Wide pre/post meters
 and the current post-fader peak make every track's
-level visible at a glance. Double-click a mixer's boxed dB value to enter a
-number such as `-6`, `-6 dB`, or `-6db`. Values must be within `-60.0` to
+level visible at a glance. Click a mixer's boxed dB value to enter a
+number such as `-6`, `-6 dB`, or `-6db` directly in the strip; no dialog opens.
+Values must be within `-60.0` to
 `+12.0 dB` and are normalized to the fader's 0.1 dB step.
 Double-click a fader lane to return to `0.0 dB` or a pan control to return to
 center. Solo is exclusive: selecting a new solo clears the previous solo, and
@@ -342,6 +343,9 @@ The processor search moves above its action buttons on narrow layouts.
 Double-click a track name in the inspector, timeline, or mixer to edit its name.
 **COLOR** provides palette choices and an HSV/RGB picker. Appearance changes are
 persistent and undoable.
+Right-clicking a mixer strip exposes the same mute, solo, arm, name/color,
+version, duplicate, and delete actions as the corresponding timeline track
+header.
 
 Use **Add Track** (plus icon) for audio, aux, bus, folder, VCA, and
 control-room tracks.

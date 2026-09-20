@@ -155,6 +155,36 @@ MixerPanel::MixerPanel()
     itemsViewport.setScrollBarsShown(true, false);
     itemsViewport.setScrollBarThickness(8);
     addAndMakeVisible(itemsViewport);
+
+    addChildComponent(volumeEditor);
+    volumeEditor.setJustification(
+        juce::Justification::centred);
+    volumeEditor.setSelectAllWhenFocused(true);
+    volumeEditor.setInputRestrictions(
+        12,
+        "0123456789+-. dDbB");
+    volumeEditor.setColour(
+        juce::TextEditor::backgroundColourId,
+        juce::Colour(StudioColours::window));
+    volumeEditor.setColour(
+        juce::TextEditor::textColourId,
+        juce::Colour(StudioColours::text));
+    volumeEditor.setColour(
+        juce::TextEditor::outlineColourId,
+        juce::Colour(StudioColours::orange));
+    volumeEditor.onReturnKey = [this]
+    {
+        commitVolumeEdit();
+    };
+    volumeEditor.onEscapeKey = [this]
+    {
+        cancelVolumeEdit();
+    };
+    volumeEditor.onFocusLost = [this]
+    {
+        if (!committingVolumeEdit)
+            commitVolumeEdit();
+    };
 }
 
 MixerPanel::~MixerPanel()
@@ -164,6 +194,8 @@ MixerPanel::~MixerPanel()
 
 void MixerPanel::setProject(const Project* value)
 {
+    if (volumeEditor.isVisible())
+        cancelVolumeEdit();
     project = value;
     refreshItems();
     repaint();
@@ -598,6 +630,11 @@ void MixerPanel::mouseDown(const juce::MouseEvent& event)
 {
     if (project == nullptr || event.position.y < 34.0f)
         return;
+    if (event.mods.isPopupMenu())
+    {
+        showTrackContextMenu(event);
+        return;
+    }
 
     const auto index = static_cast<int>(
         (event.position.x - 14.0f)
@@ -620,6 +657,18 @@ void MixerPanel::mouseDown(const juce::MouseEvent& event)
     const auto localY =
         static_cast<int>(event.position.y)
         - strip.getY();
+    const auto decibelBounds = juce::Rectangle<int>(
+        strip.getX() + 12,
+        strip.getY() + 54,
+        strip.getWidth() - 24,
+        20);
+    if (decibelBounds.contains(event.getPosition())
+        && track->type != TrackType::folder
+        && track->type != TrackType::midi)
+    {
+        beginVolumeEdit(*track, decibelBounds);
+        return;
+    }
     if (localY >= stripControlY
         && localY
             < stripControlY + stripControlSize)
@@ -737,6 +786,202 @@ void MixerPanel::mouseUp(const juce::MouseEvent&)
     }
 }
 
+void MixerPanel::beginVolumeEdit(
+    const Track& track,
+    juce::Rectangle<int> bounds)
+{
+    editingVolumeTrack = track.id;
+    volumeEditor.setColour(
+        juce::TextEditor::outlineColourId,
+        juce::Colour(StudioColours::orange));
+    volumeEditor.setText(
+        juce::String(track.volumeDecibels, 1)
+            + " dB",
+        false);
+    volumeEditor.setBounds(bounds);
+    volumeEditor.setVisible(true);
+    volumeEditor.toFront(true);
+    volumeEditor.grabKeyboardFocus();
+    volumeEditor.selectAll();
+}
+
+void MixerPanel::commitVolumeEdit()
+{
+    if (!volumeEditor.isVisible()
+        || committingVolumeEdit)
+        return;
+    const auto parsed = parseTrackDecibels(
+        volumeEditor.getText());
+    if (!parsed.has_value())
+    {
+        volumeEditor.setColour(
+            juce::TextEditor::outlineColourId,
+            juce::Colour(StudioColours::orange));
+        volumeEditor.setTooltip(
+            "Enter a finite value from -60 to +12 dB.");
+        const auto safe =
+            juce::Component::SafePointer<MixerPanel>(this);
+        juce::MessageManager::callAsync([safe]
+        {
+            if (safe != nullptr
+                && safe->volumeEditor.isVisible())
+            {
+                safe->volumeEditor.grabKeyboardFocus();
+                safe->volumeEditor.selectAll();
+            }
+        });
+        return;
+    }
+
+    committingVolumeEdit = true;
+    const auto trackId = editingVolumeTrack;
+    const auto* track = project != nullptr
+        ? project->findTrack(trackId)
+        : nullptr;
+    if (track != nullptr
+        && onAutomationGestureStarted)
+    {
+        onAutomationGestureStarted(
+            trackId,
+            AutomationTargetType::trackVolume,
+            (track->volumeDecibels + 60.0f)
+                / 72.0f);
+    }
+    volumeEditor.setVisible(false);
+    editingVolumeTrack.clear();
+    volumeEditor.setTooltip({});
+    if (onVolumeChanged)
+        onVolumeChanged(trackId, *parsed);
+    committingVolumeEdit = false;
+}
+
+void MixerPanel::cancelVolumeEdit()
+{
+    committingVolumeEdit = true;
+    volumeEditor.setVisible(false);
+    volumeEditor.setTooltip({});
+    editingVolumeTrack.clear();
+    committingVolumeEdit = false;
+}
+
+void MixerPanel::showTrackContextMenu(
+    const juce::MouseEvent& event)
+{
+    if (project == nullptr)
+        return;
+    const auto index = static_cast<int>(
+        (event.position.x - 14.0f)
+        / (stripWidth + stripGap));
+    const auto tracks = mixerTracks();
+    if (index < 0
+        || index >= static_cast<int>(tracks.size()))
+        return;
+
+    const auto* track =
+        tracks[static_cast<std::size_t>(index)];
+    const auto trackId = track->id;
+    if (onTrackSelected)
+        onTrackSelected(trackId);
+
+    juce::PopupMenu menu;
+    menu.addItem(
+        track->muted ? "Unmute track" : "Mute track",
+        [this, trackId]
+        {
+            if (onTrackMute)
+                onTrackMute(trackId);
+        });
+    menu.addItem(
+        track->solo ? "Unsolo track" : "Solo track",
+        [this, trackId]
+        {
+            if (onTrackSolo)
+                onTrackSolo(trackId);
+        });
+    if (track->type == TrackType::audio
+        || track->type == TrackType::instrument
+        || track->type == TrackType::midi)
+    {
+        menu.addItem(
+            track->armed ? "Disarm track" : "Arm track",
+            [this, trackId]
+            {
+                if (onTrackArm)
+                    onTrackArm(trackId);
+            });
+    }
+    menu.addItem(
+        "Edit name and color...",
+        [this, trackId, index]
+        {
+            if (onEditTrack)
+            {
+                const juce::Rectangle<int> strip(
+                    14 + index
+                        * (stripWidth + stripGap),
+                    stripTop,
+                    stripWidth,
+                    getHeight() - 44);
+                onEditTrack(
+                    trackId,
+                    localAreaToGlobal(
+                        strip.reduced(8)
+                            .withHeight(28)));
+            }
+        });
+
+    const auto hasVersions = std::any_of(
+        project->tracks.cbegin(),
+        project->tracks.cend(),
+        [track](const auto& candidate)
+        {
+            return candidate.parentTrackId == track->id;
+        });
+    if (hasVersions)
+    {
+        menu.addItem(
+            track->versionsCollapsed
+                ? "Expand versions"
+                : "Collapse versions",
+            [this, trackId]
+            {
+                if (onToggleTrackVersions)
+                    onToggleTrackVersions(trackId);
+            });
+    }
+
+    menu.addSeparator();
+    menu.addItem(
+        "Duplicate track",
+        track->type != TrackType::master,
+        false,
+        [this, trackId]
+        {
+            if (onDuplicateTrack)
+                onDuplicateTrack(trackId);
+        });
+    menu.addItem(
+        "Delete track",
+        track->type != TrackType::master,
+        false,
+        [this, trackId]
+        {
+            if (onDeleteTrack)
+                onDeleteTrack(trackId);
+        });
+
+    const auto screenPosition = event.getScreenPosition();
+    menu.showMenuAsync(
+        juce::PopupMenu::Options()
+            .withTargetComponent(this)
+            .withTargetScreenArea({
+                screenPosition.x,
+                screenPosition.y,
+                1,
+                1
+            }));
+}
+
 void MixerPanel::mouseDoubleClick(const juce::MouseEvent& event)
 {
     if (project == nullptr || event.position.y < 34.0f)
@@ -763,81 +1008,6 @@ void MixerPanel::mouseDoubleClick(const juce::MouseEvent& event)
             const auto nameBounds = strip.reduced(8).withHeight(28);
             onEditTrack(track->id, localAreaToGlobal(nameBounds));
         }
-        return;
-    }
-
-    const auto decibelBounds = juce::Rectangle<int>(
-        strip.getX() + 12,
-        strip.getY() + 54,
-        strip.getWidth() - 24,
-        20);
-    if (decibelBounds.contains(event.getPosition())
-        && track->type != TrackType::folder
-        && track->type != TrackType::midi)
-    {
-        auto* dialog = new juce::AlertWindow(
-            "Set track volume",
-            "Enter a value from -60 to +12. The dB suffix is optional.",
-            juce::MessageBoxIconType::NoIcon);
-        dialog->addTextEditor(
-            "volume",
-            juce::String(track->volumeDecibels, 1)
-                + " dB",
-            "Volume");
-        dialog->addButton(
-            "Apply",
-            1,
-            juce::KeyPress(juce::KeyPress::returnKey));
-        dialog->addButton(
-            "Cancel",
-            0,
-            juce::KeyPress(juce::KeyPress::escapeKey));
-        dialog->centreAroundComponent(this, 420, 190);
-        const juce::Component::SafePointer<
-            juce::AlertWindow> dialogSafe(dialog);
-        const auto safe =
-            juce::Component::SafePointer<MixerPanel>(this);
-        const auto trackId = track->id;
-        const auto startingVolume = track->volumeDecibels;
-        dialog->enterModalState(
-            true,
-            juce::ModalCallbackFunction::create(
-                [safe,
-                 dialogSafe,
-                 trackId,
-                 startingVolume](int result)
-                {
-                    if (result != 1
-                        || safe == nullptr
-                        || dialogSafe == nullptr)
-                        return;
-                    const auto parsed = parseTrackDecibels(
-                        dialogSafe->getTextEditorContents(
-                            "volume"));
-                    if (!parsed.has_value())
-                    {
-                        juce::AlertWindow::showMessageBoxAsync(
-                            juce::MessageBoxIconType::WarningIcon,
-                            "Volume unavailable",
-                            "Enter a finite value from -60 to +12 dB.");
-                        return;
-                    }
-                    if (safe->onAutomationGestureStarted)
-                    {
-                        safe->onAutomationGestureStarted(
-                            trackId,
-                            AutomationTargetType::trackVolume,
-                            (startingVolume + 60.0f)
-                                / 72.0f);
-                    }
-                    if (safe->onVolumeChanged)
-                    {
-                        safe->onVolumeChanged(
-                            trackId,
-                            *parsed);
-                    }
-                }),
-            true);
         return;
     }
 
