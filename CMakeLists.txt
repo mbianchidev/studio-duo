@@ -228,6 +228,8 @@ set(STUDIO_DUO_MODEL_SOURCES
     src/model/LinkedEditModel.h
     src/model/ProjectCommands.cpp
     src/model/ProjectCommands.h
+    src/model/TransportEditing.cpp
+    src/model/TransportEditing.h
     src/model/ProjectModel.cpp
     src/model/ProjectModel.h
     src/project_io/ProjectFile.cpp
@@ -397,6 +399,9 @@ target_sources(
         src/ui/MainComponent.h
         src/ui/AudioExportOptionsComponent.cpp
         src/ui/AudioExportOptionsComponent.h
+        src/ui/TransportSettingsComponent.cpp
+        src/ui/TransportSettingsComponent.h
+        src/ui/NumericInput.h
         src/ui/MainWindowSizing.cpp
         src/ui/MainWindowSizing.h
         src/ui/MasteringWorkspaceComponent.cpp
@@ -798,8 +803,14 @@ if(STUDIO_DUO_BUILD_TESTS)
             tests/ProjectMigrationTests.cpp
             tests/WindowSizingTests.cpp
             tests/TransportTests.cpp
+            tests/TransportEditingTests.cpp
+            tests/SectionTransportTests.cpp
+            tests/TransportSettingsTests.cpp
             tests/UpdateTests.cpp
             tests/DawProjectTests.cpp
+            src/ui/TransportSettingsComponent.cpp
+            src/ui/TransportSettingsComponent.h
+            src/ui/NumericInput.h
             src/ui/AudioExportOptionsComponent.cpp
             src/ui/AudioExportOptionsComponent.h
             src/ui/RoutingUiModel.cpp

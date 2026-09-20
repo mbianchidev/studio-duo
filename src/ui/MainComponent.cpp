@@ -1,6 +1,7 @@
 #include "MainComponent.h"
 
 #include "AudioExportOptionsComponent.h"
+#include "TransportSettingsComponent.h"
 #include "automation/AutomationRecorder.h"
 #include "audio/AudioDeviceProbe.h"
 #include "logging/StudioLogger.h"
@@ -405,7 +406,14 @@ MainComponent::MainComponent(bool startAudioOnLaunch)
     configureButton(
         recordButton,
         "Record armed audio, MIDI, and instrument tracks");
-    configureButton(loopButton, "Loop the project range");
+    configureButton(loopButton, "Enable or disable the configured loop");
+    loopButton.setClickingTogglesState(true);
+    loopButton.setWantsKeyboardFocus(true);
+    loopButton.setColour(juce::TextButton::buttonOnColourId, juce::Colour(StudioColours::raised));
+    loopButton.setColour(juce::TextButton::textColourOnId, juce::Colour(StudioColours::orange));
+    configureButton(loopRangeButton, "Configure loop start and end: seconds, musical positions, or markers");
+    loopRangeButton.setTitle("Configure loop range");
+    loopRangeButton.setWantsKeyboardFocus(true);
     configureButton(metronomeButton, "Toggle the metronome");
     configureButton(addTrackButton, "Add an audio, instrument, MIDI, aux, bus, folder, VCA, or control-room track");
     configureButton(addBusButton, "Add a stereo bus track");
@@ -413,6 +421,7 @@ MainComponent::MainComponent(bool startAudioOnLaunch)
     configureButton(duplicateTrackButton, "Duplicate the selected track and its edits");
     configureButton(deleteTrackButton, "Delete the selected track");
     configureButton(trackingButton, "Add or edit named markers, tempo, meter, punch, count-in, and click routing");
+    trackingButton.setWantsKeyboardFocus(true);
     configureButton(automationButton, "Edit and record mixer and plugin automation");
     configureButton(
         newMidiClipButton,
@@ -555,11 +564,11 @@ MainComponent::MainComponent(bool startAudioOnLaunch)
     loopButton.setToggleState(project.loopEnabled, juce::dontSendNotification);
     loopButton.onClick = [this]
     {
-        changeTransportState([this](auto& state)
-        {
-            state.loopEnabled = loopButton.getToggleState();
+        applyLoopSettings({
+            loopButton.getToggleState(), project.loopStartSeconds, project.loopEndSeconds
         });
     };
+    loopRangeButton.onClick = [this] { showLoopSettings(); };
 
     metronomeButton.setToggleState(project.metronomeEnabled, juce::dontSendNotification);
     metronomeButton.onClick = [this]
@@ -1083,7 +1092,11 @@ MainComponent::MainComponent(bool startAudioOnLaunch)
     };
     timeline.onRemoveSectionRequested = [this](const auto& sectionId)
     {
-        perform(std::make_unique<RemoveSongSectionCommand>(sectionId));
+        removeSongSection(sectionId);
+    };
+    timeline.onConfigureSectionRequested = [this](const auto& sectionId)
+    {
+        showSectionSettings(sectionId);
     };
     timeline.onSplitSelected = [this] { splitSelectedClip(); };
     timeline.onTrimStartSelected = [this] { trimSelectedClipStartToPlayhead(); };
@@ -2077,8 +2090,9 @@ void MainComponent::resized()
                 area.removeFromLeft(62).reduced(3, verticalInset));
             recordButton.setBounds(
                 area.removeFromLeft(58).reduced(3, verticalInset));
-            loopButton.setBounds(
-                area.removeFromLeft(76).reduced(3, verticalInset));
+            auto loopArea = area.removeFromLeft(76).reduced(3, verticalInset);
+            loopRangeButton.setBounds(loopArea.removeFromRight(20));
+            loopButton.setBounds(loopArea.withTrimmedRight(2));
         };
     const auto layoutTempoControls =
         [this](juce::Rectangle<int> area, int verticalInset)
@@ -6803,6 +6817,128 @@ void MainComponent::showTrackQuickEditor(const juce::String& trackId,
         });
 }
 
+void MainComponent::showLoopSettings()
+{
+    if (exportInProgress)
+    {
+        setStatus("Wait for the current export before editing the loop.", true);
+        return;
+    }
+    if (hasActiveRecordingTargets() || audioEngine.isRecording() || recordingFinalizationInProgress)
+    {
+        showError("Loop settings unavailable", "Stop and finalize recording before changing loop boundaries.");
+        return;
+    }
+    std::optional<juce::Range<double>> selection;
+    if (const auto* clip = project.findClip(selectedClipId))
+        selection = juce::Range<double>(clip->startSeconds, clip->endSeconds());
+    else if (const auto* midi = project.findMidiClip(selectedClipId))
+        selection = juce::Range<double>(
+            project.secondsAtBeat(midi->startBeats), project.secondsAtBeat(midi->endBeats()));
+    LoopSettingsComponent::show(
+        project, audioEngine.currentSampleRate(), selection, *this,
+        [safe = juce::Component::SafePointer<MainComponent>(this), projectId = project.id](
+            const LoopRangeSettings& settings)
+        {
+            if (safe == nullptr)
+                return;
+            if (safe->project.id != projectId)
+            {
+                safe->showError("Loop settings unavailable", "The project changed while editing the loop.");
+                return;
+            }
+            safe->applyLoopSettings(settings);
+        });
+}
+
+bool MainComponent::applyLoopSettings(const LoopRangeSettings& settings)
+{
+    const auto changesBounds = !juce::exactlyEqual(settings.startSeconds, project.loopStartSeconds)
+        || !juce::exactlyEqual(settings.endSeconds, project.loopEndSeconds);
+    if (changesBounds
+        && (hasActiveRecordingTargets() || audioEngine.isRecording() || recordingFinalizationInProgress))
+    {
+        loopButton.setToggleState(project.loopEnabled, juce::dontSendNotification);
+        showError("Loop settings unavailable", "Stop and finalize recording before changing loop boundaries.");
+        return false;
+    }
+    if (const auto result = TransportEditing::validateLoopRange(settings, audioEngine.currentSampleRate());
+        result.failed())
+    {
+        loopButton.setToggleState(project.loopEnabled, juce::dontSendNotification);
+        showError("Invalid loop range", result.getErrorMessage());
+        return false;
+    }
+    if (!changesBounds && settings.enabled == project.loopEnabled)
+        return true;
+    const auto before = ProjectTransportState::fromProject(project);
+    auto after = before;
+    after.loopEnabled = settings.enabled;
+    after.loopStartSeconds = settings.startSeconds;
+    after.loopEndSeconds = settings.endSeconds;
+    const auto applied = perform(std::make_unique<SetProjectTransportCommand>(before, after));
+    loopButton.setToggleState(project.loopEnabled, juce::dontSendNotification);
+    if (applied)
+        setStatus("Loop " + juce::String(settings.startSeconds, 3) + " - "
+                  + juce::String(settings.endSeconds, 3) + " s"
+                  + (settings.enabled ? " enabled." : " saved; loop is off."));
+    return applied;
+}
+
+void MainComponent::showSectionSettings(const juce::String& sectionId)
+{
+    if (exportInProgress)
+    {
+        setStatus("Wait for the current export before editing section settings.", true);
+        return;
+    }
+    if (hasActiveRecordingTargets() || audioEngine.isRecording() || recordingFinalizationInProgress)
+    {
+        showError("Section settings unavailable", "Stop and finalize recording before editing section timing or click.");
+        return;
+    }
+    if (project.findSection(sectionId) == nullptr)
+    {
+        showError("Section settings unavailable", "The selected marker no longer exists.");
+        return;
+    }
+    SectionSettingsComponent::show(
+        project, sectionId, *this,
+        [safe = juce::Component::SafePointer<MainComponent>(this),
+         projectId = project.id, sectionId](SectionTransportSettings settings)
+        {
+            if (safe == nullptr)
+                return;
+            if (safe->project.id != projectId)
+            {
+                safe->showError("Section settings unavailable", "The project changed while editing section settings.");
+                return;
+            }
+            if (safe->hasActiveRecordingTargets() || safe->audioEngine.isRecording()
+                || safe->recordingFinalizationInProgress)
+            {
+                safe->showError("Section settings unavailable", "Stop and finalize recording before applying section settings.");
+                return;
+            }
+            safe->perform(std::make_unique<SetSectionTransportCommand>(sectionId, std::move(settings)));
+        });
+}
+
+void MainComponent::removeSongSection(const juce::String& sectionId)
+{
+    if (hasActiveRecordingTargets() || audioEngine.isRecording() || recordingFinalizationInProgress)
+    {
+        juce::String error;
+        const auto settings = project.sectionTransportSettings(sectionId, error);
+        if (settings && (settings->tempoBpm || settings->timeSignature || settings->clickSettings))
+        {
+            showError("Section removal unavailable", "Stop recording before removing section timing or click changes.");
+            return;
+        }
+    }
+    perform(std::make_unique<RemoveSongSectionCommand>(sectionId));
+}
+
 void MainComponent::showTrackingMenu()
 {
     const auto position = audioEngine.positionSeconds();
@@ -6816,6 +6952,10 @@ void MainComponent::showTrackingMenu()
     for (const auto& section : project.sections)
     {
         juce::PopupMenu actions;
+        actions.addItem("Tempo, time signature and click...", [this, sectionId = section.id]
+        {
+            showSectionSettings(sectionId);
+        });
         actions.addItem("Go to marker", [this, sectionId = section.id]
         {
             const auto found = std::find_if(
@@ -6830,7 +6970,7 @@ void MainComponent::showTrackingMenu()
         });
         actions.addItem("Delete marker", [this, sectionId = section.id]
         {
-            perform(std::make_unique<RemoveSongSectionCommand>(sectionId));
+            removeSongSection(sectionId);
         });
         markers.addSubMenu(
             section.name + " (" + juce::String(section.timeSeconds, 3) + " s)",
@@ -6886,6 +7026,7 @@ void MainComponent::showTrackingMenu()
 
     menu.addSeparator();
     menu.addSectionHeader("Punch and ranges");
+    menu.addItem("Configure loop range...", [this] { showLoopSettings(); });
     menu.addItem("Punch recording",
                  true,
                  project.punchEnabled,
@@ -6913,18 +7054,13 @@ void MainComponent::showTrackingMenu()
     });
     menu.addItem("Set loop start to playhead", [this, position]
     {
-        changeTransportState([position](auto& state)
-        {
-            state.loopStartSeconds = position;
-            state.loopEndSeconds = std::max(state.loopEndSeconds, position + 0.01);
+        applyLoopSettings({
+            project.loopEnabled, position, std::max(project.loopEndSeconds, position + 0.01)
         });
     });
     menu.addItem("Set loop end to playhead", [this, position]
     {
-        changeTransportState([position](auto& state)
-        {
-            state.loopEndSeconds = position;
-        });
+        applyLoopSettings({ project.loopEnabled, project.loopStartSeconds, position });
     });
 
     const auto addIntegerChoices = [this](const juce::String& title,
@@ -7595,8 +7731,9 @@ void MainComponent::promptSongSection(double position,
     dialog->addTextEditor("position", juce::String(position, 9), "Position (seconds)");
     dialog->addButton(before.has_value() ? "Save" : "Create",
                       1, juce::KeyPress(juce::KeyPress::returnKey));
+    dialog->addButton(before.has_value() ? "Save + timing" : "Create + timing", 2);
     dialog->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
-    dialog->centreAroundComponent(&trackingButton, 420, 250);
+    dialog->centreAroundComponent(&trackingButton, 500, 270);
     const juce::Component::SafePointer<juce::AlertWindow> dialogSafe(dialog);
     dialog->enterModalState(
         true,
@@ -7605,7 +7742,7 @@ void MainComponent::promptSongSection(double position,
              dialogSafe,
              before](int result)
             {
-                if (result != 1 || safe == nullptr || dialogSafe == nullptr)
+                if ((result != 1 && result != 2) || safe == nullptr || dialogSafe == nullptr)
                     return;
 
                 auto section = before.value_or(SongSection {});
@@ -7625,10 +7762,29 @@ void MainComponent::promptSongSection(double position,
                                     "Enter a name and a finite, non-negative position in seconds.");
                     return;
                 }
-                if (before.has_value())
-                    safe->perform(std::make_unique<SetSongSectionCommand>(*before, std::move(section)));
-                else
-                    safe->perform(std::make_unique<AddSongSectionCommand>(std::move(section)));
+                if (before && !juce::exactlyEqual(before->timeSeconds, section.timeSeconds)
+                    && (safe->hasActiveRecordingTargets() || safe->audioEngine.isRecording()
+                        || safe->recordingFinalizationInProgress))
+                {
+                    juce::String error;
+                    const auto settings = safe->project.sectionTransportSettings(before->id, error);
+                    if (settings && (settings->tempoBpm || settings->timeSignature || settings->clickSettings))
+                    {
+                        safe->showError("Section move unavailable",
+                                        "Stop recording before moving section timing or click changes.");
+                        return;
+                    }
+                }
+                const auto id = section.id;
+                const auto applied = before.has_value()
+                    ? safe->perform(std::make_unique<SetSongSectionCommand>(*before, std::move(section)))
+                    : safe->perform(std::make_unique<AddSongSectionCommand>(std::move(section)));
+                if (applied && result == 2)
+                    juce::MessageManager::callAsync([safe, id]
+                    {
+                        if (safe != nullptr)
+                            safe->showSectionSettings(id);
+                    });
             }),
         true);
 }
@@ -8408,6 +8564,11 @@ void MainComponent::projectChanged(bool writeRecovery, bool markDirty)
     projectLabel.setText(project.name + (dirty ? " *" : ""), juce::dontSendNotification);
     loopButton.setToggleState(project.loopEnabled, juce::dontSendNotification);
     metronomeButton.setToggleState(project.metronomeEnabled, juce::dontSendNotification);
+    loopRangeButton.setTooltip(
+        "Configure loop: " + juce::String(project.loopStartSeconds, 3) + " - "
+        + juce::String(project.loopEndSeconds, 3) + " s ("
+        + TransportEditing::musicalPositionText(project, project.loopStartSeconds) + " - "
+        + TransportEditing::musicalPositionText(project, project.loopEndSeconds) + ")");
     undoButton.setEnabled(commandStack.canUndo());
     redoButton.setEnabled(commandStack.canRedo());
     updateInspector();

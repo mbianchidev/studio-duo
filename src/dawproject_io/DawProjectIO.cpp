@@ -1888,6 +1888,21 @@ private:
 
     void reportUnsupportedProjectData()
     {
+        for (const auto& section : project.sections)
+        {
+            const auto ownsPoint = [&section](const auto& points)
+            {
+                return std::any_of(points.cbegin(), points.cend(),
+                    [&section](const auto& point) { return point.sectionId == section.id; });
+            };
+            const auto path = "/Project/Arrangement/Markers/Marker[" + section.id + "]";
+            if (section.clickSettings)
+                warn("unsupported.section-click", path,
+                     "DAWproject 1.0 does not store per-section click enablement, subdivisions or accents.");
+            if (ownsPoint(project.tempoChanges) || ownsPoint(project.meterChanges))
+                warn("unsupported.section-transport-link", path,
+                     "Section tempo and meter changes are preserved as ordinary timeline events, without their marker-editing association.");
+        }
         if (project.metronomeEnabled
             || project.metronomeSubdivision != 1
             || project.metronomeOutputChannel != 0)

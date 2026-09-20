@@ -122,5 +122,6 @@ a saved hash is repaired only from matching content. Legacy resources without
 a hash fall back to an exact filename match. Unresolved files remain explicit
 report entries; Studio Duo never silently substitutes different media.
 
-Project format version 9 stores mastering data and media hashes. Version 8 and
+Mastering data and media hashes were introduced in format 9 and remain in
+format 10. Version 8 and
 older projects migrate with an empty mastering album.

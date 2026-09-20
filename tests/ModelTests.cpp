@@ -1607,6 +1607,9 @@ int main(int argc, char* argv[])
     RUN_SUITE(multitrackRecordingTargets);
     RUN_SUITE(multitrackRecordingCommand);
     RUN_SUITE(transportTests);
+    RUN_SUITE(transportEditingTests);
+    RUN_SUITE(sectionTransportTests);
+    RUN_SUITE(transportSettingsTests);
     RUN_SUITE(routingModelTests);
     RUN_SUITE(routingEngineTests);
     RUN_SUITE(routingUiModelTests);

@@ -4,6 +4,7 @@
 #include "project_io/ProjectMigration.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 
 namespace studio
@@ -55,6 +56,53 @@ bool validMeterDenominator(int denominator)
         || denominator == 32;
 }
 
+bool readSectionId(const juce::DynamicObject& object,
+                   juce::String& sectionId,
+                   juce::String& error)
+{
+    if (!object.hasProperty("sectionId"))
+        return true;
+    const auto value = object.getProperty("sectionId");
+    if (!value.isString())
+    {
+        error = "Transport map section IDs must be strings.";
+        return false;
+    }
+    sectionId = value.toString();
+    return true;
+}
+
+template <typename Change>
+bool validateSectionOwner(const Project& project,
+                          const std::vector<Change>& changes,
+                          std::size_t index,
+                          juce::String& error)
+{
+    const auto& change = changes[index];
+    if (change.sectionId.isEmpty())
+        return true;
+
+    const auto* section = project.findSection(change.sectionId);
+    if (section == nullptr
+        || !juce::exactlyEqual(section->timeSeconds, change.timeSeconds))
+    {
+        error = "A section-owned transport point must match an existing section's position.";
+        return false;
+    }
+    if (std::any_of(
+            changes.cbegin(),
+            changes.cbegin() + static_cast<std::ptrdiff_t>(index),
+            [&change](const auto& previous)
+            {
+                return previous.sectionId == change.sectionId;
+            }))
+    {
+        error = "A section can own only one point in each transport map.";
+        return false;
+    }
+    return true;
+}
+
 bool validSha256(const juce::String& value)
 {
     return value.isEmpty()
@@ -97,6 +145,8 @@ juce::var TempoChange::toVar() const
     object->setProperty("timeSeconds", timeSeconds);
     object->setProperty("bpm", bpm);
     object->setProperty("rampToNext", rampToNext);
+    if (sectionId.isNotEmpty())
+        object->setProperty("sectionId", sectionId);
     return juce::var(object.release());
 }
 
@@ -104,7 +154,8 @@ bool TempoChange::operator==(const TempoChange& other) const noexcept
 {
     return std::abs(timeSeconds - other.timeSeconds) < 0.0000001
         && std::abs(bpm - other.bpm) < 0.0000001
-        && rampToNext == other.rampToNext;
+        && rampToNext == other.rampToNext
+        && sectionId == other.sectionId;
 }
 
 std::optional<TempoChange> TempoChange::fromVar(const juce::var& value,
@@ -118,6 +169,8 @@ std::optional<TempoChange> TempoChange::fromVar(const juce::var& value,
     change.timeSeconds = numberProperty(*object, "timeSeconds", 0.0);
     change.bpm = numberProperty(*object, "bpm", 120.0);
     change.rampToNext = booleanProperty(*object, "rampToNext", false);
+    if (!readSectionId(*object, change.sectionId, error))
+        return std::nullopt;
     if (!std::isfinite(change.timeSeconds)
         || !std::isfinite(change.bpm)
         || change.timeSeconds < 0.0
@@ -136,6 +189,8 @@ juce::var MeterChange::toVar() const
     object->setProperty("timeSeconds", timeSeconds);
     object->setProperty("numerator", numerator);
     object->setProperty("denominator", denominator);
+    if (sectionId.isNotEmpty())
+        object->setProperty("sectionId", sectionId);
     return juce::var(object.release());
 }
 
@@ -143,7 +198,8 @@ bool MeterChange::operator==(const MeterChange& other) const noexcept
 {
     return std::abs(timeSeconds - other.timeSeconds) < 0.0000001
         && numerator == other.numerator
-        && denominator == other.denominator;
+        && denominator == other.denominator
+        && sectionId == other.sectionId;
 }
 
 std::optional<MeterChange> MeterChange::fromVar(const juce::var& value,
@@ -157,6 +213,8 @@ std::optional<MeterChange> MeterChange::fromVar(const juce::var& value,
     change.timeSeconds = numberProperty(*object, "timeSeconds", 0.0);
     change.numerator = integerProperty(*object, "numerator", 4);
     change.denominator = integerProperty(*object, "denominator", 4);
+    if (!readSectionId(*object, change.sectionId, error))
+        return std::nullopt;
     if (!std::isfinite(change.timeSeconds)
         || change.timeSeconds < 0.0
         || change.numerator < 1
@@ -169,12 +227,134 @@ std::optional<MeterChange> MeterChange::fromVar(const juce::var& value,
     return change;
 }
 
+bool SectionClickSettings::operator==(const SectionClickSettings& other) const
+{
+    return enabled == other.enabled && subdivision == other.subdivision
+        && juce::exactlyEqual(level, other.level)
+        && juce::exactlyEqual(accentLevel, other.accentLevel)
+        && accentBeats == other.accentBeats;
+}
+
+bool SectionClickSettings::validate(juce::String& error) const
+{
+    if (subdivision < 1 || subdivision > 8
+        || !std::isfinite(level) || level < 0.0f || level > 1.0f
+        || !std::isfinite(accentLevel) || accentLevel < 0.0f || accentLevel > 1.0f)
+    {
+        error = "Section click subdivisions must be from 1 to 8 and levels must be finite values from 0 to 1.";
+        return false;
+    }
+    std::array<bool, 33> seen {};
+    for (const auto beat : accentBeats)
+    {
+        if (beat < 1 || beat > 32 || seen[static_cast<std::size_t>(beat)])
+        {
+            error = "Section click accent beats must be unique integers from 1 to 32.";
+            return false;
+        }
+        seen[static_cast<std::size_t>(beat)] = true;
+    }
+    return true;
+}
+
+juce::var SectionClickSettings::toVar() const
+{
+    auto object = std::make_unique<juce::DynamicObject>();
+    object->setProperty("enabled", enabled);
+    object->setProperty("subdivision", subdivision);
+    object->setProperty("level", level);
+    object->setProperty("accentLevel", accentLevel);
+    juce::Array<juce::var> accents;
+    for (const auto beat : accentBeats)
+        accents.add(beat);
+    object->setProperty("accentBeats", juce::var(accents));
+    return juce::var(object.release());
+}
+
+std::optional<SectionClickSettings> SectionClickSettings::fromVar(
+    const juce::var& value,
+    juce::String& error)
+{
+    const auto* object = requireObject(value, error, "Section click settings");
+    if (object == nullptr)
+        return std::nullopt;
+
+    SectionClickSettings settings;
+    if (object->hasProperty("enabled"))
+    {
+        const auto enabledValue = object->getProperty("enabled");
+        if (!enabledValue.isBool())
+        {
+            error = "The section click enabled setting must be a boolean.";
+            return std::nullopt;
+        }
+        settings.enabled = static_cast<bool>(enabledValue);
+    }
+    if (object->hasProperty("subdivision"))
+    {
+        const auto subdivisionValue = object->getProperty("subdivision");
+        if ((!subdivisionValue.isInt() && !subdivisionValue.isInt64())
+            || static_cast<juce::int64>(subdivisionValue) < 1
+            || static_cast<juce::int64>(subdivisionValue) > 8)
+        {
+            error = "The section click subdivision must be an integer from 1 to 8.";
+            return std::nullopt;
+        }
+        settings.subdivision = static_cast<int>(subdivisionValue);
+    }
+    const auto readLevel = [&](const juce::Identifier& property, float& destination)
+    {
+        if (!object->hasProperty(property))
+            return true;
+        const auto levelValue = object->getProperty(property);
+        if ((!levelValue.isDouble() && !levelValue.isInt() && !levelValue.isInt64())
+            || !std::isfinite(static_cast<double>(levelValue))
+            || static_cast<double>(levelValue) < 0.0
+            || static_cast<double>(levelValue) > 1.0)
+        {
+            error = "Section click levels must be finite numbers from 0 to 1.";
+            return false;
+        }
+        destination = static_cast<float>(static_cast<double>(levelValue));
+        return true;
+    };
+    if (!readLevel("level", settings.level)
+        || !readLevel("accentLevel", settings.accentLevel))
+        return std::nullopt;
+    if (object->hasProperty("accentBeats"))
+    {
+        const auto accents = object->getProperty("accentBeats");
+        if (!accents.isArray())
+        {
+            error = "Section click accent beats must be an array of integers.";
+            return std::nullopt;
+        }
+        settings.accentBeats.clear();
+        for (const auto& accent : *accents.getArray())
+        {
+            if ((!accent.isInt() && !accent.isInt64())
+                || static_cast<juce::int64>(accent) < 1
+                || static_cast<juce::int64>(accent) > 32)
+            {
+                error = "Section click accent beats must be integers from 1 to 32.";
+                return std::nullopt;
+            }
+            settings.accentBeats.push_back(static_cast<int>(accent));
+        }
+    }
+    if (!settings.validate(error))
+        return std::nullopt;
+    return settings;
+}
+
 juce::var SongSection::toVar() const
 {
     auto object = std::make_unique<juce::DynamicObject>();
     object->setProperty("id", id);
     object->setProperty("name", name);
     object->setProperty("timeSeconds", timeSeconds);
+    if (clickSettings.has_value())
+        object->setProperty("clickSettings", clickSettings->toVar());
     return juce::var(object.release());
 }
 
@@ -189,6 +369,13 @@ std::optional<SongSection> SongSection::fromVar(const juce::var& value,
     section.id = object->getProperty("id").toString();
     section.name = object->getProperty("name").toString().trim();
     section.timeSeconds = numberProperty(*object, "timeSeconds", 0.0);
+    if (object->hasProperty("clickSettings"))
+    {
+        section.clickSettings = SectionClickSettings::fromVar(
+            object->getProperty("clickSettings"), error);
+        if (!section.clickSettings.has_value())
+            return std::nullopt;
+    }
     if (section.id.trim().isEmpty()
         || section.name.isEmpty()
         || !std::isfinite(section.timeSeconds)
@@ -1594,6 +1781,28 @@ Project Project::createDefault()
     return project;
 }
 
+SongSection* Project::findSection(const juce::String& sectionId)
+{
+    const auto section = std::find_if(
+        sections.begin(), sections.end(),
+        [&sectionId](const auto& candidate)
+        {
+            return candidate.id == sectionId;
+        });
+    return section != sections.end() ? &*section : nullptr;
+}
+
+const SongSection* Project::findSection(const juce::String& sectionId) const
+{
+    const auto section = std::find_if(
+        sections.cbegin(), sections.cend(),
+        [&sectionId](const auto& candidate)
+        {
+            return candidate.id == sectionId;
+        });
+    return section != sections.cend() ? &*section : nullptr;
+}
+
 Track* Project::findTrack(const juce::String& trackId)
 {
     const auto iterator = std::find_if(tracks.begin(), tracks.end(), [&trackId](const auto& track)
@@ -1975,6 +2184,67 @@ std::optional<std::vector<juce::String>> Project::routingGraphOrder(
     return RoutingGraph::order(*this, error);
 }
 
+SectionClickSettings Project::clickSettingsAt(double seconds) const
+{
+    SectionClickSettings settings;
+    settings.subdivision = metronomeSubdivision;
+    settings.level = metronomeLevel;
+    settings.accentLevel = metronomeAccentLevel;
+    const auto position = std::max(0.0, seconds);
+    auto latestPosition = -1.0;
+    for (const auto& section : sections)
+    {
+        if (section.clickSettings.has_value()
+            && section.timeSeconds <= position
+            && section.timeSeconds > latestPosition)
+        {
+            settings = *section.clickSettings;
+            latestPosition = section.timeSeconds;
+        }
+    }
+    return settings;
+}
+
+std::optional<SectionTransportSettings> Project::sectionTransportSettings(
+    const juce::String& sectionId,
+    juce::String& error) const
+{
+    const auto* section = findSection(sectionId);
+    if (section == nullptr)
+    {
+        error = "The song section no longer exists.";
+        return std::nullopt;
+    }
+
+    SectionTransportSettings settings;
+    settings.clickSettings = section->clickSettings;
+    const auto tempoPoint = std::find_if(
+        tempoChanges.cbegin(), tempoChanges.cend(),
+        [&sectionId](const auto& change)
+        {
+            return change.sectionId == sectionId;
+        });
+    if (tempoPoint != tempoChanges.cend())
+    {
+        settings.tempoBpm = tempoPoint->bpm;
+        if (tempoPoint != tempoChanges.cbegin())
+            settings.rampFromPrevious = (tempoPoint - 1)->rampToNext;
+    }
+    const auto meterPoint = std::find_if(
+        meterChanges.cbegin(), meterChanges.cend(),
+        [&sectionId](const auto& change)
+        {
+            return change.sectionId == sectionId;
+        });
+    if (meterPoint != meterChanges.cend())
+    {
+        settings.timeSignature = SectionTimeSignature {
+            meterPoint->numerator, meterPoint->denominator
+        };
+    }
+    return settings;
+}
+
 double Project::tempoAt(double seconds) const noexcept
 {
     if (tempoChanges.empty())
@@ -2184,6 +2454,34 @@ bool Project::validateTransport(juce::String& error) const
         return false;
     }
 
+    for (std::size_t index = 0; index < sections.size(); ++index)
+    {
+        const auto& section = sections[index];
+        if (section.id.trim().isEmpty()
+            || section.name.trim().isEmpty()
+            || !std::isfinite(section.timeSeconds)
+            || section.timeSeconds < 0.0)
+        {
+            error = "Song sections require an ID, a name, and a finite non-negative position.";
+            return false;
+        }
+        if (section.clickSettings.has_value()
+            && !section.clickSettings->validate(error))
+            return false;
+        if (std::any_of(
+                sections.cbegin(),
+                sections.cbegin() + static_cast<std::ptrdiff_t>(index),
+                [&section](const auto& previous)
+                {
+                    return previous.id == section.id
+                        || std::abs(previous.timeSeconds - section.timeSeconds) < 0.0001;
+                }))
+        {
+            error = "Song sections require unique IDs and timeline positions.";
+            return false;
+        }
+    }
+
     for (std::size_t index = 0; index < tempoChanges.size(); ++index)
     {
         const auto& change = tempoChanges[index];
@@ -2202,6 +2500,8 @@ bool Project::validateTransport(juce::String& error) const
             error = "Tempo changes require unique positions in timeline order.";
             return false;
         }
+        if (!validateSectionOwner(*this, tempoChanges, index, error))
+            return false;
     }
 
     for (std::size_t index = 0; index < meterChanges.size(); ++index)
@@ -2222,6 +2522,8 @@ bool Project::validateTransport(juce::String& error) const
             error = "Meter changes require unique positions in timeline order.";
             return false;
         }
+        if (!validateSectionOwner(*this, meterChanges, index, error))
+            return false;
     }
 
     if (metronomeSubdivision < 1
@@ -2523,8 +2825,6 @@ std::optional<Project> Project::fromVar(const juce::var& value, juce::String& er
     project.loopEnabled = booleanProperty(*object, "loopEnabled", false);
     project.loopStartSeconds = numberProperty(*object, "loopStartSeconds", 0.0);
     project.loopEndSeconds = numberProperty(*object, "loopEndSeconds", 8.0);
-    if (!project.validateTransport(error))
-        return std::nullopt;
     const auto editGroupValues = object->getProperty("editGroups");
     if (editGroupValues.isArray())
     {
@@ -3116,6 +3416,8 @@ std::optional<Project> Project::fromVar(const juce::var& value, juce::String& er
         }
     }
 
+    if (!project.validateTransport(error))
+        return std::nullopt;
     return project;
 }
 

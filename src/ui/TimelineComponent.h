@@ -53,6 +53,7 @@ public:
     std::function<void(double)> onAddSectionRequested;
     std::function<void(const juce::String&)> onEditSectionRequested;
     std::function<void(const juce::String&)> onRemoveSectionRequested;
+    std::function<void(const juce::String&)> onConfigureSectionRequested;
     std::function<void()> onSplitSelected;
     std::function<void()> onTrimStartSelected;
     std::function<void()> onTrimEndSelected;

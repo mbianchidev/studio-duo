@@ -1,6 +1,6 @@
 # Studio Duo native project format
 
-Studio Duo format version 9 is a directory package with immutable generation
+Studio Duo format version 10 is a directory package with immutable generation
 files and content-addressed processor state.
 
 ```text
@@ -40,10 +40,10 @@ The prior manifest and generation remain valid until step 5 succeeds.
 - generation number and save time
 - `requiredCapabilities`
 
-Version 9 manifests include `midiCompositionV1`,
+Current manifests include `midiCompositionV1`,
 `midiChannelPressureV1`, `bundledCompositionDevicesV1`, `scenesV1`,
 `compatibilityReportsV1`, `renderReportsV2`, `dawprojectV1`, and
-`masteringAlbumV1`. Readers must reject a manifest
+`masteringAlbumV1` and `sectionTransportV1`. Readers must reject a manifest
 version newer than they support rather than silently dropping MIDI, bundled
 output/cabinet state, scenes, or interchange diagnostics.
 
@@ -57,6 +57,27 @@ processor records, tone snapshots, mixer snapshots, render reports, drum maps,
 pattern aliases, MIDI routing templates, general project metadata, launch
 scenes, structured compatibility reports, and the mastering album. Automation lanes are stored
 separately.
+
+### Section transport and loops
+
+`tempoChanges` and `meterChanges` remain the authoritative timeline maps.
+Their optional `sectionId` binds a point to a named section with the same
+`timeSeconds`; absent/empty IDs identify ordinary manual points. Owners must
+exist and own at most one point in each map. Marker moves and removals update
+owned points atomically. Clearing section settings never changes the project
+default tempo or default 4/4 meter.
+
+A section may contain `clickSettings`: `enabled`, `subdivision` (1-8), `level`
+and `accentLevel` (finite 0-1), and `accentBeats` (unique integers 1-32, possibly
+empty). Missing settings inherit the last earlier explicit section override or
+the global click defaults. The global `metronomeEnabled` remains a master gate.
+Audio snapshots compile patterns into immutable scalar events and accent masks;
+project IDs and dynamic pattern arrays are not copied on the audio callback.
+
+`loopStartSeconds`, `loopEndSeconds`, and `loopEnabled` persist arbitrary loop
+bounds. Musical-position and marker selection are editing conveniences resolved
+to seconds, not new persistent references. Playback and loop exports round these
+positions to the relevant sample grid.
 
 External and bundled processor records retain a stable insert ID, format,
 vendor, version, architecture, isolation mode, state path/hash, latency, tail,
@@ -237,7 +258,9 @@ disabled until explicit reload. Clean shutdown removes the marker.
   targets; channel-pressure targets require `1..16`.
 - Version 8 gains version 9 empty mastering album data. Existing media hashes
   remain optional and are populated during import, collection, or repair.
+- Versions 1-9 migrate to version 10 without adding section ownership or click
+  overrides. Existing maps, loop bounds and project meter remain unchanged.
 - The manifest and referenced session format versions must agree.
 
-[`schema/project-v9.schema.json`](schema/project-v9.schema.json) documents the
+[`schema/project-v10.schema.json`](schema/project-v10.schema.json) documents the
 current public session envelope; older schema files remain historical.

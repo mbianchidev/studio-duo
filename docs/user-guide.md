@@ -180,7 +180,7 @@ playback to the active playlist.
 
 **TRACKING SETUP** manages:
 
-- Song-section placeholders at the playhead
+- Named sections/markers and section-specific transport settings
 - Tempo and meter changes at the playhead
 - Jump and ramp tempo transitions
 - Punch points, count-in, pre-roll, and post-roll
@@ -193,8 +193,52 @@ tempo and meter at the playhead, and the timeline keeps punch and loop ranges
 visible as coloured bounds. When punch and loop are both enabled, punch takes
 priority for recording while ordinary playback keeps using the loop range.
 
-Right-click the **SECTIONS** lane above the bar ruler to create a named section
+Right-click the **MARKERS / SECTIONS** lane above the bar ruler to create a named section
 at that exact timeline position without moving the playhead.
+
+### Set an arbitrary loop
+
+Use the **...** button beside **LOOP**, or **TRACKING SETUP > Configure loop
+range**. The **LOOP** button still switches the saved loop on/off in one click.
+The editor accepts timeline seconds, musical positions (`bar:beat:tick`, with
+one-based bars/beats and 0-959 ticks), or two named markers. It can also use the
+whole project or selected audio/MIDI clip. There is no fixed bar or section
+count. Musical positions follow tempo ramps and time-signature changes; beats
+cut short by a meter change are rejected instead of silently selecting another
+bar.
+If musical tick notation would move a sample-precise boundary, the editor keeps
+the existing seconds format rather than silently quantizing the loop.
+
+Apply saves the resolved timeline positions, rounded to the playback sample
+grid. Choosing musical positions or markers copies their current positions;
+it does not create a permanent link. Boundaries remain editable while loop is
+off, but must contain at least one sample. Stop recording before changing
+boundaries. Loop-range export uses these same saved bounds.
+
+### Section tempo, meter and click
+
+New projects start in **4/4**. Right-click a named marker and choose **Tempo,
+time signature and click**, or use its submenu in **TRACKING SETUP**.
+**Create + timing** / **Save + timing** opens the same settings after adding or editing
+a marker.
+
+Each section can set BPM, an incoming tempo ramp, a time signature, and a click
+override. BPM uses quarter notes; meter beats use the selected denominator.
+Click settings include on/off, 1-8 subdivisions per meter beat, normal/accent
+levels, and a comma-separated list of accented beats. For example, use `1,4`
+in 6/8 or `1,4,6` in 7/8; an empty list gives an unaccented click.
+
+Changes begin at the marker and continue until the next applicable change.
+Unconfigured markers do not reset the clock or click. Clearing an override
+inherits previous settings or the project's defaults. The global **CLICK**
+button remains the master mute: section settings cannot force it on. Clicks
+remain excluded from mix exports.
+
+Section-owned tempo/meter points move with their marker; deleting the marker
+removes those owned changes, not unrelated manual points. Moving into another
+tempo/meter point reports a collision instead of overwriting it. These edits,
+click patterns and loop bounds support undo/redo and native project persistence.
+Stop recording before editing or moving section transport changes.
 
 Arm two or more parent tracks and choose **Link armed parent tracks** to create a
 phase-locked edit group. Split, trim, move, delete, comp, warp, and quantize
@@ -530,14 +574,14 @@ Studio Duo projects are versioned `.studioduo` directory packages. A save writes
 a new session generation before atomically replacing `manifest.json`; the latest
 complete state is also copied to `recovery/latest.json`.
 
-Project format version 9 stores the typed routing graph, separate automation
+Project format version 10 stores the typed routing graph, separate automation
 generations, content-addressed plugin state, compatibility policy, tone and
 mixer snapshots, render reports, ordinary MIDI clips and expressions, drum
 maps, pattern aliases, humanization state, MIDI routing templates, project
 metadata, scenes, persisted interchange reports, and channel-scoped MIDI
 pressure automation. It also stores the mastering album, source hashes,
-references, sequencing, release metadata, and final measurements. Versions
-1-8 migrate on load.
+references, sequencing, release metadata, final measurements, section-owned
+tempo/meter points and per-section click patterns. Versions 1-9 migrate on load.
 See [project-format.md](project-format.md).
 
 ### Audio export

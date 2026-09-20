@@ -1,12 +1,11 @@
 #include "AudioExportOptionsComponent.h"
 
+#include "NumericInput.h"
 #include "StudioTheme.h"
 
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <locale>
-#include <sstream>
 #include <utility>
 
 namespace studio
@@ -52,21 +51,6 @@ juce::String numberText(double value)
     return text;
 }
 
-std::optional<double> parseNumber(const juce::String& text)
-{
-    const auto trimmed = text.trim();
-    if (trimmed.isEmpty())
-        return std::nullopt;
-
-    std::istringstream input(trimmed.toStdString());
-    input.imbue(std::locale::classic());
-    double value = 0.0;
-    input >> std::noskipws >> value;
-    if (input.fail() || !input.eof() || !std::isfinite(value))
-        return std::nullopt;
-    return value;
-}
-
 bool readNumber(
     const juce::TextEditor& editor,
     double minimum,
@@ -75,7 +59,7 @@ bool readNumber(
     double& value,
     juce::String& error)
 {
-    const auto parsed = parseNumber(editor.getText());
+    const auto parsed = parseFiniteNumber(editor.getText());
     if (!parsed)
     {
         error = name + " must be a finite number, without units or other text.";
@@ -733,7 +717,7 @@ struct AudioExportOptionsComponent::Impl
                             "Normalization target (dBFS)", result.audio.normalizePeakDbfs, error))
                 return std::nullopt;
         }
-        else if (const auto target = parseNumber(normalizeTarget.control.getText());
+        else if (const auto target = parseFiniteNumber(normalizeTarget.control.getText());
                  target && *target >= -24.0 && *target <= 0.0)
         {
             result.audio.normalizePeakDbfs = *target;

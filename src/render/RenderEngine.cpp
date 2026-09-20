@@ -1,6 +1,7 @@
 #include "RenderEngine.h"
 
 #include "model/ProjectCommands.h"
+#include "model/TransportEditing.h"
 #include "reamp/ReampSnapshotService.h"
 
 #include <juce_cryptography/juce_cryptography.h>
@@ -72,21 +73,12 @@ std::optional<StudioAudioEngine::RenderRange> RenderEngine::resolveRange(
             break;
         case MixExportRange::markers:
         {
-            const auto findMarker = [&project](const juce::String& id)
-            {
-                return std::find_if(
-                    project.sections.cbegin(), project.sections.cend(),
-                    [&id](const auto& marker) { return marker.id == id; });
-            };
-            const auto start = findMarker(settings.startMarkerId);
-            const auto end = findMarker(settings.endMarkerId);
-            if (start == project.sections.cend() || end == project.sections.cend())
-            {
-                error = "Choose existing start and end markers. A selected marker is missing.";
+            const auto markers = TransportEditing::markerRange(
+                project, settings.startMarkerId, settings.endMarkerId, error);
+            if (!markers)
                 return std::nullopt;
-            }
-            range.startSeconds = start->timeSeconds;
-            range.endSeconds = end->timeSeconds;
+            range.startSeconds = markers->getStart();
+            range.endSeconds = markers->getEnd();
             break;
         }
         case MixExportRange::custom:

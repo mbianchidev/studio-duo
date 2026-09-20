@@ -14,7 +14,7 @@
   master/DDP exports, signed reports, portable copies, and repair
 - [Releasing](releasing.md): versioning, release minting, CI artifacts, and
   installation
-- [Native project format](project-format.md): version 9 package layout,
+- [Native project format](project-format.md): version 10 package layout,
   generations, schemas, state hashes, recovery, and migrations
 - [Contributing](contributing.md): coding expectations and pull-request workflow
 

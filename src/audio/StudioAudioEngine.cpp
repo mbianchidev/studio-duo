@@ -1,4 +1,5 @@
 #include "StudioAudioEngine.h"
+#include "model/TransportEditing.h"
 
 #include "logging/StudioLogger.h"
 #include "mix/RoutingGraph.h"
@@ -620,7 +621,6 @@ juce::Result StudioAudioEngine::updateProjectInternal(
         && !renderOwned)
         return juce::Result::fail(
             "Wait for the active render to finish.");
-    metronomeEnabled.store(project.metronomeEnabled, std::memory_order_release);
     juce::String error;
     auto snapshot = buildSnapshot(project,
                                   currentSampleRate(),
@@ -628,6 +628,7 @@ juce::Result StudioAudioEngine::updateProjectInternal(
                                   error);
     if (!snapshot.has_value())
         return juce::Result::fail(error);
+    metronomeEnabled.store(project.metronomeEnabled, std::memory_order_release);
     monitoringEnabled.store(
         std::any_of(
             project.tracks.cbegin(),
@@ -3239,26 +3240,65 @@ std::optional<StudioAudioEngine::RenderSnapshot> StudioAudioEngine::buildSnapsho
     const std::vector<PluginRuntimeRequest>& pluginRequests,
     juce::String& error)
 {
+    if (!project.validateTransport(error))
+        return std::nullopt;
+    if (const auto loopValidation = TransportEditing::validateLoopRange(
+            { project.loopEnabled, project.loopStartSeconds, project.loopEndSeconds },
+            targetSampleRate);
+        loopValidation.failed())
+    {
+        error = loopValidation.getErrorMessage();
+        return std::nullopt;
+    }
+    const auto contentSamples = std::ceil(project.lengthSeconds() * targetSampleRate);
+    if (!std::isfinite(contentSamples)
+        || contentSamples > std::nextafter(
+            static_cast<double>(std::numeric_limits<std::int64_t>::max()), 0.0))
+    {
+        error = "The project exceeds the supported audio sample clock.";
+        return std::nullopt;
+    }
     RenderSnapshot snapshot;
     snapshot.sampleRate = targetSampleRate;
     snapshot.processingQuantum = juce::jlimit(
         1,
         PluginBridgeSharedState::maxBlockSize,
         deviceBlockSize.load(std::memory_order_acquire));
-    snapshot.contentLengthSamples = static_cast<std::int64_t>(
-        std::ceil(project.lengthSeconds() * targetSampleRate));
+    snapshot.contentLengthSamples = static_cast<std::int64_t>(contentSamples);
     snapshot.lengthSamples = snapshot.contentLengthSamples;
-    snapshot.loopStartSample = static_cast<std::int64_t>(project.loopStartSeconds * targetSampleRate);
-    snapshot.loopEndSample = static_cast<std::int64_t>(project.loopEndSeconds * targetSampleRate);
+    snapshot.loopStartSample = std::llround(project.loopStartSeconds * targetSampleRate);
+    snapshot.loopEndSample = std::llround(project.loopEndSeconds * targetSampleRate);
     snapshot.tempo = project.tempo;
-    snapshot.tempoChanges = project.tempoChanges;
-    snapshot.meterChanges = project.meterChanges;
+    for (const auto& change : project.tempoChanges)
+        snapshot.tempoChanges.push_back({ change.timeSeconds, change.bpm, change.rampToNext });
+    for (const auto& change : project.meterChanges)
+        snapshot.meterChanges.push_back({ change.timeSeconds, change.numerator, change.denominator });
     snapshot.timeSignatureNumerator = project.timeSignatureNumerator;
     snapshot.timeSignatureDenominator = project.timeSignatureDenominator;
     snapshot.metronomeSubdivision = project.metronomeSubdivision;
     snapshot.metronomeOutputChannel = project.metronomeOutputChannel;
     snapshot.metronomeLevel = project.metronomeLevel;
     snapshot.metronomeAccentLevel = project.metronomeAccentLevel;
+    snapshot.clickChanges.push_back({
+        0.0, true, project.metronomeSubdivision,
+        project.metronomeLevel, project.metronomeAccentLevel, 1
+    });
+    for (const auto& section : project.sections)
+    {
+        if (!section.clickSettings.has_value())
+            continue;
+        const auto& settings = *section.clickSettings;
+        auto accents = std::uint32_t { 0 };
+        for (const auto beat : settings.accentBeats)
+            accents |= std::uint32_t { 1 } << static_cast<unsigned int>(beat - 1);
+        snapshot.clickChanges.push_back({
+            section.timeSeconds, settings.enabled, settings.subdivision,
+            settings.level, settings.accentLevel, accents
+        });
+    }
+    std::stable_sort(
+        snapshot.clickChanges.begin(), snapshot.clickChanges.end(),
+        [](const auto& left, const auto& right) { return left.timeSeconds < right.timeSeconds; });
     snapshot.loopEnabled = project.loopEnabled && snapshot.loopEndSample > snapshot.loopStartSample;
     for (const auto& route : project.reampRoutes)
     {
@@ -6132,12 +6172,12 @@ double StudioAudioEngine::beatsAt(const RenderSnapshot& snapshot,
     return beats;
 }
 
-MeterChange StudioAudioEngine::meterAt(const RenderSnapshot& snapshot,
-                                       double seconds) noexcept
+StudioAudioEngine::RenderSnapshot::ClockMeterChange StudioAudioEngine::meterAt(
+    const RenderSnapshot& snapshot, double seconds) noexcept
 {
-    auto current = MeterChange { 0.0,
-                                 snapshot.timeSignatureNumerator,
-                                 snapshot.timeSignatureDenominator };
+    auto current = RenderSnapshot::ClockMeterChange {
+        0.0, snapshot.timeSignatureNumerator, snapshot.timeSignatureDenominator
+    };
     for (const auto& change : snapshot.meterChanges)
     {
         if (change.timeSeconds > seconds)
@@ -6153,13 +6193,21 @@ void StudioAudioEngine::addMetronome(const RenderSnapshot& snapshot,
                                      float& right) noexcept
 {
     const auto seconds = static_cast<double>(timelineSample) / snapshot.sampleRate;
+    const auto nextClick = std::upper_bound(
+        snapshot.clickChanges.cbegin(), snapshot.clickChanges.cend(), seconds,
+        [](double position, const auto& change) { return position < change.timeSeconds; });
+    const auto* settings = nextClick != snapshot.clickChanges.cbegin()
+        ? &*(nextClick - 1) : nullptr;
+    if (settings != nullptr && !settings->enabled)
+        return;
     const auto meter = meterAt(snapshot, seconds);
     const auto quarterBeats = beatsAt(snapshot, seconds);
     const auto meterStartQuarterBeats = beatsAt(snapshot, meter.timeSeconds);
     const auto metricBeats = (quarterBeats - meterStartQuarterBeats)
         * static_cast<double>(meter.denominator)
         / 4.0;
-    const auto subdivision = std::max(1, snapshot.metronomeSubdivision);
+    const auto subdivision = settings != nullptr
+        ? settings->subdivision : std::max(1, snapshot.metronomeSubdivision);
     const auto clickPosition = metricBeats * static_cast<double>(subdivision);
     const auto clickIndex = static_cast<std::int64_t>(std::floor(clickPosition + 0.0000001));
     const auto clickProgress = clickPosition - static_cast<double>(clickIndex);
@@ -6175,13 +6223,16 @@ void StudioAudioEngine::addMetronome(const RenderSnapshot& snapshot,
         return;
 
     const auto clicksPerBar = std::max(1, meter.numerator * subdivision);
-    const auto accent = clickIndex % clicksPerBar == 0;
+    const auto beat = static_cast<unsigned int>((clickIndex % clicksPerBar) / subdivision);
+    const auto accentMask = settings != nullptr ? settings->accentMask : std::uint32_t { 1 };
+    const auto accent = clickIndex % subdivision == 0
+        && (accentMask & (std::uint32_t { 1 } << beat)) != 0;
     const auto frequency = accent ? 1760.0 : 1320.0;
     const auto envelope = static_cast<float>(
         1.0 - clickPositionSeconds / clickDurationSeconds);
-    const auto level = accent
-        ? snapshot.metronomeAccentLevel
-        : snapshot.metronomeLevel;
+    const auto level = settings != nullptr
+        ? (accent ? settings->accentLevel : settings->level)
+        : (accent ? snapshot.metronomeAccentLevel : snapshot.metronomeLevel);
     const auto click = static_cast<float>(std::sin(juce::MathConstants<double>::twoPi
                                                    * frequency
                                                    * clickPositionSeconds))

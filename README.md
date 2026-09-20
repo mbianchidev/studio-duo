@@ -22,6 +22,8 @@ hardening remains before the complete DAW described in the
   routed metronome
 - Named timeline markers with undoable editing and whole-project, loop,
   marker-to-marker, or custom-range audio export
+- Editable loop bounds in seconds, bars/beats/ticks, or marker positions, plus
+  section-specific tempo, time signature, and click/accent patterns
 - WAV, AIFF, FLAC, Ogg Vorbis, and built-in MP3 encoding with sample-rate,
   bit-depth, mono/stereo, bitrate/quality, peak-normalization, and dither controls
 - Take lanes, comping, linked multitrack edits, transient tools, elastic audio,

@@ -465,6 +465,30 @@ private:
             int outputChannel = 2;
         };
 
+        struct ClockTempoChange
+        {
+            double timeSeconds = 0.0;
+            double bpm = 120.0;
+            bool rampToNext = false;
+        };
+
+        struct ClockMeterChange
+        {
+            double timeSeconds = 0.0;
+            int numerator = 4;
+            int denominator = 4;
+        };
+
+        struct ClickChange
+        {
+            double timeSeconds = 0.0;
+            bool enabled = true;
+            int subdivision = 1;
+            float level = 0.65f;
+            float accentLevel = 1.0f;
+            std::uint32_t accentMask = 1;
+        };
+
         double sampleRate = 48000.0;
         int processingQuantum = 512;
         std::int64_t contentLengthSamples = 0;
@@ -472,8 +496,9 @@ private:
         std::int64_t loopStartSample = 0;
         std::int64_t loopEndSample = 0;
         double tempo = 120.0;
-        std::vector<TempoChange> tempoChanges;
-        std::vector<MeterChange> meterChanges;
+        std::vector<ClockTempoChange> tempoChanges;
+        std::vector<ClockMeterChange> meterChanges;
+        std::vector<ClickChange> clickChanges;
         int timeSignatureNumerator = 4;
         int timeSignatureDenominator = 4;
         int metronomeSubdivision = 1;
@@ -776,8 +801,8 @@ private:
                                         double seconds) noexcept;
     [[nodiscard]] static double beatsAt(const RenderSnapshot& snapshot,
                                         double seconds) noexcept;
-    [[nodiscard]] static MeterChange meterAt(const RenderSnapshot& snapshot,
-                                             double seconds) noexcept;
+    [[nodiscard]] static RenderSnapshot::ClockMeterChange meterAt(
+        const RenderSnapshot& snapshot, double seconds) noexcept;
     int chooseWritableSnapshot() const noexcept;
 
     void audioDeviceIOCallbackWithContext(const float* const* inputChannelData,

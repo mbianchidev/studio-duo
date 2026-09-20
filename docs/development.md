@@ -106,6 +106,30 @@ Manual export coverage:
 5. Compare mono, normalized, dithered integer, and 32-bit float WAV exports;
    invalid or reversed ranges must report errors without replacing a file.
 
+## Loop and section transport
+
+`model/TransportEditing` validates sample-aligned loop ranges, resolves marker
+IDs and converts musical bar/beat/tick positions through existing tempo/meter
+maps. The loop editor stores resolved seconds, not a hard-coded bar count or
+live marker reference. `TransportSettingsComponent` supplies separate loop and
+section dialogs; native fields use the shared strict `NumericInput` parser.
+
+Format 10 gives tempo/meter points an optional stable `sectionId` owner and
+sections optional `SectionClickSettings`. Section commands atomically preserve
+ownership across edits, movement, deletion, undo and redo. Manual map points
+remain independent. Old projects gain no overrides on migration.
+
+The audio snapshot strips editor ownership into scalar tempo/meter events and
+compiles click overrides into scalar events with 32-bit accent masks. Metronome
+lookup allocates nothing on the callback, follows tempo/meter changes and loop
+wrap, and remains behind the global CLICK gate. Generic markers are neutral;
+explicit click changes persist until the next explicit override. Both render
+paths continue excluding click audio.
+
+DAWproject exports retain audible tempo/meter maps while issuing object-specific
+warnings for marker-editing associations and click patterns that its schema
+cannot represent.
+
 ## Manual multitrack recording test
 
 1. Connect an interface with at least two inputs, build Studio Duo, and save a

@@ -1553,6 +1553,11 @@ void TimelineComponent::showContextMenu(const juce::MouseEvent& event)
         const auto sectionId = sectionIdAt(event.position);
         if (sectionId.isNotEmpty())
         {
+            menu.addItem("Tempo, time signature and click...", [safeThis, sectionId]
+            {
+                if (safeThis != nullptr && safeThis->onConfigureSectionRequested)
+                    safeThis->onConfigureSectionRequested(sectionId);
+            });
             menu.addItem("Rename / move marker...", [safeThis, sectionId]
             {
                 if (safeThis != nullptr && safeThis->onEditSectionRequested)

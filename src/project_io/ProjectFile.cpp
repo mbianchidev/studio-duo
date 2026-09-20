@@ -331,7 +331,8 @@ juce::Result ProjectFile::save(const Project& project, const juce::File& request
             "scenesV1",
             "compatibilityReportsV1",
             "dawprojectV1",
-            "masteringAlbumV1"
+            "masteringAlbumV1",
+            "sectionTransportV1"
         }));
     manifest->setProperty("savedAt", juce::Time::getCurrentTime().toISO8601(true));
 
