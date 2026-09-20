@@ -724,6 +724,11 @@ It is enabled by default and persists across launches. Autosave updates the
 recovery copy inside an already-saved `.studioduo` package; manual Save still
 publishes the durable project generation.
 
+The **VST Plug-ins** Settings tab lists active default and custom VST3 search
+folders. Defaults are scanned at startup unless **Scan plug-in folders at
+startup** is disabled. Add custom folders, remove either custom or default
+locations, restore all platform defaults, or run **Rescan now** manually.
+
 Every package is downloaded inside the Studio Duo application-data directory
 and must match the release manifest's filename, byte size, and SHA-256 checksum.
 The current app keeps running after the download. Choose **Restart and Update**

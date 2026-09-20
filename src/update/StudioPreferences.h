@@ -11,8 +11,10 @@ public:
         juce::File settingsFile = {});
 
     [[nodiscard]] bool autosaveEnabled() const noexcept;
+    [[nodiscard]] bool scanPluginsAtStartup() const noexcept;
     [[nodiscard]] const juce::String& status() const noexcept;
     juce::Result setAutosaveEnabled(bool enabled);
+    juce::Result setScanPluginsAtStartup(bool enabled);
 
 private:
     static juce::File defaultSettingsFile();
@@ -21,6 +23,7 @@ private:
 
     juce::File settingsFile;
     bool autosave = true;
+    bool scanAtStartup = true;
     juce::String statusMessage;
 };
 }

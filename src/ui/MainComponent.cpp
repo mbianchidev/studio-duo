@@ -1972,6 +1972,16 @@ MainComponent::MainComponent(bool startAudioOnLaunch)
                     safe->initialiseAudio();
             });
     }
+    if (preferences->scanPluginsAtStartup())
+    {
+        juce::Timer::callAfterDelay(
+            500,
+            [safe = juce::Component::SafePointer<MainComponent>(this)]
+            {
+                if (safe != nullptr)
+                    safe->pluginCatalog.startScan(false);
+            });
+    }
     juce::Timer::callAfterDelay(
         1200,
         [safe = juce::Component::SafePointer<MainComponent>(this)]
@@ -3608,6 +3618,7 @@ void MainComponent::showSettings(bool showUpdates)
         deviceManager.get(),
         updateService,
         *preferences,
+        pluginCatalog,
         [safe = juce::Component::SafePointer<MainComponent>(this)]
         {
             if (safe != nullptr)

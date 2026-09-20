@@ -17,6 +17,11 @@ bool StudioPreferences::autosaveEnabled() const noexcept
     return autosave;
 }
 
+bool StudioPreferences::scanPluginsAtStartup() const noexcept
+{
+    return scanAtStartup;
+}
+
 const juce::String& StudioPreferences::status() const noexcept
 {
     return statusMessage;
@@ -30,6 +35,19 @@ juce::Result StudioPreferences::setAutosaveEnabled(
     const auto result = save();
     if (result.failed())
         autosave = previous;
+    else
+        statusMessage = "Preferences saved.";
+    return result;
+}
+
+juce::Result StudioPreferences::setScanPluginsAtStartup(
+    bool enabled)
+{
+    const auto previous = scanAtStartup;
+    scanAtStartup = enabled;
+    const auto result = save();
+    if (result.failed())
+        scanAtStartup = previous;
     else
         statusMessage = "Preferences saved.";
     return result;
@@ -52,7 +70,11 @@ void StudioPreferences::load()
         settingsFile.loadFileAsString());
     const auto* object = parsed.getDynamicObject();
     if (object == nullptr
-        || !object->getProperty("autosaveEnabled").isBool())
+        || !object->getProperty("autosaveEnabled").isBool()
+        || (object->hasProperty("scanPluginsAtStartup")
+            && !object->getProperty(
+                    "scanPluginsAtStartup")
+                    .isBool()))
     {
         statusMessage =
             "Preferences could not be read; defaults are active.";
@@ -62,6 +84,12 @@ void StudioPreferences::load()
     autosave =
         static_cast<bool>(
             object->getProperty("autosaveEnabled"));
+    if (object->hasProperty("scanPluginsAtStartup"))
+    {
+        scanAtStartup = static_cast<bool>(
+            object->getProperty(
+                "scanPluginsAtStartup"));
+    }
 }
 
 juce::Result StudioPreferences::save()
@@ -75,6 +103,9 @@ juce::Result StudioPreferences::save()
     auto object = std::make_unique<juce::DynamicObject>();
     object->setProperty("schemaVersion", 1);
     object->setProperty("autosaveEnabled", autosave);
+    object->setProperty(
+        "scanPluginsAtStartup",
+        scanAtStartup);
     const auto temporary =
         settingsFile.getSiblingFile(
             settingsFile.getFileName() + ".tmp");

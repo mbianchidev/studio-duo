@@ -724,6 +724,10 @@ user Library equivalent) or Windows (`Program Files/Common Files/VST3` and
 LocalAppData `Programs/Common/VST3`) fallbacks, and configured custom VST3
 folders. It never launches a child app, instantiates a plug-in, or touches audio
 and microphone initialization.
+`PluginSearchPaths` schema 2 stores custom folders and disabled defaults.
+The VST settings page can add/remove effective paths, restore defaults, and
+force a scan. `StudioPreferences::scanPluginsAtStartup` controls the delayed
+startup scan and defaults to enabled.
 
 On macOS, CMake applies an ad-hoc signature with the stable designated
 requirement `dev.mbianchi.studioduo`. This keeps the TCC microphone grant tied

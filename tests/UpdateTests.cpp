@@ -152,14 +152,21 @@ void preferencePersistence()
         studio::StudioPreferences preferences(file);
         expect(preferences.autosaveEnabled(),
                "Autosave recovery defaults to enabled.");
+        expect(preferences.scanPluginsAtStartup(),
+               "Startup plug-in scanning defaults to enabled.");
         expect(preferences.setAutosaveEnabled(false).wasOk()
                    && !preferences.autosaveEnabled(),
                "Autosave recovery can be disabled and persisted.");
+        expect(preferences.setScanPluginsAtStartup(false).wasOk()
+                   && !preferences.scanPluginsAtStartup(),
+               "Startup plug-in scanning can be disabled and persisted.");
     }
     {
         studio::StudioPreferences preferences(file);
         expect(!preferences.autosaveEnabled(),
                "Autosave recovery preference survives reload.");
+        expect(!preferences.scanPluginsAtStartup(),
+               "Startup plug-in scan preference survives reload.");
     }
     file.replaceWithText("{\"autosaveEnabled\":\"invalid\"}");
     {

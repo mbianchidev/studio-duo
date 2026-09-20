@@ -133,6 +133,27 @@ void pluginSearchPathTests()
             && plan.warnings.joinIntoString(" ").contains("not a folder:"),
         "Unavailable custom VST3 folders are reported and skipped without blocking valid folders.");
 
+    result =
+        validationSettings.disableDefaultFolder(defaultFolder);
+    resultMessage = result.getErrorMessage();
+    expect(result.wasOk(), resultMessage.toRawUTF8());
+    studio::PluginSearchPaths disabledDefaults(validationFile);
+    error.clear();
+    expect(disabledDefaults.load(error)
+               && disabledDefaults.disabledDefaultFolders().contains(
+                   defaultFolder.getFullPathName())
+               && disabledDefaults.createScanPlan(defaults)
+                      .folders.getNumPaths()
+                      == 1,
+           "Disabled default VST3 folders persist and are excluded from scans.");
+    result = disabledDefaults.restoreDefaultFolders();
+    resultMessage = result.getErrorMessage();
+    expect(result.wasOk()
+               && disabledDefaults.createScanPlan(defaults)
+                      .folders.getNumPaths()
+                      == 2,
+           "Restoring defaults returns disabled VST3 locations to the scan plan.");
+
     juce::AudioPluginFormatManager formatManager;
     studio::PluginFormats::addSupportedFormats(formatManager);
     juce::AudioPluginFormat* vst3Format = nullptr;
