@@ -203,6 +203,9 @@ loop-range, metronome, time signature, and tempo controls in compact grouped
 modules. **Inspect**, **Mix**, and **Tracks** switches at the far right own the
 three docked work areas. File and project tools remain in the top header, while
 undo, redo, scissors, trim, delete, and zoom tools share the edit toolbar.
+Transport buttons are centered independently from the position display;
+metronome, meter, and BPM sit immediately to their right. Audio readiness and
+device status appear at the top-right of the header.
 
 Right-click the **MARKERS / SECTIONS** lane above the bar ruler to add either a
 marker flag or a song section at that exact timeline position without moving

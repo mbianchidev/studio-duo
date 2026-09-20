@@ -680,6 +680,11 @@ active playhead with a right-side margin,
 grows the view during long recordings, and rewinds a completed transport before
 starting playback again.
 
+The transport buttons are centered on the window independently from the
+position readout. Metronome, time signature, and BPM form the adjacent
+right-hand transport group, while device/readiness status is owned by the
+top-right header.
+
 The bottom-right **Inspect**, **Mix**, and **Tracks** buttons are the sole
 visibility controls for the three docked areas. The edit toolbar owns undo,
 redo, scissors, trim, delete, and zoom controls; no duplicate panel-edge

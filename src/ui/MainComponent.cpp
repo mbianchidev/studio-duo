@@ -1841,7 +1841,7 @@ MainComponent::MainComponent(bool startAudioOnLaunch)
 
     addAndMakeVisible(statusLabel);
     statusLabel.setColour(juce::Label::textColourId, juce::Colour(StudioColours::secondaryText));
-    statusLabel.setJustificationType(juce::Justification::centredLeft);
+    statusLabel.setJustificationType(juce::Justification::centredRight);
 
     selectedTrackId = project.tracks.front().id;
     selectTrack(selectedTrackId);
@@ -2074,12 +2074,12 @@ void MainComponent::paint(juce::Graphics& graphics)
             static_cast<float>(footer.getY() + 7),
             static_cast<float>(footer.getBottom() - 7));
     }
-    if (meterLabel.getWidth() > 0)
+    if (metronomeButton.getWidth() > 0)
     {
         graphics.setColour(
             juce::Colour(StudioColours::border));
         graphics.drawVerticalLine(
-            meterLabel.getX() - 6,
+            metronomeButton.getX() - 6,
             static_cast<float>(footer.getY() + 7),
             static_cast<float>(footer.getBottom() - 7));
     }
@@ -2260,6 +2260,9 @@ void MainComponent::resized()
         };
 
     layoutFileControls(topRow.removeFromLeft(200), 8);
+    auto statusArea = topRow.removeFromRight(
+        juce::jmin(360, topRow.getWidth() / 2));
+    statusLabel.setBounds(statusArea.reduced(8, 4));
     projectLabel.setBounds(topRow.reduced(8, 4));
 
     auto footerControls = status.reduced(8, 4);
@@ -2271,33 +2274,36 @@ void MainComponent::resized()
         panelControls.removeFromLeft(58).reduced(2, 1));
     sessionPanelToggleButton.setBounds(
         panelControls.removeFromLeft(58).reduced(2, 1));
-    auto tempoControls =
-        footerControls.removeFromRight(190);
-    meterLabel.setBounds(
-        tempoControls.removeFromLeft(42).reduced(2, 1));
-    layoutTempoControls(tempoControls, 2);
-    const auto transportWidth = 6 * 38;
-    const auto positionWidth = 190;
-    const auto clusterWidth = positionWidth + transportWidth;
-    const auto statusWidth = juce::jmax(
-        90,
-        (footerControls.getWidth() - clusterWidth) / 2);
-    statusLabel.setBounds(
-        footerControls.removeFromLeft(
-            juce::jmin(
-                statusWidth,
-                footerControls.getWidth())));
-    juce::Rectangle<int> transportCluster(
-        footerControls.removeFromLeft(
-            juce::jmin(
-                clusterWidth,
-                footerControls.getWidth())));
+    constexpr auto transportWidth = 5 * 38;
+    constexpr auto tempoWidth = 200;
+    const auto positionWidth = juce::jlimit(
+        140,
+        220,
+        footerControls.getWidth()
+            - transportWidth
+            - tempoWidth
+            - 16);
+    const auto minimumTransportX =
+        footerControls.getX() + positionWidth + 8;
+    const auto maximumTransportX =
+        footerControls.getRight()
+        - tempoWidth
+        - transportWidth
+        - 8;
+    const auto transportX = juce::jlimit(
+        minimumTransportX,
+        maximumTransportX,
+        status.getCentreX() - transportWidth / 2);
     positionLabel.setBounds(
-        transportCluster.removeFromLeft(
-            juce::jmin(
-                positionWidth,
-                transportCluster.getWidth())));
-    auto transportButtons = transportCluster;
+        transportX - positionWidth - 8,
+        footerControls.getY(),
+        positionWidth,
+        footerControls.getHeight());
+    auto transportButtons = juce::Rectangle<int>(
+        transportX,
+        footerControls.getY(),
+        transportWidth,
+        footerControls.getHeight());
     stopButton.setBounds(
         transportButtons.removeFromLeft(38).reduced(3, 1));
     playButton.setBounds(
@@ -2306,10 +2312,18 @@ void MainComponent::resized()
         transportButtons.removeFromLeft(38).reduced(3, 1));
     loopButton.setBounds(
         transportButtons.removeFromLeft(38).reduced(3, 1));
-    metronomeButton.setBounds(
-        transportButtons.removeFromLeft(38).reduced(3, 1));
     loopRangeButton.setBounds(
         transportButtons.removeFromLeft(38).reduced(3, 1));
+    auto tempoControls = juce::Rectangle<int>(
+        transportX + transportWidth + 8,
+        footerControls.getY(),
+        tempoWidth,
+        footerControls.getHeight());
+    metronomeButton.setBounds(
+        tempoControls.removeFromLeft(38).reduced(3, 1));
+    meterLabel.setBounds(
+        tempoControls.removeFromLeft(42).reduced(2, 1));
+    layoutTempoControls(tempoControls, 2);
     mixerPanelToggleButton.setEnabled(!showMidiEditor);
     auto sessionPanel = left.reduced(leftPanelCollapsed ? 8 : 14, 42);
     addTrackButton.setBounds(sessionPanel.removeFromTop(34));
