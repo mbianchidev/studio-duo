@@ -646,6 +646,12 @@ and is reused by mixer, inspector, timeline, clip-gain, and routing displays.
 Mixer-strip context menus forward to the same track callbacks used by timeline
 headers, keeping mute/solo/arm, name/color, versions, duplicate, and delete
 behavior identical.
+Timeline headers and mixer strips forward their compact input dropdowns to one
+MainComponent menu, which lists the current device's input channels and applies
+the existing undoable `SetTrackMixCommand`.
+The selected mixer's scrollable processing pane separates collapsible Inserts
+and Sends sections. Add controls route to the processor browser and routing
+menu; row power controls reuse insert-bypass and routing-update commands.
 
 Audio tracks persist their first hardware input, mono/stereo mode, and software
 monitoring state. The lock-free recorder copies only those selected callback

@@ -31,12 +31,19 @@ public:
     std::function<void(const juce::String&)> onToggleTrackVersions;
     std::function<void(const juce::String&)> onDuplicateTrack;
     std::function<void(const juce::String&)> onDeleteTrack;
+    std::function<void(const juce::String&, juce::Rectangle<int>)>
+        onInputMenuRequested;
+    std::function<void(const juce::String&)> onAddInsert;
+    std::function<void(const juce::String&)> onAddSend;
     std::function<void(const juce::String&, float)> onVolumeChanged;
     std::function<void(const juce::String&, float)> onPanChanged;
     std::function<void(const juce::String&, const juce::String&)> onPluginOpen;
     std::function<void(const juce::String&, const juce::String&, bool)>
         onPluginEnabledChanged;
     std::function<void(const juce::String&, const juce::String&)> onRouteOpen;
+    std::function<void(const juce::String&,
+                       const juce::String&,
+                       bool)> onRouteEnabledChanged;
 
     void paint(juce::Graphics& graphics) override;
     void resized() override;
@@ -90,6 +97,8 @@ private:
     juce::TextEditor volumeEditor;
     juce::String editingVolumeTrack;
     bool committingVolumeEdit = false;
+    bool insertsExpanded = true;
+    bool sendsExpanded = true;
     juce::Viewport itemsViewport;
     std::unique_ptr<ItemList> itemList;
 };

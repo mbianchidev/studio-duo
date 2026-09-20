@@ -215,6 +215,23 @@ void timelineMarkerTests()
                && std::abs(rangeEnd - 6.0) < 0.000001,
            "Dragging a section end resizes the range.");
 
+    juce::String inputTrack;
+    timeline.onInputMenuRequested =
+        [&inputTrack](const juce::String& trackId,
+                      juce::Rectangle<int>)
+    {
+        inputTrack = trackId;
+    };
+    const juce::Point<float> inputControl(136.0f, 118.0f);
+    timeline.mouseDown(mouseEvent(
+        timeline,
+        inputControl,
+        inputControl,
+        1,
+        false));
+    expect(inputTrack == project.tracks.front().id,
+           "Timeline input dropdowns target the clicked audio track.");
+
     juce::String mutedTrack;
     timeline.onTrackMute = [&mutedTrack](const juce::String& trackId)
     {

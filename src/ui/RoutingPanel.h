@@ -19,6 +19,7 @@ public:
     void setTrack(const juce::String& value);
     void setHardwareOutputs(juce::StringArray names);
     void editConnection(const juce::String& connectionId);
+    void showAddRouteMenu();
 
     std::function<void(RoutingConnection)> onAddConnection;
     std::function<void(RoutingConnection, RoutingConnection)> onUpdateConnection;

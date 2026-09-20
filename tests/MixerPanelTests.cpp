@@ -70,6 +70,22 @@ void mixerPanelTests()
     mixer.setBounds(0, 0, 900, 260);
     mixer.setProject(&project);
 
+    juce::String inputTrack;
+    mixer.onInputMenuRequested =
+        [&inputTrack](const juce::String& trackId,
+                      juce::Rectangle<int>)
+    {
+        inputTrack = trackId;
+    };
+    const juce::Point<float> inputControl(70.0f, 70.0f);
+    mixer.mouseDown(mixerMouseEvent(
+        mixer,
+        inputControl,
+        inputControl,
+        false));
+    expect(inputTrack == track.id,
+           "Mixer input dropdowns target the clicked audio track.");
+
     auto pan = 0.0f;
     mixer.onPanChanged = [&pan](const juce::String&, float value)
     {
@@ -120,7 +136,7 @@ void mixerPanelTests()
     {
         mutedTrack = trackId;
     };
-    const juce::Point<float> muteControl(37.0f, 73.0f);
+    const juce::Point<float> muteControl(37.0f, 93.0f);
     mixer.mouseDown(mixerMouseEvent(
         mixer,
         muteControl,
@@ -135,7 +151,7 @@ void mixerPanelTests()
     {
         appliedVolume = value;
     };
-    const juce::Point<float> decibelReadout(70.0f, 98.0f);
+    const juce::Point<float> decibelReadout(70.0f, 118.0f);
     mixer.mouseDown(mixerMouseEvent(
         mixer,
         decibelReadout,

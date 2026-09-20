@@ -517,12 +517,56 @@ void TimelineComponent::paint(juce::Graphics& graphics)
         }
         if (track.automationArmed)
             routingLabel << " A";
-        graphics.drawText(routingLabel,
-                          viewportPositionX + 104,
-                          y + 30,
-                          64,
-                          16,
-                          juce::Justification::centredRight);
+        if (track.type == TrackType::audio)
+        {
+            const juce::Rectangle<float> inputBounds(
+                static_cast<float>(viewportPositionX + 104),
+                static_cast<float>(y + 29),
+                64.0f,
+                18.0f);
+            graphics.setColour(
+                juce::Colour(StudioColours::raised));
+            graphics.fillRoundedRectangle(
+                inputBounds,
+                3.0f);
+            graphics.setColour(
+                juce::Colour(StudioColours::border));
+            graphics.drawRoundedRectangle(
+                inputBounds,
+                3.0f,
+                1.0f);
+            graphics.setColour(
+                juce::Colour(StudioColours::text));
+            graphics.setFont(
+                juce::Font(juce::FontOptions(8.5f)));
+            graphics.drawText(
+                routingLabel,
+                inputBounds.toNearestInt()
+                    .withTrimmedRight(14),
+                juce::Justification::centred);
+            juce::Path chevron;
+            chevron.startNewSubPath(
+                inputBounds.getRight() - 11.0f,
+                inputBounds.getCentreY() - 2.0f);
+            chevron.lineTo(
+                inputBounds.getRight() - 7.0f,
+                inputBounds.getCentreY() + 2.0f);
+            chevron.lineTo(
+                inputBounds.getRight() - 3.0f,
+                inputBounds.getCentreY() - 2.0f);
+            graphics.strokePath(
+                chevron,
+                juce::PathStrokeType(1.2f));
+        }
+        else
+        {
+            graphics.drawText(routingLabel,
+                              viewportPositionX + 104,
+                              y + 30,
+                              64,
+                              16,
+                              juce::Justification::centredRight);
+        }
 
         if (track.type != TrackType::folder
             && track.type != TrackType::midi)
@@ -1348,6 +1392,29 @@ void TimelineComponent::mouseDown(const juce::MouseEvent& event)
             if (x < 22 && hasVersions && onToggleTrackVersions)
             {
                 onToggleTrackVersions(track.id);
+                return;
+            }
+            if (track.type == TrackType::audio
+                && localY >= 29
+                && localY <= 47
+                && x >= 104
+                && x <= 168
+                && onInputMenuRequested)
+            {
+                selectedTrackId = track.id;
+                selectedClipId.clear();
+                if (onTrackSelected)
+                    onTrackSelected(track.id);
+                const juce::Rectangle<int> inputBounds(
+                    viewportPositionX + 104,
+                    rulerHeight
+                        + trackIndex * trackHeight
+                        + 29,
+                    64,
+                    18);
+                onInputMenuRequested(
+                    track.id,
+                    localAreaToGlobal(inputBounds));
                 return;
             }
             if (localY >= trackControlY

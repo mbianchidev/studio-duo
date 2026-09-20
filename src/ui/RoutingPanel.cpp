@@ -50,6 +50,11 @@ void RoutingPanel::editConnection(const juce::String& connectionId)
         showRouteMenu(*route);
 }
 
+void RoutingPanel::showAddRouteMenu()
+{
+    showAddMenu();
+}
+
 std::vector<const RoutingConnection*> RoutingPanel::displayedRoutes() const
 {
     std::vector<const RoutingConnection*> result;

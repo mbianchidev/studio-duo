@@ -45,6 +45,8 @@ public:
         onTrackVolumeGestureStarted;
     std::function<void(const juce::String&, float)>
         onTrackVolumeChanged;
+    std::function<void(const juce::String&, juce::Rectangle<int>)>
+        onInputMenuRequested;
     std::function<void(const juce::String&, juce::Rectangle<int>)> onEditTrack;
     std::function<void(const juce::String&)> onToggleTrackVersions;
     std::function<void(const juce::String&)> onDuplicateTrack;

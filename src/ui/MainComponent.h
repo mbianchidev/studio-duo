@@ -209,6 +209,8 @@ private:
     void selectClip(const juce::String& trackId, const juce::String& clipId);
     void updateInspector();
     void refreshInputControls();
+    void showTrackInputMenu(const juce::String& trackId,
+                            juce::Rectangle<int> targetScreenArea);
     void refreshOutputControls();
     void showTrackColourMenu();
     void showTrackQuickEditor(const juce::String& trackId,

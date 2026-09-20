@@ -156,7 +156,10 @@ aliasing the source family.
 ## Record and manage takes
 
 Each timeline track header has speaker-mute, headphones-solo, and record-circle
-controls plus a compact horizontal dB fader. **Start Recording** (circle icon)
+controls, a compact horizontal dB fader, and an input dropdown for audio tracks.
+The same input dropdown appears on mixer strips, so microphone, guitar, or other
+active-device channels can be assigned without opening the inspector.
+**Start Recording** (circle icon)
 captures every armed audio parent into a separate, sample-aligned WAV. If no
 track is armed, the selected audio track becomes the single recording target.
 
@@ -331,10 +334,11 @@ Double-click a fader lane to return to `0.0 dB` or a pan control to return to
 center. Solo is exclusive: selecting a new solo clears the previous solo, and
 clicking the active solo again restores normal playback.
 
-The mixer also contains a scrollable **INSERTS & SENDS** list across all root
-tracks. Click an insert to open its editor or use its **ON/OFF** control to
-bypass and restore it while audio is playing. Click a send or sidechain to open
-its routing editor.
+The mixer also contains collapsible, scrollable **INSERTS** and
+**SENDS** sections for the selected track. Their `+` controls reveal the
+processor browser or route-add menu. Click an insert to open its editor, click a
+send or sidechain to open its routing editor, or use the power control on either
+row to enable/bypass it in one step.
 
 Use the single sidebar arrow to collapse Session controls to an icon rail. The
 expanded Session pane shows each action's icon and full name; collapsing it

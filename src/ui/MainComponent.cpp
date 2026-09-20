@@ -1139,6 +1139,12 @@ MainComponent::MainComponent(bool startAudioOnLaunch)
         selectTrack(trackId);
         changeSelectedTrackState([](auto& state) { state.armed = !state.armed; });
     };
+    timeline.onInputMenuRequested = [this](
+        const auto& trackId,
+        auto targetArea)
+    {
+        showTrackInputMenu(trackId, targetArea);
+    };
     timeline.onToggleTrackVersions = [this](const auto& trackId)
     {
         selectTrack(trackId);
@@ -1421,6 +1427,12 @@ MainComponent::MainComponent(bool startAudioOnLaunch)
         if (timeline.onTrackArm)
             timeline.onTrackArm(trackId);
     };
+    mixer->onInputMenuRequested = [this](
+        const auto& trackId,
+        auto targetArea)
+    {
+        showTrackInputMenu(trackId, targetArea);
+    };
     mixer->onToggleTrackVersions = [this](const auto& trackId)
     {
         if (timeline.onToggleTrackVersions)
@@ -1435,6 +1447,20 @@ MainComponent::MainComponent(bool startAudioOnLaunch)
     {
         if (timeline.onDeleteTrack)
             timeline.onDeleteTrack(trackId);
+    };
+    mixer->onAddInsert = [this](const auto& trackId)
+    {
+        selectTrack(trackId);
+        setLeftPanelCollapsed(false);
+        setStatus(
+            "Choose a plug-in from the processor browser to add an insert.");
+    };
+    mixer->onAddSend = [this](const auto& trackId)
+    {
+        selectTrack(trackId);
+        setInspectorPanelVisible(true);
+        routingPanel->setTrack(trackId);
+        routingPanel->showAddRouteMenu();
     };
     mixer->onEditTrack = [this](const auto& trackId, auto targetArea)
     {
@@ -1583,6 +1609,23 @@ MainComponent::MainComponent(bool startAudioOnLaunch)
     {
         selectTrack(trackId);
         routingPanel->editConnection(routeId);
+    };
+    mixer->onRouteEnabledChanged = [this](
+                                            const auto&,
+                                            const auto& routeId,
+                                            bool enabled)
+    {
+        const auto* route =
+            project.findRoutingConnection(routeId);
+        if (route == nullptr)
+            return;
+        auto after = *route;
+        after.enabled = enabled;
+        perform(
+            std::make_unique<
+                UpdateRoutingConnectionCommand>(
+                *route,
+                std::move(after)));
     };
     mixer->addKeyListener(this);
     addAndMakeVisible(*mixer);
@@ -7020,6 +7063,85 @@ void MainComponent::refreshInputControls()
                                        juce::dontSendNotification);
     updatingInputControls = false;
     updateInspector();
+}
+
+void MainComponent::showTrackInputMenu(
+    const juce::String& trackId,
+    juce::Rectangle<int> targetScreenArea)
+{
+    const auto* track = project.findTrack(trackId);
+    if (track == nullptr || track->type != TrackType::audio)
+        return;
+
+    juce::PopupMenu menu;
+    if (auto* device = currentAudioDevice())
+    {
+        const auto names = device->getInputChannelNames();
+        juce::AudioDeviceManager::AudioDeviceSetup setup;
+        deviceManager->getAudioDeviceSetup(setup);
+        const auto deviceName =
+            setup.inputDeviceName.trim().isNotEmpty()
+            ? setup.inputDeviceName.trim()
+            : device->getName().trim();
+        for (int index = 0; index < names.size(); ++index)
+        {
+            auto channelName = names[index].trim();
+            if (channelName.isEmpty()
+                || channelName.containsOnly("0123456789"))
+                channelName =
+                    "Input " + juce::String(index + 1);
+            const auto label =
+                deviceName.isNotEmpty()
+                    && !channelName.containsIgnoreCase(
+                        deviceName)
+                ? deviceName + " - " + channelName
+                : channelName;
+            menu.addItem(
+                index + 1,
+                label,
+                true,
+                track->inputChannel == index);
+        }
+    }
+    if (menu.getNumItems() == 0)
+    {
+        menu.addItem(
+            "No active audio inputs",
+            false,
+            false,
+            [] {});
+        menu.addItem(
+            "Open Audio / MIDI Settings...",
+            [this] { showSettings(); });
+        menu.showMenuAsync(
+            juce::PopupMenu::Options()
+                .withTargetScreenArea(targetScreenArea));
+        return;
+    }
+
+    menu.showMenuAsync(
+        juce::PopupMenu::Options()
+            .withTargetScreenArea(targetScreenArea),
+        [safe = juce::Component::SafePointer<MainComponent>(this),
+         trackId](int result)
+        {
+            if (safe == nullptr || result <= 0)
+                return;
+            const auto* current =
+                safe->project.findTrack(trackId);
+            if (current == nullptr
+                || current->type != TrackType::audio)
+                return;
+            const auto before =
+                TrackMixState::fromTrack(*current);
+            auto after = before;
+            after.inputChannel = result - 1;
+            safe->perform(
+                std::make_unique<SetTrackMixCommand>(
+                    trackId,
+                    before,
+                    after));
+        });
 }
 
 void MainComponent::showTrackColourMenu()
