@@ -57,6 +57,10 @@ void mixerPanelTests()
                && !studio::parseTrackDecibels("-60.1").has_value()
                && !studio::parseTrackDecibels("12.1").has_value(),
            "Mixer dB input enforces the real -60 to +12 range and 0.1 dB step.");
+    expect(studio::formatDecibels(6.0) == "+6.0 dB"
+               && studio::formatDecibels(0.0) == "0.0 dB"
+               && studio::formatDecibels(-6.0) == "-6.0 dB",
+           "Positive dB displays include a plus sign while zero and negative values do not.");
 
     auto project = studio::Project::createDefault();
     auto& track = project.tracks.front();

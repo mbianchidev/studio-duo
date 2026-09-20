@@ -490,7 +490,7 @@ void MixerPanel::paint(juce::Graphics& graphics)
             juce::Font(juce::FontOptions(10.0f,
                                          juce::Font::bold)));
         graphics.drawText(
-            juce::String(volumeValue, 1) + " dB",
+            formatDecibels(volumeValue),
             decibelBounds.toNearestInt(),
             juce::Justification::centred);
 
@@ -544,7 +544,7 @@ void MixerPanel::paint(juce::Graphics& graphics)
             graphics.setFont(
                 juce::Font(juce::FontOptions(8.0f)));
             graphics.drawText(
-                juce::String(peakDb, 1) + " dB",
+                formatDecibels(peakDb),
                 strip.getX() + 12,
                 faderTop + faderHeight + 2,
                 strip.getWidth() - 24,
@@ -795,8 +795,7 @@ void MixerPanel::beginVolumeEdit(
         juce::TextEditor::outlineColourId,
         juce::Colour(StudioColours::orange));
     volumeEditor.setText(
-        juce::String(track.volumeDecibels, 1)
-            + " dB",
+        formatDecibels(track.volumeDecibels),
         false);
     volumeEditor.setBounds(bounds);
     volumeEditor.setVisible(true);

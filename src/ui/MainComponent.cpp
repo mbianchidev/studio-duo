@@ -1,6 +1,7 @@
 #include "MainComponent.h"
 
 #include "AudioExportOptionsComponent.h"
+#include "NumericInput.h"
 #include "TransportSettingsComponent.h"
 #include "automation/AutomationRecorder.h"
 #include "audio/AudioDeviceProbe.h"
@@ -852,7 +853,15 @@ MainComponent::MainComponent(bool startAudioOnLaunch)
     volumeSlider.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 76, 24);
     volumeSlider.setDoubleClickReturnValue(true, 0.0);
     volumeSlider.setNumDecimalPlacesToDisplay(1);
-    volumeSlider.setTextValueSuffix(" dB");
+    volumeSlider.textFromValueFunction = [](double value)
+    {
+        return formatDecibels(value);
+    };
+    volumeSlider.valueFromTextFunction = [](const juce::String& text)
+    {
+        return static_cast<double>(
+            parseTrackDecibels(text).value_or(0.0f));
+    };
     configureInspectorSlider(panSlider, -1.0, 1.0, 0.01);
     panSlider.setSliderStyle(juce::Slider::LinearHorizontal);
     panSlider.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 76, 24);

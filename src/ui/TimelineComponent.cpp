@@ -1,5 +1,6 @@
 #include "TimelineComponent.h"
 
+#include "NumericInput.h"
 #include "StudioIconButton.h"
 #include "StudioTheme.h"
 
@@ -580,7 +581,7 @@ void TimelineComponent::paint(juce::Graphics& graphics)
             graphics.setFont(
                 juce::Font(juce::FontOptions(8.0f)));
             graphics.drawText(
-                juce::String(volume, 1) + " dB",
+                formatDecibels(volume),
                 viewportPositionX + trackVolumeIconX,
                 y + 68,
                 trackVolumeEndX - trackVolumeIconX,
@@ -1087,7 +1088,7 @@ void TimelineComponent::paint(juce::Graphics& graphics)
         const auto processingLabel = (clip->reversed ? " REV" : "")
             + juce::String(clip->polarityInverted ? " INV" : "");
         const auto gainLabel = std::abs(gainDecibels) >= 0.05f
-            ? "  " + juce::String(gainDecibels, 1) + " dB"
+            ? "  " + formatDecibels(gainDecibels)
             : juce::String();
         graphics.drawText(clip->name + processingLabel + gainLabel,
                           bounds.toNearestInt().withHeight(24).reduced(8, 0),

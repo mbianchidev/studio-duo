@@ -322,7 +322,8 @@ and the current post-fader peak make every track's
 level visible at a glance. Click a mixer's boxed dB value to enter a
 number such as `-6`, `-6 dB`, or `-6db` directly in the strip; no dialog opens.
 Values must be within `-60.0` to
-`+12.0 dB` and are normalized to the fader's 0.1 dB step.
+`+12.0 dB` and are normalized to the fader's 0.1 dB step. Displayed positive
+values include a leading `+`; zero remains `0.0 dB`.
 Double-click a fader lane to return to `0.0 dB` or a pan control to return to
 center. Solo is exclusive: selecting a new solo clears the previous solo, and
 clicking the active solo again restores normal playback.

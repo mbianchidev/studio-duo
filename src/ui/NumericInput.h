@@ -44,4 +44,13 @@ inline std::optional<float> parseTrackDecibels(
     return static_cast<float>(
         std::round(*parsed * 10.0) / 10.0);
 }
+
+inline juce::String formatDecibels(double value)
+{
+    if (std::abs(value) < 0.05)
+        value = 0.0;
+    return juce::String(value > 0.0 ? "+" : "")
+        + juce::String(value, 1)
+        + " dB";
+}
 }

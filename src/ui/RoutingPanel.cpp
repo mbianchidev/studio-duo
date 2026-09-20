@@ -1,6 +1,7 @@
 #include "RoutingPanel.h"
 
 #include "devices/DeviceRegistry.h"
+#include "NumericInput.h"
 #include "StudioTheme.h"
 
 #include <algorithm>
@@ -553,7 +554,7 @@ void RoutingPanel::showRouteMenu(const RoutingConnection& route)
              { -18.0f, -12.0f, -6.0f, 0.0f, 6.0f })
         {
             levels.addItem(
-                juce::String(level, 1) + " dB",
+                formatDecibels(level),
                 true,
                 std::abs(route.gainDecibels - level) < 0.001f,
                 [update, level]

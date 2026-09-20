@@ -639,6 +639,8 @@ Mixer dB readouts accept strict finite numeric input with an optional
 case-insensitive `dB` suffix, enforce the `-60.0..+12.0 dB` track range, round
 to 0.1 dB, and edit inline in the existing strip readout. Applying the inline
 editor routes through the existing undo and automation gesture path.
+Shared dB formatting prefixes positive values with `+`, keeps zero unsigned,
+and is reused by mixer, inspector, timeline, clip-gain, and routing displays.
 Mixer-strip context menus forward to the same track callbacks used by timeline
 headers, keeping mute/solo/arm, name/color, versions, duplicate, and delete
 behavior identical.
