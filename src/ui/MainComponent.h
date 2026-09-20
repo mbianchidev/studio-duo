@@ -509,6 +509,12 @@ private:
         "Zoom in",
         "Zoom timeline in (Command/Ctrl++)"
     };
+    StudioIconButton snapButton {
+        StudioIcon::snap,
+        "Snap edits",
+        "Snap clip, marker, and section edits to the selected grid"
+    };
+    juce::ComboBox editGridSelector;
 
     juce::Viewport timelineViewport;
     TimelineComponent timeline;

@@ -14,6 +14,7 @@
 #include <juce_cryptography/juce_cryptography.h>
 
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <cmath>
 #include <map>
@@ -489,6 +490,49 @@ MainComponent::MainComponent(bool startAudioOnLaunch)
     configureButton(zoomOutButton, "Zoom timeline out (Command/Ctrl+-)");
     configureButton(zoomResetButton, "Reset timeline zoom (Command/Ctrl+0)");
     configureButton(zoomInButton, "Zoom timeline in (Command/Ctrl++)");
+    configureButton(
+        snapButton,
+        "Snap clip, marker, and section edits to the selected grid");
+    snapButton.setClickingTogglesState(true);
+    snapButton.setToggleState(
+        true,
+        juce::dontSendNotification);
+    snapButton.setColour(
+        juce::TextButton::buttonOnColourId,
+        juce::Colour(StudioColours::transportRaised));
+    snapButton.setColour(
+        juce::TextButton::textColourOnId,
+        juce::Colour(StudioColours::orange));
+    snapButton.onClick = [this]
+    {
+        timeline.setSnapEnabled(
+            snapButton.getToggleState());
+    };
+    addAndMakeVisible(editGridSelector);
+    editGridSelector.addItem("1/4", 1);
+    editGridSelector.addItem("1/8", 2);
+    editGridSelector.addItem("1/16", 3);
+    editGridSelector.addItem("1/32", 4);
+    editGridSelector.setSelectedId(
+        3,
+        juce::dontSendNotification);
+    editGridSelector.setTooltip(
+        "Set the snap grid for clip, marker, and section edits");
+    editGridSelector.onChange = [this]
+    {
+        const std::array grids {
+            1.0,
+            0.5,
+            0.25,
+            0.125
+        };
+        const auto index =
+            editGridSelector.getSelectedId() - 1;
+        if (index >= 0
+            && index < static_cast<int>(grids.size()))
+            timeline.setEditGridBeats(
+                grids[static_cast<std::size_t>(index)]);
+    };
 
     newButton.onClick = [this] { createNewProject(); };
     openButton.onClick = [this] { beginOpenProject(); };
@@ -2232,6 +2276,11 @@ void MainComponent::resized()
     splitClipButton.setBounds(editToolbar.removeFromLeft(38).reduced(2));
     trimClipEndButton.setBounds(editToolbar.removeFromLeft(38).reduced(2));
     deleteClipButton.setBounds(editToolbar.removeFromLeft(38).reduced(2));
+    editToolbar.removeFromLeft(8);
+    snapButton.setBounds(
+        editToolbar.removeFromLeft(38).reduced(2));
+    editGridSelector.setBounds(
+        editToolbar.removeFromLeft(82).reduced(2));
     timelineViewport.setBounds(bounds);
 
     auto topRow = header.reduced(14, 8);

@@ -202,7 +202,9 @@ The bottom transport strip keeps position, Stop, Play/Pause, Record, Loop,
 loop-range, metronome, time signature, and tempo controls in compact grouped
 modules. **Inspect**, **Mix**, and **Tracks** switches at the far right own the
 three docked work areas. File and project tools remain in the top header, while
-undo, redo, scissors, trim, delete, and zoom tools share the edit toolbar.
+undo, redo, scissors, trim, delete, Snap, a visible 1/4-1/32 grid selector, and
+zoom tools share the edit toolbar. Snap applies to clip, marker, and section
+dragging without introducing separate pointer/eraser tool modes.
 Transport buttons are centered independently from the position display;
 metronome, meter, and BPM sit immediately to their right. Audio readiness and
 device status appear at the top-right of the header.

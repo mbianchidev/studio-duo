@@ -100,6 +100,17 @@ void TimelineComponent::setPixelsPerSecond(double pixels)
     repaint();
 }
 
+void TimelineComponent::setSnapEnabled(bool enabled)
+{
+    snapEnabled = enabled;
+}
+
+void TimelineComponent::setEditGridBeats(double beats)
+{
+    if (std::isfinite(beats) && beats > 0.0)
+        editGridBeats = beats;
+}
+
 double TimelineComponent::getPixelsPerSecond() const noexcept
 {
     return pixelsPerSecond;
@@ -1625,8 +1636,7 @@ void TimelineComponent::mouseDrag(const juce::MouseEvent& event)
 
     if (draggedMarkerId.isNotEmpty())
     {
-        markerDragPreviewSeconds = juce::jmax(
-            0.0,
+        markerDragPreviewSeconds = snappedSeconds(
             xToSeconds(event.position.x));
         repaint();
         return;
@@ -1666,11 +1676,11 @@ void TimelineComponent::mouseDrag(const juce::MouseEvent& event)
             const auto duration =
                 sectionDragOriginalEnd
                 - sectionDragOriginalStart;
-            const auto requested =
+            const auto requested = snappedSeconds(
                 sectionDragOriginalStart
                 + static_cast<double>(
                       event.position.x - dragStartX)
-                    / pixelsPerSecond;
+                    / pixelsPerSecond);
             const auto maximumStart =
                 std::isfinite(nextStart)
                     ? juce::jmax(
@@ -1694,7 +1704,8 @@ void TimelineComponent::mouseDrag(const juce::MouseEvent& event)
         {
             const auto requested = juce::jmax(
                 sectionDragPreviewStart + 0.01,
-                xToSeconds(event.position.x));
+                snappedSeconds(
+                    xToSeconds(event.position.x)));
             sectionDragPreviewEnd =
                 std::isfinite(nextStart)
                     ? juce::jmin(nextStart, requested)
@@ -1714,7 +1725,7 @@ void TimelineComponent::mouseDrag(const juce::MouseEvent& event)
     if (dragMode == DragMode::move)
     {
         const auto unsnapped = std::max(0.0, dragOriginalStart + deltaSeconds);
-        dragPreviewStart = std::round(unsnapped / beat) * beat;
+        dragPreviewStart = snappedSeconds(unsnapped);
 
         const auto targetTrackIndex = trackIndexAt(event.position.y);
         if (project != nullptr
@@ -1739,7 +1750,7 @@ void TimelineComponent::mouseDrag(const juce::MouseEvent& event)
         const auto unsnapped = juce::jlimit(minimumStart,
                                            maximumStart,
                                            dragOriginalStart + deltaSeconds);
-        dragPreviewStart = std::round(unsnapped / (beat / 4.0)) * (beat / 4.0);
+        dragPreviewStart = snappedSeconds(unsnapped);
         dragPreviewStart = juce::jlimit(minimumStart, maximumStart, dragPreviewStart);
         const auto appliedDelta = dragPreviewStart - dragOriginalStart;
         dragPreviewSourceOffset = dragOriginalSourceOffset + appliedDelta;
@@ -1754,8 +1765,11 @@ void TimelineComponent::mouseDrag(const juce::MouseEvent& event)
         const auto unsnappedDuration = juce::jlimit(minimumDuration,
                                                     sourceRemaining,
                                                     dragOriginalDuration + deltaSeconds);
-        dragPreviewDuration = std::round(unsnappedDuration / (beat / 4.0))
-            * (beat / 4.0);
+        const auto unsnappedEnd =
+            dragOriginalStart + unsnappedDuration;
+        dragPreviewDuration =
+            snappedSeconds(unsnappedEnd)
+            - dragOriginalStart;
         dragPreviewDuration = juce::jlimit(minimumDuration,
                                            sourceRemaining,
                                            dragPreviewDuration);
@@ -2851,6 +2865,24 @@ void TimelineComponent::updateHoverState(juce::Point<float> position)
 double TimelineComponent::xToSeconds(float x) const noexcept
 {
     return std::max(0.0, static_cast<double>(x - trackHeaderWidth) / pixelsPerSecond);
+}
+
+double TimelineComponent::snappedSeconds(
+    double seconds) const noexcept
+{
+    const auto clamped = std::max(0.0, seconds);
+    if (!snapEnabled
+        || project == nullptr
+        || !std::isfinite(editGridBeats)
+        || editGridBeats <= 0.0)
+        return clamped;
+    const auto beats = project->beatsAt(clamped);
+    const auto snappedBeats =
+        std::round(beats / editGridBeats)
+        * editGridBeats;
+    return std::max(
+        0.0,
+        project->secondsAtBeat(snappedBeats));
 }
 
 float TimelineComponent::secondsToX(double seconds) const noexcept

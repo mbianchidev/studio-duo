@@ -89,6 +89,31 @@ void timelineMarkerTests()
                && std::abs(movedSeconds - 3.0) < 0.000001,
            "Dragging a marker flag requests a stable-ID move to the new timeline position.");
 
+    timeline.setEditGridBeats(0.25);
+    const auto offGridPosition = juce::Point<float>(
+        timeline.xForSeconds(3.13),
+        8.0f);
+    timeline.mouseDown(mouseEvent(
+        timeline,
+        markerPosition,
+        markerPosition,
+        1,
+        false));
+    timeline.mouseDrag(mouseEvent(
+        timeline,
+        offGridPosition,
+        markerPosition,
+        1,
+        true));
+    timeline.mouseUp(mouseEvent(
+        timeline,
+        offGridPosition,
+        markerPosition,
+        1,
+        true));
+    expect(std::abs(movedSeconds - 3.125) < 0.000001,
+           "Marker edits snap to the visible sixteenth-note grid.");
+
     auto markerAdds = 0;
     auto sectionEdits = 0;
     timeline.onAddMarkerRequested = [&markerAdds](double)

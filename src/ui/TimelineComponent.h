@@ -28,6 +28,8 @@ public:
     void setRecordingPreviews(std::vector<RecordingPreview> previews);
     void clearRecordingPreviews();
     void setPixelsPerSecond(double pixels);
+    void setSnapEnabled(bool enabled);
+    void setEditGridBeats(double beats);
     [[nodiscard]] double getPixelsPerSecond() const noexcept;
     [[nodiscard]] float xForSeconds(double seconds) const noexcept;
     [[nodiscard]] int preferredWidth(int minimumWidth) const;
@@ -138,6 +140,7 @@ private:
     [[nodiscard]] float trackY(const juce::String& trackId) const noexcept;
     [[nodiscard]] double xToSeconds(float x) const noexcept;
     [[nodiscard]] float secondsToX(double seconds) const noexcept;
+    [[nodiscard]] double snappedSeconds(double seconds) const noexcept;
     static void drawClipWaveform(juce::Graphics& graphics,
                                  const AudioClip& clip,
                                  juce::Rectangle<float> bounds,
@@ -179,6 +182,8 @@ private:
     float dragPreviewTrackVolume = 0.0f;
     std::vector<RecordingPreview> recordingPreviews;
     double pixelsPerSecond = 96.0;
+    double editGridBeats = 0.25;
+    bool snapEnabled = true;
     int viewportPositionX = 0;
     double dragOriginalStart = 0.0;
     double dragOriginalSourceOffset = 0.0;

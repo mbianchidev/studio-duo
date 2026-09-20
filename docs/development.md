@@ -687,8 +687,10 @@ top-right header.
 
 The bottom-right **Inspect**, **Mix**, and **Tracks** buttons are the sole
 visibility controls for the three docked areas. The edit toolbar owns undo,
-redo, scissors, trim, delete, and zoom controls; no duplicate panel-edge
-buttons remain.
+redo, scissors, trim, delete, snap/grid, and zoom controls; no duplicate
+panel-edge buttons remain. Timeline snap converts edit positions through the
+project tempo map, so the selected beat grid remains musical across tempo
+changes.
 
 `StudioPreferences` persists the autosave-recovery toggle in the application
 data directory with defaults merged on missing or invalid data. When enabled,
