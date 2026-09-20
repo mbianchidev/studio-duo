@@ -424,6 +424,7 @@ target_sources(
         src/ui/RoutingPanel.h
         src/ui/StudioIconButton.cpp
         src/ui/StudioIconButton.h
+        src/ui/StudioPanControl.h
         src/ui/StudioTheme.h
         src/ui/TimelineComponent.cpp
         src/ui/TimelineComponent.h
@@ -824,6 +825,7 @@ if(STUDIO_DUO_BUILD_TESTS)
             src/ui/RoutingUiModel.h
             src/ui/StudioIconButton.cpp
             src/ui/StudioIconButton.h
+            src/ui/StudioPanControl.h
             src/ui/TimelineComponent.cpp
             src/ui/TimelineComponent.h
             src/ui/MixerPanel.cpp

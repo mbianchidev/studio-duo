@@ -630,7 +630,9 @@ The left track-header context menu targets the clicked parent or version lane.
 Delete removes one version or the complete parent group, while the master
 remains protected. The lower mixer filters out child lanes and exposes an
 interactive linear pan control for each parent channel; drag horizontally toward the
-intended channel or double-click to reset center. Deterministic render coverage
+intended channel or double-click to reset center. The mixer and inspector use
+the shared center-origin pan renderer, which colors only the active span from
+center to the knob. Deterministic render coverage
 asserts that full-left and full-right pan move mono content to the matching
 output channel.
 

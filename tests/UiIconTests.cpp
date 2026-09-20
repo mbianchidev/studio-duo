@@ -2,6 +2,7 @@
 #include "TestSuites.h"
 
 #include "ui/StudioIconButton.h"
+#include "ui/StudioPanControl.h"
 
 #include <cmath>
 
@@ -57,4 +58,21 @@ void uiIconTests()
     expect(button.getTitle() == "Pause"
                && button.getTooltip() == "Pause playback (Space)",
            "Stateful controls can replace their accessible name and tooltip.");
+
+    const auto leftPan = studio::studioPanGeometry(
+        { 0.0f, 0.0f, 100.0f, 20.0f },
+        -0.5f);
+    const auto rightPan = studio::studioPanGeometry(
+        { 0.0f, 0.0f, 100.0f, 20.0f },
+        0.5f);
+    expect(std::abs(
+               leftPan.fill.getRight()
+               - leftPan.centreX) < 0.0001f
+               && leftPan.fill.getX() < leftPan.centreX,
+           "Left pan colour fills only from the knob to the centre.");
+    expect(std::abs(
+               rightPan.fill.getX()
+               - rightPan.centreX) < 0.0001f
+               && rightPan.fill.getRight() > rightPan.centreX,
+           "Right pan colour fills only from the centre to the knob.");
 }

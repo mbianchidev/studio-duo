@@ -309,7 +309,9 @@ The inspector and lower mixer expose gain, pan, mute, and solo. Gain defaults to
 `0.0 dB`; pan defaults to `Center`. Mixer strips expose dedicated mute, solo,
 and record-arm icons plus a boxed dB readout and calibrated fader scale. Drag
 faders vertically and the linear left/right pan controls horizontally to edit
-them. Wide pre/post meters and the current post-fader peak make every track's
+them. Mixer and inspector panners share the same center-origin display: only
+the active side between center and the knob is colored. Wide pre/post meters
+and the current post-fader peak make every track's
 level visible at a glance.
 Double-click a fader lane to return to `0.0 dB` or a pan control to return to
 center. Solo is exclusive: selecting a new solo clears the previous solo, and

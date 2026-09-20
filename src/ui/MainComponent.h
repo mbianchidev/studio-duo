@@ -1,6 +1,7 @@
 #pragma once
 
 #include "StudioIconButton.h"
+#include "StudioPanControl.h"
 #include "StudioTheme.h"
 #include "AutomationPanel.h"
 #include "MixerPanel.h"
@@ -460,7 +461,7 @@ private:
     juce::Label volumeLabel;
     juce::Label panLabel;
     juce::Slider volumeSlider;
-    juce::Slider panSlider;
+    StudioPanSlider panSlider;
     StudioIconButton muteButton {
         StudioIcon::mute,
         "Mute track",

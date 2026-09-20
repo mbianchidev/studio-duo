@@ -1,6 +1,7 @@
 #include "MixerPanel.h"
 
 #include "StudioIconButton.h"
+#include "StudioPanControl.h"
 #include "StudioTheme.h"
 
 #include <algorithm>
@@ -525,67 +526,21 @@ void MixerPanel::paint(juce::Graphics& graphics)
             ? juce::String("C")
             : juce::String(static_cast<int>(std::round(std::abs(panValue) * 100.0f)))
                 + (panValue < 0.0f ? "% L" : "% R");
-        const auto panY =
-            static_cast<float>(strip.getBottom() - 32);
-        const auto panLeft =
-            static_cast<float>(strip.getX() + 18);
-        const auto panRight =
-            static_cast<float>(strip.getRight() - 18);
-        graphics.setColour(juce::Colour(StudioColours::window));
-        graphics.drawLine(
-            panLeft,
-            panY,
-            panRight,
-            panY,
-            5.0f);
-        graphics.setColour(juce::Colour(StudioColours::border));
-        graphics.drawLine(
-            panLeft,
-            panY,
-            panRight,
-            panY,
-            1.5f);
-        graphics.drawVerticalLine(
-            strip.getCentreX(),
-            panY - 5.0f,
-            panY + 5.0f);
-        const auto panX = juce::jmap(
+        drawStudioPanControl(
+            graphics,
+            {
+                static_cast<float>(strip.getX() + 2),
+                static_cast<float>(strip.getBottom() - 45),
+                static_cast<float>(strip.getWidth() - 4),
+                24.0f
+            },
             panValue,
-            -1.0f,
-            1.0f,
-            panLeft,
-            panRight);
-        graphics.setColour(
-            std::abs(panValue) < 0.005f
-                ? juce::Colour(StudioColours::text)
-                : track->colour);
-        graphics.fillRoundedRectangle(
-            panX - 5.0f,
-            panY - 7.0f,
-            10.0f,
-            14.0f,
-            3.0f);
+            track->colour,
+            true);
         graphics.setColour(
             juce::Colour(StudioColours::secondaryText));
         graphics.setFont(
-            juce::Font(
-                juce::FontOptions(8.0f,
-                                  juce::Font::bold)));
-        graphics.drawText(
-            "L",
-            strip.getX() + 4,
-            strip.getBottom() - 41,
-            12,
-            16,
-            juce::Justification::centred);
-        graphics.drawText(
-            "R",
-            strip.getRight() - 16,
-            strip.getBottom() - 41,
-            12,
-            16,
-            juce::Justification::centred);
-        graphics.setColour(juce::Colour(StudioColours::secondaryText));
+            juce::Font(juce::FontOptions(8.0f)));
         graphics.drawText(panText,
                           strip.getX() + 6,
                           strip.getBottom() - 16,

@@ -6763,6 +6763,7 @@ void MainComponent::updateInspector()
     refreshOutputControls();
     volumeSlider.setValue(track->volumeDecibels, juce::dontSendNotification);
     panSlider.setValue(track->pan, juce::dontSendNotification);
+    panSlider.setAccentColour(track->colour);
     muteButton.setColour(juce::TextButton::buttonColourId,
                          juce::Colour(track->muted ? StudioColours::amber : StudioColours::raised));
     muteButton.setAccessibleLabel(
