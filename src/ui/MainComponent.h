@@ -385,6 +385,7 @@ private:
     };
     juce::Slider tempoSlider;
     juce::Label tempoLabel;
+    juce::Label meterLabel;
     juce::Label positionLabel;
     juce::Label projectLabel;
 
@@ -421,7 +422,11 @@ private:
         "Automation",
         "Edit and record mixer and plugin automation"
     };
-    juce::TextButton newMidiClipButton { "NEW MIDI CLIP" };
+    StudioIconButton newMidiClipButton {
+        StudioIcon::midi,
+        "New MIDI clip",
+        "Create an ordinary editable MIDI clip at the playhead (Command/Ctrl+Shift+N)"
+    };
     StudioIconButton sessionPanelToggleButton {
         StudioIcon::chevronLeft,
         "Collapse session sidebar",

@@ -670,8 +670,11 @@ The timeline component receives the viewport's horizontal position and paints
 track headers at that offset, while clips and grid content remain in timeline
 coordinates. Markers, song sections, and musical ruler labels occupy separate
 stacked rows. The top application header contains project/file tools; the
-bottom transport strip owns position, transport, loop, metronome, and tempo
-controls. The UI timer follows an active playhead with a right-side margin,
+bottom transport strip owns position, transport, loop, metronome, meter, and
+tempo controls. The Session pane uses the same icon-button instances in both
+states: expanded width reveals full labels, while collapsed width hides labels
+without changing actions, tooltips, or focus behavior. The UI timer follows an
+active playhead with a right-side margin,
 grows the view during long recordings, and rewinds a completed transport before
 starting playback again.
 

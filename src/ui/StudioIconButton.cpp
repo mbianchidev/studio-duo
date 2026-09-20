@@ -200,6 +200,18 @@ juce::Path createStudioIconPath(StudioIcon icon)
             path.cubicTo(23.0f, 9.0f, 23.0f, 15.0f, 17.0f, 18.0f);
             break;
 
+        case StudioIcon::midi:
+            path.startNewSubPath(9.0f, 5.0f);
+            path.lineTo(20.0f, 3.0f);
+            path.lineTo(20.0f, 15.0f);
+            path.startNewSubPath(9.0f, 5.0f);
+            path.lineTo(9.0f, 17.0f);
+            path.startNewSubPath(9.0f, 9.0f);
+            path.lineTo(20.0f, 7.0f);
+            path.addEllipse(3.0f, 15.0f, 6.0f, 5.0f);
+            path.addEllipse(14.0f, 13.0f, 6.0f, 5.0f);
+            break;
+
         case StudioIcon::add:
             path.startNewSubPath(4.0f, 12.0f);
             path.lineTo(20.0f, 12.0f);
@@ -407,7 +419,8 @@ StudioIconButton::StudioIconButton(StudioIcon initialIcon,
                                    juce::String accessibleLabel,
                                    juce::String tooltip)
     : juce::TextButton({}, tooltip),
-      icon(initialIcon)
+      icon(initialIcon),
+      visibleLabel(accessibleLabel)
 {
     setButtonText({});
     setAccessibleLabel(std::move(accessibleLabel));
@@ -435,18 +448,39 @@ void StudioIconButton::setAccessibleLabel(juce::String label)
     setTitle(label);
 }
 
+void StudioIconButton::setVisibleLabel(juce::String label)
+{
+    visibleLabel = std::move(label);
+    repaint();
+}
+
+void StudioIconButton::setShowLabel(bool shouldShow)
+{
+    if (showLabel == shouldShow)
+        return;
+    showLabel = shouldShow;
+    repaint();
+}
+
+bool StudioIconButton::isShowingLabel() const noexcept
+{
+    return showLabel;
+}
+
 void StudioIconButton::paintButton(juce::Graphics& graphics,
                                    bool highlighted,
                                    bool down)
 {
-    juce::TextButton::paintButton(graphics, highlighted, down);
+    getLookAndFeel().drawButtonBackground(
+        graphics,
+        *this,
+        findColour(
+            getToggleState()
+                ? juce::TextButton::buttonOnColourId
+                : juce::TextButton::buttonColourId),
+        highlighted,
+        down);
 
-    const auto side = static_cast<float>(
-        std::min(getWidth(), getHeight()));
-    const auto inset = juce::jmax(4.0f, side * 0.23f);
-    auto iconBounds = getLocalBounds().toFloat()
-        .withSizeKeepingCentre(side, side)
-        .reduced(inset);
     auto colour = findColour(
         getToggleState()
             ? juce::TextButton::textColourOnId
@@ -457,6 +491,37 @@ void StudioIconButton::paintButton(juce::Graphics& graphics,
         colour = colour.darker(0.08f);
     else if (highlighted)
         colour = colour.brighter(0.08f);
+
+    auto content = getLocalBounds().toFloat().reduced(5.0f);
+    juce::Rectangle<float> iconBounds;
+    if (showLabel && visibleLabel.isNotEmpty())
+    {
+        iconBounds = content.removeFromLeft(
+            juce::jmin(
+                content.getHeight(),
+                24.0f)).reduced(3.0f);
+        content.removeFromLeft(5.0f);
+        graphics.setColour(colour);
+        graphics.setFont(
+            juce::Font(
+                juce::FontOptions(10.5f,
+                                  juce::Font::bold)));
+        graphics.drawFittedText(
+            visibleLabel,
+            content.toNearestInt(),
+            juce::Justification::centredLeft,
+            1,
+            0.8f);
+    }
+    else
+    {
+        const auto side = static_cast<float>(
+            std::min(getWidth(), getHeight()));
+        const auto inset = juce::jmax(4.0f, side * 0.23f);
+        iconBounds = getLocalBounds().toFloat()
+            .withSizeKeepingCentre(side, side)
+            .reduced(inset);
+    }
     drawStudioIcon(
         graphics,
         icon,

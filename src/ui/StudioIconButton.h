@@ -25,6 +25,7 @@ enum class StudioIcon
     mute,
     solo,
     volume,
+    midi,
     add,
     bus,
     importFile,
@@ -67,6 +68,7 @@ inline constexpr std::array allStudioIcons {
     StudioIcon::mute,
     StudioIcon::solo,
     StudioIcon::volume,
+    StudioIcon::midi,
     StudioIcon::add,
     StudioIcon::bus,
     StudioIcon::importFile,
@@ -111,6 +113,9 @@ public:
     void setIcon(StudioIcon icon);
     [[nodiscard]] StudioIcon getIcon() const noexcept;
     void setAccessibleLabel(juce::String label);
+    void setVisibleLabel(juce::String label);
+    void setShowLabel(bool shouldShow);
+    [[nodiscard]] bool isShowingLabel() const noexcept;
 
     void paintButton(juce::Graphics& graphics,
                      bool highlighted,
@@ -118,5 +123,7 @@ public:
 
 private:
     StudioIcon icon;
+    juce::String visibleLabel;
+    bool showLabel = false;
 };
 }

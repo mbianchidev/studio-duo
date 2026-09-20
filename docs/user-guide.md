@@ -199,8 +199,8 @@ tempo and meter at the playhead, and the timeline keeps punch and loop ranges
 visible as coloured bounds. When punch and loop are both enabled, punch takes
 priority for recording while ordinary playback keeps using the loop range.
 The bottom transport strip keeps position, Stop, Play/Pause, Record, Loop,
-loop-range, metronome, and tempo controls together while file and project tools
-remain in the top header.
+loop-range, metronome, time signature, and tempo controls in compact grouped
+modules while file and project tools remain in the top header.
 
 Right-click the **MARKERS / SECTIONS** lane above the bar ruler to add either a
 marker flag or a song section at that exact timeline position without moving
@@ -316,7 +316,9 @@ bypass and restore it while audio is playing. Click a send or sidechain to open
 its routing editor.
 
 Use the single sidebar arrow to collapse Session controls to an icon rail. The
-inspector and mixer each keep their own collapse button on the panel edge; when
+expanded Session pane shows each action's icon and full name; collapsing it
+removes the labels and returns the same controls to compact icon-only buttons.
+The inspector and mixer each keep their own collapse button on the panel edge; when
 hidden, a left chevron restores the inspector at the right edge and an up
 chevron restores the mixer above the bottom transport strip. Their dividers also
 collapse when dragged closed and restore when dragged open or double-clicked.

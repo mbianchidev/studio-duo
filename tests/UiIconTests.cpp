@@ -36,6 +36,13 @@ void uiIconTests()
            "Icon buttons preserve an explicit hover tooltip.");
     expect(button.getWantsKeyboardFocus(),
            "Icon buttons participate in keyboard focus.");
+    button.setVisibleLabel("Play");
+    button.setShowLabel(true);
+    expect(button.isShowingLabel(),
+           "Icon buttons can reveal a full label in expanded toolbars.");
+    button.setShowLabel(false);
+    expect(!button.isShowingLabel(),
+           "Icon buttons return to icon-only mode in collapsed toolbars.");
 
     button.setClickingTogglesState(true);
     button.setToggleState(true, juce::dontSendNotification);

@@ -435,6 +435,24 @@ MainComponent::MainComponent(bool startAudioOnLaunch)
     configureButton(
         newMidiClipButton,
         "Create an ordinary editable MIDI clip at the playhead (Command/Ctrl+Shift+N)");
+    addTrackButton.setVisibleLabel("Add Track");
+    addBusButton.setVisibleLabel("Add Bus Track");
+    importButton.setVisibleLabel("Import Audio");
+    duplicateTrackButton.setVisibleLabel("Duplicate Track");
+    deleteTrackButton.setVisibleLabel("Delete Track");
+    trackingButton.setVisibleLabel("Tracking Setup");
+    automationButton.setVisibleLabel("Automation");
+    newMidiClipButton.setVisibleLabel("New MIDI Clip");
+    for (auto* button : {
+             &addTrackButton,
+             &addBusButton,
+             &importButton,
+             &duplicateTrackButton,
+             &deleteTrackButton,
+             &trackingButton,
+             &automationButton,
+             &newMidiClipButton })
+        button->setShowLabel(true);
     configureButton(sessionPanelToggleButton, "Collapse or expand the session sidebar");
     configureButton(inspectorPanelToggleButton, "Show or hide the inspector");
     configureButton(mixerPanelToggleButton, "Show or hide the mixer");
@@ -585,19 +603,48 @@ MainComponent::MainComponent(bool startAudioOnLaunch)
             state.metronomeEnabled = metronomeButton.getToggleState();
         });
     };
+    for (auto* button : {
+             &stopButton,
+             &playButton,
+             &recordButton,
+             &loopButton,
+             &loopRangeButton,
+             &metronomeButton })
+        button->setColour(
+            juce::TextButton::buttonColourId,
+            juce::Colour(StudioColours::transportRaised));
+    loopButton.setColour(
+        juce::TextButton::buttonOnColourId,
+        juce::Colour(StudioColours::transportRaised));
+    metronomeButton.setColour(
+        juce::TextButton::buttonOnColourId,
+        juce::Colour(StudioColours::transportRaised));
 
     addAndMakeVisible(projectLabel);
     projectLabel.setFont(juce::Font(juce::FontOptions(18.0f, juce::Font::bold)));
     projectLabel.setJustificationType(juce::Justification::centredLeft);
 
     addAndMakeVisible(positionLabel);
-    positionLabel.setFont(juce::Font(juce::FontOptions(18.0f, juce::Font::bold)));
+    positionLabel.setFont(juce::Font(juce::FontOptions(15.0f, juce::Font::bold)));
     positionLabel.setJustificationType(juce::Justification::centred);
+    positionLabel.setColour(
+        juce::Label::textColourId,
+        juce::Colour(StudioColours::text));
 
     addAndMakeVisible(tempoLabel);
     tempoLabel.setText("BPM", juce::dontSendNotification);
     tempoLabel.setColour(juce::Label::textColourId, juce::Colour(StudioColours::secondaryText));
     tempoLabel.setJustificationType(juce::Justification::centred);
+
+    addAndMakeVisible(meterLabel);
+    meterLabel.setText("4 / 4", juce::dontSendNotification);
+    meterLabel.setColour(
+        juce::Label::textColourId,
+        juce::Colour(StudioColours::text));
+    meterLabel.setFont(
+        juce::Font(juce::FontOptions(12.0f, juce::Font::bold)));
+    meterLabel.setJustificationType(
+        juce::Justification::centred);
 
     addAndMakeVisible(tempoSlider);
     tempoSlider.setSliderStyle(juce::Slider::LinearBar);
@@ -1971,6 +2018,8 @@ void MainComponent::paint(juce::Graphics& graphics)
         bounds.removeFromBottom(transportFooterHeight);
     graphics.setColour(juce::Colour(StudioColours::panel));
     graphics.fillRect(header);
+    graphics.setColour(
+        juce::Colour(StudioColours::transport));
     graphics.fillRect(footer);
     graphics.setColour(juce::Colour(StudioColours::border));
     graphics.drawHorizontalLine(header.getBottom() - 1, 0.0f, static_cast<float>(getWidth()));
@@ -1978,6 +2027,36 @@ void MainComponent::paint(juce::Graphics& graphics)
         footer.getY(),
         0.0f,
         static_cast<float>(getWidth()));
+    const auto positionBounds =
+        positionLabel.getBounds().toFloat().reduced(1.0f);
+    if (!positionBounds.isEmpty())
+    {
+        graphics.setColour(
+            juce::Colour(StudioColours::transportRaised)
+                .darker(0.18f));
+        graphics.fillRoundedRectangle(
+            positionBounds,
+            3.0f);
+        graphics.setColour(
+            juce::Colour(StudioColours::border));
+        graphics.drawRoundedRectangle(
+            positionBounds,
+            3.0f,
+            1.0f);
+        graphics.drawVerticalLine(
+            positionLabel.getX() - 6,
+            static_cast<float>(footer.getY() + 7),
+            static_cast<float>(footer.getBottom() - 7));
+    }
+    if (meterLabel.getWidth() > 0)
+    {
+        graphics.setColour(
+            juce::Colour(StudioColours::border));
+        graphics.drawVerticalLine(
+            meterLabel.getX() - 6,
+            static_cast<float>(footer.getY() + 7),
+            static_cast<float>(footer.getBottom() - 7));
+    }
     if (brandLogo != nullptr)
     {
         brandLogo->drawWithin(graphics,
@@ -2162,10 +2241,12 @@ void MainComponent::resized()
 
     auto footerControls = status.reduced(8, 4);
     auto tempoControls =
-        footerControls.removeFromRight(184);
+        footerControls.removeFromRight(226);
+    meterLabel.setBounds(
+        tempoControls.removeFromLeft(48).reduced(2, 1));
     layoutTempoControls(tempoControls, 2);
     const auto transportWidth = 6 * 38;
-    const auto positionWidth = 150;
+    const auto positionWidth = 190;
     const auto clusterWidth =
         positionWidth + transportWidth;
     const auto clusterX = juce::jmax(
@@ -2356,6 +2437,14 @@ void MainComponent::timerCallback()
     timeline.setPlayheadSeconds(position);
     positionLabel.setText(positionText(position, project),
                           juce::dontSendNotification);
+    const auto musicalPosition =
+        project.musicalPositionAt(position);
+    meterLabel.setText(
+        juce::String(musicalPosition.meter.numerator)
+            + " / "
+            + juce::String(
+                musicalPosition.meter.denominator),
+        juce::dontSendNotification);
     const auto playing = audioEngine.isPlaying();
     playButton.setIcon(playing ? StudioIcon::pause : StudioIcon::play);
     playButton.setAccessibleLabel(playing ? "Pause" : "Play");
@@ -2372,7 +2461,7 @@ void MainComponent::timerCallback()
             : "Record armed audio, MIDI, and instrument tracks");
     recordButton.setColour(juce::TextButton::buttonColourId,
                            juce::Colour(recording ? StudioColours::orange
-                                                 : StudioColours::raised));
+                                                 : StudioColours::transportRaised));
     mixer->setPeaks(audioEngine.leftPeak(), audioEngine.rightPeak());
     mixer->setMeters(audioEngine.trackMeterSnapshots());
     auto runtimeStatuses = audioEngine.pluginRuntimeStatuses();
@@ -4307,7 +4396,7 @@ void MainComponent::stopTransportAndRecording()
     recordButton.setTooltip(
         "Record armed audio, MIDI, and instrument tracks");
     recordButton.setColour(juce::TextButton::buttonColourId,
-                           juce::Colour(StudioColours::raised));
+                           juce::Colour(StudioColours::transportRaised));
     timeline.clearRecordingPreviews();
 }
 
@@ -4332,7 +4421,7 @@ void MainComponent::finishRecording()
     recordButton.setTooltip(
         "Record armed audio, MIDI, and instrument tracks");
     recordButton.setColour(juce::TextButton::buttonColourId,
-                           juce::Colour(StudioColours::raised));
+                           juce::Colour(StudioColours::transportRaised));
     timeline.clearRecordingPreviews();
     setStatus(
         pendingTargets.empty()
@@ -8773,6 +8862,16 @@ void MainComponent::setLeftPanelCollapsed(bool collapsed)
     sessionPanelToggleButton.setTooltip(
         collapsed ? "Expand the session sidebar"
                   : "Collapse the session sidebar");
+    for (auto* button : {
+             &addTrackButton,
+             &addBusButton,
+             &importButton,
+             &duplicateTrackButton,
+             &deleteTrackButton,
+             &trackingButton,
+             &automationButton,
+             &newMidiClipButton })
+        button->setShowLabel(!collapsed);
     resized();
     repaint();
 }
@@ -9348,21 +9447,15 @@ juce::String MainComponent::positionText(double seconds, const Project& project)
     const auto milliseconds = static_cast<int>(std::fmod(seconds, 1.0) * 1000.0);
 
     return juce::String(musical.bar).paddedLeft('0', 3)
-        + " | "
+        + "."
         + juce::String(musical.beat).paddedLeft('0', 2)
-        + " | "
+        + "."
         + juce::String(musical.ticks).paddedLeft('0', 3)
-        + "    "
+        + "   "
         + juce::String(minutes).paddedLeft('0', 2)
         + ":"
         + juce::String(wholeSeconds).paddedLeft('0', 2)
         + "."
-        + juce::String(milliseconds).paddedLeft('0', 3)
-        + "    "
-        + juce::String(project.tempoAt(seconds), 1)
-        + " BPM  "
-        + juce::String(musical.meter.numerator)
-        + "/"
-        + juce::String(musical.meter.denominator);
+        + juce::String(milliseconds).paddedLeft('0', 3);
 }
 }
