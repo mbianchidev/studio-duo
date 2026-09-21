@@ -4963,7 +4963,6 @@ void MainComponent::addTrack(TrackType type)
     track.name = type == TrackType::controlRoom
         ? typeName
         : typeName + " " + juce::String(trackCount + 1);
-    track.armed = type == TrackType::audio;
     const std::array colours {
         juce::Colour(0xffdd5b3f),
         juce::Colour(0xffd99a42),

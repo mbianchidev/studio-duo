@@ -268,4 +268,70 @@ void timelineMarkerTests()
         false));
     expect(volume > 11.9f,
            "Timeline track volume faders expose their dB range through direct manipulation.");
+
+    auto scrollProject =
+        studio::Project::createDefault();
+    for (auto index = 0; index < 10; ++index)
+    {
+        studio::Track extra;
+        extra.name =
+            "Scroll track "
+            + juce::String(index + 1);
+        scrollProject.tracks.insert(
+            scrollProject.tracks.end() - 1,
+            std::move(extra));
+    }
+    studio::TimelineComponent scrollingTimeline;
+    juce::Viewport viewport;
+    viewport.setBounds(0, 0, 640, 240);
+    viewport.setViewedComponent(
+        &scrollingTimeline,
+        false);
+    scrollingTimeline.setProject(&scrollProject);
+    scrollingTimeline.setSize(
+        scrollingTimeline.preferredWidth(
+            viewport.getWidth()),
+        scrollingTimeline.preferredHeight(
+            viewport.getHeight()));
+    viewport.setViewPosition(0, 100);
+    scrollingTimeline.setViewportPosition(0);
+    auto zoomRequests = 0;
+    scrollingTimeline.onZoomRequested =
+        [&zoomRequests](double, double)
+    {
+        ++zoomRequests;
+    };
+    juce::MouseWheelDetails wheel;
+    wheel.deltaY = -1.0f;
+    const auto headerWheel =
+        juce::Point<float>(80.0f, 180.0f);
+    scrollingTimeline.mouseWheelMove(
+        mouseEvent(
+            scrollingTimeline,
+            headerWheel,
+            headerWheel,
+            1,
+            false),
+        wheel);
+    expect(viewport.getViewPositionY() > 100
+               && zoomRequests == 0,
+           "Wheel input over track headers scrolls tracks vertically without zooming.");
+
+    const auto timelineWheel =
+        juce::Point<float>(320.0f, 180.0f);
+    const auto previousScroll =
+        viewport.getViewPositionY();
+    scrollingTimeline.mouseWheelMove(
+        mouseEvent(
+            scrollingTimeline,
+            timelineWheel,
+            timelineWheel,
+            1,
+            false),
+        wheel);
+    expect(viewport.getViewPositionY()
+                   == previousScroll
+               && zoomRequests == 1,
+           "Wheel input over the timeline canvas keeps the existing zoom behavior.");
+    viewport.setViewedComponent(nullptr, false);
 }

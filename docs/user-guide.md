@@ -87,8 +87,9 @@ DAWproject exchange, and Phase 5 mastering and release workflows.
 | Zoom timeline out or in | `Command/Ctrl+-` or `Command/Ctrl++` |
 | Reset timeline zoom | `Command/Ctrl+0` |
 
-Scroll the mouse wheel over the timeline to zoom around the pointer. On macOS,
-trackpad scrolling and pinch gestures zoom the same view.
+Scroll the mouse wheel over the timeline canvas to zoom around the pointer.
+Wheel or trackpad scrolling over the track-header column instead moves the
+track list vertically. On macOS, pinch gestures continue to zoom the timeline.
 
 ## Start a session
 
@@ -359,7 +360,8 @@ version, duplicate, and delete actions as the corresponding timeline track
 header.
 
 Use **Add Track** (plus icon) for audio, aux, bus, folder, VCA, and
-control-room tracks.
+control-room tracks. Newly added tracks start disarmed; arm only the recording
+targets you intend to capture.
 **Add Bus Track** (routing icon) remains a direct bus shortcut. Select a root
 track and choose **OUTPUT** in the inspector. Audio, instrument, aux, and bus
 tracks can feed a bus or the master. Buses can feed later buses. Destinations that would

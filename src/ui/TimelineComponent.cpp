@@ -2068,6 +2068,29 @@ void TimelineComponent::mouseExit(const juce::MouseEvent&)
 void TimelineComponent::mouseWheelMove(const juce::MouseEvent& event,
                                        const juce::MouseWheelDetails& wheel)
 {
+    if (event.position.x
+            < static_cast<float>(
+                viewportPositionX + trackHeaderWidth)
+        && std::abs(wheel.deltaY) > 0.0001f)
+    {
+        if (auto* viewport =
+                findParentComponentOfClass<
+                    juce::Viewport>();
+            viewport != nullptr)
+        {
+            const auto distance = static_cast<int>(
+                std::round(
+                    wheel.deltaY
+                    * (wheel.isSmooth ? 120.0f
+                                      : 88.0f)));
+            viewport->setViewPosition(
+                viewport->getViewPositionX(),
+                viewport->getViewPositionY()
+                    - distance);
+            return;
+        }
+    }
+
     if (std::abs(wheel.deltaY) > 0.0001f
         && std::abs(wheel.deltaY) >= std::abs(wheel.deltaX)
         && onZoomRequested)
