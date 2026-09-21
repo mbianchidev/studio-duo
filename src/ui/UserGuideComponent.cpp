@@ -84,6 +84,446 @@ juce::String readableGuideText(
     return result.trimEnd();
 }
 
+juce::String expandedLinks(juce::String line)
+{
+    for (;;)
+    {
+        const auto open =
+            line.indexOfChar('[');
+        const auto middle =
+            open >= 0
+            ? line.indexOf(open, "](")
+            : -1;
+        const auto close =
+            middle >= 0
+            ? line.indexOfChar(
+                  middle + 2,
+                  ')')
+            : -1;
+        if (open < 0
+            || middle < 0
+            || close < 0)
+            break;
+        const auto label =
+            line.substring(
+                open + 1,
+                middle);
+        const auto destination =
+            line.substring(
+                middle + 2,
+                close);
+        line = line.substring(0, open)
+            + label
+            + (destination.isNotEmpty()
+                   ? " (" + destination + ")"
+                   : juce::String())
+            + line.substring(close + 1);
+    }
+    return line;
+}
+
+void insertStyled(
+    juce::TextEditor& editor,
+    const juce::String& text,
+    const juce::Font& font,
+    juce::Colour colour)
+{
+    editor.setFont(font);
+    editor.setColour(
+        juce::TextEditor::textColourId,
+        colour);
+    editor.insertTextAtCaret(text);
+}
+
+void insertInlineMarkdown(
+    juce::TextEditor& editor,
+    juce::String line,
+    const juce::Font& baseFont,
+    juce::Colour baseColour)
+{
+    line = expandedLinks(std::move(line));
+    const auto codeFont =
+        juce::Font(
+            juce::FontOptions(
+                juce::Font::
+                    getDefaultMonospacedFontName(),
+                baseFont.getHeight(),
+                juce::Font::plain));
+    auto position = 0;
+    while (position < line.length())
+    {
+        const auto bold =
+            line.indexOf(position, "**");
+        const auto code =
+            line.indexOfChar(position, '`');
+        const auto next =
+            bold < 0
+                ? code
+                : code < 0
+                ? bold
+                : juce::jmin(bold, code);
+        if (next < 0)
+        {
+            insertStyled(
+                editor,
+                line.substring(position),
+                baseFont,
+                baseColour);
+            return;
+        }
+        insertStyled(
+            editor,
+            line.substring(position, next),
+            baseFont,
+            baseColour);
+        if (next == bold)
+        {
+            const auto close =
+                line.indexOf(next + 2, "**");
+            if (close < 0)
+            {
+                insertStyled(
+                    editor,
+                    line.substring(next),
+                    baseFont,
+                    baseColour);
+                return;
+            }
+            insertStyled(
+                editor,
+                line.substring(
+                    next + 2,
+                    close),
+                baseFont.boldened(),
+                baseColour);
+            position = close + 2;
+            continue;
+        }
+        const auto close =
+            line.indexOfChar(
+                next + 1,
+                '`');
+        if (close < 0)
+        {
+            insertStyled(
+                editor,
+                line.substring(next),
+                baseFont,
+                baseColour);
+            return;
+        }
+        insertStyled(
+            editor,
+            line.substring(
+                next + 1,
+                close),
+            codeFont,
+            juce::Colour(
+                StudioColours::green));
+        position = close + 1;
+    }
+}
+
+juce::StringArray tableCells(
+    juce::String line)
+{
+    line = line.trim()
+               .trimCharactersAtStart("|")
+               .trimCharactersAtEnd("|");
+    juce::StringArray cells;
+    cells.addTokens(line, "|", {});
+    for (auto& cell : cells)
+        cell = cell.trim();
+    return cells;
+}
+
+bool isTableSeparator(
+    const juce::StringArray& cells)
+{
+    if (cells.isEmpty())
+        return false;
+    for (const auto& cell : cells)
+    {
+        if (!cell.containsChar('-')
+            || !cell.containsOnly("-: "))
+            return false;
+    }
+    return true;
+}
+
+juce::String repeated(
+    juce::juce_wchar character,
+    int count)
+{
+    juce::String result;
+    for (auto index = 0; index < count; ++index)
+        result << juce::String::charToString(
+            character);
+    return result;
+}
+
+juce::String paddedRight(
+    juce::String value,
+    int width)
+{
+    while (value.length() < width)
+        value << " ";
+    return value;
+}
+
+juce::String formatTable(
+    const std::vector<juce::StringArray>& rows)
+{
+    std::vector<juce::StringArray> contentRows;
+    for (const auto& row : rows)
+        if (!isTableSeparator(row))
+            contentRows.push_back(row);
+    if (contentRows.empty())
+        return {};
+    auto columns = 0;
+    for (const auto& row : contentRows)
+        columns = juce::jmax(
+            columns,
+            row.size());
+    std::vector<int> widths(
+        static_cast<std::size_t>(columns),
+        1);
+    for (const auto& row : contentRows)
+    {
+        for (auto column = 0;
+             column < row.size();
+             ++column)
+        {
+            widths[static_cast<std::size_t>(
+                column)] =
+                juce::jmin(
+                    48,
+                    juce::jmax(
+                        widths[
+                            static_cast<
+                                std::size_t>(
+                                column)],
+                        row[column].length()));
+        }
+    }
+    const auto border = [&]
+    {
+        juce::String line { "+" };
+        for (const auto width : widths)
+            line << repeated('-', width + 2)
+                 << "+";
+        return line + "\n";
+    };
+    juce::String result = border();
+    for (std::size_t rowIndex = 0;
+         rowIndex < contentRows.size();
+         ++rowIndex)
+    {
+        result << "|";
+        for (auto column = 0;
+             column < columns;
+             ++column)
+        {
+            const auto value =
+                column
+                        < contentRows[rowIndex]
+                              .size()
+                    ? contentRows[rowIndex][column]
+                          .substring(
+                              0,
+                              widths[
+                                  static_cast<
+                                      std::size_t>(
+                                      column)])
+                    : juce::String();
+            result
+                << " "
+                << paddedRight(
+                       value,
+                       widths[
+                           static_cast<
+                               std::size_t>(
+                               column)])
+                << " |";
+        }
+        result << "\n";
+        if (rowIndex == 0)
+            result << border();
+    }
+    result << border();
+    return result;
+}
+
+void renderMarkdown(
+    juce::TextEditor& editor,
+    const juce::String& markdown)
+{
+    const auto bodyFont =
+        juce::Font(
+            juce::FontOptions(14.0f));
+    const auto headingFont =
+        juce::Font(
+            juce::FontOptions(
+                18.0f,
+                juce::Font::bold));
+    const auto codeFont =
+        juce::Font(
+            juce::FontOptions(
+                juce::Font::
+                    getDefaultMonospacedFontName(),
+                13.0f,
+                juce::Font::plain));
+    const auto textColour =
+        juce::Colour(StudioColours::text);
+    const auto secondaryColour =
+        juce::Colour(
+            StudioColours::secondaryText);
+    auto lines =
+        juce::StringArray::fromLines(markdown);
+    editor.setReadOnly(false);
+    editor.clear();
+    auto inCodeBlock = false;
+    for (auto index = 0;
+         index < lines.size();
+         ++index)
+    {
+        auto line = lines[index].trimEnd();
+        if (line.trim().startsWith("```"))
+        {
+            inCodeBlock = !inCodeBlock;
+            if (!inCodeBlock)
+                insertStyled(
+                    editor,
+                    "\n",
+                    bodyFont,
+                    textColour);
+            continue;
+        }
+        if (inCodeBlock)
+        {
+            insertStyled(
+                editor,
+                line + "\n",
+                codeFont,
+                juce::Colour(
+                    StudioColours::green));
+            continue;
+        }
+        if (line.trim().startsWith("|"))
+        {
+            std::vector<juce::StringArray>
+                rows;
+            while (index < lines.size()
+                   && lines[index]
+                          .trim()
+                          .startsWith("|"))
+            {
+                rows.push_back(
+                    tableCells(lines[index]));
+                ++index;
+            }
+            --index;
+            insertStyled(
+                editor,
+                formatTable(rows) + "\n",
+                codeFont,
+                textColour);
+            continue;
+        }
+        if (line.startsWith("### "))
+        {
+            insertInlineMarkdown(
+                editor,
+                line.substring(4),
+                headingFont,
+                textColour);
+            insertStyled(
+                editor,
+                "\n\n",
+                bodyFont,
+                textColour);
+            continue;
+        }
+        if (line.startsWith("#### "))
+        {
+            insertInlineMarkdown(
+                editor,
+                line.substring(5),
+                bodyFont.boldened(),
+                textColour);
+            insertStyled(
+                editor,
+                "\n",
+                bodyFont,
+                textColour);
+            continue;
+        }
+        if (line.startsWith("- "))
+        {
+            insertStyled(
+                editor,
+                "  - ",
+                bodyFont,
+                juce::Colour(
+                    StudioColours::orange));
+            insertInlineMarkdown(
+                editor,
+                line.substring(2),
+                bodyFont,
+                textColour);
+            insertStyled(
+                editor,
+                "\n",
+                bodyFont,
+                textColour);
+            continue;
+        }
+        if (line.startsWith("> "))
+        {
+            insertStyled(
+                editor,
+                "| ",
+                codeFont,
+                juce::Colour(
+                    StudioColours::orange));
+            insertInlineMarkdown(
+                editor,
+                line.substring(2),
+                bodyFont,
+                secondaryColour);
+            insertStyled(
+                editor,
+                "\n",
+                bodyFont,
+                textColour);
+            continue;
+        }
+        if (line.trim().containsOnly("-")
+            && line.trim().length() >= 3)
+        {
+            insertStyled(
+                editor,
+                repeated('-', 64) + "\n",
+                codeFont,
+                juce::Colour(
+                    StudioColours::border));
+            continue;
+        }
+        insertInlineMarkdown(
+            editor,
+            line,
+            bodyFont,
+            textColour);
+        insertStyled(
+            editor,
+            "\n",
+            bodyFont,
+            textColour);
+    }
+    editor.setReadOnly(true);
+    editor.setCaretVisible(false);
+}
+
 juce::String pageSummary(
     const juce::String& body)
 {
@@ -121,7 +561,7 @@ parseGuidePages(const juce::String& markdown)
             return;
         pages.push_back({
             currentTitle,
-            readableGuideText(currentBody)
+            currentBody.trimEnd()
         });
         currentTitle.clear();
         currentBody.clear();
@@ -149,19 +589,21 @@ parseGuidePages(const juce::String& markdown)
     flushPage();
 
     juce::String overview =
-        readableGuideText(introduction);
+        introduction.trimEnd();
     if (overview.isNotEmpty())
         overview << "\n\n";
-    overview << "GUIDE INDEX\n\n";
+    overview << "### Guide index\n\n";
     for (std::size_t index = 0;
          index < pages.size();
          ++index)
     {
         overview
+            << "**"
             << juce::String(
                    static_cast<int>(index) + 1)
             << ". "
             << pages[index].title
+            << "**"
             << "\n"
             << pageSummary(
                    pages[index].body)
@@ -392,6 +834,13 @@ void UserGuideComponent::resized()
     guide.setBounds(bounds);
 }
 
+void UserGuideComponent::lookAndFeelChanged()
+{
+    if (!pages.empty())
+        showPage(currentPage);
+    index.repaint();
+}
+
 int UserGuideComponent::getNumRows()
 {
     return static_cast<int>(pages.size());
@@ -488,9 +937,9 @@ void UserGuideComponent::showPage(int page)
     pageTitle.setText(
         selected.title,
         juce::dontSendNotification);
-    guide.setText(
-        selected.body,
-        false);
+    renderMarkdown(
+        guide,
+        selected.body);
     guide.setCaretPosition(0);
     guide.setHighlightedRegion({});
     searchStatus.setText(

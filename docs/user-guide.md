@@ -769,9 +769,12 @@ reopens.
 
 Open **Help > User Guide** in the top application bar to read the documentation
 inside Studio Duo. A persistent contents index separates the guide into focused
-pages, with previous/next navigation and search within the current page. The
-guide is embedded when the application is built, so it always matches the
-installed Studio Duo release and remains available offline.
+pages, with previous/next navigation and search within the current page.
+Headings, emphasis, code, and tables are rendered with appropriate fonts and
+alignment. The rendered text remains selectable, so commands, paths, and other
+examples can be copied. The guide is embedded when the application is built, so
+it always matches the installed Studio Duo release and remains available
+offline.
 
 On macOS, the updater accepts the project's normal ad-hoc-signed application
 bundle and does not require notarization or an Apple update-signing key. The

@@ -22,6 +22,7 @@ public:
 
     void paint(juce::Graphics& graphics) override;
     void resized() override;
+    void lookAndFeelChanged() override;
 
 private:
     int getNumRows() override;
