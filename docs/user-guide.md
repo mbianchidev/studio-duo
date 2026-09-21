@@ -107,6 +107,11 @@ entries are labeled clearly and include a **Remove** action; use **Open Existing
 Project** if the package moved. Passing a `.studioduo` path to the application
 opens it directly instead of showing the hub.
 
+Click the Studio Duo logo in the top-left corner to leave the current project
+and return to the startup hub. Unsaved or never-saved projects prompt for
+**Save and Return**, **Return Without Saving**, or **Cancel**. Active recordings
+must be stopped and finalized before returning to the hub.
+
 After choosing a project:
 
 1. Open **Settings** (gear icon) > **Audio / MIDI** and enable the required

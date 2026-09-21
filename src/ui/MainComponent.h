@@ -53,6 +53,22 @@ public:
     void resized() override;
 
 private:
+    class LogoButton final : public juce::Button
+    {
+    public:
+        LogoButton()
+            : juce::Button("Main menu")
+        {
+        }
+
+        void paintButton(
+            juce::Graphics&,
+            bool,
+            bool) override
+        {
+        }
+    };
+
     class PanelResizer;
 
     class ExportInputBlocker final : public juce::Component
@@ -131,6 +147,8 @@ private:
         const StudioThemePalette& palette);
     void showHelpMenu();
     void openUserGuide();
+    void requestStartupHub();
+    void leaveProjectForStartupHub();
     void showStartupHub(
         const juce::String& message = {},
         bool error = false);
@@ -340,6 +358,7 @@ private:
     bool audioEngineInitialised = false;
     bool exportInProgress = false;
     bool shutdownRequestedDuringExport = false;
+    bool returnToStartupHubAfterSave = false;
     MixExportSettings lastMixExportSettings;
     ExportInputBlocker exportInputBlocker;
     bool statusIsError = false;
@@ -385,6 +404,7 @@ private:
         "Help",
         "Open Help and the in-app User Guide"
     };
+    LogoButton logoButton;
     StudioIconButton undoButton {
         StudioIcon::undo, "Undo", "Undo (Command/Ctrl+Z)"
     };

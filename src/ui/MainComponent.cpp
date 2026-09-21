@@ -348,6 +348,14 @@ MainComponent::MainComponent(
     brandLogo = juce::Drawable::createFromImageData(
         studio_brand::studioduoicon_svg,
         static_cast<std::size_t>(studio_brand::studioduoicon_svgSize));
+    addAndMakeVisible(logoButton);
+    logoButton.setTitle("Main menu");
+    logoButton.setTooltip(
+        "Return to the Studio Duo startup menu");
+    logoButton.onClick = [this]
+    {
+        requestStartupHub();
+    };
     exportInputBlocker.setInterceptsMouseClicks(true, true);
     exportInputBlocker.setWantsKeyboardFocus(true);
     addChildComponent(exportInputBlocker);
@@ -2406,6 +2414,12 @@ void MainComponent::resized()
     }
     settingsButton.setVisible(true);
     helpButton.setVisible(true);
+    logoButton.setBounds(
+        0,
+        0,
+        126,
+        mainHeaderHeight);
+    logoButton.toFront(false);
     if (startupMode)
     {
         auto topRow = header.reduced(14, 8);
@@ -3162,6 +3176,9 @@ void MainComponent::beginSaveProject()
         const auto result = chooser.getResult();
         if (result != juce::File())
             safe->saveProjectTo(result);
+        else
+            safe->returnToStartupHubAfterSave =
+                false;
         safe->fileChooser.reset();
     });
 }
@@ -3928,6 +3945,95 @@ void MainComponent::openUserGuide()
         false);
 }
 
+void MainComponent::requestStartupHub()
+{
+    if (startupHub.isVisible())
+        return;
+    if (hasActiveRecordingTargets()
+        || recordingFinalizationInProgress
+        || audioEngine.isRecording())
+    {
+        showError(
+            "Cannot return to the main menu",
+            "Stop and finalize the current recording before leaving the project.");
+        return;
+    }
+    const auto projectHasNeverBeenSaved =
+        !projectPackage.exists();
+    if (!dirty
+        && !projectHasNeverBeenSaved)
+    {
+        leaveProjectForStartupHub();
+        return;
+    }
+    juce::AlertWindow::showAsync(
+        juce::MessageBoxOptions()
+            .withIconType(
+                juce::MessageBoxIconType::QuestionIcon)
+            .withTitle(
+                "Return to the main menu?")
+            .withMessage(
+                projectHasNeverBeenSaved
+                    ? "This project has not been saved. Save it before returning "
+                      "to the startup menu, return without saving, or keep working."
+                    : "This project has unsaved changes. Save it before returning "
+                      "to the startup menu, return without saving, or keep working.")
+            .withButton("Save and Return")
+            .withButton(
+                "Return Without Saving")
+            .withButton("Cancel")
+            .withAssociatedComponent(this),
+        [safe = juce::Component::SafePointer<
+             MainComponent>(this)](int result)
+        {
+            if (safe == nullptr)
+                return;
+            if (result == 1)
+            {
+                safe->returnToStartupHubAfterSave =
+                    true;
+                safe->beginSaveProject();
+            }
+            else if (result == 2)
+            {
+                safe->leaveProjectForStartupHub();
+            }
+        });
+}
+
+void MainComponent::leaveProjectForStartupHub()
+{
+    audioEngine.stop();
+    if (projectPackage.exists())
+    {
+        ProjectFile::clearReducedIsolationMarker(
+            projectPackage);
+    }
+    project =
+        ProjectTemplates::createBlankSong();
+    projectPackage = juce::File();
+    transientCompatibilityReport.reset();
+    reducedIsolationMarkerSignature.clear();
+    activeAutomationGesture.reset();
+    pendingAutomationPreview.reset();
+    commandStack.clear();
+    selectedClipId.clear();
+    copiedClipId.clear();
+    selectedTrackId = project.tracks.empty()
+        ? juce::String()
+        : project.tracks.front().id;
+    tempoSlider.setValue(
+        project.tempo,
+        juce::dontSendNotification);
+    loopButton.setToggleState(
+        project.loopEnabled,
+        juce::dontSendNotification);
+    dirty = false;
+    selectTrack(selectedTrackId);
+    projectChanged(false, false);
+    showStartupHub();
+}
+
 void MainComponent::showStartupHub(
     const juce::String& message,
     bool error)
@@ -4066,6 +4172,9 @@ void MainComponent::maybePromptForUpdate()
 
 void MainComponent::saveProjectTo(const juce::File& package)
 {
+    const auto returnToHubOnSuccess =
+        returnToStartupHubAfterSave;
+    returnToStartupHubAfterSave = false;
     if (exportInProgress)
     {
         setStatus("Another save or render is already in progress.", true);
@@ -4235,6 +4344,8 @@ void MainComponent::saveProjectTo(const juce::File& package)
                    : juce::String())
             + recentWarning,
         recentWarning.isNotEmpty());
+    if (returnToHubOnSuccess)
+        leaveProjectForStartupHub();
 }
 
 bool MainComponent::captureCurrentPluginStates(
