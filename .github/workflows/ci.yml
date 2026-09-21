@@ -23,29 +23,53 @@ jobs:
         include:
           - os: macos-latest
             build_parallel: 1
+            test_parallel: 2
+            configure_args: >-
+              -DCMAKE_C_COMPILER_LAUNCHER=sccache
+              -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+            sccache_enabled: "true"
           - os: windows-latest
             build_parallel: 4
+            test_parallel: 4
+            configure_args: ""
+            sccache_enabled: "false"
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
+    env:
+      SCCACHE_GHA_ENABLED: ${{ matrix.sccache_enabled }}
 
     steps:
       - name: Check out source
         uses: actions/checkout@v7
 
-      - name: Cache JUCE source
+      - name: Cache dependencies
         uses: actions/cache@v6
         with:
           path: build/_deps
-          key: juce-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}
+          key: dependencies-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}
+
+      - name: Cache macOS compilation
+        if: runner.os == 'macOS'
+        uses: mozilla-actions/sccache-action@v0.0.11
+        env:
+          SCCACHE_GHA_ENABLED: "true"
 
       - name: Configure
-        run: cmake -S . -B build -DSTUDIO_DUO_BUILD_TESTS=ON
+        run: >
+          cmake -S . -B build
+          -DSTUDIO_DUO_BUILD_TESTS=ON
+          ${{ matrix.configure_args }}
 
       - name: Build
         run: cmake --build build --config Release --parallel ${{ matrix.build_parallel }}
 
       - name: Test
-        run: ctest --test-dir build --build-config Release --output-on-failure
+        run: >
+          ctest --test-dir build
+          --build-config Release
+          --parallel ${{ matrix.test_parallel }}
+          --output-on-failure
+          --no-tests=error
 
       - name: Validate signed Windows packages
         if: runner.os == 'Windows'

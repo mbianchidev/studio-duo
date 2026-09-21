@@ -8811,21 +8811,21 @@ void MainComponent::promptProjectMarker(
                 marker.name =
                     dialogSafe->getTextEditorContents("name")
                         .trim();
-                const auto position =
+                const auto parsedPosition =
                     parseFiniteNumber(
                         dialogSafe
                             ->getTextEditorContents("position")
                             .trim());
                 if (marker.name.isEmpty()
-                    || !position.has_value()
-                    || *position < 0.0)
+                    || !parsedPosition.has_value()
+                    || *parsedPosition < 0.0)
                 {
                     safe->showError(
                         "Marker unavailable",
                         "Enter a name and a finite, non-negative position in seconds.");
                     return;
                 }
-                marker.timeSeconds = *position;
+                marker.timeSeconds = *parsedPosition;
                 if (before.has_value())
                 {
                     safe->perform(
@@ -8922,7 +8922,7 @@ void MainComponent::promptSongSection(double position,
 
                 auto section = before.value_or(SongSection {});
                 section.name = dialogSafe->getTextEditorContents("name").trim();
-                const auto position = parseFiniteNumber(
+                const auto parsedPosition = parseFiniteNumber(
                     dialogSafe->getTextEditorContents("position"));
                 const auto endText =
                     dialogSafe
@@ -8935,23 +8935,23 @@ void MainComponent::promptSongSection(double position,
                     const auto endSeconds =
                         parseFiniteNumber(endText);
                     validEnd =
-                        position.has_value()
+                        parsedPosition.has_value()
                         && endSeconds.has_value()
-                        && *endSeconds > *position;
+                        && *endSeconds > *parsedPosition;
                     if (validEnd)
                         section.endTimeSeconds =
                             *endSeconds;
                 }
                 if (section.name.isEmpty()
-                    || !position.has_value()
-                    || *position < 0.0
+                    || !parsedPosition.has_value()
+                    || *parsedPosition < 0.0
                     || !validEnd)
                 {
                     safe->showError("Section unavailable",
                                     "Enter a name, a finite non-negative start, and an optional end after the start.");
                     return;
                 }
-                section.timeSeconds = *position;
+                section.timeSeconds = *parsedPosition;
                 if (before && !juce::exactlyEqual(before->timeSeconds, section.timeSeconds)
                     && (safe->hasActiveRecordingTargets() || safe->audioEngine.isRecording()
                         || safe->recordingFinalizationInProgress))
