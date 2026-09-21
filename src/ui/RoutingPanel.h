@@ -20,7 +20,8 @@ public:
     [[nodiscard]] int preferredHeight() const;
     void setHardwareOutputs(juce::StringArray names);
     void editConnection(const juce::String& connectionId);
-    void showAddRouteMenu();
+    void showAddRouteMenu(
+        juce::Rectangle<int> targetScreenArea = {});
 
     std::function<void(RoutingConnection)> onAddConnection;
     std::function<void(RoutingConnection, RoutingConnection)> onUpdateConnection;
@@ -35,7 +36,8 @@ public:
 
 private:
     [[nodiscard]] std::vector<const RoutingConnection*> displayedRoutes() const;
-    void showAddMenu();
+    void showAddMenu(
+        juce::Rectangle<int> targetScreenArea = {});
     void showTrackMenu();
     void showRouteMenu(const RoutingConnection& route);
 

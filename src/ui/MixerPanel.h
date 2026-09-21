@@ -35,7 +35,8 @@ public:
         onInputMenuRequested;
     std::function<void(const juce::String&, juce::Rectangle<int>)>
         onAddInsert;
-    std::function<void(const juce::String&)> onAddSend;
+    std::function<void(const juce::String&, juce::Rectangle<int>)>
+        onAddSend;
     std::function<void(const juce::String&, float)> onVolumeChanged;
     std::function<void(const juce::String&, float)> onPanChanged;
     std::function<void(const juce::String&, const juce::String&)> onPluginOpen;

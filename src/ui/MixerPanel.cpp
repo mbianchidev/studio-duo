@@ -737,7 +737,9 @@ void MixerPanel::mouseDown(const juce::MouseEvent& event)
             }
             else if (onAddSend)
             {
-                onAddSend(track->id);
+                onAddSend(
+                    track->id,
+                    localAreaToGlobal(addBounds));
             }
             return true;
         }

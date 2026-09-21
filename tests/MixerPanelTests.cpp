@@ -196,10 +196,14 @@ void mixerPanelTests()
            "Mixer strip insert power buttons toggle the clicked plug-in.");
 
     juce::String sendTrack;
+    juce::Rectangle<int> sendTarget;
     mixer.onAddSend =
-        [&sendTrack](const juce::String& trackId)
+        [&sendTrack, &sendTarget](
+            const juce::String& trackId,
+            juce::Rectangle<int> target)
     {
         sendTrack = trackId;
+        sendTarget = target;
     };
     const juce::Point<float> sendPlus(135.0f, 225.0f);
     mixer.mouseDown(mixerMouseEvent(
@@ -207,8 +211,9 @@ void mixerPanelTests()
         sendPlus,
         sendPlus,
         false));
-    expect(sendTrack == track.id,
-           "Each mixer strip send plus action targets its own track.");
+    expect(sendTrack == track.id
+               && !sendTarget.isEmpty(),
+           "Each mixer strip send plus action targets its own track and anchor.");
 
     auto appliedVolume = 99.0f;
     mixer.onVolumeChanged =

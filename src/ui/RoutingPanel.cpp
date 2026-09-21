@@ -50,9 +50,10 @@ void RoutingPanel::editConnection(const juce::String& connectionId)
         showRouteMenu(*route);
 }
 
-void RoutingPanel::showAddRouteMenu()
+void RoutingPanel::showAddRouteMenu(
+    juce::Rectangle<int> targetScreenArea)
 {
-    showAddMenu();
+    showAddMenu(targetScreenArea);
 }
 
 std::vector<const RoutingConnection*> RoutingPanel::displayedRoutes() const
@@ -143,7 +144,8 @@ void RoutingPanel::mouseDown(const juce::MouseEvent& event)
         showRouteMenu(*routes[static_cast<std::size_t>(index)]);
 }
 
-void RoutingPanel::showAddMenu()
+void RoutingPanel::showAddMenu(
+    juce::Rectangle<int> targetScreenArea)
 {
     const auto* source = project != nullptr ? project->findTrack(trackId) : nullptr;
     if (source == nullptr
@@ -185,9 +187,12 @@ void RoutingPanel::showAddMenu()
         menu.addSubMenu("MIDI destination", midi);
         if (source->type == TrackType::midi)
         {
-            menu.showMenuAsync(
-                juce::PopupMenu::Options().withTargetComponent(
-                    addButton));
+            auto options = juce::PopupMenu::Options();
+            options = targetScreenArea.isEmpty()
+                ? options.withTargetComponent(addButton)
+                : options.withTargetScreenArea(
+                    targetScreenArea);
+            menu.showMenuAsync(options);
             return;
         }
         menu.addSeparator();
@@ -343,7 +348,12 @@ void RoutingPanel::showAddMenu()
     if (hardware.getNumItems() == 0)
         hardware.addItem("No active outputs", false, false, [] {});
     menu.addSubMenu("Hardware output", hardware);
-    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(addButton));
+    auto options = juce::PopupMenu::Options();
+    options = targetScreenArea.isEmpty()
+        ? options.withTargetComponent(addButton)
+        : options.withTargetScreenArea(
+            targetScreenArea);
+    menu.showMenuAsync(options);
 }
 
 void RoutingPanel::showTrackMenu()

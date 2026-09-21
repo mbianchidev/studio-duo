@@ -1459,13 +1459,13 @@ MainComponent::MainComponent(bool startAudioOnLaunch)
             trackId,
             targetArea);
     };
-    mixer->onAddSend = [this](const auto& trackId)
+    mixer->onAddSend = [this](
+                            const auto& trackId,
+                            auto targetArea)
     {
         selectTrack(trackId);
-        setInspectorPanelVisible(true);
-        inspectorRibbonTabs.setCurrentTabIndex(0);
         routingPanel->setTrack(trackId);
-        routingPanel->showAddRouteMenu();
+        routingPanel->showAddRouteMenu(targetArea);
     };
     mixer->onEditTrack = [this](const auto& trackId, auto targetArea)
     {
