@@ -419,6 +419,29 @@ juce::StringArray PluginCatalog::customVst3SearchFolders() const
     return pluginSearchPaths.customFolders();
 }
 
+juce::StringArray PluginCatalog::disabledDefaultVst3SearchFolders() const
+{
+    const juce::ScopedLock lock(searchPathLock);
+    return pluginSearchPaths.disabledDefaultFolders();
+}
+
+juce::StringArray PluginCatalog::effectiveVst3SearchFolders() const
+{
+    juce::FileSearchPath defaults;
+    for (const auto& path : defaultVst3SearchFolders())
+        defaults.add(juce::File(path));
+    const juce::ScopedLock lock(searchPathLock);
+    const auto plan =
+        pluginSearchPaths.createScanPlan(defaults);
+    juce::StringArray result;
+    for (int index = 0;
+         index < plan.folders.getNumPaths();
+         ++index)
+        result.add(
+            plan.folders[index].getFullPathName());
+    return result;
+}
+
 juce::Result PluginCatalog::addCustomVst3SearchFolder(
     const juce::File& folder)
 {
@@ -434,10 +457,16 @@ juce::Result PluginCatalog::addCustomVst3SearchFolder(
     {
         if (juce::File(defaultFolder) == folder)
         {
+            const juce::ScopedLock lock(searchPathLock);
+            const auto result =
+                pluginSearchPaths.enableDefaultFolder(folder);
             updateState(
-                "That folder is already included in the default VST3 locations.",
+                result.wasOk()
+                    ? "Enabled default VST3 folder: "
+                        + folder.getFullPathName()
+                    : result.getErrorMessage(),
                 progress());
-            return juce::Result::ok();
+            return result;
         }
     }
 
@@ -463,6 +492,42 @@ juce::Result PluginCatalog::addCustomVst3SearchFolder(
             "Added VST3 folder: " + folder.getFullPathName()
                 + ". Choose SCAN to discover plugins.",
             progress());
+    return result;
+}
+
+juce::Result PluginCatalog::removeVst3SearchFolder(
+    const juce::File& folder)
+{
+    for (const auto& defaultFolder :
+         defaultVst3SearchFolders())
+    {
+        if (juce::File(defaultFolder) == folder)
+        {
+            const juce::ScopedLock lock(searchPathLock);
+            const auto result =
+                pluginSearchPaths.disableDefaultFolder(folder);
+            updateState(
+                result.wasOk()
+                    ? "Disabled default VST3 folder: "
+                        + folder.getFullPathName()
+                    : result.getErrorMessage(),
+                progress());
+            return result;
+        }
+    }
+    return removeCustomVst3SearchFolder(folder);
+}
+
+juce::Result PluginCatalog::restoreDefaultVst3SearchFolders()
+{
+    const juce::ScopedLock lock(searchPathLock);
+    const auto result =
+        pluginSearchPaths.restoreDefaultFolders();
+    updateState(
+        result.wasOk()
+            ? "Restored default VST3 folders."
+            : result.getErrorMessage(),
+        progress());
     return result;
 }
 

@@ -1,5 +1,7 @@
 #include "TimelineComponent.h"
 
+#include "NumericInput.h"
+#include "StudioIconButton.h"
 #include "StudioTheme.h"
 
 #include <algorithm>
@@ -12,6 +14,15 @@ namespace studio
 {
 namespace
 {
+constexpr int trackControlY = 48;
+constexpr int trackControlSize = 22;
+constexpr int trackMuteX = 24;
+constexpr int trackSoloX = 50;
+constexpr int trackArmX = 76;
+constexpr int trackVolumeIconX = 105;
+constexpr int trackVolumeStartX = 120;
+constexpr int trackVolumeEndX = 164;
+
 float waveformAmplitude(const AudioClip& clip, double sourceSeconds) noexcept
 {
     const auto sourceKey = clip.sourceFile.getFullPathName().isNotEmpty()
@@ -90,6 +101,17 @@ void TimelineComponent::setPixelsPerSecond(double pixels)
     repaint();
 }
 
+void TimelineComponent::setSnapEnabled(bool enabled)
+{
+    snapEnabled = enabled;
+}
+
+void TimelineComponent::setEditGridBeats(double beats)
+{
+    if (std::isfinite(beats) && beats > 0.0)
+        editGridBeats = beats;
+}
+
 double TimelineComponent::getPixelsPerSecond() const noexcept
 {
     return pixelsPerSecond;
@@ -146,15 +168,20 @@ void TimelineComponent::paint(juce::Graphics& graphics)
     for (std::size_t index = 0; index < project->sections.size(); ++index)
     {
         const auto& section = project->sections[index];
-        const auto startX = secondsToX(section.timeSeconds);
-        const auto endSeconds = index + 1 < project->sections.size()
-            ? project->sections[index + 1].timeSeconds
-            : maximumSeconds;
+        const auto dragging =
+            section.id == draggedSectionId;
+        const auto startSeconds = dragging
+            ? sectionDragPreviewStart
+            : section.timeSeconds;
+        const auto endSeconds = dragging
+            ? sectionDragPreviewEnd
+            : sectionEndSeconds(index, maximumSeconds);
+        const auto startX = secondsToX(startSeconds);
         const auto endX = secondsToX(endSeconds);
         const auto colour = sectionColours[index % sectionColours.size()];
         graphics.setColour(colour.withAlpha(0.18f));
         graphics.fillRect(startX,
-                          0.0f,
+                          static_cast<float>(markerLaneHeight),
                           std::max(1.0f, endX - startX),
                           static_cast<float>(sectionLaneHeight));
         graphics.setColour(colour.withAlpha(0.85f));
@@ -165,9 +192,45 @@ void TimelineComponent::paint(juce::Graphics& graphics)
                                                       juce::Font::bold)));
         graphics.drawText(section.name,
                           static_cast<int>(startX) + 6,
-                          0,
+                          markerLaneHeight,
                           std::max(0, static_cast<int>(endX - startX) - 10),
                           sectionLaneHeight,
+                          juce::Justification::centredLeft,
+                          true);
+        graphics.setColour(colour.brighter(0.2f));
+        graphics.fillRect(
+            endX - 3.0f,
+            static_cast<float>(markerLaneHeight + 3),
+            3.0f,
+            static_cast<float>(sectionLaneHeight - 6));
+    }
+    for (const auto& marker : project->markers)
+    {
+        const auto markerSeconds = marker.id == draggedMarkerId
+            ? markerDragPreviewSeconds
+            : marker.timeSeconds;
+        const auto x = secondsToX(markerSeconds);
+        graphics.setColour(juce::Colour(StudioColours::text));
+        graphics.drawVerticalLine(static_cast<int>(x),
+                                  2.0f,
+                                  static_cast<float>(markerLaneHeight - 2));
+        juce::Path flag;
+        flag.startNewSubPath(x, 2.0f);
+        flag.lineTo(x + 9.0f, 5.5f);
+        flag.lineTo(x, 9.0f);
+        flag.closeSubPath();
+        graphics.fillPath(flag);
+        graphics.setFont(juce::Font(juce::FontOptions(10.0f,
+                                                      juce::Font::bold)));
+        graphics.drawText(marker.name,
+                          static_cast<int>(x) + 11,
+                          0,
+                          juce::jmax(
+                              0,
+                              getWidth()
+                                  - static_cast<int>(x)
+                                  - 12),
+                          markerLaneHeight,
                           juce::Justification::centredLeft,
                           true);
     }
@@ -215,9 +278,9 @@ void TimelineComponent::paint(juce::Graphics& graphics)
             graphics.setFont(12.0f);
             graphics.drawText(juce::String(position.bar),
                               x + 5,
-                              sectionLaneHeight,
+                              timelineRulerTop,
                               42,
-                              rulerHeight - sectionLaneHeight,
+                              rulerHeight - timelineRulerTop,
                               juce::Justification::centredLeft);
         }
 
@@ -243,12 +306,12 @@ void TimelineComponent::paint(juce::Graphics& graphics)
     {
         const auto x = static_cast<int>(secondsToX(tempoChange.timeSeconds));
         graphics.setColour(juce::Colour(StudioColours::orange));
-        graphics.fillRect(x - 1, sectionLaneHeight, 3, 5);
+        graphics.fillRect(x - 1, timelineRulerTop, 3, 5);
         graphics.setFont(9.0f);
         graphics.drawText(juce::String(tempoChange.bpm, 1)
                               + (tempoChange.rampToNext ? " R" : ""),
                           x + 4,
-                          sectionLaneHeight + 1,
+                          timelineRulerTop + 1,
                           52,
                           12,
                           juce::Justification::centredLeft);
@@ -270,13 +333,13 @@ void TimelineComponent::paint(juce::Graphics& graphics)
     {
         const auto x = static_cast<int>(secondsToX(meterChange.timeSeconds));
         graphics.setColour(juce::Colour(StudioColours::green));
-        graphics.fillRect(x - 1, sectionLaneHeight + 16, 3, 5);
+        graphics.fillRect(x - 1, timelineRulerTop + 16, 3, 5);
         graphics.setFont(9.0f);
         graphics.drawText(juce::String(meterChange.numerator)
                               + "/"
                               + juce::String(meterChange.denominator),
                           x + 4,
-                          sectionLaneHeight + 15,
+                          timelineRulerTop + 15,
                           42,
                           12,
                           juce::Justification::centredLeft);
@@ -297,10 +360,10 @@ void TimelineComponent::paint(juce::Graphics& graphics)
                           std::max(1.0f, endX - startX),
                           4.0f);
         graphics.drawVerticalLine(static_cast<int>(startX),
-                                  static_cast<float>(sectionLaneHeight),
+                                  static_cast<float>(timelineRulerTop),
                                   static_cast<float>(getHeight()));
         graphics.drawVerticalLine(static_cast<int>(endX),
-                                  static_cast<float>(sectionLaneHeight),
+                                  static_cast<float>(timelineRulerTop),
                                   static_cast<float>(getHeight()));
     };
     if (project->loopEnabled)
@@ -321,17 +384,23 @@ void TimelineComponent::paint(juce::Graphics& graphics)
     graphics.setColour(juce::Colour(StudioColours::secondaryText));
     graphics.setFont(juce::Font(juce::FontOptions(9.0f,
                                                   juce::Font::bold)));
-    graphics.drawText("MARKERS / SECTIONS",
+    graphics.drawText("MARKERS",
                       viewportPositionX + 12,
                       0,
+                      trackHeaderWidth - 24,
+                      markerLaneHeight,
+                      juce::Justification::centredLeft);
+    graphics.drawText("SECTIONS",
+                      viewportPositionX + 12,
+                      markerLaneHeight,
                       trackHeaderWidth - 24,
                       sectionLaneHeight,
                       juce::Justification::centredLeft);
     graphics.drawText("TIMELINE",
                       viewportPositionX + 12,
-                      sectionLaneHeight,
+                      timelineRulerTop,
                       trackHeaderWidth - 24,
-                      rulerHeight - sectionLaneHeight,
+                      rulerHeight - timelineRulerTop,
                       juce::Justification::centredLeft);
 
     const auto tracks = visibleTracks();
@@ -389,29 +458,48 @@ void TimelineComponent::paint(juce::Graphics& graphics)
                           24,
                           juce::Justification::centredLeft);
 
-        const auto drawControl = [&graphics, y, this](int x,
-                                                const juce::String& label,
-                                                bool active,
-                                                juce::Colour activeColour)
+        const auto drawControl = [&graphics, y, this](
+                                     int x,
+                                     StudioIcon icon,
+                                     bool active,
+                                     juce::Colour activeColour)
         {
-            const juce::Rectangle<float> bounds(static_cast<float>(viewportPositionX + x),
-                                                static_cast<float>(y + 48),
-                                                28.0f,
-                                                24.0f);
+            const juce::Rectangle<float> bounds(
+                static_cast<float>(viewportPositionX + x),
+                static_cast<float>(y + trackControlY),
+                static_cast<float>(trackControlSize),
+                static_cast<float>(trackControlSize));
             graphics.setColour(active ? activeColour : juce::Colour(StudioColours::raised));
-            graphics.fillRoundedRectangle(bounds, 3.0f);
-            graphics.setColour(active ? juce::Colours::white
-                                      : juce::Colour(StudioColours::secondaryText));
-            graphics.setFont(juce::Font(juce::FontOptions(10.0f, juce::Font::bold)));
-            graphics.drawText(label, bounds.toNearestInt(), juce::Justification::centred);
+            graphics.fillRoundedRectangle(bounds, 4.0f);
+            drawStudioIcon(
+                graphics,
+                icon,
+                bounds.reduced(5.0f),
+                active ? juce::Colours::white
+                       : juce::Colour(StudioColours::secondaryText),
+                1.35f);
         };
 
-        drawControl(26, "M", track.muted, juce::Colour(StudioColours::amber));
-        drawControl(60, "S", track.solo, juce::Colour(StudioColours::green));
+        drawControl(
+            trackMuteX,
+            StudioIcon::mute,
+            track.muted,
+            juce::Colour(StudioColours::amber));
+        drawControl(
+            trackSoloX,
+            StudioIcon::solo,
+            track.solo,
+            juce::Colour(StudioColours::green));
         if (track.type == TrackType::audio
             || track.type == TrackType::instrument
             || track.type == TrackType::midi)
-            drawControl(94, "R", track.armed, juce::Colour(StudioColours::orange));
+        {
+            drawControl(
+                trackArmX,
+                StudioIcon::record,
+                track.armed,
+                juce::Colour(StudioColours::orange));
+        }
 
         graphics.setColour(juce::Colour(StudioColours::secondaryText));
         graphics.setFont(juce::Font(juce::FontOptions(9.5f)));
@@ -429,12 +517,121 @@ void TimelineComponent::paint(juce::Graphics& graphics)
         }
         if (track.automationArmed)
             routingLabel << " A";
-        graphics.drawText(routingLabel,
-                          viewportPositionX + 128,
-                          y + 48,
-                          40,
-                          24,
-                          juce::Justification::centredRight);
+        if (track.type == TrackType::audio)
+        {
+            const juce::Rectangle<float> inputBounds(
+                static_cast<float>(viewportPositionX + 104),
+                static_cast<float>(y + 29),
+                64.0f,
+                18.0f);
+            graphics.setColour(
+                juce::Colour(StudioColours::raised));
+            graphics.fillRoundedRectangle(
+                inputBounds,
+                3.0f);
+            graphics.setColour(
+                juce::Colour(StudioColours::border));
+            graphics.drawRoundedRectangle(
+                inputBounds,
+                3.0f,
+                1.0f);
+            graphics.setColour(
+                juce::Colour(StudioColours::text));
+            graphics.setFont(
+                juce::Font(juce::FontOptions(8.5f)));
+            graphics.drawText(
+                routingLabel,
+                inputBounds.toNearestInt()
+                    .withTrimmedRight(14),
+                juce::Justification::centred);
+            juce::Path chevron;
+            chevron.startNewSubPath(
+                inputBounds.getRight() - 11.0f,
+                inputBounds.getCentreY() - 2.0f);
+            chevron.lineTo(
+                inputBounds.getRight() - 7.0f,
+                inputBounds.getCentreY() + 2.0f);
+            chevron.lineTo(
+                inputBounds.getRight() - 3.0f,
+                inputBounds.getCentreY() - 2.0f);
+            graphics.strokePath(
+                chevron,
+                juce::PathStrokeType(1.2f));
+        }
+        else
+        {
+            graphics.drawText(routingLabel,
+                              viewportPositionX + 104,
+                              y + 30,
+                              64,
+                              16,
+                              juce::Justification::centredRight);
+        }
+
+        if (track.type != TrackType::folder
+            && track.type != TrackType::midi)
+        {
+            const auto volume = track.id
+                    == draggingTrackVolumeId
+                ? dragPreviewTrackVolume
+                : track.volumeDecibels;
+            const auto faderY =
+                static_cast<float>(y + trackControlY + 8);
+            drawStudioIcon(
+                graphics,
+                StudioIcon::volume,
+                {
+                    static_cast<float>(
+                        viewportPositionX + trackVolumeIconX),
+                    static_cast<float>(y + trackControlY + 3),
+                    12.0f,
+                    12.0f
+                },
+                juce::Colour(StudioColours::secondaryText),
+                1.2f);
+            graphics.setColour(
+                juce::Colour(StudioColours::border));
+            graphics.drawLine(
+                static_cast<float>(
+                    viewportPositionX + trackVolumeStartX),
+                faderY,
+                static_cast<float>(
+                    viewportPositionX + trackVolumeEndX),
+                faderY,
+                2.0f);
+            const auto normalized = juce::jmap(
+                juce::jlimit(-60.0f, 12.0f, volume),
+                -60.0f,
+                12.0f,
+                0.0f,
+                1.0f);
+            const auto knobX = juce::jmap(
+                normalized,
+                0.0f,
+                1.0f,
+                static_cast<float>(
+                    viewportPositionX + trackVolumeStartX),
+                static_cast<float>(
+                    viewportPositionX + trackVolumeEndX));
+            graphics.setColour(
+                juce::Colour(StudioColours::text));
+            graphics.fillEllipse(
+                knobX - 3.5f,
+                faderY - 3.5f,
+                7.0f,
+                7.0f);
+            graphics.setColour(
+                juce::Colour(StudioColours::secondaryText));
+            graphics.setFont(
+                juce::Font(juce::FontOptions(8.0f)));
+            graphics.drawText(
+                formatDecibels(volume),
+                viewportPositionX + trackVolumeIconX,
+                y + 68,
+                trackVolumeEndX - trackVolumeIconX,
+                14,
+                juce::Justification::centredRight);
+        }
 
         if (children > 0)
         {
@@ -935,7 +1132,7 @@ void TimelineComponent::paint(juce::Graphics& graphics)
         const auto processingLabel = (clip->reversed ? " REV" : "")
             + juce::String(clip->polarityInverted ? " INV" : "");
         const auto gainLabel = std::abs(gainDecibels) >= 0.05f
-            ? "  " + juce::String(gainDecibels, 1) + " dB"
+            ? "  " + formatDecibels(gainDecibels)
             : juce::String();
         graphics.drawText(clip->name + processingLabel + gainLabel,
                           bounds.toNearestInt().withHeight(24).reduced(8, 0),
@@ -1085,8 +1282,84 @@ void TimelineComponent::mouseDown(const juce::MouseEvent& event)
         return;
     }
 
-    if (event.position.y < static_cast<float>(sectionLaneHeight))
+    if (event.position.y < static_cast<float>(markerLaneHeight))
+    {
+        const auto inTrackHeader =
+            event.position.x
+                >= static_cast<float>(viewportPositionX)
+            && event.position.x
+                < static_cast<float>(
+                    viewportPositionX + trackHeaderWidth);
+        if (!inTrackHeader && project != nullptr)
+        {
+            draggedMarkerId = markerIdAt(event.position);
+            if (const auto* marker =
+                    project->findMarker(draggedMarkerId))
+            {
+                markerDragOriginalSeconds = marker->timeSeconds;
+                markerDragPreviewSeconds = marker->timeSeconds;
+                setMouseCursor(
+                    juce::MouseCursor::DraggingHandCursor);
+            }
+        }
         return;
+    }
+    if (event.position.y
+        < static_cast<float>(timelineRulerTop))
+    {
+        const auto inTrackHeader =
+            event.position.x
+                >= static_cast<float>(viewportPositionX)
+            && event.position.x
+                < static_cast<float>(
+                    viewportPositionX + trackHeaderWidth);
+        if (!inTrackHeader && project != nullptr)
+        {
+            draggedSectionId = sectionIdAt(event.position);
+            const auto section = std::find_if(
+                project->sections.cbegin(),
+                project->sections.cend(),
+                [this](const auto& candidate)
+                {
+                    return candidate.id
+                        == draggedSectionId;
+                });
+            if (section != project->sections.cend())
+            {
+                const auto index = static_cast<std::size_t>(
+                    std::distance(
+                        project->sections.cbegin(),
+                        section));
+                sectionDragOriginalStart =
+                    section->timeSeconds;
+                sectionDragOriginalEnd =
+                    sectionEndSeconds(
+                        index,
+                        project->timelineEndSeconds()
+                            + 8.0);
+                sectionDragPreviewStart =
+                    sectionDragOriginalStart;
+                sectionDragPreviewEnd =
+                    sectionDragOriginalEnd;
+                dragStartX = event.position.x;
+                const auto endX =
+                    secondsToX(sectionDragOriginalEnd);
+                sectionDragMode =
+                    std::abs(event.position.x - endX)
+                            <= 7.0f
+                        ? SectionDragMode::resizeEnd
+                        : SectionDragMode::move;
+                setMouseCursor(
+                    sectionDragMode
+                            == SectionDragMode::resizeEnd
+                        ? juce::MouseCursor::
+                              LeftRightResizeCursor
+                        : juce::MouseCursor::
+                              DraggingHandCursor);
+            }
+        }
+        return;
+    }
 
     const auto inTrackHeader = event.position.x >= static_cast<float>(viewportPositionX)
         && event.position.x < static_cast<float>(viewportPositionX + trackHeaderWidth);
@@ -1121,19 +1394,82 @@ void TimelineComponent::mouseDown(const juce::MouseEvent& event)
                 onToggleTrackVersions(track.id);
                 return;
             }
-            if (localY >= 44 && localY <= 76)
+            if (track.type == TrackType::audio
+                && localY >= 29
+                && localY <= 47
+                && x >= 104
+                && x <= 168
+                && onInputMenuRequested)
             {
-                if (x >= 22 && x <= 58 && onTrackMute)
+                selectedTrackId = track.id;
+                selectedClipId.clear();
+                if (onTrackSelected)
+                    onTrackSelected(track.id);
+                const juce::Rectangle<int> inputBounds(
+                    viewportPositionX + 104,
+                    rulerHeight
+                        + trackIndex * trackHeight
+                        + 29,
+                    64,
+                    18);
+                onInputMenuRequested(
+                    track.id,
+                    localAreaToGlobal(inputBounds));
+                return;
+            }
+            if (localY >= trackControlY
+                && localY
+                    <= trackControlY + trackControlSize)
+            {
+                if (x >= trackMuteX
+                    && x < trackMuteX + trackControlSize
+                    && onTrackMute)
                     onTrackMute(track.id);
-                else if (x >= 58 && x <= 92 && onTrackSolo)
+                else if (x >= trackSoloX
+                         && x
+                             < trackSoloX
+                                 + trackControlSize
+                         && onTrackSolo)
                     onTrackSolo(track.id);
-                else if (x >= 92 && x <= 126
+                else if (x >= trackArmX
+                         && x
+                             < trackArmX
+                                 + trackControlSize
                          && (track.type == TrackType::audio
                              || track.type
                                  == TrackType::instrument
                              || track.type == TrackType::midi)
                          && onTrackArm)
                     onTrackArm(track.id);
+                else if (
+                    x >= trackVolumeIconX
+                    && x <= trackVolumeEndX + 4
+                    && track.type != TrackType::folder
+                    && track.type != TrackType::midi)
+                {
+                    draggingTrackVolumeId = track.id;
+                    const auto normalized =
+                        juce::jlimit(
+                            0.0f,
+                            1.0f,
+                            static_cast<float>(
+                                x - trackVolumeStartX)
+                                / static_cast<float>(
+                                    trackVolumeEndX
+                                    - trackVolumeStartX));
+                    dragPreviewTrackVolume =
+                        juce::jmap(
+                            normalized,
+                            0.0f,
+                            1.0f,
+                            -60.0f,
+                            12.0f);
+                    if (onTrackVolumeGestureStarted)
+                        onTrackVolumeGestureStarted(
+                            track.id,
+                            track.volumeDecibels);
+                    repaint();
+                }
                 else
                     return;
 
@@ -1246,22 +1582,38 @@ void TimelineComponent::mouseDoubleClick(const juce::MouseEvent& event)
         && event.position.x < static_cast<float>(viewportPositionX + trackHeaderWidth);
     if (!inTrackHeader
         && event.position.y >= 0.0f
-        && event.position.y < static_cast<float>(sectionLaneHeight))
+        && event.position.y < static_cast<float>(timelineRulerTop))
     {
         if (!event.mods.isPopupMenu())
         {
-            const auto sectionId = sectionIdAt(event.position);
-            if (sectionId.isNotEmpty())
+            if (event.position.y
+                < static_cast<float>(markerLaneHeight))
             {
-                const auto editSection = onEditSectionRequested;
-                if (editSection)
-                    editSection(sectionId);
+                const auto markerId = markerIdAt(event.position);
+                if (markerId.isNotEmpty())
+                {
+                    if (onEditMarkerRequested)
+                        onEditMarkerRequested(markerId);
+                }
+                else if (onAddMarkerRequested)
+                {
+                    onAddMarkerRequested(
+                        xToSeconds(event.position.x));
+                }
             }
             else
             {
-                const auto addSection = onAddSectionRequested;
-                if (addSection)
-                    addSection(xToSeconds(event.position.x));
+                const auto sectionId = sectionIdAt(event.position);
+                if (sectionId.isNotEmpty())
+                {
+                    if (onEditSectionRequested)
+                        onEditSectionRequested(sectionId);
+                }
+                else if (onAddSectionRequested)
+                {
+                    onAddSectionRequested(
+                        xToSeconds(event.position.x));
+                }
             }
         }
         return;
@@ -1327,6 +1679,110 @@ void TimelineComponent::mouseDoubleClick(const juce::MouseEvent& event)
 
 void TimelineComponent::mouseDrag(const juce::MouseEvent& event)
 {
+    if (draggingTrackVolumeId.isNotEmpty())
+    {
+        const auto localX =
+            event.position.x
+            - static_cast<float>(viewportPositionX);
+        const auto normalized = juce::jlimit(
+            0.0f,
+            1.0f,
+            (localX
+             - static_cast<float>(trackVolumeStartX))
+                / static_cast<float>(
+                    trackVolumeEndX
+                    - trackVolumeStartX));
+        dragPreviewTrackVolume = juce::jmap(
+            normalized,
+            0.0f,
+            1.0f,
+            -60.0f,
+            12.0f);
+        repaint();
+        return;
+    }
+
+    if (draggedMarkerId.isNotEmpty())
+    {
+        markerDragPreviewSeconds = snappedSeconds(
+            xToSeconds(event.position.x));
+        repaint();
+        return;
+    }
+
+    if (draggedSectionId.isNotEmpty()
+        && project != nullptr)
+    {
+        const auto section = std::find_if(
+            project->sections.cbegin(),
+            project->sections.cend(),
+            [this](const auto& candidate)
+            {
+                return candidate.id == draggedSectionId;
+            });
+        if (section == project->sections.cend())
+            return;
+        const auto index = static_cast<std::size_t>(
+            std::distance(
+                project->sections.cbegin(),
+                section));
+        const auto nextStart =
+            index + 1 < project->sections.size()
+                ? project->sections[index + 1].timeSeconds
+                : std::numeric_limits<double>::infinity();
+        auto minimumStart = 0.0;
+        if (index > 0)
+        {
+            const auto& previous =
+                project->sections[index - 1];
+            minimumStart =
+                previous.endTimeSeconds.value_or(
+                    previous.timeSeconds + 0.0001);
+        }
+        if (sectionDragMode == SectionDragMode::move)
+        {
+            const auto duration =
+                sectionDragOriginalEnd
+                - sectionDragOriginalStart;
+            const auto requested = snappedSeconds(
+                sectionDragOriginalStart
+                + static_cast<double>(
+                      event.position.x - dragStartX)
+                    / pixelsPerSecond);
+            const auto maximumStart =
+                std::isfinite(nextStart)
+                    ? juce::jmax(
+                          minimumStart,
+                          nextStart - duration)
+                    : requested;
+            sectionDragPreviewStart =
+                std::isfinite(nextStart)
+                    ? juce::jlimit(
+                          minimumStart,
+                          maximumStart,
+                          requested)
+                    : juce::jmax(
+                          minimumStart,
+                          requested);
+            sectionDragPreviewEnd =
+                sectionDragPreviewStart + duration;
+        }
+        else if (sectionDragMode
+                 == SectionDragMode::resizeEnd)
+        {
+            const auto requested = juce::jmax(
+                sectionDragPreviewStart + 0.01,
+                snappedSeconds(
+                    xToSeconds(event.position.x)));
+            sectionDragPreviewEnd =
+                std::isfinite(nextStart)
+                    ? juce::jmin(nextStart, requested)
+                    : requested;
+        }
+        repaint();
+        return;
+    }
+
     if (draggedClipId.isEmpty())
         return;
 
@@ -1337,7 +1793,7 @@ void TimelineComponent::mouseDrag(const juce::MouseEvent& event)
     if (dragMode == DragMode::move)
     {
         const auto unsnapped = std::max(0.0, dragOriginalStart + deltaSeconds);
-        dragPreviewStart = std::round(unsnapped / beat) * beat;
+        dragPreviewStart = snappedSeconds(unsnapped);
 
         const auto targetTrackIndex = trackIndexAt(event.position.y);
         if (project != nullptr
@@ -1362,7 +1818,7 @@ void TimelineComponent::mouseDrag(const juce::MouseEvent& event)
         const auto unsnapped = juce::jlimit(minimumStart,
                                            maximumStart,
                                            dragOriginalStart + deltaSeconds);
-        dragPreviewStart = std::round(unsnapped / (beat / 4.0)) * (beat / 4.0);
+        dragPreviewStart = snappedSeconds(unsnapped);
         dragPreviewStart = juce::jlimit(minimumStart, maximumStart, dragPreviewStart);
         const auto appliedDelta = dragPreviewStart - dragOriginalStart;
         dragPreviewSourceOffset = dragOriginalSourceOffset + appliedDelta;
@@ -1377,8 +1833,11 @@ void TimelineComponent::mouseDrag(const juce::MouseEvent& event)
         const auto unsnappedDuration = juce::jlimit(minimumDuration,
                                                     sourceRemaining,
                                                     dragOriginalDuration + deltaSeconds);
-        dragPreviewDuration = std::round(unsnappedDuration / (beat / 4.0))
-            * (beat / 4.0);
+        const auto unsnappedEnd =
+            dragOriginalStart + unsnappedDuration;
+        dragPreviewDuration =
+            snappedSeconds(unsnappedEnd)
+            - dragOriginalStart;
         dragPreviewDuration = juce::jlimit(minimumDuration,
                                            sourceRemaining,
                                            dragPreviewDuration);
@@ -1431,6 +1890,61 @@ void TimelineComponent::mouseDrag(const juce::MouseEvent& event)
 
 void TimelineComponent::mouseUp(const juce::MouseEvent&)
 {
+    if (draggingTrackVolumeId.isNotEmpty())
+    {
+        const auto trackId = draggingTrackVolumeId;
+        draggingTrackVolumeId.clear();
+        if (onTrackVolumeChanged)
+            onTrackVolumeChanged(
+                trackId,
+                dragPreviewTrackVolume);
+        repaint();
+        return;
+    }
+
+    if (draggedMarkerId.isNotEmpty())
+    {
+        if (std::abs(
+                markerDragPreviewSeconds
+                - markerDragOriginalSeconds)
+                > 0.0001
+            && onMoveMarkerRequested)
+        {
+            onMoveMarkerRequested(
+                draggedMarkerId,
+                markerDragPreviewSeconds);
+        }
+        draggedMarkerId.clear();
+        setMouseCursor(juce::MouseCursor::NormalCursor);
+        repaint();
+        return;
+    }
+
+    if (draggedSectionId.isNotEmpty())
+    {
+        const auto sectionId = draggedSectionId;
+        draggedSectionId.clear();
+        sectionDragMode = SectionDragMode::none;
+        if ((std::abs(
+                 sectionDragPreviewStart
+                 - sectionDragOriginalStart)
+                 > 0.0001
+             || std::abs(
+                    sectionDragPreviewEnd
+                    - sectionDragOriginalEnd)
+                    > 0.0001)
+            && onSectionRangeChanged)
+        {
+            onSectionRangeChanged(
+                sectionId,
+                sectionDragPreviewStart,
+                sectionDragPreviewEnd);
+        }
+        setMouseCursor(juce::MouseCursor::NormalCursor);
+        repaint();
+        return;
+    }
+
     if (draggedClipId.isNotEmpty())
     {
         if (dragMode == DragMode::move
@@ -1489,12 +2003,57 @@ void TimelineComponent::mouseUp(const juce::MouseEvent&)
 
 void TimelineComponent::mouseMove(const juce::MouseEvent& event)
 {
+    if (event.position.y >= 0.0f
+        && event.position.y
+            < static_cast<float>(markerLaneHeight)
+        && markerIdAt(event.position).isNotEmpty())
+    {
+        setMouseCursor(juce::MouseCursor::DraggingHandCursor);
+        return;
+    }
+    if (event.position.y
+            >= static_cast<float>(markerLaneHeight)
+        && event.position.y
+            < static_cast<float>(timelineRulerTop)
+        && project != nullptr)
+    {
+        const auto sectionId = sectionIdAt(event.position);
+        const auto section = std::find_if(
+            project->sections.cbegin(),
+            project->sections.cend(),
+            [&sectionId](const auto& candidate)
+            {
+                return candidate.id == sectionId;
+            });
+        if (section != project->sections.cend())
+        {
+            const auto index = static_cast<std::size_t>(
+                std::distance(
+                    project->sections.cbegin(),
+                    section));
+            const auto endX = secondsToX(
+                sectionEndSeconds(
+                    index,
+                    project->timelineEndSeconds() + 8.0));
+            setMouseCursor(
+                std::abs(event.position.x - endX)
+                        <= 7.0f
+                    ? juce::MouseCursor::
+                          LeftRightResizeCursor
+                    : juce::MouseCursor::
+                          DraggingHandCursor);
+            return;
+        }
+    }
     updateHoverState(event.position);
 }
 
 void TimelineComponent::mouseExit(const juce::MouseEvent&)
 {
-    if (draggedClipId.isNotEmpty())
+    if (draggingTrackVolumeId.isNotEmpty()
+        || draggedMarkerId.isNotEmpty()
+        || draggedSectionId.isNotEmpty()
+        || draggedClipId.isNotEmpty())
         return;
 
     const auto changed = hoveredClipId.isNotEmpty()
@@ -1509,6 +2068,29 @@ void TimelineComponent::mouseExit(const juce::MouseEvent&)
 void TimelineComponent::mouseWheelMove(const juce::MouseEvent& event,
                                        const juce::MouseWheelDetails& wheel)
 {
+    if (event.position.x
+            < static_cast<float>(
+                viewportPositionX + trackHeaderWidth)
+        && std::abs(wheel.deltaY) > 0.0001f)
+    {
+        if (auto* viewport =
+                findParentComponentOfClass<
+                    juce::Viewport>();
+            viewport != nullptr)
+        {
+            const auto distance = static_cast<int>(
+                std::round(
+                    wheel.deltaY
+                    * (wheel.isSmooth ? 120.0f
+                                      : 88.0f)));
+            viewport->setViewPosition(
+                viewport->getViewPositionX(),
+                viewport->getViewPositionY()
+                    - distance);
+            return;
+        }
+    }
+
     if (std::abs(wheel.deltaY) > 0.0001f
         && std::abs(wheel.deltaY) >= std::abs(wheel.deltaX)
         && onZoomRequested)
@@ -1546,37 +2128,68 @@ void TimelineComponent::showContextMenu(const juce::MouseEvent& event)
         && event.position.x < static_cast<float>(viewportPositionX + trackHeaderWidth);
     if (!inTrackHeader
         && event.position.y >= 0.0f
-        && event.position.y < static_cast<float>(sectionLaneHeight))
+        && event.position.y < static_cast<float>(timelineRulerTop))
     {
         juce::PopupMenu menu;
         const auto safeThis = juce::Component::SafePointer<TimelineComponent>(this);
-        const auto sectionId = sectionIdAt(event.position);
-        if (sectionId.isNotEmpty())
+        if (event.position.y
+            < static_cast<float>(markerLaneHeight))
         {
-            menu.addItem("Tempo, time signature and click...", [safeThis, sectionId]
+            const auto markerId = markerIdAt(event.position);
+            if (markerId.isNotEmpty())
             {
-                if (safeThis != nullptr && safeThis->onConfigureSectionRequested)
-                    safeThis->onConfigureSectionRequested(sectionId);
-            });
-            menu.addItem("Rename / move marker...", [safeThis, sectionId]
-            {
-                if (safeThis != nullptr && safeThis->onEditSectionRequested)
-                    safeThis->onEditSectionRequested(sectionId);
-            });
-            menu.addItem("Remove marker", [safeThis, sectionId]
-            {
-                if (safeThis != nullptr && safeThis->onRemoveSectionRequested)
-                    safeThis->onRemoveSectionRequested(sectionId);
-            });
-            menu.addSeparator();
+                menu.addItem("Rename marker...", [safeThis, markerId]
+                {
+                    if (safeThis != nullptr
+                        && safeThis->onEditMarkerRequested)
+                        safeThis->onEditMarkerRequested(markerId);
+                });
+                menu.addItem("Remove marker", [safeThis, markerId]
+                {
+                    if (safeThis != nullptr
+                        && safeThis->onRemoveMarkerRequested)
+                        safeThis->onRemoveMarkerRequested(markerId);
+                });
+                menu.addSeparator();
+            }
+            menu.addItem(
+                "Add marker here...",
+                [safeThis, position = xToSeconds(event.position.x)]
+                {
+                    if (safeThis != nullptr && safeThis->onAddMarkerRequested)
+                        safeThis->onAddMarkerRequested(position);
+                });
         }
-        menu.addItem(
-            "Add marker here...",
-            [safeThis, position = xToSeconds(event.position.x)]
+        else
+        {
+            const auto sectionId = sectionIdAt(event.position);
+            if (sectionId.isNotEmpty())
             {
-                if (safeThis != nullptr && safeThis->onAddSectionRequested)
-                    safeThis->onAddSectionRequested(position);
-            });
+                menu.addItem("Tempo, time signature and click...", [safeThis, sectionId]
+                {
+                    if (safeThis != nullptr && safeThis->onConfigureSectionRequested)
+                        safeThis->onConfigureSectionRequested(sectionId);
+                });
+                menu.addItem("Rename / move section...", [safeThis, sectionId]
+                {
+                    if (safeThis != nullptr && safeThis->onEditSectionRequested)
+                        safeThis->onEditSectionRequested(sectionId);
+                });
+                menu.addItem("Remove section", [safeThis, sectionId]
+                {
+                    if (safeThis != nullptr && safeThis->onRemoveSectionRequested)
+                        safeThis->onRemoveSectionRequested(sectionId);
+                });
+                menu.addSeparator();
+            }
+            menu.addItem(
+                "Add section here...",
+                [safeThis, position = xToSeconds(event.position.x)]
+                {
+                    if (safeThis != nullptr && safeThis->onAddSectionRequested)
+                        safeThis->onAddSectionRequested(position);
+                });
+        }
         const auto screenPosition = event.getScreenPosition();
         menu.showMenuAsync(juce::PopupMenu::Options()
                                .withTargetComponent(this)
@@ -1962,34 +2575,92 @@ void TimelineComponent::showContextMenu(const juce::MouseEvent& event)
     repaint();
 }
 
-juce::String TimelineComponent::sectionIdAt(juce::Point<float> position) const
+juce::String TimelineComponent::markerIdAt(
+    juce::Point<float> position) const
 {
     if (project == nullptr
         || position.y < 0.0f
-        || position.y >= static_cast<float>(sectionLaneHeight)
+        || position.y
+            >= static_cast<float>(markerLaneHeight)
+        || position.x
+            < static_cast<float>(
+                viewportPositionX + trackHeaderWidth)
+        || position.x >= static_cast<float>(getWidth()))
+        return {};
+
+    const juce::Font font(
+        juce::FontOptions(10.0f, juce::Font::bold));
+    for (auto index = project->markers.size(); index > 0; --index)
+    {
+        const auto& marker = project->markers[index - 1];
+        const auto x = secondsToX(
+            marker.id == draggedMarkerId
+                ? markerDragPreviewSeconds
+                : marker.timeSeconds);
+        const auto labelWidth =
+            juce::GlyphArrangement::getStringWidth(
+                font,
+                marker.name);
+        const juce::Rectangle<float> bounds(
+            x - 4.0f,
+            0.0f,
+            16.0f + labelWidth,
+            static_cast<float>(markerLaneHeight));
+        if (bounds.contains(position))
+            return marker.id;
+    }
+    return {};
+}
+
+juce::String TimelineComponent::sectionIdAt(juce::Point<float> position) const
+{
+    if (project == nullptr
+        || position.y < static_cast<float>(markerLaneHeight)
+        || position.y >= static_cast<float>(timelineRulerTop)
         || position.x < static_cast<float>(viewportPositionX + trackHeaderWidth)
         || position.x >= static_cast<float>(getWidth()))
         return {};
 
-    const juce::Font font(juce::FontOptions(10.0f, juce::Font::bold));
     for (auto index = project->sections.size(); index > 0; --index)
     {
         const auto& section = project->sections[index - 1];
-        const auto startX = secondsToX(section.timeSeconds);
-        const auto nextX = index < project->sections.size()
-            ? secondsToX(project->sections[index].timeSeconds)
-            : static_cast<float>(getWidth());
-        const auto labelEndX = startX + 10.0f
-            + juce::GlyphArrangement::getStringWidth(font, section.name);
+        const auto dragging =
+            section.id == draggedSectionId;
+        const auto startX = secondsToX(
+            dragging
+                ? sectionDragPreviewStart
+                : section.timeSeconds);
+        const auto endX = secondsToX(
+            dragging
+                ? sectionDragPreviewEnd
+                : sectionEndSeconds(
+                    index - 1,
+                    xToSeconds(
+                        static_cast<float>(getWidth()))));
         const juce::Rectangle<float> bounds(
-            startX - 3.0f,
-            0.0f,
-            std::max(6.0f, std::min(labelEndX, nextX) - startX + 3.0f),
+            startX,
+            static_cast<float>(markerLaneHeight),
+            std::max(1.0f, endX - startX + 4.0f),
             static_cast<float>(sectionLaneHeight));
         if (bounds.contains(position))
             return section.id;
     }
     return {};
+}
+
+double TimelineComponent::sectionEndSeconds(
+    std::size_t index,
+    double fallback) const noexcept
+{
+    if (project == nullptr
+        || index >= project->sections.size())
+        return fallback;
+    const auto& section = project->sections[index];
+    if (section.endTimeSeconds.has_value())
+        return *section.endTimeSeconds;
+    return index + 1 < project->sections.size()
+        ? project->sections[index + 1].timeSeconds
+        : fallback;
 }
 
 std::vector<TimelineComponent::Hit> TimelineComponent::clipHits() const
@@ -2285,6 +2956,24 @@ void TimelineComponent::updateHoverState(juce::Point<float> position)
 double TimelineComponent::xToSeconds(float x) const noexcept
 {
     return std::max(0.0, static_cast<double>(x - trackHeaderWidth) / pixelsPerSecond);
+}
+
+double TimelineComponent::snappedSeconds(
+    double seconds) const noexcept
+{
+    const auto clamped = std::max(0.0, seconds);
+    if (!snapEnabled
+        || project == nullptr
+        || !std::isfinite(editGridBeats)
+        || editGridBeats <= 0.0)
+        return clamped;
+    const auto beats = project->beatsAt(clamped);
+    const auto snappedBeats =
+        std::round(beats / editGridBeats)
+        * editGridBeats;
+    return std::max(
+        0.0,
+        project->secondsAtBeat(snappedBeats));
 }
 
 float TimelineComponent::secondsToX(double seconds) const noexcept

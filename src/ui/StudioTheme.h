@@ -9,6 +9,8 @@ struct StudioColours
     static constexpr std::uint32_t window = 0xff101214;
     static constexpr std::uint32_t panel = 0xff171a1d;
     static constexpr std::uint32_t raised = 0xff22262a;
+    static constexpr std::uint32_t transport = 0xff18243a;
+    static constexpr std::uint32_t transportRaised = 0xff263653;
     static constexpr std::uint32_t border = 0xff30353a;
     static constexpr std::uint32_t text = 0xffe7e4df;
     static constexpr std::uint32_t secondaryText = 0xff8f969c;

@@ -82,13 +82,15 @@ bool PluginSearchPaths::load(juce::String& error)
 {
     writable = true;
     folders.clear();
+    disabledDefaults.clear();
     if (!file.existsAsFile())
         return true;
 
     const auto value = juce::JSON::parse(file.loadFileAsString());
     const auto* root = value.getDynamicObject();
     if (root == nullptr
-        || static_cast<int>(root->getProperty("schemaVersion")) != 1
+        || (static_cast<int>(root->getProperty("schemaVersion")) != 1
+            && static_cast<int>(root->getProperty("schemaVersion")) != 2)
         || !root->getProperty("customVst3Folders").isArray())
     {
         writable = false;
@@ -114,6 +116,21 @@ bool PluginSearchPaths::load(juce::String& error)
     }
 
     folders = normalizeAndDeduplicate(loadedFolders, nativePathStyle());
+    if (root->getProperty("disabledDefaultVst3Folders").isArray())
+    {
+        juce::StringArray disabled;
+        for (const auto& disabledValue :
+             *root->getProperty(
+                  "disabledDefaultVst3Folders")
+                  .getArray())
+        {
+            if (disabledValue.isString())
+                disabled.add(disabledValue.toString());
+        }
+        disabledDefaults = normalizeAndDeduplicate(
+            disabled,
+            nativePathStyle());
+    }
     return true;
 }
 
@@ -163,9 +180,66 @@ juce::Result PluginSearchPaths::removeCustomFolder(const juce::File& folder)
     return result;
 }
 
+juce::Result PluginSearchPaths::disableDefaultFolder(
+    const juce::File& folder)
+{
+    const auto normalized = normalizePathText(
+        folder.getFullPathName(),
+        nativePathStyle());
+    if (normalized.isEmpty())
+        return juce::Result::fail(
+            "The default VST3 folder is invalid.");
+    if (indexOfPath(
+            disabledDefaults,
+            normalized,
+            nativePathStyle()) >= 0)
+        return juce::Result::ok();
+    const auto previous = disabledDefaults;
+    disabledDefaults.add(normalized);
+    disabledDefaults = normalizeAndDeduplicate(
+        disabledDefaults,
+        nativePathStyle());
+    const auto result = save();
+    if (result.failed())
+        disabledDefaults = previous;
+    return result;
+}
+
+juce::Result PluginSearchPaths::enableDefaultFolder(
+    const juce::File& folder)
+{
+    const auto index = indexOfPath(
+        disabledDefaults,
+        folder.getFullPathName(),
+        nativePathStyle());
+    if (index < 0)
+        return juce::Result::ok();
+    const auto previous = disabledDefaults;
+    disabledDefaults.remove(index);
+    const auto result = save();
+    if (result.failed())
+        disabledDefaults = previous;
+    return result;
+}
+
+juce::Result PluginSearchPaths::restoreDefaultFolders()
+{
+    const auto previous = disabledDefaults;
+    disabledDefaults.clear();
+    const auto result = save();
+    if (result.failed())
+        disabledDefaults = previous;
+    return result;
+}
+
 juce::StringArray PluginSearchPaths::customFolders() const
 {
     return folders;
+}
+
+juce::StringArray PluginSearchPaths::disabledDefaultFolders() const
+{
+    return disabledDefaults;
 }
 
 PluginSearchPlan PluginSearchPaths::createScanPlan(
@@ -174,7 +248,15 @@ PluginSearchPlan PluginSearchPaths::createScanPlan(
     PluginSearchPlan plan;
     juce::StringArray availableFolders;
     for (int index = 0; index < defaultFolders.getNumPaths(); ++index)
-        availableFolders.add(defaultFolders[index].getFullPathName());
+    {
+        const auto path =
+            defaultFolders[index].getFullPathName();
+        if (indexOfPath(
+                disabledDefaults,
+                path,
+                nativePathStyle()) < 0)
+            availableFolders.add(path);
+    }
 
     for (const auto& path : folders)
     {
@@ -250,11 +332,17 @@ juce::Result PluginSearchPaths::save() const
     }
 
     auto root = std::make_unique<juce::DynamicObject>();
-    root->setProperty("schemaVersion", 1);
+    root->setProperty("schemaVersion", 2);
     juce::Array<juce::var> folderValues;
     for (const auto& folder : folders)
         folderValues.add(folder);
     root->setProperty("customVst3Folders", juce::var(folderValues));
+    juce::Array<juce::var> disabledValues;
+    for (const auto& folder : disabledDefaults)
+        disabledValues.add(folder);
+    root->setProperty(
+        "disabledDefaultVst3Folders",
+        juce::var(disabledValues));
 
     const auto temporary = file.getSiblingFile(
         file.getFileName() + ".tmp-" + juce::Uuid().toString());

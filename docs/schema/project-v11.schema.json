@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://studioduo.dev/schema/project-v11.schema.json",
+  "title": "Studio Duo session format v11",
+  "type": "object",
+  "required": [
+    "formatVersion", "id", "name", "metadata", "mastering", "tracks",
+    "routingConnections", "drumMaps", "midiPatterns", "midiRoutingTemplates",
+    "scenes", "compatibilityReports", "toneSnapshots", "mixerSnapshots",
+    "renderReports", "markers", "sections", "tempoChanges", "meterChanges",
+    "loopEnabled", "loopStartSeconds", "loopEndSeconds"
+  ],
+  "properties": {
+    "formatVersion": { "const": 11 },
+    "id": { "$ref": "project-v10.schema.json#/properties/id" },
+    "name": { "$ref": "project-v10.schema.json#/properties/name" },
+    "metadata": { "type": "object" },
+    "mastering": { "$ref": "project-v10.schema.json#/properties/mastering" },
+    "tracks": { "$ref": "project-v10.schema.json#/properties/tracks" },
+    "routingConnections": { "type": "array" },
+    "drumMaps": { "type": "array" },
+    "midiPatterns": { "type": "array" },
+    "midiRoutingTemplates": { "type": "array" },
+    "scenes": { "type": "array" },
+    "compatibilityReports": { "type": "array" },
+    "toneSnapshots": { "type": "array" },
+    "mixerSnapshots": { "type": "array" },
+    "renderReports": {
+      "type": "array",
+      "items": { "$ref": "render-report-v2.schema.json" }
+    },
+    "tempo": { "type": "number", "minimum": 20, "maximum": 400, "default": 120 },
+    "timeSignatureNumerator": { "type": "integer", "minimum": 1, "maximum": 32, "default": 4 },
+    "timeSignatureDenominator": { "enum": [1, 2, 4, 8, 16, 32], "default": 4 },
+    "loopEnabled": { "type": "boolean", "default": false },
+    "loopStartSeconds": { "type": "number", "minimum": 0 },
+    "loopEndSeconds": { "type": "number", "exclusiveMinimum": 0 },
+    "markers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "timeSeconds"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "name": { "type": "string", "minLength": 1 },
+          "timeSeconds": { "type": "number", "minimum": 0 }
+        },
+        "additionalProperties": true
+      }
+    },
+    "sections": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "timeSeconds"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "name": { "type": "string", "minLength": 1 },
+          "timeSeconds": { "type": "number", "minimum": 0 },
+          "endTimeSeconds": { "type": "number", "minimum": 0 },
+          "clickSettings": { "$ref": "#/$defs/clickSettings" }
+        },
+        "additionalProperties": true
+      }
+    },
+    "tempoChanges": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["timeSeconds", "bpm", "rampToNext"],
+        "properties": {
+          "timeSeconds": { "type": "number", "minimum": 0 },
+          "bpm": { "type": "number", "minimum": 20, "maximum": 400 },
+          "rampToNext": { "type": "boolean" },
+          "sectionId": { "type": "string" }
+        },
+        "additionalProperties": true
+      }
+    },
+    "meterChanges": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["timeSeconds", "numerator", "denominator"],
+        "properties": {
+          "timeSeconds": { "type": "number", "minimum": 0 },
+          "numerator": { "type": "integer", "minimum": 1, "maximum": 32 },
+          "denominator": { "enum": [1, 2, 4, 8, 16, 32] },
+          "sectionId": { "type": "string" }
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "$defs": {
+    "clickSettings": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "subdivision": { "type": "integer", "minimum": 1, "maximum": 8, "default": 1 },
+        "level": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.65 },
+        "accentLevel": { "type": "number", "minimum": 0, "maximum": 1, "default": 1 },
+        "accentBeats": {
+          "type": "array", "maxItems": 32, "uniqueItems": true, "default": [1],
+          "items": { "type": "integer", "minimum": 1, "maximum": 32 }
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

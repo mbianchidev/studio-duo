@@ -7,7 +7,7 @@ model; translation keeps the two object models independent.
 
 ## Application workflow
 
-Open **DAWPROJECT** in the main header.
+Open **Export > DAWproject 1.0**.
 
 - **Import DAWproject 1.0...** selects a `.dawproject` ZIP and a destination
   `.studioduo` package. A successful import opens that new project.
@@ -90,7 +90,8 @@ With identical input bytes and model state, repeated exports are byte-identical.
 | --- | --- |
 | Project name and metadata | `metadata.xml` fields |
 | Base tempo/signature and maps | `Transport`, `TempoAutomation`, `TimeSignatureAutomation` |
-| Song sections | Arrangement `Markers` |
+| Timeline marker flags | Arrangement `Markers` |
+| Song sections | No direct DAWproject 1.0 range equivalent; transport events remain audible |
 | Track order and folder hierarchy | Nested `Track` elements |
 | Audio, MIDI, instrument, aux, bus, VCA, master | Track `Channel` role/content |
 | Main outputs and audio sends | Channel destination and `Send` |

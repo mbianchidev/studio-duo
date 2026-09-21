@@ -1,5 +1,8 @@
 #include "MixerPanel.h"
 
+#include "StudioIconButton.h"
+#include "NumericInput.h"
+#include "StudioPanControl.h"
 #include "StudioTheme.h"
 
 #include <algorithm>
@@ -7,151 +10,70 @@
 
 namespace studio
 {
-class MixerPanel::ItemList final : public juce::Component
+namespace
 {
-public:
-    explicit ItemList(MixerPanel& ownerToUse)
-        : owner(ownerToUse)
-    {
-    }
-
-    void paint(juce::Graphics& graphics) override
-    {
-        graphics.fillAll(juce::Colour(StudioColours::panel));
-        const auto values = owner.items();
-        if (values.empty())
-        {
-            graphics.setColour(juce::Colour(StudioColours::secondaryText));
-            graphics.setFont(10.0f);
-            graphics.drawFittedText(
-                "No attached inserts or sends.",
-                getLocalBounds().reduced(8),
-                juce::Justification::topLeft,
-                2);
-            return;
-        }
-
-        constexpr auto rowHeight = 36;
-        for (std::size_t index = 0; index < values.size(); ++index)
-        {
-            const auto& item = values[index];
-            const juce::Rectangle<int> row(
-                4,
-                static_cast<int>(index) * rowHeight,
-                getWidth() - 8,
-                rowHeight - 2);
-            graphics.setColour(juce::Colour(StudioColours::raised));
-            graphics.fillRoundedRectangle(row.toFloat(), 3.0f);
-            graphics.setColour(juce::Colour(StudioColours::border));
-            graphics.drawRoundedRectangle(row.toFloat(), 3.0f, 1.0f);
-
-            const auto textWidth = item.type == Item::Type::plugin
-                ? row.getWidth() - 58
-                : row.getWidth() - 12;
-            graphics.setColour(juce::Colour(StudioColours::text));
-            graphics.setFont(juce::Font(
-                juce::FontOptions(10.5f, juce::Font::bold)));
-            graphics.drawFittedText(
-                item.title,
-                row.getX() + 7,
-                row.getY() + 2,
-                textWidth,
-                15,
-                juce::Justification::centredLeft,
-                1);
-            graphics.setColour(juce::Colour(
-                StudioColours::secondaryText));
-            graphics.setFont(juce::Font(juce::FontOptions(8.5f)));
-            graphics.drawFittedText(
-                item.detail,
-                row.getX() + 7,
-                row.getY() + 18,
-                textWidth,
-                13,
-                juce::Justification::centredLeft,
-                1);
-
-            if (item.type == Item::Type::plugin)
-            {
-                const auto toggle = row.withLeft(
-                    row.getRight() - 46).reduced(5, 6);
-                graphics.setColour(juce::Colour(
-                    item.enabled
-                        ? StudioColours::green
-                        : StudioColours::amber));
-                graphics.fillRoundedRectangle(toggle.toFloat(), 3.0f);
-                graphics.setColour(juce::Colours::white);
-                graphics.setFont(juce::Font(
-                    juce::FontOptions(8.5f, juce::Font::bold)));
-                graphics.drawText(
-                    item.enabled ? "ON" : "OFF",
-                    toggle,
-                    juce::Justification::centred);
-            }
-        }
-    }
-
-    void mouseDown(const juce::MouseEvent& event) override
-    {
-        constexpr auto rowHeight = 36;
-        const auto values = owner.items();
-        const auto index = event.y / rowHeight;
-        if (index < 0 || index >= static_cast<int>(values.size()))
-            return;
-
-        const auto& item = values[static_cast<std::size_t>(index)];
-        const juce::Rectangle<int> row(
-            4,
-            index * rowHeight,
-            getWidth() - 8,
-            rowHeight - 2);
-        if (item.type == Item::Type::plugin
-            && row.withLeft(row.getRight() - 46)
-                   .contains(event.getPosition()))
-        {
-            if (owner.onPluginEnabledChanged)
-            {
-                owner.onPluginEnabledChanged(
-                    item.trackId,
-                    item.objectId,
-                    !item.enabled);
-            }
-            return;
-        }
-
-        if (item.type == Item::Type::plugin)
-        {
-            if (owner.onPluginOpen)
-                owner.onPluginOpen(item.trackId, item.objectId);
-        }
-        else if (owner.onRouteOpen)
-        {
-            owner.onRouteOpen(item.trackId, item.objectId);
-        }
-    }
-
-private:
-    MixerPanel& owner;
-};
+constexpr int stripWidth = 136;
+constexpr int stripGap = 8;
+constexpr int stripTop = 34;
+constexpr int stripControlY = 48;
+constexpr int stripControlSize = 22;
+constexpr int stripProcessingTop = 100;
+constexpr int processingHeaderHeight = 24;
+constexpr int processingRowHeight = 28;
+constexpr int visibleProcessingRows = 2;
+constexpr int stripFaderTop =
+    stripProcessingTop
+    + 2 * (processingHeaderHeight
+           + visibleProcessingRows * processingRowHeight)
+    + 10;
+constexpr int stripBottomControls = 54;
+constexpr int processingSectionHeight =
+    processingHeaderHeight
+    + visibleProcessingRows * processingRowHeight;
+}
 
 MixerPanel::MixerPanel()
 {
-    itemList = std::make_unique<ItemList>(*this);
-    itemsViewport.setViewedComponent(itemList.get(), false);
-    itemsViewport.setScrollBarsShown(true, false);
-    itemsViewport.setScrollBarThickness(8);
-    addAndMakeVisible(itemsViewport);
+    addChildComponent(volumeEditor);
+    volumeEditor.setJustification(
+        juce::Justification::centred);
+    volumeEditor.setSelectAllWhenFocused(true);
+    volumeEditor.setInputRestrictions(
+        12,
+        "0123456789+-. dDbB");
+    volumeEditor.setColour(
+        juce::TextEditor::backgroundColourId,
+        juce::Colour(StudioColours::window));
+    volumeEditor.setColour(
+        juce::TextEditor::textColourId,
+        juce::Colour(StudioColours::text));
+    volumeEditor.setColour(
+        juce::TextEditor::outlineColourId,
+        juce::Colour(StudioColours::orange));
+    volumeEditor.onReturnKey = [this]
+    {
+        commitVolumeEdit();
+    };
+    volumeEditor.onEscapeKey = [this]
+    {
+        cancelVolumeEdit();
+    };
+    volumeEditor.onFocusLost = [this]
+    {
+        if (!committingVolumeEdit)
+            commitVolumeEdit();
+    };
 }
 
 MixerPanel::~MixerPanel()
 {
-    itemsViewport.setViewedComponent(nullptr, false);
 }
 
 void MixerPanel::setProject(const Project* value)
 {
+    if (volumeEditor.isVisible())
+        cancelVolumeEdit();
     project = value;
-    refreshItems();
     repaint();
 }
 
@@ -187,82 +109,42 @@ std::vector<const Track*> MixerPanel::mixerTracks() const
     return result;
 }
 
-std::vector<MixerPanel::Item> MixerPanel::items() const
+std::vector<MixerPanel::Item> MixerPanel::itemsForTrack(
+    const Track& track) const
 {
     std::vector<Item> result;
     if (project == nullptr)
         return result;
-
-    for (const auto& track : project->tracks)
+    for (const auto& insert : track.inserts)
     {
-        const auto* insertOwner = track.parentTrackId.isNotEmpty()
-            ? project->findTrack(track.parentTrackId)
-            : &track;
-        if (insertOwner != nullptr)
-        {
-            for (const auto& insert : insertOwner->inserts)
-            {
-                result.push_back({
-                    Item::Type::plugin,
-                    insertOwner->id,
-                    insert.id,
-                    track.name + " / " + insert.name,
-                    (track.parentTrackId.isNotEmpty()
-                         ? "INHERITED / "
-                         : "")
-                        + insert.format
-                        + " INSERT",
-                    !insert.bypassed
-                });
-            }
-        }
-        if (track.parentTrackId.isNotEmpty())
+        result.push_back({
+            Item::Type::plugin,
+            track.id,
+            insert.id,
+            insert.name,
+            insert.format,
+            !insert.bypassed
+        });
+    }
+    for (const auto& route : project->routingConnections)
+    {
+        if (route.sourceTrackId != track.id
+            || route.kind == RouteKind::mainOutput)
             continue;
-        for (const auto& route : project->routingConnections)
-        {
-            if (route.sourceTrackId != track.id
-                || route.kind == RouteKind::mainOutput)
-                continue;
-            result.push_back({
-                Item::Type::route,
-                track.id,
-                route.id,
-                track.name + " / " + route.name,
-                routeKindToString(route.kind).toUpperCase()
-                    + " / "
-                    + routeTapToString(route.tap).toUpperCase(),
-                route.enabled && !route.muted
-            });
-        }
+        result.push_back({
+            Item::Type::route,
+            track.id,
+            route.id,
+            route.name,
+            routeKindToString(route.kind).toUpperCase(),
+            route.enabled && !route.muted
+        });
     }
     return result;
 }
 
-void MixerPanel::refreshItems()
-{
-    if (itemList == nullptr)
-        return;
-    constexpr auto rowHeight = 36;
-    itemList->setSize(
-        juce::jmax(1, itemsViewport.getWidth() - 8),
-        juce::jmax(
-            itemsViewport.getHeight(),
-            static_cast<int>(items().size()) * rowHeight));
-    itemList->repaint();
-}
-
 void MixerPanel::resized()
 {
-    const auto listWidth = juce::jlimit(
-        300,
-        420,
-        getWidth() / 3);
-    itemsViewport.setBounds(
-        getWidth() - listWidth,
-        30,
-        listWidth,
-        juce::jmax(0, getHeight() - 38));
-    refreshItems();
 }
 
 void MixerPanel::paint(juce::Graphics& graphics)
@@ -271,16 +153,24 @@ void MixerPanel::paint(juce::Graphics& graphics)
     if (project == nullptr || project->tracks.empty())
         return;
 
-    constexpr auto stripWidth = 112;
-    constexpr auto gap = 8;
-    const auto itemListLeft = itemsViewport.getX();
     auto x = 14;
 
     for (const auto* track : mixerTracks())
     {
-        if (x + stripWidth > itemListLeft - 36)
+        if (x + stripWidth > getWidth() - 42)
             break;
-        const juce::Rectangle<int> strip(x, 34, stripWidth, getHeight() - 44);
+        const juce::Rectangle<int> strip(
+            x,
+            stripTop,
+            stripWidth,
+            getHeight() - 44);
+        const auto faderTop =
+            strip.getY() + stripFaderTop;
+        const auto faderHeight = juce::jmax(
+            24,
+            strip.getHeight()
+                - stripFaderTop
+                - stripBottomControls);
         const auto selected = track->id == selectedTrack;
         graphics.setColour(juce::Colour(selected ? 0xff292e32 : StudioColours::raised));
         graphics.fillRoundedRectangle(strip.toFloat(), 5.0f);
@@ -306,35 +196,40 @@ void MixerPanel::paint(juce::Graphics& graphics)
                 std::max(meter->postFaderLeft, meter->postFaderRight));
             graphics.setColour(juce::Colour(StudioColours::window));
             graphics.fillRect(strip.getX() + 4,
-                              strip.getY() + 46,
-                              3,
-                              strip.getHeight() - 112);
-            graphics.fillRect(strip.getRight() - 7,
-                              strip.getY() + 46,
-                              3,
-                              strip.getHeight() - 112);
+                              faderTop,
+                              6,
+                              faderHeight);
+            graphics.fillRect(strip.getRight() - 10,
+                              faderTop,
+                              6,
+                              faderHeight);
             graphics.setColour(juce::Colour(StudioColours::amber));
             graphics.fillRect(
                 strip.getX() + 4,
-                strip.getY() + 46
+                faderTop
                     + static_cast<int>((1.0f - pre)
                                        * static_cast<float>(
-                                           strip.getHeight() - 112)),
-                3,
+                                           faderHeight)),
+                6,
                 static_cast<int>(pre
                                  * static_cast<float>(
-                                     strip.getHeight() - 112)));
-            graphics.setColour(juce::Colour(StudioColours::green));
+                                     faderHeight)));
+            graphics.setColour(
+                post > 0.9f
+                    ? juce::Colour(StudioColours::orange)
+                    : post > 0.7f
+                        ? juce::Colour(StudioColours::amber)
+                        : juce::Colour(StudioColours::green));
             graphics.fillRect(
-                strip.getRight() - 7,
-                strip.getY() + 46
+                strip.getRight() - 10,
+                faderTop
                     + static_cast<int>((1.0f - post)
                                        * static_cast<float>(
-                                           strip.getHeight() - 112)),
-                3,
+                                           faderHeight)),
+                6,
                 static_cast<int>(post
                                  * static_cast<float>(
-                                     strip.getHeight() - 112)));
+                                     faderHeight)));
         }
 
         graphics.setColour(track->colour);
@@ -346,8 +241,56 @@ void MixerPanel::paint(juce::Graphics& graphics)
                                 juce::Justification::centred,
                                 1);
 
-        const auto faderTop = strip.getY() + 46;
-        const auto faderHeight = strip.getHeight() - 112;
+        if (track->type == TrackType::audio)
+        {
+            const juce::Rectangle<float> inputBounds(
+                static_cast<float>(strip.getX() + 12),
+                static_cast<float>(strip.getY() + 27),
+                static_cast<float>(strip.getWidth() - 24),
+                18.0f);
+            graphics.setColour(
+                juce::Colour(StudioColours::window));
+            graphics.fillRoundedRectangle(
+                inputBounds,
+                3.0f);
+            graphics.setColour(
+                juce::Colour(StudioColours::border));
+            graphics.drawRoundedRectangle(
+                inputBounds,
+                3.0f,
+                1.0f);
+            graphics.setColour(
+                juce::Colour(StudioColours::text));
+            graphics.setFont(
+                juce::Font(juce::FontOptions(8.5f)));
+            const auto inputText =
+                "Input "
+                + juce::String(track->inputChannel + 1)
+                + (track->stereoInput
+                       ? "-"
+                           + juce::String(
+                               track->inputChannel + 2)
+                       : juce::String());
+            graphics.drawText(
+                inputText,
+                inputBounds.toNearestInt()
+                    .withTrimmedRight(14),
+                juce::Justification::centred);
+            juce::Path chevron;
+            chevron.startNewSubPath(
+                inputBounds.getRight() - 11.0f,
+                inputBounds.getCentreY() - 2.0f);
+            chevron.lineTo(
+                inputBounds.getRight() - 7.0f,
+                inputBounds.getCentreY() + 2.0f);
+            chevron.lineTo(
+                inputBounds.getRight() - 3.0f,
+                inputBounds.getCentreY() - 2.0f);
+            graphics.strokePath(
+                chevron,
+                juce::PathStrokeType(1.2f));
+        }
+
         graphics.setColour(juce::Colour(StudioColours::window));
         graphics.fillRoundedRectangle(static_cast<float>(strip.getCentreX() - 3),
                                       static_cast<float>(faderTop),
@@ -372,24 +315,263 @@ void MixerPanel::paint(juce::Graphics& graphics)
                                       7.0f,
                                       3.5f);
 
-        juce::String state;
-        if (track->type != TrackType::audio)
-            state << trackTypeToString(track->type).toUpperCase() << " ";
-        if (track->muted)
-            state << "M ";
-        if (track->solo)
-            state << "S ";
-        if (track->armed)
-            state << "R";
-        graphics.setColour(track->armed ? juce::Colour(StudioColours::orange)
-                                        : juce::Colour(StudioColours::secondaryText));
-        graphics.setFont(10.5f);
-        graphics.drawText(state.trimEnd(),
-                          strip.getX() + 8,
-                          strip.getY() + 25,
-                          strip.getWidth() - 16,
-                          18,
-                          juce::Justification::centred);
+        const auto drawControl = [&graphics, &strip](
+                                     int offset,
+                                     StudioIcon icon,
+                                     bool active,
+                                     juce::Colour activeColour)
+        {
+            const juce::Rectangle<float> bounds(
+                static_cast<float>(strip.getX() + offset),
+                static_cast<float>(
+                    strip.getY() + stripControlY),
+                static_cast<float>(stripControlSize),
+                static_cast<float>(stripControlSize));
+            graphics.setColour(
+                active ? activeColour
+                       : juce::Colour(StudioColours::window));
+            graphics.fillRoundedRectangle(bounds, 4.0f);
+            drawStudioIcon(
+                graphics,
+                icon,
+                bounds.reduced(5.0f),
+                active ? juce::Colours::white
+                       : juce::Colour(
+                           StudioColours::secondaryText),
+                1.3f);
+        };
+        drawControl(
+            12,
+            StudioIcon::mute,
+            track->muted,
+            juce::Colour(StudioColours::amber));
+        drawControl(
+            45,
+            StudioIcon::solo,
+            track->solo,
+            juce::Colour(StudioColours::green));
+        if (track->type == TrackType::audio
+            || track->type == TrackType::instrument
+            || track->type == TrackType::midi)
+        {
+            drawControl(
+                78,
+                StudioIcon::record,
+                track->armed,
+                juce::Colour(StudioColours::orange));
+        }
+
+        const juce::Rectangle<float> decibelBounds(
+            static_cast<float>(strip.getX() + 12),
+            static_cast<float>(strip.getY() + 74),
+            static_cast<float>(strip.getWidth() - 24),
+            20.0f);
+        graphics.setColour(juce::Colour(StudioColours::window));
+        graphics.fillRoundedRectangle(decibelBounds, 3.0f);
+        graphics.setColour(juce::Colour(StudioColours::border));
+        graphics.drawRoundedRectangle(decibelBounds, 3.0f, 1.0f);
+        graphics.setColour(juce::Colour(StudioColours::text));
+        graphics.setFont(
+            juce::Font(juce::FontOptions(10.0f,
+                                         juce::Font::bold)));
+        graphics.drawText(
+            formatDecibels(volumeValue),
+            decibelBounds.toNearestInt(),
+            juce::Justification::centred);
+
+        const auto values = itemsForTrack(*track);
+        const auto drawProcessingSection =
+            [&graphics, &strip, &values](
+                Item::Type type,
+                const juce::String& title,
+                int sectionTop)
+        {
+            const auto count = static_cast<int>(
+                std::count_if(
+                    values.cbegin(),
+                    values.cend(),
+                    [type](const auto& item)
+                    {
+                        return item.type == type;
+                    }));
+            auto header = juce::Rectangle<int>(
+                strip.getX() + 4,
+                sectionTop,
+                strip.getWidth() - 8,
+                processingHeaderHeight - 2);
+            graphics.setColour(
+                juce::Colour(
+                    StudioColours::transportRaised));
+            graphics.fillRoundedRectangle(
+                header.toFloat(),
+                3.0f);
+            graphics.setColour(
+                juce::Colour(StudioColours::text));
+            graphics.setFont(
+                juce::Font(
+                    juce::FontOptions(
+                        9.0f,
+                        juce::Font::bold)));
+            graphics.drawText(
+                title
+                    + (count > 0
+                           ? " " + juce::String(count)
+                           : juce::String()),
+                header.withTrimmedLeft(6)
+                    .withTrimmedRight(28),
+                juce::Justification::centredLeft);
+            graphics.setFont(
+                juce::Font(
+                    juce::FontOptions(
+                        15.0f,
+                        juce::Font::bold)));
+            graphics.drawText(
+                "+",
+                header.removeFromRight(26),
+                juce::Justification::centred);
+
+            auto rowY =
+                sectionTop + processingHeaderHeight;
+            auto drawn = 0;
+            for (const auto& item : values)
+            {
+                if (item.type != type
+                    || drawn >= visibleProcessingRows)
+                    continue;
+                const auto row = juce::Rectangle<int>(
+                    strip.getX() + 4,
+                    rowY,
+                    strip.getWidth() - 8,
+                    processingRowHeight - 2);
+                graphics.setColour(
+                    juce::Colour(StudioColours::window));
+                graphics.fillRoundedRectangle(
+                    row.toFloat(),
+                    3.0f);
+                graphics.setColour(
+                    juce::Colour(StudioColours::border));
+                graphics.drawRoundedRectangle(
+                    row.toFloat(),
+                    3.0f,
+                    1.0f);
+                graphics.setColour(
+                    juce::Colour(StudioColours::text));
+                graphics.setFont(
+                    juce::Font(
+                        juce::FontOptions(8.5f)));
+                graphics.drawFittedText(
+                    item.title,
+                    row.withTrimmedLeft(6)
+                        .withTrimmedRight(28),
+                    juce::Justification::centredLeft,
+                    1);
+                const auto toggle =
+                    row.withLeft(row.getRight() - 26)
+                        .reduced(3);
+                graphics.setColour(
+                    juce::Colour(
+                        item.enabled
+                            ? StudioColours::green
+                            : StudioColours::amber));
+                graphics.fillRoundedRectangle(
+                    toggle.toFloat(),
+                    3.0f);
+                drawStudioIcon(
+                    graphics,
+                    StudioIcon::power,
+                    toggle.toFloat().reduced(5.0f),
+                    juce::Colours::white,
+                    1.2f);
+                rowY += processingRowHeight;
+                ++drawn;
+            }
+            if (drawn == 0)
+            {
+                graphics.setColour(
+                    juce::Colour(
+                        StudioColours::secondaryText));
+                graphics.setFont(
+                    juce::Font(
+                        juce::FontOptions(8.0f)));
+                graphics.drawText(
+                    type == Item::Type::plugin
+                        ? "No inserts"
+                        : "No sends",
+                    strip.getX() + 10,
+                    rowY,
+                    strip.getWidth() - 20,
+                    processingRowHeight,
+                    juce::Justification::centredLeft);
+            }
+        };
+        const auto insertTop =
+            strip.getY() + stripProcessingTop;
+        drawProcessingSection(
+            Item::Type::plugin,
+            "INSERTS",
+            insertTop);
+        drawProcessingSection(
+            Item::Type::route,
+            "SENDS",
+            insertTop + processingSectionHeight);
+
+        graphics.setColour(
+            juce::Colour(StudioColours::secondaryText));
+        graphics.setFont(juce::Font(juce::FontOptions(7.5f)));
+        for (const auto tick : { 12, 0, -12,
+                                 -24, -48, -60 })
+        {
+            const auto tickNormalised = juce::jmap(
+                static_cast<float>(tick),
+                -60.0f,
+                12.0f,
+                1.0f,
+                0.0f);
+            const auto tickY = faderTop
+                + static_cast<int>(
+                    tickNormalised
+                    * static_cast<float>(faderHeight));
+            graphics.drawHorizontalLine(
+                tickY,
+                static_cast<float>(
+                    strip.getCentreX() + 9),
+                static_cast<float>(
+                    strip.getCentreX() + 13));
+            if (tick == 0 || tick == -24
+                || tick == -60)
+            {
+                graphics.drawText(
+                    juce::String(tick),
+                    strip.getCentreX() + 15,
+                    tickY - 6,
+                    24,
+                    12,
+                    juce::Justification::centredLeft);
+            }
+        }
+        if (meter != meters.cend())
+        {
+            const auto peak = juce::jlimit(
+                0.0f,
+                1.0f,
+                std::max(
+                    meter->postFaderLeft,
+                    meter->postFaderRight));
+            const auto peakDb = juce::Decibels::gainToDecibels(
+                peak,
+                -60.0f);
+            graphics.setColour(
+                juce::Colour(StudioColours::secondaryText));
+            graphics.setFont(
+                juce::Font(juce::FontOptions(8.0f)));
+            graphics.drawText(
+                formatDecibels(peakDb),
+                strip.getX() + 12,
+                faderTop + faderHeight + 2,
+                strip.getWidth() - 24,
+                12,
+                juce::Justification::centred);
+        }
 
         const auto panValue = track->id == draggingPanTrack
             ? dragPreviewPan
@@ -398,80 +580,32 @@ void MixerPanel::paint(juce::Graphics& graphics)
             ? juce::String("C")
             : juce::String(static_cast<int>(std::round(std::abs(panValue) * 100.0f)))
                 + (panValue < 0.0f ? "% L" : "% R");
-        graphics.setColour(juce::Colour(StudioColours::secondaryText));
-        graphics.setFont(juce::Font(juce::FontOptions(9.0f)));
-        graphics.drawText(juce::String(volumeValue, 1) + " dB",
-                          strip.getX() + 6,
-                          faderTop + faderHeight + 2,
-                          strip.getWidth() - 12,
-                          16,
-                          juce::Justification::centred);
-
-        const juce::Point<float> panCentre(static_cast<float>(strip.getCentreX()),
-                                           static_cast<float>(strip.getBottom() - 35));
-        constexpr auto panRadius = 12.0f;
-        graphics.setColour(juce::Colour(StudioColours::window));
-        graphics.fillEllipse(panCentre.x - panRadius,
-                             panCentre.y - panRadius,
-                             panRadius * 2.0f,
-                             panRadius * 2.0f);
-        graphics.setColour(std::abs(panValue) < 0.005f
-                               ? juce::Colour(StudioColours::secondaryText)
-                               : track->colour);
-        graphics.drawEllipse(panCentre.x - panRadius,
-                             panCentre.y - panRadius,
-                             panRadius * 2.0f,
-                             panRadius * 2.0f,
-                             1.5f);
-        const auto angle = juce::jmap(panValue,
-                                     -1.0f,
-                                     1.0f,
-                                     -juce::MathConstants<float>::pi * 0.75f,
-                                     juce::MathConstants<float>::pi * 0.75f);
-        const juce::Point<float> marker(panCentre.x + std::sin(angle) * 8.0f,
-                                        panCentre.y - std::cos(angle) * 8.0f);
-        graphics.drawLine(panCentre.x, panCentre.y, marker.x, marker.y, 2.0f);
-        graphics.setFont(juce::Font(juce::FontOptions(8.0f, juce::Font::bold)));
-        graphics.drawText("L",
-                          static_cast<int>(panCentre.x - 30.0f),
-                          static_cast<int>(panCentre.y - 8.0f),
-                          12,
-                          16,
-                          juce::Justification::centred);
-        graphics.drawText("R",
-                          static_cast<int>(panCentre.x + 18.0f),
-                          static_cast<int>(panCentre.y - 8.0f),
-                          12,
-                          16,
-                          juce::Justification::centred);
-        graphics.setColour(juce::Colour(StudioColours::secondaryText));
+        drawStudioPanControl(
+            graphics,
+            {
+                static_cast<float>(strip.getX() + 2),
+                static_cast<float>(strip.getBottom() - 45),
+                static_cast<float>(strip.getWidth() - 4),
+                24.0f
+            },
+            panValue,
+            track->colour,
+            true);
+        graphics.setColour(
+            juce::Colour(StudioColours::secondaryText));
+        graphics.setFont(
+            juce::Font(juce::FontOptions(8.0f)));
         graphics.drawText(panText,
                           strip.getX() + 6,
-                          strip.getBottom() - 18,
+                          strip.getBottom() - 16,
                           strip.getWidth() - 12,
                           14,
                           juce::Justification::centred);
 
-        x += stripWidth + gap;
+        x += stripWidth + stripGap;
     }
 
-    graphics.setColour(juce::Colour(StudioColours::border));
-    graphics.drawVerticalLine(
-        itemListLeft - 8,
-        0.0f,
-        static_cast<float>(getHeight()));
-    graphics.setColour(juce::Colour(StudioColours::secondaryText));
-    graphics.setFont(juce::Font(
-        juce::FontOptions(10.0f, juce::Font::bold)));
-    graphics.drawText(
-        "INSERTS & SENDS",
-        itemListLeft,
-        4,
-        itemsViewport.getWidth(),
-        20,
-        juce::Justification::centredLeft);
-
-    const auto meterX = itemListLeft - 30;
+    const auto meterX = getWidth() - 28;
     const auto meterHeight = getHeight() - 58;
     graphics.setColour(juce::Colour(StudioColours::window));
     graphics.fillRoundedRectangle(static_cast<float>(meterX),
@@ -501,10 +635,15 @@ void MixerPanel::mouseDown(const juce::MouseEvent& event)
 {
     if (project == nullptr || event.position.y < 34.0f)
         return;
+    if (event.mods.isPopupMenu())
+    {
+        showTrackContextMenu(event);
+        return;
+    }
 
-    constexpr auto stripWidth = 112;
-    constexpr auto gap = 8;
-    const auto index = static_cast<int>((event.position.x - 14.0f) / (stripWidth + gap));
+    const auto index = static_cast<int>(
+        (event.position.x - 14.0f)
+        / (stripWidth + stripGap));
     const auto tracks = mixerTracks();
     if (index < 0 || index >= static_cast<int>(tracks.size()))
         return;
@@ -512,14 +651,169 @@ void MixerPanel::mouseDown(const juce::MouseEvent& event)
     const auto* track = tracks[static_cast<std::size_t>(index)];
     if (onTrackSelected)
         onTrackSelected(track->id);
+    const juce::Rectangle<int> strip(
+                                     14 + index * (stripWidth + stripGap),
+                                     stripTop,
+                                     stripWidth,
+                                     getHeight() - 44);
+    const auto localX =
+        static_cast<int>(event.position.x)
+        - strip.getX();
+    const auto localY =
+        static_cast<int>(event.position.y)
+        - strip.getY();
+    const auto inputBounds = juce::Rectangle<int>(
+        strip.getX() + 12,
+        strip.getY() + 27,
+        strip.getWidth() - 24,
+        18);
+    if (track->type == TrackType::audio
+        && inputBounds.contains(event.getPosition())
+        && onInputMenuRequested)
+    {
+        onInputMenuRequested(
+            track->id,
+            localAreaToGlobal(inputBounds));
+        return;
+    }
+    const auto decibelBounds = juce::Rectangle<int>(
+        strip.getX() + 12,
+        strip.getY() + 74,
+        strip.getWidth() - 24,
+        20);
+    if (decibelBounds.contains(event.getPosition())
+        && track->type != TrackType::folder
+        && track->type != TrackType::midi)
+    {
+        beginVolumeEdit(*track, decibelBounds);
+        return;
+    }
+    if (localY >= stripControlY
+        && localY
+            < stripControlY + stripControlSize)
+    {
+        if (localX >= 12
+            && localX < 12 + stripControlSize
+            && onTrackMute)
+            onTrackMute(track->id);
+        else if (localX >= 45
+                 && localX < 45 + stripControlSize
+                 && onTrackSolo)
+            onTrackSolo(track->id);
+        else if (localX >= 78
+                 && localX < 78 + stripControlSize
+                 && (track->type == TrackType::audio
+                     || track->type
+                         == TrackType::instrument
+                     || track->type == TrackType::midi)
+                 && onTrackArm)
+            onTrackArm(track->id);
+        return;
+    }
+
+    const auto values = itemsForTrack(*track);
+    const auto handleProcessingSection =
+        [this, &event, &strip, &values, track](
+            Item::Type type,
+            int sectionTop) -> bool
+    {
+        const auto header = juce::Rectangle<int>(
+            strip.getX() + 4,
+            sectionTop,
+            strip.getWidth() - 8,
+            processingHeaderHeight - 2);
+        if (header.contains(event.getPosition()))
+        {
+            const auto addBounds =
+                header.withLeft(header.getRight() - 30);
+            if (!addBounds.contains(event.getPosition()))
+                return true;
+            if (type == Item::Type::plugin)
+            {
+                if (onAddInsert)
+                    onAddInsert(
+                        track->id,
+                        localAreaToGlobal(addBounds));
+            }
+            else if (onAddSend)
+            {
+                onAddSend(
+                    track->id,
+                    localAreaToGlobal(addBounds));
+            }
+            return true;
+        }
+
+        auto rowY = sectionTop + processingHeaderHeight;
+        auto drawn = 0;
+        for (const auto& item : values)
+        {
+            if (item.type != type
+                || drawn >= visibleProcessingRows)
+                continue;
+            const auto row = juce::Rectangle<int>(
+                strip.getX() + 4,
+                rowY,
+                strip.getWidth() - 8,
+                processingRowHeight - 2);
+            if (row.contains(event.getPosition()))
+            {
+                const auto power = row.withLeft(
+                    row.getRight() - 28);
+                if (power.contains(event.getPosition()))
+                {
+                    if (type == Item::Type::plugin
+                        && onPluginEnabledChanged)
+                    {
+                        onPluginEnabledChanged(
+                            item.trackId,
+                            item.objectId,
+                            !item.enabled);
+                    }
+                    else if (type == Item::Type::route
+                             && onRouteEnabledChanged)
+                    {
+                        onRouteEnabledChanged(
+                            item.trackId,
+                            item.objectId,
+                            !item.enabled);
+                    }
+                }
+                else if (type == Item::Type::plugin
+                         && onPluginOpen)
+                {
+                    onPluginOpen(
+                        item.trackId,
+                        item.objectId);
+                }
+                else if (type == Item::Type::route
+                         && onRouteOpen)
+                {
+                    onRouteOpen(
+                        item.trackId,
+                        item.objectId);
+                }
+                return true;
+            }
+            rowY += processingRowHeight;
+            ++drawn;
+        }
+        return false;
+    };
+    const auto insertTop =
+        strip.getY() + stripProcessingTop;
+    if (handleProcessingSection(
+            Item::Type::plugin,
+            insertTop)
+        || handleProcessingSection(
+            Item::Type::route,
+            insertTop + processingSectionHeight))
+        return;
+
     if (track->type == TrackType::folder
         || track->type == TrackType::midi)
         return;
 
-    const juce::Rectangle<int> strip(14 + index * (stripWidth + gap),
-                                     34,
-                                     stripWidth,
-                                     getHeight() - 44);
     draggingVolumeTrack.clear();
     draggingPanTrack.clear();
     if (track->type != TrackType::vca
@@ -527,6 +821,7 @@ void MixerPanel::mouseDown(const juce::MouseEvent& event)
             >= static_cast<float>(strip.getBottom() - 60))
     {
         draggingPanTrack = track->id;
+        dragStartX = event.position.x;
         dragStartY = event.position.y;
         dragStartPan = track->pan;
         dragPreviewPan = track->pan;
@@ -538,8 +833,13 @@ void MixerPanel::mouseDown(const juce::MouseEvent& event)
         return;
     }
 
-    const auto faderTop = strip.getY() + 46;
-    const auto faderHeight = strip.getHeight() - 112;
+    const auto faderTop =
+        strip.getY() + stripFaderTop;
+    const auto faderHeight = juce::jmax(
+        24,
+        strip.getHeight()
+            - stripFaderTop
+            - stripBottomControls);
     if (event.position.y >= static_cast<float>(faderTop - 8)
         && event.position.y <= static_cast<float>(faderTop + faderHeight + 8))
     {
@@ -576,7 +876,8 @@ void MixerPanel::mouseDrag(const juce::MouseEvent& event)
     dragPreviewPan = juce::jlimit(
         -1.0f,
         1.0f,
-        dragStartPan + (dragStartY - event.position.y) / 80.0f);
+        dragStartPan
+            + (event.position.x - dragStartX) / 56.0f);
     repaint();
 }
 
@@ -603,20 +904,216 @@ void MixerPanel::mouseUp(const juce::MouseEvent&)
     }
 }
 
+void MixerPanel::beginVolumeEdit(
+    const Track& track,
+    juce::Rectangle<int> bounds)
+{
+    editingVolumeTrack = track.id;
+    volumeEditor.setColour(
+        juce::TextEditor::outlineColourId,
+        juce::Colour(StudioColours::orange));
+    volumeEditor.setText(
+        formatDecibels(track.volumeDecibels),
+        false);
+    volumeEditor.setBounds(bounds);
+    volumeEditor.setVisible(true);
+    volumeEditor.toFront(true);
+    volumeEditor.grabKeyboardFocus();
+    volumeEditor.selectAll();
+}
+
+void MixerPanel::commitVolumeEdit()
+{
+    if (!volumeEditor.isVisible()
+        || committingVolumeEdit)
+        return;
+    const auto parsed = parseTrackDecibels(
+        volumeEditor.getText());
+    if (!parsed.has_value())
+    {
+        volumeEditor.setColour(
+            juce::TextEditor::outlineColourId,
+            juce::Colour(StudioColours::orange));
+        volumeEditor.setTooltip(
+            "Enter a finite value from -60 to +12 dB.");
+        const auto safe =
+            juce::Component::SafePointer<MixerPanel>(this);
+        juce::MessageManager::callAsync([safe]
+        {
+            if (safe != nullptr
+                && safe->volumeEditor.isVisible())
+            {
+                safe->volumeEditor.grabKeyboardFocus();
+                safe->volumeEditor.selectAll();
+            }
+        });
+        return;
+    }
+
+    committingVolumeEdit = true;
+    const auto trackId = editingVolumeTrack;
+    const auto* track = project != nullptr
+        ? project->findTrack(trackId)
+        : nullptr;
+    if (track != nullptr
+        && onAutomationGestureStarted)
+    {
+        onAutomationGestureStarted(
+            trackId,
+            AutomationTargetType::trackVolume,
+            (track->volumeDecibels + 60.0f)
+                / 72.0f);
+    }
+    volumeEditor.setVisible(false);
+    editingVolumeTrack.clear();
+    volumeEditor.setTooltip({});
+    if (onVolumeChanged)
+        onVolumeChanged(trackId, *parsed);
+    committingVolumeEdit = false;
+}
+
+void MixerPanel::cancelVolumeEdit()
+{
+    committingVolumeEdit = true;
+    volumeEditor.setVisible(false);
+    volumeEditor.setTooltip({});
+    editingVolumeTrack.clear();
+    committingVolumeEdit = false;
+}
+
+void MixerPanel::showTrackContextMenu(
+    const juce::MouseEvent& event)
+{
+    if (project == nullptr)
+        return;
+    const auto index = static_cast<int>(
+        (event.position.x - 14.0f)
+        / (stripWidth + stripGap));
+    const auto tracks = mixerTracks();
+    if (index < 0
+        || index >= static_cast<int>(tracks.size()))
+        return;
+
+    const auto* track =
+        tracks[static_cast<std::size_t>(index)];
+    const auto trackId = track->id;
+    if (onTrackSelected)
+        onTrackSelected(trackId);
+
+    juce::PopupMenu menu;
+    menu.addItem(
+        track->muted ? "Unmute track" : "Mute track",
+        [this, trackId]
+        {
+            if (onTrackMute)
+                onTrackMute(trackId);
+        });
+    menu.addItem(
+        track->solo ? "Unsolo track" : "Solo track",
+        [this, trackId]
+        {
+            if (onTrackSolo)
+                onTrackSolo(trackId);
+        });
+    if (track->type == TrackType::audio
+        || track->type == TrackType::instrument
+        || track->type == TrackType::midi)
+    {
+        menu.addItem(
+            track->armed ? "Disarm track" : "Arm track",
+            [this, trackId]
+            {
+                if (onTrackArm)
+                    onTrackArm(trackId);
+            });
+    }
+    menu.addItem(
+        "Edit name and color...",
+        [this, trackId, index]
+        {
+            if (onEditTrack)
+            {
+                const juce::Rectangle<int> strip(
+                    14 + index
+                        * (stripWidth + stripGap),
+                    stripTop,
+                    stripWidth,
+                    getHeight() - 44);
+                onEditTrack(
+                    trackId,
+                    localAreaToGlobal(
+                        strip.reduced(8)
+                            .withHeight(28)));
+            }
+        });
+
+    const auto hasVersions = std::any_of(
+        project->tracks.cbegin(),
+        project->tracks.cend(),
+        [track](const auto& candidate)
+        {
+            return candidate.parentTrackId == track->id;
+        });
+    if (hasVersions)
+    {
+        menu.addItem(
+            track->versionsCollapsed
+                ? "Expand versions"
+                : "Collapse versions",
+            [this, trackId]
+            {
+                if (onToggleTrackVersions)
+                    onToggleTrackVersions(trackId);
+            });
+    }
+
+    menu.addSeparator();
+    menu.addItem(
+        "Duplicate track",
+        track->type != TrackType::master,
+        false,
+        [this, trackId]
+        {
+            if (onDuplicateTrack)
+                onDuplicateTrack(trackId);
+        });
+    menu.addItem(
+        "Delete track",
+        track->type != TrackType::master,
+        false,
+        [this, trackId]
+        {
+            if (onDeleteTrack)
+                onDeleteTrack(trackId);
+        });
+
+    const auto screenPosition = event.getScreenPosition();
+    menu.showMenuAsync(
+        juce::PopupMenu::Options()
+            .withTargetComponent(this)
+            .withTargetScreenArea({
+                screenPosition.x,
+                screenPosition.y,
+                1,
+                1
+            }));
+}
+
 void MixerPanel::mouseDoubleClick(const juce::MouseEvent& event)
 {
     if (project == nullptr || event.position.y < 34.0f)
         return;
 
-    constexpr auto stripWidth = 112;
-    constexpr auto gap = 8;
-    const auto index = static_cast<int>((event.position.x - 14.0f) / (stripWidth + gap));
+    const auto index = static_cast<int>(
+        (event.position.x - 14.0f)
+        / (stripWidth + stripGap));
     const auto tracks = mixerTracks();
     if (index < 0 || index >= static_cast<int>(tracks.size()))
         return;
 
-    const juce::Rectangle<int> strip(14 + index * (stripWidth + gap),
-                                     34,
+    const juce::Rectangle<int> strip(
+                                     14 + index * (stripWidth + stripGap),
+                                     stripTop,
                                      stripWidth,
                                      getHeight() - 44);
     const auto* track = tracks[static_cast<std::size_t>(index)];
@@ -642,8 +1139,13 @@ void MixerPanel::mouseDoubleClick(const juce::MouseEvent& event)
         return;
     }
 
-    const auto faderTop = strip.getY() + 46;
-    const auto faderHeight = strip.getHeight() - 112;
+    const auto faderTop =
+        strip.getY() + stripFaderTop;
+    const auto faderHeight = juce::jmax(
+        24,
+        strip.getHeight()
+            - stripFaderTop
+            - stripBottomControls);
     if (track->type != TrackType::folder
         && track->type != TrackType::midi
         && event.position.y >= static_cast<float>(faderTop - 8)

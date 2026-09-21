@@ -1,6 +1,6 @@
 # Studio Duo native project format
 
-Studio Duo format version 10 is a directory package with immutable generation
+Studio Duo format version 11 is a directory package with immutable generation
 files and content-addressed processor state.
 
 ```text
@@ -43,7 +43,7 @@ The prior manifest and generation remain valid until step 5 succeeds.
 Current manifests include `midiCompositionV1`,
 `midiChannelPressureV1`, `bundledCompositionDevicesV1`, `scenesV1`,
 `compatibilityReportsV1`, `renderReportsV2`, `dawprojectV1`, and
-`masteringAlbumV1` and `sectionTransportV1`. Readers must reject a manifest
+`masteringAlbumV1`, `sectionTransportV1`, and `timelineMarkersV1`. Readers must reject a manifest
 version newer than they support rather than silently dropping MIDI, bundled
 output/cabinet state, scenes, or interchange diagnostics.
 
@@ -60,10 +60,20 @@ separately.
 
 ### Section transport and loops
 
+`markers` stores independent named timeline flags with stable IDs, names, and
+non-negative positions. Markers may be dragged, renamed, used for navigation,
+or resolved into loop/export ranges. They do not own transport settings or
+define song ranges.
+
+`sections` stores named song-range boundaries. A section starts at its
+`timeSeconds`; optional `endTimeSeconds` stores a user-resized end, otherwise
+the section extends to the next section or timeline end. Sections are managed
+independently from marker flags and cannot overlap the next section.
+
 `tempoChanges` and `meterChanges` remain the authoritative timeline maps.
 Their optional `sectionId` binds a point to a named section with the same
 `timeSeconds`; absent/empty IDs identify ordinary manual points. Owners must
-exist and own at most one point in each map. Marker moves and removals update
+exist and own at most one point in each map. Section moves and removals update
 owned points atomically. Clearing section settings never changes the project
 default tempo or default 4/4 meter.
 
@@ -260,7 +270,9 @@ disabled until explicit reload. Clean shutdown removes the marker.
   remain optional and are populated during import, collection, or repair.
 - Versions 1-9 migrate to version 10 without adding section ownership or click
   overrides. Existing maps, loop bounds and project meter remain unchanged.
+- Versions 1-10 migrate to version 11 by preserving existing song sections and
+  copying their former marker identity into standalone draggable markers.
 - The manifest and referenced session format versions must agree.
 
-[`schema/project-v10.schema.json`](schema/project-v10.schema.json) documents the
+[`schema/project-v11.schema.json`](schema/project-v11.schema.json) documents the
 current public session envelope; older schema files remain historical.

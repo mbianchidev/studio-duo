@@ -35,3 +35,7 @@ void updateTests();
 void midiTests();
 void dawProjectTests();
 void masteringTests();
+void uiIconTests();
+void timelineMarkerTests();
+void mixerPanelTests();
+void infoPanelTests();

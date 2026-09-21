@@ -9,7 +9,8 @@
 
 namespace studio
 {
-class PluginInsertPanel final : public juce::Component
+class PluginInsertPanel final : public juce::Component,
+                                public juce::SettableTooltipClient
 {
 public:
     void setProject(const Project* value);
@@ -31,6 +32,8 @@ public:
     void paint(juce::Graphics& graphics) override;
     void mouseDown(const juce::MouseEvent& event) override;
     void mouseDoubleClick(const juce::MouseEvent& event) override;
+    void mouseMove(const juce::MouseEvent& event) override;
+    void mouseExit(const juce::MouseEvent&) override;
 
 private:
     [[nodiscard]] const Track* insertOwnerTrack() const;

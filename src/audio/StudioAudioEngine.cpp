@@ -144,6 +144,22 @@ float automatedPan(
         : fallback;
 }
 
+void prepareSingleChannelPan(float& left,
+                             float& right,
+                             float pan) noexcept
+{
+    if (std::abs(pan) < 0.0001f)
+        return;
+
+    constexpr auto silence = 1.0e-9f;
+    if (std::abs(right) <= silence
+        && std::abs(left) > silence)
+        right = left;
+    else if (std::abs(left) <= silence
+             && std::abs(right) > silence)
+        left = right;
+}
+
 bool automatedSwitch(
     const std::optional<CompiledAutomationLane>& automation,
     std::int64_t sample,
@@ -4948,6 +4964,10 @@ void StudioAudioEngine::mixSample(RenderSnapshot& snapshot,
                 route.panAutomation,
                 timelineSample,
                 route.pan);
+            prepareSingleChannelPan(
+                sourceLeft,
+                sourceRight,
+                pan);
             const auto leftGain = gain
                 * (pan > 0.0f ? 1.0f - pan : 1.0f);
             const auto rightGain = gain
@@ -5005,6 +5025,10 @@ void StudioAudioEngine::mixSample(RenderSnapshot& snapshot,
             track.panAutomation,
             timelineSample,
             track.pan);
+        prepareSingleChannelPan(
+            trackLeft,
+            trackRight,
+            pan);
         const auto leftPanGain = pan > 0.0f ? 1.0f - pan : 1.0f;
         const auto rightPanGain = pan < 0.0f ? 1.0f + pan : 1.0f;
         const auto polarity = automatedSwitch(
@@ -5076,6 +5100,10 @@ void StudioAudioEngine::mixSample(RenderSnapshot& snapshot,
         snapshot.masterPanAutomation,
         timelineSample,
         snapshot.masterPan);
+    prepareSingleChannelPan(
+        masterLeft,
+        masterRight,
+        masterPan);
     const auto masterLeftGain = masterGain
         * (masterPan > 0.0f ? 1.0f - masterPan : 1.0f);
     const auto masterRightGain = masterGain
@@ -5314,6 +5342,20 @@ void StudioAudioEngine::applyTrackGainAndPan(juce::AudioBuffer<float>& buffer,
                                              float gain,
                                              float pan) noexcept
 {
+    if (std::abs(pan) >= 0.0001f)
+    {
+        constexpr auto silence = 1.0e-9f;
+        const auto leftMagnitude =
+            buffer.getMagnitude(0, 0, samples);
+        const auto rightMagnitude =
+            buffer.getMagnitude(1, 0, samples);
+        if (rightMagnitude <= silence
+            && leftMagnitude > silence)
+            buffer.copyFrom(1, 0, buffer, 0, 0, samples);
+        else if (leftMagnitude <= silence
+                 && rightMagnitude > silence)
+            buffer.copyFrom(0, 0, buffer, 1, 0, samples);
+    }
     const auto leftGain = gain * (pan > 0.0f ? 1.0f - pan : 1.0f);
     const auto rightGain = gain * (pan < 0.0f ? 1.0f + pan : 1.0f);
     buffer.applyGain(0, 0, samples, leftGain);
@@ -7889,20 +7931,34 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
                                     route.panAutomation,
                                     absoluteSample,
                                     route.pan);
-                                route.processingBuffer.applyGain(
+                                auto left =
+                                    route.processingBuffer.getSample(
+                                        0,
+                                        sample);
+                                auto right =
+                                    route.processingBuffer.getSample(
+                                        1,
+                                        sample);
+                                prepareSingleChannelPan(
+                                    left,
+                                    right,
+                                    pan);
+                                route.processingBuffer.setSample(
                                     0,
                                     sample,
-                                    1,
-                                    gain
-                                        * (pan > 0.0f ? 1.0f - pan
-                                                      : 1.0f));
-                                route.processingBuffer.applyGain(
+                                    left
+                                        * gain
+                                        * (pan > 0.0f
+                                               ? 1.0f - pan
+                                               : 1.0f));
+                                route.processingBuffer.setSample(
                                     1,
                                     sample,
-                                    1,
-                                    gain
-                                        * (pan < 0.0f ? 1.0f + pan
-                                                      : 1.0f));
+                                    right
+                                        * gain
+                                        * (pan < 0.0f
+                                               ? 1.0f + pan
+                                               : 1.0f));
                             }
                         }
                         applyDelayCompensation(route.processingBuffer,
@@ -8022,16 +8078,34 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
                             track.panAutomation,
                             absoluteSample,
                             track.pan);
-                        track.processingBuffer.applyGain(
+                        auto left =
+                            track.processingBuffer.getSample(
+                                0,
+                                sample);
+                        auto right =
+                            track.processingBuffer.getSample(
+                                1,
+                                sample);
+                        prepareSingleChannelPan(
+                            left,
+                            right,
+                            pan);
+                        track.processingBuffer.setSample(
                             0,
                             sample,
-                            1,
-                            gain * (pan > 0.0f ? 1.0f - pan : 1.0f));
-                        track.processingBuffer.applyGain(
+                            left
+                                * gain
+                                * (pan > 0.0f
+                                       ? 1.0f - pan
+                                       : 1.0f));
+                        track.processingBuffer.setSample(
                             1,
                             sample,
-                            1,
-                            gain * (pan < 0.0f ? 1.0f + pan : 1.0f));
+                            right
+                                * gain
+                                * (pan < 0.0f
+                                       ? 1.0f + pan
+                                       : 1.0f));
                     }
                 }
                 publishMeter(true);
@@ -8140,16 +8214,34 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
                             snapshot.masterPanAutomation,
                             absoluteSample,
                             snapshot.masterPan);
-                        snapshot.masterBuffer.applyGain(
+                        auto left =
+                            snapshot.masterBuffer.getSample(
+                                0,
+                                sample);
+                        auto right =
+                            snapshot.masterBuffer.getSample(
+                                1,
+                                sample);
+                        prepareSingleChannelPan(
+                            left,
+                            right,
+                            pan);
+                        snapshot.masterBuffer.setSample(
                             0,
                             sample,
-                            1,
-                            gain * (pan > 0.0f ? 1.0f - pan : 1.0f));
-                        snapshot.masterBuffer.applyGain(
+                            left
+                                * gain
+                                * (pan > 0.0f
+                                       ? 1.0f - pan
+                                       : 1.0f));
+                        snapshot.masterBuffer.setSample(
                             1,
                             sample,
-                            1,
-                            gain * (pan < 0.0f ? 1.0f + pan : 1.0f));
+                            right
+                                * gain
+                                * (pan < 0.0f
+                                       ? 1.0f + pan
+                                       : 1.0f));
                     }
                 }
             }
@@ -8259,19 +8351,31 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
                             snapshot.controlRoomPanAutomation,
                             absoluteSample,
                             snapshot.controlRoomPan);
-                        snapshot.controlRoomBuffer.applyGain(
+                        auto left =
+                            snapshot.controlRoomBuffer.getSample(
+                                0,
+                                sample);
+                        auto right =
+                            snapshot.controlRoomBuffer.getSample(
+                                1,
+                                sample);
+                        prepareSingleChannelPan(
+                            left,
+                            right,
+                            pan);
+                        snapshot.controlRoomBuffer.setSample(
                             0,
                             sample,
-                            1,
-                            gain
+                            left
+                                * gain
                                 * (pan > 0.0f
                                        ? 1.0f - pan
                                        : 1.0f));
-                        snapshot.controlRoomBuffer.applyGain(
+                        snapshot.controlRoomBuffer.setSample(
                             1,
                             sample,
-                            1,
-                            gain
+                            right
+                                * gain
                                 * (pan < 0.0f
                                        ? 1.0f + pan
                                        : 1.0f));

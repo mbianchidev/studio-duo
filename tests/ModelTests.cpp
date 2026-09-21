@@ -29,6 +29,10 @@ void serializationRoundTrip()
         { 0.0, 4, 4 },
         { 8.0, 7, 8 }
     };
+    project.markers = {
+        { juce::Uuid().toString(), "Start", 1.0 },
+        { juce::Uuid().toString(), "End", 7.5 }
+    };
     project.sections = {
         { juce::Uuid().toString(), "Intro", 0.0 },
         { juce::Uuid().toString(), "Verse", 8.0 }
@@ -128,10 +132,13 @@ void serializationRoundTrip()
                && decoded->meterChanges[1].numerator == 7,
            "Tempo and meter maps survive serialization.");
     expect(decoded.has_value()
+               && decoded->markers.size() == 2
+               && decoded->markers[0].name == "Start"
+               && std::abs(decoded->markers[1].timeSeconds - 7.5) < 0.0001
                && decoded->sections.size() == 2
                && decoded->sections[0].name == "Intro"
                && std::abs(decoded->sections[1].timeSeconds - 8.0) < 0.0001,
-           "Song sections survive serialization.");
+           "Timeline markers and song sections survive serialization independently.");
     expect(decoded.has_value()
                && !decoded->metronomeEnabled
                && decoded->metronomeSubdivision == 2
@@ -1485,7 +1492,7 @@ void multitrackRecordingTargets()
 void multitrackRecordingCommand()
 {
     auto project = studio::Project::createDefault();
-    project.tracks.front().versionsCollapsed = true;
+    project.tracks.front().versionsCollapsed = false;
     const auto firstParentId = project.tracks.front().id;
 
     studio::Track secondParent;
@@ -1526,9 +1533,9 @@ void multitrackRecordingCommand()
     expect(project.findTrack(firstTakeId) != nullptr
                && project.findTrack(secondTakeId) != nullptr,
            "A multitrack recording adds every captured take.");
-    expect(project.findTrack(firstParentId)->versionsCollapsed
+    expect(!project.findTrack(firstParentId)->versionsCollapsed
                && project.findTrack(secondParentId)->versionsCollapsed,
-           "Recording keeps every captured parent track collapsed.");
+           "Recording preserves each parent track's open or collapsed take-lane state.");
     expect(project.findTrack(firstParentId)->activeTakeTrackId
                    == firstTakeId
                && project.findTrack(secondParentId)->activeTakeTrackId
@@ -1538,7 +1545,7 @@ void multitrackRecordingCommand()
     expect(project.findTrack(firstTakeId) == nullptr
                && project.findTrack(secondTakeId) == nullptr,
            "Undo removes every take from a multitrack recording.");
-    expect(project.findTrack(firstParentId)->versionsCollapsed
+    expect(!project.findTrack(firstParentId)->versionsCollapsed
                && project.findTrack(secondParentId)->versionsCollapsed,
            "Undo restores parent lane collapse states.");
     expect(project.findTrack(firstParentId)->activeTakeTrackId.isEmpty()
@@ -1546,8 +1553,10 @@ void multitrackRecordingCommand()
            "Undo restores parent active take selections.");
     expect(history.redo(project, error), error.toRawUTF8());
     expect(project.findTrack(firstTakeId) != nullptr
-               && project.findTrack(secondTakeId) != nullptr,
-           "Redo restores every take from a multitrack recording.");
+               && project.findTrack(secondTakeId) != nullptr
+               && !project.findTrack(firstParentId)->versionsCollapsed
+               && project.findTrack(secondParentId)->versionsCollapsed,
+           "Redo restores every take without changing parent lane visibility.");
 }
 }
 
@@ -1631,6 +1640,10 @@ int main(int argc, char* argv[])
     RUN_SUITE(midiTests);
     RUN_SUITE(dawProjectTests);
     RUN_SUITE(masteringTests);
+    RUN_SUITE(uiIconTests);
+    RUN_SUITE(timelineMarkerTests);
+    RUN_SUITE(mixerPanelTests);
+    RUN_SUITE(infoPanelTests);
 
 #undef RUN_SUITE
 

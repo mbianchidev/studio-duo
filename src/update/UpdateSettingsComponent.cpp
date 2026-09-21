@@ -4,6 +4,509 @@
 
 namespace studio
 {
+namespace
+{
+class GeneralSettingsComponent final : public juce::Component
+{
+public:
+    explicit GeneralSettingsComponent(
+        StudioPreferences& preferencesToUse)
+        : preferences(preferencesToUse)
+    {
+        addAndMakeVisible(title);
+        title.setText(
+            "Project preferences",
+            juce::dontSendNotification);
+        title.setFont(
+            juce::Font(
+                juce::FontOptions(22.0f,
+                                  juce::Font::bold)));
+
+        addAndMakeVisible(autosave);
+        autosave.setButtonText(
+            "Autosave project recovery after edits");
+        autosave.setTooltip(
+            "Write the latest project state to the package recovery copy after each edit.");
+        autosave.setToggleState(
+            preferences.autosaveEnabled(),
+            juce::dontSendNotification);
+        autosave.onClick = [this]
+        {
+            const auto enabled =
+                autosave.getToggleState();
+            const auto result =
+                preferences.setAutosaveEnabled(enabled);
+            if (result.failed())
+            {
+                autosave.setToggleState(
+                    !enabled,
+                    juce::dontSendNotification);
+                status.setText(
+                    result.getErrorMessage(),
+                    juce::dontSendNotification);
+                status.setColour(
+                    juce::Label::textColourId,
+                    juce::Colour(StudioColours::orange));
+                return;
+            }
+            status.setText(
+                enabled
+                    ? "Autosave recovery is enabled."
+                    : "Autosave recovery is disabled.",
+                juce::dontSendNotification);
+            status.setColour(
+                juce::Label::textColourId,
+                juce::Colour(
+                    StudioColours::secondaryText));
+        };
+
+        addAndMakeVisible(help);
+        help.setText(
+            "Autosave writes a recovery copy inside saved .studioduo projects. "
+            "Manual Save still creates the durable project generation.",
+            juce::dontSendNotification);
+        help.setColour(
+            juce::Label::textColourId,
+            juce::Colour(StudioColours::secondaryText));
+        help.setJustificationType(
+            juce::Justification::topLeft);
+
+        addAndMakeVisible(status);
+        status.setText(
+            preferences.status(),
+            juce::dontSendNotification);
+        status.setColour(
+            juce::Label::textColourId,
+            juce::Colour(StudioColours::secondaryText));
+    }
+
+    void paint(juce::Graphics& graphics) override
+    {
+        graphics.fillAll(
+            juce::Colour(StudioColours::panel));
+    }
+
+    void resized() override
+    {
+        auto bounds = getLocalBounds().reduced(24);
+        title.setBounds(bounds.removeFromTop(36));
+        bounds.removeFromTop(18);
+        autosave.setBounds(bounds.removeFromTop(32));
+        help.setBounds(bounds.removeFromTop(58));
+        status.setBounds(bounds.removeFromTop(28));
+    }
+
+private:
+    StudioPreferences& preferences;
+    juce::Label title;
+    juce::ToggleButton autosave;
+    juce::Label help;
+    juce::Label status;
+};
+
+class VstPluginSettingsComponent final
+    : public juce::Component,
+      private juce::ListBoxModel,
+      private juce::Timer
+{
+public:
+    VstPluginSettingsComponent(
+        PluginCatalog& catalogToUse,
+        StudioPreferences& preferencesToUse,
+        std::function<void(const PluginCatalogEntry&)>
+            validationCallback)
+        : catalog(catalogToUse),
+          preferences(preferencesToUse),
+          validatePlugin(std::move(validationCallback)),
+          list("VST3 search folders", this)
+    {
+        addAndMakeVisible(title);
+        title.setText(
+            "VST plug-ins",
+            juce::dontSendNotification);
+        title.setFont(
+            juce::Font(
+                juce::FontOptions(22.0f,
+                                  juce::Font::bold)));
+
+        addAndMakeVisible(scanAtStartup);
+        scanAtStartup.setButtonText(
+            "Scan plug-in folders at startup");
+        scanAtStartup.setToggleState(
+            preferences.scanPluginsAtStartup(),
+            juce::dontSendNotification);
+        scanAtStartup.onClick = [this]
+        {
+            const auto enabled =
+                scanAtStartup.getToggleState();
+            const auto result =
+                preferences.setScanPluginsAtStartup(
+                    enabled);
+            if (result.failed())
+            {
+                scanAtStartup.setToggleState(
+                    !enabled,
+                    juce::dontSendNotification);
+                setStatus(
+                    result.getErrorMessage(),
+                    true);
+            }
+            else
+            {
+                setStatus(
+                    enabled
+                        ? "Startup plug-in scan enabled."
+                        : "Startup plug-in scan disabled.",
+                    false);
+            }
+        };
+
+        addAndMakeVisible(pluginSelector);
+        pluginSelector.setTooltip(
+            "Choose one scanned plug-in for advanced isolated validation");
+        pluginSelector.onChange = [this]
+        {
+            validateSelected.setEnabled(
+                pluginSelector.getSelectedItemIndex() >= 0);
+        };
+        addAndMakeVisible(validateSelected);
+        validateSelected.setButtonText(
+            "ADVANCED VALIDATE");
+        validateSelected.setTooltip(
+            "Launch an isolated deep compatibility check for the selected plug-in");
+        validateSelected.onClick = [this]
+        {
+            const auto index =
+                pluginSelector.getSelectedItemIndex();
+            if (index >= 0
+                && index
+                    < static_cast<int>(
+                        validationEntries.size())
+                && validatePlugin)
+            {
+                validatePlugin(
+                    validationEntries[
+                        static_cast<std::size_t>(index)]);
+            }
+        };
+
+        addAndMakeVisible(list);
+        list.setRowHeight(34);
+        list.setColour(
+            juce::ListBox::backgroundColourId,
+            juce::Colour(StudioColours::window));
+        list.setColour(
+            juce::ListBox::outlineColourId,
+            juce::Colour(StudioColours::border));
+        list.setOutlineThickness(1);
+
+        addAndMakeVisible(addFolder);
+        addFolder.setButtonText("ADD FOLDER");
+        addFolder.onClick = [this] { chooseFolder(); };
+        addAndMakeVisible(removeFolder);
+        removeFolder.setButtonText("REMOVE");
+        removeFolder.onClick = [this] { removeSelected(); };
+        addAndMakeVisible(restoreDefaults);
+        restoreDefaults.setButtonText("RESTORE DEFAULTS");
+        restoreDefaults.onClick = [this]
+        {
+            const auto result =
+                catalog.restoreDefaultVst3SearchFolders();
+            setStatus(
+                result.wasOk()
+                    ? "Default VST3 folders restored."
+                    : result.getErrorMessage(),
+                result.failed());
+            refresh();
+        };
+        addAndMakeVisible(rescan);
+        rescan.setButtonText("RESCAN NOW");
+        rescan.onClick = [this]
+        {
+            catalog.startScan(true);
+            setStatus(
+                "VST3 rescan started.",
+                false);
+        };
+
+        addAndMakeVisible(status);
+        status.setColour(
+            juce::Label::textColourId,
+            juce::Colour(StudioColours::secondaryText));
+        refresh();
+        refreshPlugins();
+        startTimerHz(2);
+    }
+
+    ~VstPluginSettingsComponent() override
+    {
+        stopTimer();
+    }
+
+    void paint(juce::Graphics& graphics) override
+    {
+        graphics.fillAll(
+            juce::Colour(StudioColours::panel));
+    }
+
+    void resized() override
+    {
+        auto bounds = getLocalBounds().reduced(24);
+        title.setBounds(bounds.removeFromTop(36));
+        scanAtStartup.setBounds(
+            bounds.removeFromTop(32));
+        auto validationRow = bounds.removeFromTop(34);
+        pluginSelector.setBounds(
+            validationRow.removeFromLeft(
+                juce::jmax(
+                    180,
+                    validationRow.getWidth() - 170))
+                .reduced(2));
+        validateSelected.setBounds(
+            validationRow.reduced(2));
+        bounds.removeFromTop(8);
+        auto actions = bounds.removeFromBottom(36);
+        addFolder.setBounds(
+            actions.removeFromLeft(110).reduced(2));
+        removeFolder.setBounds(
+            actions.removeFromLeft(92).reduced(2));
+        restoreDefaults.setBounds(
+            actions.removeFromLeft(150).reduced(2));
+        rescan.setBounds(
+            actions.removeFromLeft(112).reduced(2));
+        status.setBounds(
+            bounds.removeFromBottom(28));
+        bounds.removeFromBottom(8);
+        list.setBounds(bounds);
+    }
+
+private:
+    void timerCallback() override
+    {
+        if (lastCatalogRevision != catalog.revision())
+            refreshPlugins();
+    }
+
+    int getNumRows() override
+    {
+        return paths.size();
+    }
+
+    void paintListBoxItem(int row,
+                          juce::Graphics& graphics,
+                          int width,
+                          int height,
+                          bool selected) override
+    {
+        if (row < 0 || row >= paths.size())
+            return;
+        if (selected)
+        {
+            graphics.setColour(
+                juce::Colour(StudioColours::raised));
+            graphics.fillRect(
+                0,
+                0,
+                width,
+                height);
+        }
+        const auto file = juce::File(paths[row]);
+        graphics.setColour(
+            file.isDirectory()
+                ? juce::Colour(StudioColours::text)
+                : juce::Colour(StudioColours::orange));
+        graphics.setFont(10.5f);
+        graphics.drawFittedText(
+            paths[row],
+            8,
+            2,
+            width - 90,
+            height - 4,
+            juce::Justification::centredLeft,
+            1);
+        graphics.setColour(
+            juce::Colour(StudioColours::secondaryText));
+        graphics.setFont(
+            juce::Font(
+                juce::FontOptions(8.5f,
+                                  juce::Font::bold)));
+        graphics.drawText(
+            defaultFlags[row] ? "DEFAULT" : "CUSTOM",
+            width - 78,
+            0,
+            70,
+            height,
+            juce::Justification::centredRight);
+    }
+
+    void selectedRowsChanged(int row) override
+    {
+        removeFolder.setEnabled(
+            row >= 0 && row < paths.size());
+    }
+
+    void refresh()
+    {
+        paths.clear();
+        defaultFlags.clear();
+        const auto defaults =
+            catalog.defaultVst3SearchFolders();
+        const auto disabled =
+            catalog.disabledDefaultVst3SearchFolders();
+        for (const auto& path : defaults)
+        {
+            if (!disabled.contains(path))
+            {
+                paths.add(path);
+                defaultFlags.add(true);
+            }
+        }
+        for (const auto& path :
+             catalog.customVst3SearchFolders())
+        {
+            if (!paths.contains(path))
+            {
+                paths.add(path);
+                defaultFlags.add(false);
+            }
+        }
+        list.updateContent();
+        list.deselectAllRows();
+        removeFolder.setEnabled(false);
+        repaint();
+    }
+
+    void refreshPlugins()
+    {
+        const auto selectedIdentifier =
+            pluginSelector.getSelectedItemIndex() >= 0
+                && pluginSelector.getSelectedItemIndex()
+                    < static_cast<int>(
+                        validationEntries.size())
+            ? validationEntries[
+                  static_cast<std::size_t>(
+                      pluginSelector
+                          .getSelectedItemIndex())]
+                  .identifier
+            : juce::String();
+        validationEntries.clear();
+        pluginSelector.clear(
+            juce::dontSendNotification);
+        for (const auto& entry : catalog.entries())
+        {
+            if (entry.bundledDevice)
+                continue;
+            validationEntries.push_back(entry);
+            pluginSelector.addItem(
+                entry.name + " [" + entry.format + "]",
+                static_cast<int>(
+                    validationEntries.size()));
+        }
+        const auto selected = std::find_if(
+            validationEntries.cbegin(),
+            validationEntries.cend(),
+            [&selectedIdentifier](const auto& entry)
+            {
+                return entry.identifier
+                    == selectedIdentifier;
+            });
+        if (selected != validationEntries.cend())
+        {
+            pluginSelector.setSelectedItemIndex(
+                static_cast<int>(
+                    std::distance(
+                        validationEntries.cbegin(),
+                        selected)),
+                juce::dontSendNotification);
+        }
+        validateSelected.setEnabled(
+            pluginSelector.getSelectedItemIndex() >= 0);
+        lastCatalogRevision = catalog.revision();
+    }
+
+    void chooseFolder()
+    {
+        chooser = std::make_unique<juce::FileChooser>(
+            "Add VST3 search folder",
+            juce::File::getSpecialLocation(
+                juce::File::userHomeDirectory));
+        const auto safe =
+            juce::Component::SafePointer<
+                VstPluginSettingsComponent>(this);
+        chooser->launchAsync(
+            juce::FileBrowserComponent::openMode
+                | juce::FileBrowserComponent::canSelectDirectories,
+            [safe](const juce::FileChooser& completed)
+            {
+                if (safe == nullptr)
+                    return;
+                const auto folder = completed.getResult();
+                if (folder == juce::File())
+                    return;
+                const auto result =
+                    safe->catalog.addCustomVst3SearchFolder(
+                        folder);
+                safe->setStatus(
+                    result.wasOk()
+                        ? "VST3 folder added."
+                        : result.getErrorMessage(),
+                    result.failed());
+                safe->refresh();
+            });
+    }
+
+    void removeSelected()
+    {
+        const auto row = list.getSelectedRow();
+        if (row < 0 || row >= paths.size())
+            return;
+        const auto result =
+            catalog.removeVst3SearchFolder(
+                juce::File(paths[row]));
+        setStatus(
+            result.wasOk()
+                ? "VST3 folder removed."
+                : result.getErrorMessage(),
+            result.failed());
+        refresh();
+    }
+
+    void setStatus(const juce::String& message,
+                   bool error)
+    {
+        status.setText(
+            message,
+            juce::dontSendNotification);
+        status.setColour(
+            juce::Label::textColourId,
+            juce::Colour(
+                error
+                    ? StudioColours::orange
+                    : StudioColours::secondaryText));
+    }
+
+    PluginCatalog& catalog;
+    StudioPreferences& preferences;
+    std::function<void(const PluginCatalogEntry&)>
+        validatePlugin;
+    juce::Label title;
+    juce::ToggleButton scanAtStartup;
+    juce::ComboBox pluginSelector;
+    juce::TextButton validateSelected;
+    juce::ListBox list;
+    juce::TextButton addFolder;
+    juce::TextButton removeFolder;
+    juce::TextButton restoreDefaults;
+    juce::TextButton rescan;
+    juce::Label status;
+    juce::StringArray paths;
+    juce::Array<bool> defaultFlags;
+    std::unique_ptr<juce::FileChooser> chooser;
+    std::vector<PluginCatalogEntry> validationEntries;
+    std::uint64_t lastCatalogRevision = 0;
+};
+}
+
 UpdateSettingsComponent::UpdateSettingsComponent(
     UpdateService& service,
     std::function<void()> restartCallback)
@@ -179,6 +682,10 @@ void UpdateSettingsComponent::refresh(
 SettingsComponent::SettingsComponent(
     StudioAudioDeviceManager* deviceManager,
     UpdateService& updateService,
+    StudioPreferences& preferences,
+    PluginCatalog& pluginCatalog,
+    std::function<void(const PluginCatalogEntry&)>
+        validatePlugin,
     std::function<void()> restartRequested,
     bool showUpdatesInitially,
     const juce::String& audioUnavailableReason)
@@ -214,10 +721,28 @@ SettingsComponent::SettingsComponent(
     updatePage = std::make_unique<UpdateSettingsComponent>(
         updateService,
         std::move(restartRequested));
+    generalPage =
+        std::make_unique<GeneralSettingsComponent>(
+            preferences);
+    vstPage =
+        std::make_unique<VstPluginSettingsComponent>(
+            pluginCatalog,
+            preferences,
+            std::move(validatePlugin));
 
     addAndMakeVisible(tabs);
     tabs.setTabBarDepth(34);
     tabs.setOutline(1);
+    tabs.addTab(
+        "General",
+        juce::Colour(StudioColours::panel),
+        generalPage.get(),
+        false);
+    tabs.addTab(
+        "VST Plug-ins",
+        juce::Colour(StudioColours::panel),
+        vstPage.get(),
+        false);
     tabs.addTab(
         "Audio / MIDI",
         juce::Colour(StudioColours::panel),
@@ -245,6 +770,6 @@ void SettingsComponent::resized()
 
 void SettingsComponent::showUpdates()
 {
-    tabs.setCurrentTabIndex(1);
+    tabs.setCurrentTabIndex(3);
 }
 }

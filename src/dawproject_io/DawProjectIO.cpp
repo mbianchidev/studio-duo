@@ -1129,17 +1129,17 @@ private:
         if (hasLanes)
             arrangement->addChildElement(lanes.release());
 
-        if (!project.sections.empty())
+        if (!project.markers.empty())
         {
             auto* markers = addElement(*arrangement, "Markers");
             markers->setAttribute("timeUnit", "seconds");
-            for (const auto& section : project.sections)
+            for (const auto& projectMarker : project.markers)
             {
                 auto* marker = addElement(*markers, "Marker");
-                marker->setAttribute("name", section.name);
+                marker->setAttribute("name", projectMarker.name);
                 marker->setAttribute(
                     "time",
-                    formatNumber(section.timeSeconds));
+                    formatNumber(projectMarker.timeSeconds));
             }
         }
         writeTempoAutomation(*arrangement);
@@ -1895,13 +1895,15 @@ private:
                 return std::any_of(points.cbegin(), points.cend(),
                     [&section](const auto& point) { return point.sectionId == section.id; });
             };
-            const auto path = "/Project/Arrangement/Markers/Marker[" + section.id + "]";
+            const auto path = "/StudioDuo/Sections/Section[" + section.id + "]";
+            warn("unsupported.song-section", path,
+                 "DAWproject 1.0 preserves timeline markers but does not represent Studio Duo song-section ranges.");
             if (section.clickSettings)
                 warn("unsupported.section-click", path,
                      "DAWproject 1.0 does not store per-section click enablement, subdivisions or accents.");
             if (ownsPoint(project.tempoChanges) || ownsPoint(project.meterChanges))
                 warn("unsupported.section-transport-link", path,
-                     "Section tempo and meter changes are preserved as ordinary timeline events, without their marker-editing association.");
+                     "Section tempo and meter changes are preserved as ordinary timeline events, without their section-editing association.");
         }
         if (project.metronomeEnabled
             || project.metronomeSubdivision != 1
@@ -4826,25 +4828,25 @@ private:
             ++index;
             const auto position =
                 child->getDoubleAttribute("time");
-            SongSection section;
+            ProjectMarker marker;
             juce::String mappingError;
-            section.id = ids.importedId(
+            marker.id = ids.importedId(
                 "marker",
                 path + "/" + juce::String(index),
                 mappingError);
-            section.name =
+            marker.name =
                 child->getStringAttribute("name", "Marker");
-            section.timeSeconds = timeUnit == "seconds"
+            marker.timeSeconds = timeUnit == "seconds"
                 ? position
                 : project.secondsAtBeat(position);
             if (std::any_of(
-                    project.sections.cbegin(),
-                    project.sections.cend(),
-                    [&section](const auto& existing)
+                    project.markers.cbegin(),
+                    project.markers.cend(),
+                    [&marker](const auto& existing)
                     {
                         return std::abs(
                                    existing.timeSeconds
-                                   - section.timeSeconds)
+                                   - marker.timeSeconds)
                             < 0.0001;
                     }))
             {
@@ -4854,11 +4856,11 @@ private:
                     "Studio Duo keeps the first marker at a timeline position.");
                 continue;
             }
-            project.sections.push_back(std::move(section));
+            project.markers.push_back(std::move(marker));
         }
         std::stable_sort(
-            project.sections.begin(),
-            project.sections.end(),
+            project.markers.begin(),
+            project.markers.end(),
             [](const auto& left, const auto& right)
             {
                 return left.timeSeconds < right.timeSeconds;

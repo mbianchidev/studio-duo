@@ -24,8 +24,12 @@ public:
     bool load(juce::String& error);
     juce::Result addCustomFolder(const juce::File& folder);
     juce::Result removeCustomFolder(const juce::File& folder);
+    juce::Result disableDefaultFolder(const juce::File& folder);
+    juce::Result enableDefaultFolder(const juce::File& folder);
+    juce::Result restoreDefaultFolders();
 
     [[nodiscard]] juce::StringArray customFolders() const;
+    [[nodiscard]] juce::StringArray disabledDefaultFolders() const;
     [[nodiscard]] PluginSearchPlan createScanPlan(
         const juce::FileSearchPath& defaultFolders) const;
 
@@ -39,6 +43,7 @@ private:
 
     juce::File file;
     juce::StringArray folders;
+    juce::StringArray disabledDefaults;
     bool writable = true;
 };
 }

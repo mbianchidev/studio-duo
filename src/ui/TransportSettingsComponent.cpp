@@ -519,16 +519,16 @@ struct LoopSettingsComponent::Impl
     void initialiseMarkers()
     {
         std::set<juce::String> ids;
-        for (const auto& section : project.sections)
+        for (const auto& marker : project.markers)
         {
-            const auto time = std::isfinite(section.timeSeconds)
-                ? juce::String(section.timeSeconds, 3) + " s" : "invalid time";
+            const auto time = std::isfinite(marker.timeSeconds)
+                ? juce::String(marker.timeSeconds, 3) + " s" : "invalid time";
             markers.push_back({
-                section.id, (section.name.isEmpty() ? "Unnamed marker" : section.name) + " - " + time,
-                section.timeSeconds
+                marker.id, (marker.name.isEmpty() ? "Unnamed marker" : marker.name) + " - " + time,
+                marker.timeSeconds
             });
-            if (section.id.isNotEmpty())
-                ids.insert(section.id);
+            if (marker.id.isNotEmpty())
+                ids.insert(marker.id);
         }
         std::stable_sort(markers.begin(), markers.end(), [](const auto& first, const auto& second)
         {
@@ -864,7 +864,7 @@ struct SectionSettingsComponent::Impl
 
     Impl(SectionSettingsComponent& component, Project snapshot, juce::String id)
         : owner(component), project(std::move(snapshot)), sectionId(std::move(id)),
-          frame(component, "section", "Section settings", "Tempo, time signature and click overrides at this marker.")
+          frame(component, "section", "Section settings", "Tempo, time signature and click overrides at this section boundary.")
     {
         readInitialValues();
         auto& body = frame.content;
@@ -905,7 +905,7 @@ struct SectionSettingsComponent::Impl
         initialiseLabel(body, clickHint, "section.clickHint",
                         project.metronomeEnabled
                             ? "Accent beats use 1..32, including beats used by later meter changes. "
-                              "An empty list means no accents. Generic markers do not reset this pattern."
+                              "An empty list means no accents. Unconfigured sections do not reset this pattern."
                             : "Global CLICK is off. These local settings are saved but stay silent until global CLICK is enabled. "
                               "Accent beats use 1..32; an empty list means no accents.",
                         12.0f);

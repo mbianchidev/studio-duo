@@ -1,6 +1,7 @@
 #pragma once
 
 #include "PluginCatalog.h"
+#include "ui/StudioIconButton.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
@@ -38,9 +39,21 @@ private:
 
     PluginCatalog& catalog;
     juce::TextEditor search;
-    juce::TextButton scanButton { "SCAN" };
-    juce::TextButton pathsButton { "PATHS" };
-    juce::TextButton addButton { "ADD" };
+    StudioIconButton scanButton {
+        StudioIcon::scan,
+        "Scan plugins",
+        "Scan default VST3, Audio Unit, and CLAP locations in a worker process"
+    };
+    StudioIconButton pathsButton {
+        StudioIcon::folder,
+        "Plugin search paths",
+        "Show, add, or remove VST3 plugin search folders"
+    };
+    StudioIconButton addButton {
+        StudioIcon::add,
+        "Add plugin",
+        "Add the selected plugin to the selected track"
+    };
     juce::TextButton validateButton { "TEST" };
     juce::Label statusLabel;
     juce::ListBox list { "Plugin catalog", this };

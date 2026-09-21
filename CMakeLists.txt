@@ -391,12 +391,16 @@ target_sources(
         src/update/UpdateInstaller.h
         src/update/UpdateManifest.cpp
         src/update/UpdateManifest.h
+        src/update/StudioPreferences.cpp
+        src/update/StudioPreferences.h
         src/update/UpdateService.cpp
         src/update/UpdateService.h
         src/update/UpdateSettingsComponent.cpp
         src/update/UpdateSettingsComponent.h
         src/ui/MainComponent.cpp
         src/ui/MainComponent.h
+        src/ui/InfoPanelComponent.cpp
+        src/ui/InfoPanelComponent.h
         src/ui/AudioExportOptionsComponent.cpp
         src/ui/AudioExportOptionsComponent.h
         src/ui/TransportSettingsComponent.cpp
@@ -420,6 +424,9 @@ target_sources(
         src/ui/RoutingUiModel.h
         src/ui/RoutingPanel.cpp
         src/ui/RoutingPanel.h
+        src/ui/StudioIconButton.cpp
+        src/ui/StudioIconButton.h
+        src/ui/StudioPanControl.h
         src/ui/StudioTheme.h
         src/ui/TimelineComponent.cpp
         src/ui/TimelineComponent.h
@@ -807,6 +814,10 @@ if(STUDIO_DUO_BUILD_TESTS)
             tests/SectionTransportTests.cpp
             tests/TransportSettingsTests.cpp
             tests/UpdateTests.cpp
+            tests/UiIconTests.cpp
+            tests/TimelineMarkerTests.cpp
+            tests/MixerPanelTests.cpp
+            tests/InfoPanelTests.cpp
             tests/DawProjectTests.cpp
             src/ui/TransportSettingsComponent.cpp
             src/ui/TransportSettingsComponent.h
@@ -815,8 +826,19 @@ if(STUDIO_DUO_BUILD_TESTS)
             src/ui/AudioExportOptionsComponent.h
             src/ui/RoutingUiModel.cpp
             src/ui/RoutingUiModel.h
+            src/ui/StudioIconButton.cpp
+            src/ui/StudioIconButton.h
+            src/ui/StudioPanControl.h
+            src/ui/TimelineComponent.cpp
+            src/ui/TimelineComponent.h
+            src/ui/MixerPanel.cpp
+            src/ui/MixerPanel.h
+            src/ui/InfoPanelComponent.cpp
+            src/ui/InfoPanelComponent.h
             src/ui/MainWindowSizing.cpp
             src/ui/MainWindowSizing.h
+            src/update/StudioPreferences.cpp
+            src/update/StudioPreferences.h
             src/ui/MidiEditorComponent.cpp
             src/ui/MidiEditorComponent.h
             src/audio/StudioAudioDeviceManager.cpp

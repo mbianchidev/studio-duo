@@ -533,7 +533,7 @@ struct AudioExportOptionsComponent::Impl
     void initialiseMarkers(const MixExportSettings& initial)
     {
         if (project)
-            for (const auto& marker : project->sections)
+            for (const auto& marker : project->markers)
                 markers.push_back({ marker.id, marker.name, marker.timeSeconds });
         std::stable_sort(markers.begin(), markers.end(), [](const auto& first, const auto& second)
         {

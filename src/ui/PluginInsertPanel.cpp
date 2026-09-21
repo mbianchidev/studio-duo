@@ -1,5 +1,6 @@
 #include "PluginInsertPanel.h"
 
+#include "StudioIconButton.h"
 #include "StudioTheme.h"
 
 #include <algorithm>
@@ -160,16 +161,26 @@ void PluginInsertPanel::paint(juce::Graphics& graphics)
                                 juce::Justification::centredLeft,
                                 1);
 
-        graphics.setColour(juce::Colour(insert.bypassed
-                                            ? StudioColours::amber
-                                            : StudioColours::secondaryText));
-        graphics.setFont(juce::Font(juce::FontOptions(9.0f, juce::Font::bold)));
-        graphics.drawText("BYP",
-                          getWidth() - 64,
-                          y,
-                          32,
-                          48,
-                          juce::Justification::centred);
+        const auto powerBounds =
+            juce::Rectangle<float>(
+                static_cast<float>(getWidth() - 62),
+                static_cast<float>(y + 10),
+                28.0f,
+                28.0f);
+        graphics.setColour(
+            juce::Colour(
+                insert.bypassed
+                    ? StudioColours::amber
+                    : StudioColours::green));
+        graphics.fillRoundedRectangle(
+            powerBounds,
+            4.0f);
+        drawStudioIcon(
+            graphics,
+            StudioIcon::power,
+            powerBounds.reduced(7.0f),
+            juce::Colours::white,
+            1.2f);
         graphics.setColour(juce::Colour(StudioColours::orange));
         graphics.drawText("X",
                           getWidth() - 30,
@@ -315,5 +326,56 @@ void PluginInsertPanel::mouseDoubleClick(const juce::MouseEvent& event)
             track->id,
             track->inserts[static_cast<std::size_t>(index)].id);
     }
+}
+
+void PluginInsertPanel::mouseMove(
+    const juce::MouseEvent& event)
+{
+    const auto* track = insertOwnerTrack();
+    if (track == nullptr
+        || event.position.y < 24.0f)
+    {
+        setTooltip({});
+        return;
+    }
+    const auto index = static_cast<int>(
+        (event.position.y - 24.0f) / 54.0f);
+    if (index < 0
+        || index
+            >= static_cast<int>(
+                track->inserts.size()))
+    {
+        setTooltip({});
+        return;
+    }
+    const auto& insert =
+        track->inserts[
+            static_cast<std::size_t>(index)];
+    if (event.position.x
+        >= static_cast<float>(getWidth() - 30))
+    {
+        setTooltip("Remove " + insert.name);
+    }
+    else if (event.position.x
+             >= static_cast<float>(
+                 getWidth() - 64))
+    {
+        setTooltip(
+            insert.bypassed
+                ? "Enable " + insert.name
+                : "Bypass " + insert.name);
+    }
+    else
+    {
+        setTooltip(
+            "Double-click to open "
+            + insert.name);
+    }
+}
+
+void PluginInsertPanel::mouseExit(
+    const juce::MouseEvent&)
+{
+    setTooltip({});
 }
 }

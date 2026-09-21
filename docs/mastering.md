@@ -1,18 +1,18 @@
 # Mastering and release
 
-Studio Duo's **MASTERING** workspace assembles several finished mixes into one
+Studio Duo's **Mastering and Release** workspace assembles several finished mixes into one
 release. It is separate from the arrangement and mixer: source mixes are
 treated as immutable release inputs, while sequencing, fades, metadata,
 analysis, exports, and collection remain part of the `.studioduo` project.
 
 ## Album workflow
 
-1. Open **MASTERING** in the main header.
+1. Choose **Export > Open mastering and release workspace**.
 2. Add each final mix with **+ SONG**.
 3. Add alternate mixes to the selected song with **+ ALT MIX**, then choose the
    active source from **Source mix**.
 4. Set the gap, overlap, fade-in, fade-out, and gain for each song. Reorder songs
-   with **UP** and **DOWN**.
+   with **Move Song Up** and **Move Song Down** (chevron icons).
 5. Enter album and song metadata. ISRC values are normalized to the 12-character
    form without spaces or hyphens.
 6. Add comparison material with **+ REFERENCE**. Reference files remain outside
@@ -123,5 +123,4 @@ a hash fall back to an exact filename match. Unresolved files remain explicit
 report entries; Studio Duo never silently substitutes different media.
 
 Mastering data and media hashes were introduced in format 9 and remain in
-format 10. Version 8 and
-older projects migrate with an empty mastering album.
+format 11. Version 8 and older projects migrate with an empty mastering album.

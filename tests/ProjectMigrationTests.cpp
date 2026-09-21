@@ -48,6 +48,7 @@ void projectMigrationTests()
     auto hasMasteringCapability = false;
     auto hasRenderReportV2Capability = false;
     auto hasSectionTransportCapability = false;
+    auto hasTimelineMarkersCapability = false;
     if (manifestObject != nullptr)
     {
         const auto required =
@@ -84,6 +85,8 @@ void projectMigrationTests()
                         == "renderReportsV2";
                 hasSectionTransportCapability = hasSectionTransportCapability
                     || capability.toString() == "sectionTransportV1";
+                hasTimelineMarkersCapability = hasTimelineMarkersCapability
+                    || capability.toString() == "timelineMarkersV1";
             }
         }
     }
@@ -99,8 +102,9 @@ void projectMigrationTests()
                && hasMidiChannelPressureCapability
                && hasMasteringCapability
                && hasRenderReportV2Capability
-               && hasSectionTransportCapability,
-           "Current manifests declare section transport and existing mastering, MIDI, device and interchange capabilities.");
+               && hasSectionTransportCapability
+               && hasTimelineMarkersCapability,
+           "Current manifests declare independent markers, section transport, and existing mastering, MIDI, device and interchange capabilities.");
 
     juce::String error;
     const auto loaded = studio::ProjectFile::load(package, error);
@@ -162,13 +166,34 @@ void projectMigrationTests()
     expect(loadedNine && loadedNine->timeSignatureNumerator == 4
                && loadedNine->timeSignatureDenominator == 4
                && loadedNine->sections.size() == 1
+               && loadedNine->markers.size() == 1
+               && loadedNine->markers.front().id
+                      == loadedNine->sections.front().id
                && !loadedNine->sections.front().clickSettings
                && loadedNine->tempoChanges.front().sectionId.isEmpty()
                && loadedNine->tempoChanges == legacyNineProject.tempoChanges
                && loadedNine->loopStartSeconds == 1.25
                && loadedNine->loopEndSeconds == 6.75
-               && static_cast<int>(loadedNine->toVar()["formatVersion"]) == 10,
-           "Version 9 projects retain their loop/maps and 4/4 default without inventing section overrides.");
+               && static_cast<int>(loadedNine->toVar()["formatVersion"]) == 11,
+           "Version 9 projects retain sections while migrating their former marker behavior to standalone flags.");
+
+    auto legacyTenProject = studio::Project::createDefault();
+    legacyTenProject.sections = {
+        { "legacy-section", "Legacy section", 2.0 }
+    };
+    auto legacyTen = legacyTenProject.toVar();
+    legacyTen.getDynamicObject()->setProperty("formatVersion", 10);
+    legacyTen.getDynamicObject()->removeProperty("markers");
+    error.clear();
+    const auto loadedTen = studio::Project::fromVar(legacyTen, error);
+    expect(loadedTen
+               && loadedTen->sections.size() == 1
+               && loadedTen->markers.size() == 1
+               && loadedTen->sections.front().id == "legacy-section"
+               && loadedTen->markers.front().id == "legacy-section"
+               && loadedTen->markers.front().name == "Legacy section"
+               && loadedTen->markers.front().timeSeconds == 2.0,
+           "Version 10 migration preserves each section and creates the standalone marker flag that carried its legacy marker behavior.");
 
     auto versionSix = project.toVar();
     auto* versionSixObject = versionSix.getDynamicObject();

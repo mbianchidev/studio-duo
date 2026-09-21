@@ -85,7 +85,7 @@ metadata, and atomic publication. Mix and mastering exports share this path.
 `ui/AudioExportOptionsComponent` exposes only compatible sample rates, bit depths,
 and quality controls and validates numeric text before opening the save chooser.
 
-`RenderEngine::resolveRange` resolves existing `SongSection` IDs rather than
+`RenderEngine::resolveRange` resolves existing `ProjectMarker` IDs rather than
 marker names or menu indices. `StudioAudioEngine::renderRangeToBuffer` retains
 timeline coordinates, renders the preceding processor history, discards the
 compensated prefix, and captures the selected sample interval. It cuts source
@@ -114,7 +114,9 @@ maps. The loop editor stores resolved seconds, not a hard-coded bar count or
 live marker reference. `TransportSettingsComponent` supplies separate loop and
 section dialogs; native fields use the shared strict `NumericInput` parser.
 
-Format 10 gives tempo/meter points an optional stable `sectionId` owner and
+Format 11 stores draggable `ProjectMarker` flags separately from `SongSection`
+ranges. It retains the format-10 optional `sectionId` owner on tempo/meter
+points and
 sections optional `SectionClickSettings`. Section commands atomically preserve
 ownership across edits, movement, deletion, undo and redo. Manual map points
 remain independent. Old projects gain no overrides on migration.
@@ -122,25 +124,28 @@ remain independent. Old projects gain no overrides on migration.
 The audio snapshot strips editor ownership into scalar tempo/meter events and
 compiles click overrides into scalar events with 32-bit accent masks. Metronome
 lookup allocates nothing on the callback, follows tempo/meter changes and loop
-wrap, and remains behind the global CLICK gate. Generic markers are neutral;
+wrap, and remains behind the global CLICK gate. Unconfigured sections are neutral;
 explicit click changes persist until the next explicit override. Both render
 paths continue excluding click audio.
 
-DAWproject exports retain audible tempo/meter maps while issuing object-specific
-warnings for marker-editing associations and click patterns that its schema
-cannot represent.
+DAWproject exports standalone timeline markers and retains audible tempo/meter
+maps while issuing object-specific warnings for Studio Duo section ranges,
+section-editing associations, and click patterns that its schema cannot
+represent.
 
 ## Manual multitrack recording test
 
 1. Connect an interface with at least two inputs, build Studio Duo, and save a
    new project so recordings are written below its `media/` directory.
-2. Open **SETTINGS** > **Audio / MIDI** and enable both input channels.
+2. Open **Settings** (gear icon) > **Audio / MIDI** and enable both input
+   channels.
 3. Select two audio parent tracks. Assign different mono inputs in each track's
-   inspector and arm both tracks with **R**.
-4. Press **REC**, send signal to both inputs, then press **STOP**.
+   inspector and arm both tracks with their record-circle controls.
+4. Press **Start Recording** (circle icon), send signal to both inputs, then
+   press **Stop** (square icon).
 5. Expand both parents. Each must contain a new version lane with clips sharing
-   the same timeline start and duration. One **UNDO** must remove both lanes;
-   one **REDO** must restore both.
+   the same timeline start and duration. One **Undo** (curved-left arrow) must
+   remove both lanes; one **Redo** (curved-right arrow) must restore both.
 6. Save, reopen, and confirm both version lanes, input assignments, and WAV
    references remain intact.
 
@@ -564,7 +569,7 @@ persisted gated-RMS comparison trim without changing raw batch-render levels.
 
 To test hardware calibration, physically route the configured reamp output back
 to the configured return input, enable both channels in
-**SETTINGS** > **Audio / MIDI**, choose **Calibrate round-trip latency**, and
+**Settings** (gear icon) > **Audio / MIDI**, choose **Calibrate round-trip latency**, and
 confirm a positive sample count appears. Record a sharp DI transient through
 the path with pre-roll longer than the reported latency; the DI and returned
 transient should align after capture.
@@ -596,7 +601,7 @@ the inspector provides palette shortcuts and a full HSV/RGB selector with live
 preview before one final undoable color change is recorded. Timeline headers
 and mixer-strip titles open a shared anchored editor that batches simultaneous
 name and color changes into one undoable command. The mixer separates title,
-volume-fader, and pan-knob hit zones: only the title opens that editor, while
+volume-fader, and linear-pan hit zones: only the title opens that editor, while
 fader and pan drags commit ordinary undoable mix-state commands.
 
 Recording creates flat-model child tracks with a stable `parentTrackId` and
@@ -605,6 +610,8 @@ engine mixing, but the timeline places them immediately below the parent and
 can hide them using the parent's persisted collapse state. Parent rows draw a
 subtle aggregate of child clips. Deleting a parent removes and restores the
 whole group atomically through undo.
+Recording, undo, and redo preserve each parent's pre-existing expanded or
+collapsed take-lane state instead of forcing newly recorded families closed.
 
 Version lanes are playlists rather than summed layers. With no explicit choice,
 the newest version plays; users can select another active take or build
@@ -624,8 +631,31 @@ be suspended without deleting their membership or settings.
 The left track-header context menu targets the clicked parent or version lane.
 Delete removes one version or the complete parent group, while the master
 remains protected. The lower mixer filters out child lanes and exposes an
-interactive pan knob for each parent channel; drag vertically to change pan or
-double-click to reset center.
+interactive linear pan control for each parent channel; drag horizontally toward the
+intended channel or double-click to reset center. The mixer and inspector use
+the shared center-origin pan renderer, which colors only the active span from
+center to the knob. Deterministic render coverage
+asserts that full-left and full-right pan move mono content to the matching
+output channel.
+Mixer dB readouts accept strict finite numeric input with an optional
+case-insensitive `dB` suffix, enforce the `-60.0..+12.0 dB` track range, round
+to 0.1 dB, and edit inline in the existing strip readout. Applying the inline
+editor routes through the existing undo and automation gesture path.
+Shared dB formatting prefixes positive values with `+`, keeps zero unsigned,
+and is reused by mixer, inspector, timeline, clip-gain, and routing displays.
+Mixer-strip context menus forward to the same track callbacks used by timeline
+headers, keeping mute/solo/arm, name/color, versions, duplicate, and delete
+behavior identical.
+Timeline headers and mixer strips forward their compact input dropdowns to one
+MainComponent menu, which lists the current device's input channels and applies
+the existing undoable `SetTrackMixCommand`.
+Each parent mixer strip renders its own compact Inserts and Sends sections.
+The insert add control launches a track-targeted `PluginBrowserComponent`
+callout, while send add routes to the existing routing menu. Row power controls
+reuse insert-bypass and routing-update commands. The left Session pane keeps
+only project and track actions. The right inspector is a tabbed ribbon that
+switches between the existing selected-track inspector and the persistent
+Plugin Manager catalog.
 
 Audio tracks persist their first hardware input, mono/stereo mode, and software
 monitoring state. The lock-free recorder copies only those selected callback
@@ -661,9 +691,51 @@ pixels-per-second value and keep the playhead centered.
 
 The timeline component receives the viewport's horizontal position and paints
 track headers at that offset, while clips and grid content remain in timeline
-coordinates. The UI timer follows an active playhead with a right-side margin,
+coordinates. Markers, song sections, and musical ruler labels occupy separate
+stacked rows. The top application header contains project/file tools; the
+bottom transport strip owns position, transport, loop, metronome, meter, and
+tempo controls. The Session pane uses the same icon-button instances in both
+states: expanded width reveals full labels, while collapsed width hides labels
+without changing actions, tooltips, or focus behavior. The UI timer follows an
+active playhead with a right-side margin,
 grows the view during long recordings, and rewinds a completed transport before
 starting playback again.
+
+The transport buttons are centered on the window independently from the
+position readout. Metronome, time signature, and BPM form the adjacent
+right-hand transport group, while device/readiness status is owned by the
+top-right `InfoPanelComponent`. `MainComponent::setStatus` appends deduplicated
+session entries; the callout displays newest-first history with per-entry
+removal and clear-all controls. High-frequency live progress uses display-only
+updates, so one recording operation contributes only its final saved event to
+history.
+
+The bottom-right **Inspect**, **Mixer**, and **Tracks** buttons are the sole
+visibility controls for the three docked areas. The edit toolbar owns undo,
+redo, scissors, trim, delete, snap/grid, and zoom controls; no duplicate
+panel-edge buttons remain. Timeline snap converts edit positions through the
+project tempo map, so the selected beat grid remains musical across tempo
+changes.
+
+`StudioPreferences` persists the autosave-recovery toggle in the application
+data directory with defaults merged on missing or invalid data. When enabled,
+ordinary project edits refresh `recovery/latest.json`; disabling it leaves
+manual project saves and explicit safety recovery points unchanged.
+
+The Tracking Setup installed-VST check is filesystem-only. It combines JUCE's
+native VST3 defaults, explicit macOS (`/Library/Audio/Plug-Ins/VST3` and the
+user Library equivalent) or Windows (`Program Files/Common Files/VST3` and
+LocalAppData `Programs/Common/VST3`) fallbacks, and configured custom VST3
+folders. It never launches a child app, instantiates a plug-in, or touches audio
+and microphone initialization.
+`PluginSearchPaths` schema 2 stores custom folders and disabled defaults.
+The VST settings page can add/remove effective paths, restore defaults, and
+force a scan. `StudioPreferences::scanPluginsAtStartup` controls the delayed
+startup scan and defaults to enabled.
+The same page exposes explicit per-plug-in advanced validation. It reuses the
+existing `--validate-plugin <stable identifier>` child-process path for the
+selected catalog entry only, keeping deep instantiation checks separate from
+safe folder discovery.
 
 On macOS, CMake applies an ad-hoc signature with the stable designated
 requirement `dev.mbianchi.studioduo`. This keeps the TCC microphone grant tied

@@ -181,9 +181,14 @@ std::optional<juce::var> ProjectMigration::migrateToCurrent(
     if (version < 8
         && !addVersionEightMidiChannelMetadata(*object, error))
         return std::nullopt;
+    if (version < 11)
+        object->setProperty(
+            "markers",
+            object->getProperty("sections").clone());
 
     addEmptyArray(*object, "routingConnections");
     addEmptyArray(*object, "reampRoutes");
+    addEmptyArray(*object, "markers");
     addEmptyArray(*object, "sections");
     addEmptyArray(*object, "automationLanes");
     addEmptyArray(*object, "toneSnapshots");

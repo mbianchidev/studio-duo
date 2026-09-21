@@ -28,6 +28,8 @@ public:
     void setRecordingPreviews(std::vector<RecordingPreview> previews);
     void clearRecordingPreviews();
     void setPixelsPerSecond(double pixels);
+    void setSnapEnabled(bool enabled);
+    void setEditGridBeats(double beats);
     [[nodiscard]] double getPixelsPerSecond() const noexcept;
     [[nodiscard]] float xForSeconds(double seconds) const noexcept;
     [[nodiscard]] int preferredWidth(int minimumWidth) const;
@@ -39,6 +41,12 @@ public:
     std::function<void(const juce::String&)> onTrackMute;
     std::function<void(const juce::String&)> onTrackSolo;
     std::function<void(const juce::String&)> onTrackArm;
+    std::function<void(const juce::String&, float)>
+        onTrackVolumeGestureStarted;
+    std::function<void(const juce::String&, float)>
+        onTrackVolumeChanged;
+    std::function<void(const juce::String&, juce::Rectangle<int>)>
+        onInputMenuRequested;
     std::function<void(const juce::String&, juce::Rectangle<int>)> onEditTrack;
     std::function<void(const juce::String&)> onToggleTrackVersions;
     std::function<void(const juce::String&)> onDuplicateTrack;
@@ -50,10 +58,16 @@ public:
     std::function<void(const juce::String&, double, double, double)> onClipTrimmed;
     std::function<void(double)> onSeek;
     std::function<void(double, double)> onZoomRequested;
+    std::function<void(double)> onAddMarkerRequested;
+    std::function<void(const juce::String&)> onEditMarkerRequested;
+    std::function<void(const juce::String&)> onRemoveMarkerRequested;
+    std::function<void(const juce::String&, double)> onMoveMarkerRequested;
     std::function<void(double)> onAddSectionRequested;
     std::function<void(const juce::String&)> onEditSectionRequested;
     std::function<void(const juce::String&)> onRemoveSectionRequested;
     std::function<void(const juce::String&)> onConfigureSectionRequested;
+    std::function<void(const juce::String&, double, double)>
+        onSectionRangeChanged;
     std::function<void()> onSplitSelected;
     std::function<void()> onTrimStartSelected;
     std::function<void()> onTrimEndSelected;
@@ -110,13 +124,25 @@ private:
         fadeOutCurve
     };
 
+    enum class SectionDragMode
+    {
+        none,
+        move,
+        resizeEnd
+    };
+
+    [[nodiscard]] juce::String markerIdAt(juce::Point<float> position) const;
     [[nodiscard]] juce::String sectionIdAt(juce::Point<float> position) const;
+    [[nodiscard]] double sectionEndSeconds(
+        std::size_t index,
+        double fallback) const noexcept;
     [[nodiscard]] std::vector<Hit> clipHits() const;
     [[nodiscard]] std::vector<const Track*> visibleTracks() const;
     [[nodiscard]] int trackIndexAt(float y) const noexcept;
     [[nodiscard]] float trackY(const juce::String& trackId) const noexcept;
     [[nodiscard]] double xToSeconds(float x) const noexcept;
     [[nodiscard]] float secondsToX(double seconds) const noexcept;
+    [[nodiscard]] double snappedSeconds(double seconds) const noexcept;
     static void drawClipWaveform(juce::Graphics& graphics,
                                  const AudioClip& clip,
                                  juce::Rectangle<float> bounds,
@@ -141,13 +167,25 @@ private:
     const Project* project = nullptr;
     juce::String selectedTrackId;
     juce::String selectedClipId;
+    juce::String draggingTrackVolumeId;
+    juce::String draggedMarkerId;
+    juce::String draggedSectionId;
     juce::String draggedClipId;
     juce::String hoveredClipId;
     juce::String dragOriginalTrackId;
     juce::String dragPreviewTrackId;
     double playheadSeconds = 0.0;
+    double markerDragOriginalSeconds = 0.0;
+    double markerDragPreviewSeconds = 0.0;
+    double sectionDragOriginalStart = 0.0;
+    double sectionDragOriginalEnd = 0.0;
+    double sectionDragPreviewStart = 0.0;
+    double sectionDragPreviewEnd = 0.0;
+    float dragPreviewTrackVolume = 0.0f;
     std::vector<RecordingPreview> recordingPreviews;
     double pixelsPerSecond = 96.0;
+    double editGridBeats = 0.25;
+    bool snapEnabled = true;
     int viewportPositionX = 0;
     double dragOriginalStart = 0.0;
     double dragOriginalSourceOffset = 0.0;
@@ -166,11 +204,16 @@ private:
     float dragPreviewFadeCurve = 0.0f;
     DragMode dragMode = DragMode::none;
     DragMode hoveredDragMode = DragMode::none;
+    SectionDragMode sectionDragMode =
+        SectionDragMode::none;
 
     static constexpr double minimumPixelsPerSecond = 24.0;
     static constexpr double maximumPixelsPerSecond = 9600.0;
+    static constexpr int markerLaneHeight = 20;
     static constexpr int sectionLaneHeight = 24;
-    static constexpr int rulerHeight = 60;
+    static constexpr int timelineRulerTop =
+        markerLaneHeight + sectionLaneHeight;
+    static constexpr int rulerHeight = 80;
     static constexpr int trackHeaderWidth = 176;
     static constexpr int trackHeight = 88;
     static constexpr int addTrackHeight = 44;

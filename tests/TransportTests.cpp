@@ -22,13 +22,13 @@ bool closeTo(double left, double right, double tolerance = 0.000001)
     return std::abs(left - right) <= tolerance;
 }
 
-bool matchesSongSections(
+bool matchesProjectMarkers(
     const studio::Project& project,
-    std::initializer_list<studio::SongSection> expected)
+    std::initializer_list<studio::ProjectMarker> expected)
 {
     return std::equal(
-        project.sections.cbegin(),
-        project.sections.cend(),
+        project.markers.cbegin(),
+        project.markers.cend(),
         expected.begin(),
         expected.end(),
         [](const auto& actual, const auto& wanted)
@@ -39,13 +39,13 @@ bool matchesSongSections(
         });
 }
 
-void namedSongMarkerCommands()
+void namedProjectMarkerCommands()
 {
     auto project = studio::Project::createDefault();
-    studio::SongSection start;
+    studio::ProjectMarker start;
     start.name = "Start";
     start.timeSeconds = 1.25;
-    studio::SongSection end;
+    studio::ProjectMarker end;
     end.name = "End";
     end.timeSeconds = 4.5;
     auto paddedStart = start;
@@ -54,30 +54,30 @@ void namedSongMarkerCommands()
     studio::CommandStack commands;
     juce::String error;
     expect(commands.perform(
-               std::make_unique<studio::AddSongSectionCommand>(end),
+               std::make_unique<studio::AddProjectMarkerCommand>(end),
                project,
                error)
                && commands.perform(
-                   std::make_unique<studio::AddSongSectionCommand>(
+                   std::make_unique<studio::AddProjectMarkerCommand>(
                        paddedStart),
                    project,
                    error)
-               && matchesSongSections(project, { start, end }),
+               && matchesProjectMarkers(project, { start, end }),
            "Named Start and End markers are trimmed and inserted in timeline order.");
     expect(commands.undo(project)
-               && matchesSongSections(project, { end })
+               && matchesProjectMarkers(project, { end })
                && commands.redo(project, error)
-               && matchesSongSections(project, { start, end }),
+               && matchesProjectMarkers(project, { start, end }),
            "Adding a marker preserves its ID, name, and position across undo and redo.");
 
     auto serializedProject = project;
-    serializedProject.sections = { end, paddedStart };
+    serializedProject.markers = { end, paddedStart };
     const auto loaded = studio::Project::fromVar(
         juce::JSON::parse(
             juce::JSON::toString(serializedProject.toVar())),
         error);
     expect(loaded.has_value()
-               && matchesSongSections(*loaded, { start, end }),
+               && matchesProjectMarkers(*loaded, { start, end }),
            "Marker IDs, trimmed names, and fractional positions survive JSON round trips in sorted order.");
 
     auto movedRequest = start;
@@ -86,88 +86,88 @@ void namedSongMarkerCommands()
     auto movedStart = movedRequest;
     movedStart.name = movedStart.name.trim();
     expect(commands.perform(
-               std::make_unique<studio::SetSongSectionCommand>(
+               std::make_unique<studio::SetProjectMarkerCommand>(
                    start,
                    movedRequest),
                project,
                error)
-               && matchesSongSections(project, { end, movedStart }),
+               && matchesProjectMarkers(project, { end, movedStart }),
            "Editing a marker renames and repositions its stable ID while reordering the timeline.");
     expect(commands.undo(project)
-               && matchesSongSections(project, { start, end })
+               && matchesProjectMarkers(project, { start, end })
                && commands.redo(project, error)
-               && matchesSongSections(project, { end, movedStart }),
+               && matchesProjectMarkers(project, { end, movedStart }),
            "Undo and redo restore both marker states and their sorted positions.");
 
     auto renamedStart = movedStart;
     renamedStart.name = "New Start";
     expect(commands.perform(
-               std::make_unique<studio::SetSongSectionCommand>(
+               std::make_unique<studio::SetProjectMarkerCommand>(
                    movedStart,
                    renamedStart),
                project,
                error)
-               && matchesSongSections(project, { end, renamedStart })
+               && matchesProjectMarkers(project, { end, renamedStart })
                && commands.undo(project)
-               && matchesSongSections(project, { end, movedStart })
+               && matchesProjectMarkers(project, { end, movedStart })
                && commands.redo(project, error)
-               && matchesSongSections(project, { end, renamedStart }),
+               && matchesProjectMarkers(project, { end, renamedStart }),
            "Renaming without moving does not treat the marker's own position as a duplicate.");
 
     expect(commands.perform(
-               std::make_unique<studio::RemoveSongSectionCommand>(
+               std::make_unique<studio::RemoveProjectMarkerCommand>(
                    end.id),
                project,
                error)
-               && matchesSongSections(project, { renamedStart })
+               && matchesProjectMarkers(project, { renamedStart })
                && commands.undo(project)
-               && matchesSongSections(project, { end, renamedStart })
+               && matchesProjectMarkers(project, { end, renamedStart })
                && commands.redo(project, error)
-               && matchesSongSections(project, { renamedStart }),
+               && matchesProjectMarkers(project, { renamedStart }),
            "Removing the first marker and undoing or redoing preserves the remaining marker.");
     expect(commands.undo(project)
                && commands.perform(
-                   std::make_unique<studio::RemoveSongSectionCommand>(
+                   std::make_unique<studio::RemoveProjectMarkerCommand>(
                        renamedStart.id),
                    project,
                    error)
-               && matchesSongSections(project, { end })
+               && matchesProjectMarkers(project, { end })
                && commands.undo(project)
-               && matchesSongSections(project, { end, renamedStart })
+               && matchesProjectMarkers(project, { end, renamedStart })
                && commands.redo(project, error)
-               && matchesSongSections(project, { end }),
+               && matchesProjectMarkers(project, { end }),
            "Removing the last marker reinserts its original ID, name, and sorted position on undo.");
 
     while (commands.undo(project))
     {
     }
-    expect(project.sections.empty(),
+    expect(project.markers.empty(),
            "Undoing the complete marker edit history restores an empty marker lane.");
     while (commands.redo(project, error))
     {
     }
-    expect(matchesSongSections(project, { end }),
+    expect(matchesProjectMarkers(project, { end }),
            "Replaying the marker edit history is deterministic.");
 }
 
-void invalidSongMarkers()
+void invalidProjectMarkers()
 {
     auto project = studio::Project::createDefault();
-    studio::SongSection start;
+    studio::ProjectMarker start;
     start.name = "Start";
     start.timeSeconds = 1.0;
-    studio::SongSection end;
+    studio::ProjectMarker end;
     end.name = "End";
     end.timeSeconds = 4.0;
-    project.sections = { start, end };
+    project.markers = { start, end };
 
-    studio::SongSection middle;
+    studio::ProjectMarker middle;
     middle.name = "Cue";
     middle.timeSeconds = 2.0;
     studio::CommandStack commands;
     juce::String error;
     expect(commands.perform(
-               std::make_unique<studio::AddSongSectionCommand>(middle),
+               std::make_unique<studio::AddProjectMarkerCommand>(middle),
                project,
                error)
                && commands.undo(project),
@@ -190,11 +190,11 @@ void invalidSongMarkers()
                message);
     };
     const auto rejectSerializedMarker = [&](
-                                            const studio::SongSection& marker,
+                                            const studio::ProjectMarker& marker,
                                             const char* message)
     {
         auto invalidProject = project;
-        invalidProject.sections.push_back(marker);
+        invalidProject.markers.push_back(marker);
         error.clear();
         expect(!studio::Project::fromVar(
                     invalidProject.toVar(),
@@ -213,17 +213,17 @@ void invalidSongMarkers()
         auto invalid = middle;
         invalid.timeSeconds = invalidTime;
         rejectWithoutMutation(
-            std::make_unique<studio::AddSongSectionCommand>(invalid),
+            std::make_unique<studio::AddProjectMarkerCommand>(invalid),
             "Adding a negative or non-finite marker leaves the project and command history unchanged.");
         auto edited = start;
         edited.timeSeconds = invalidTime;
         rejectWithoutMutation(
-            std::make_unique<studio::SetSongSectionCommand>(
+            std::make_unique<studio::SetProjectMarkerCommand>(
                 start,
                 edited),
             "Moving a marker to a negative or non-finite time leaves the project and command history unchanged.");
         error.clear();
-        expect(!studio::SongSection::fromVar(invalid.toVar(), error)
+        expect(!studio::ProjectMarker::fromVar(invalid.toVar(), error)
                     .has_value()
                    && error.isNotEmpty(),
                "Individual marker deserialization rejects negative and non-finite positions.");
@@ -237,12 +237,12 @@ void invalidSongMarkers()
         auto invalid = middle;
         invalid.name = invalidText;
         rejectWithoutMutation(
-            std::make_unique<studio::AddSongSectionCommand>(invalid),
+            std::make_unique<studio::AddProjectMarkerCommand>(invalid),
             "Adding an empty or whitespace-only marker name does not mutate the project.");
         auto edited = start;
         edited.name = invalidText;
         rejectWithoutMutation(
-            std::make_unique<studio::SetSongSectionCommand>(
+            std::make_unique<studio::SetProjectMarkerCommand>(
                 start,
                 edited),
             "Renaming a marker to an empty or whitespace-only name does not mutate the project.");
@@ -253,12 +253,12 @@ void invalidSongMarkers()
         invalid = middle;
         invalid.id = invalidText;
         rejectWithoutMutation(
-            std::make_unique<studio::AddSongSectionCommand>(invalid),
+            std::make_unique<studio::AddProjectMarkerCommand>(invalid),
             "Adding a marker without a usable stable ID does not mutate the project.");
         edited = start;
         edited.id = invalidText;
         rejectWithoutMutation(
-            std::make_unique<studio::SetSongSectionCommand>(
+            std::make_unique<studio::SetProjectMarkerCommand>(
                 start,
                 edited),
             "Editing cannot clear a marker's stable ID.");
@@ -267,32 +267,27 @@ void invalidSongMarkers()
             "Project loading rejects empty and whitespace-only marker IDs.");
     }
 
-    for (const auto duplicatePosition : {
-             end.timeSeconds,
-             end.timeSeconds - 0.00005,
-             end.timeSeconds + 0.00005 })
-    {
-        auto duplicate = middle;
-        duplicate.timeSeconds = duplicatePosition;
-        rejectWithoutMutation(
-            std::make_unique<studio::AddSongSectionCommand>(duplicate),
-            "Adding a marker within the existing position tolerance is rejected without mutation.");
-        auto edited = start;
-        edited.timeSeconds = duplicatePosition;
-        rejectWithoutMutation(
-            std::make_unique<studio::SetSongSectionCommand>(
-                start,
-                edited),
-            "Moving a marker within another marker's position tolerance is rejected without mutation.");
-        rejectSerializedMarker(
-            duplicate,
-            "Project loading enforces the same marker position tolerance as editing.");
-    }
+    auto sharedPositionProject = studio::Project::createDefault();
+    sharedPositionProject.markers = { start, end };
+    auto sharedPosition = middle;
+    sharedPosition.timeSeconds = end.timeSeconds;
+    studio::CommandStack sharedPositionCommands;
+    expect(sharedPositionCommands.perform(
+               std::make_unique<studio::AddProjectMarkerCommand>(
+                   sharedPosition),
+               sharedPositionProject,
+               error)
+               && sharedPositionProject.markers.size() == 3
+               && studio::Project::fromVar(
+                      sharedPositionProject.toVar(),
+                      error)
+                      .has_value(),
+           "Independent marker flags may share a timeline position while retaining distinct IDs.");
 
     auto duplicateId = middle;
     duplicateId.id = end.id;
     rejectWithoutMutation(
-        std::make_unique<studio::AddSongSectionCommand>(duplicateId),
+        std::make_unique<studio::AddProjectMarkerCommand>(duplicateId),
         "Adding a duplicate marker ID is rejected even at a different time.");
     rejectSerializedMarker(
         duplicateId,
@@ -300,23 +295,23 @@ void invalidSongMarkers()
     auto changedId = start;
     changedId.id = end.id;
     rejectWithoutMutation(
-        std::make_unique<studio::SetSongSectionCommand>(start, changedId),
+        std::make_unique<studio::SetProjectMarkerCommand>(start, changedId),
         "Editing cannot change a marker ID to another existing marker.");
     changedId.id = juce::Uuid().toString();
     rejectWithoutMutation(
-        std::make_unique<studio::SetSongSectionCommand>(start, changedId),
+        std::make_unique<studio::SetProjectMarkerCommand>(start, changedId),
         "Editing cannot change a marker ID to a new ID.");
     rejectWithoutMutation(
-        std::make_unique<studio::SetSongSectionCommand>(middle, middle),
+        std::make_unique<studio::SetProjectMarkerCommand>(middle, middle),
         "Editing an absent marker reports failure without changing the project.");
     rejectWithoutMutation(
-        std::make_unique<studio::RemoveSongSectionCommand>(middle.id),
+        std::make_unique<studio::RemoveProjectMarkerCommand>(middle.id),
         "Removing an absent marker reports failure without changing the project.");
     rejectWithoutMutation(
-        std::make_unique<studio::RemoveSongSectionCommand>(juce::String()),
+        std::make_unique<studio::RemoveProjectMarkerCommand>(juce::String()),
         "Removing an empty marker ID reports failure without changing the project.");
     expect(commands.redo(project, error)
-               && matchesSongSections(project, { start, middle, end }),
+               && matchesProjectMarkers(project, { start, middle, end }),
            "Rejected marker edits preserve the redo branch and its stable marker ID.");
 
     auto boundaryProject = studio::Project::createDefault();
@@ -326,15 +321,15 @@ void invalidSongMarkers()
     adjacent.timeSeconds = 0.0001;
     studio::CommandStack boundaryCommands;
     expect(boundaryCommands.perform(
-               std::make_unique<studio::AddSongSectionCommand>(zero),
+               std::make_unique<studio::AddProjectMarkerCommand>(zero),
                boundaryProject,
                error)
                && boundaryCommands.perform(
-                   std::make_unique<studio::AddSongSectionCommand>(adjacent),
+                   std::make_unique<studio::AddProjectMarkerCommand>(adjacent),
                    boundaryProject,
                    error)
-               && matchesSongSections(boundaryProject, { zero, adjacent }),
-           "Zero is a valid marker time and the existing exclusive duplicate tolerance is preserved.");
+               && matchesProjectMarkers(boundaryProject, { zero, adjacent }),
+           "Zero and closely spaced marker positions remain valid.");
 }
 
 juce::File createLoopSource()
@@ -866,8 +861,8 @@ void midiTransportDiscontinuities()
 
 void transportTests()
 {
-    namedSongMarkerCommands();
-    invalidSongMarkers();
+    namedProjectMarkerCommands();
+    invalidProjectMarkers();
 
     auto project = studio::Project::createDefault();
     project.name = "Transport verification";
@@ -1065,9 +1060,9 @@ void transportTests()
     studio::SongSection silentSection { "silent-section", "Muted click", 0.0 };
     silentSection.clickSettings = studio::SectionClickSettings {};
     silentSection.clickSettings->enabled = false;
-    studio::SongSection genericMarker { "neutral-marker", "Export marker", 0.5 };
+    studio::SongSection genericSection { "neutral-section", "Neutral section", 0.5 };
     studio::SongSection activeSection { "active-section", "Three eighths", 1.0 };
-    sectionProject.sections = { silentSection, genericMarker, activeSection };
+    sectionProject.sections = { silentSection, genericSection, activeSection };
     studio::SectionTransportSettings sectionSettings;
     sectionSettings.tempoBpm = 180.0;
     sectionSettings.timeSignature = studio::SectionTimeSignature { 3, 8 };

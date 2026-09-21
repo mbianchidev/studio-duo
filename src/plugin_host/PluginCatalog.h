@@ -46,9 +46,13 @@ public:
     [[nodiscard]] juce::StringArray availableFormats() const;
     [[nodiscard]] juce::File dataDirectory() const;
     [[nodiscard]] juce::StringArray defaultVst3SearchFolders() const;
+    [[nodiscard]] juce::StringArray effectiveVst3SearchFolders() const;
     [[nodiscard]] juce::StringArray customVst3SearchFolders() const;
+    [[nodiscard]] juce::StringArray disabledDefaultVst3SearchFolders() const;
     juce::Result addCustomVst3SearchFolder(const juce::File& folder);
     juce::Result removeCustomVst3SearchFolder(const juce::File& folder);
+    juce::Result removeVst3SearchFolder(const juce::File& folder);
+    juce::Result restoreDefaultVst3SearchFolders();
     void recordRuntimeReady(const PluginInsert& insert);
     void recordRuntimeFailure(const PluginInsert& insert,
                               PluginFailureKind failure,

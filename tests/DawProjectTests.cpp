@@ -664,6 +664,10 @@ void completeArchiveRoundTrip()
         { "section-intro", "Intro", 0.0 },
         { "section-riff", "Riff", 4.0 }
     };
+    project.markers = {
+        { "marker-intro", "Intro", 0.0 },
+        { "marker-riff", "Riff", 4.0 }
+    };
     for (auto& track : project.tracks)
         track.armed = false;
 
@@ -1052,7 +1056,7 @@ void completeArchiveRoundTrip()
                           == "studio.device.eq",
                "Studio Duo bundled devices re-import as active bundled devices.");
         expect(imported.project->scenes.front().slots.size() == 2
-                   && imported.project->sections.size() == 2,
+                   && imported.project->markers.size() == 2,
                "Scenes and arrangement markers survive DAWproject import.");
     }
     expect(imported.succeeded()

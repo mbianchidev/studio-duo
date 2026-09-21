@@ -1,6 +1,7 @@
 #include "RoutingPanel.h"
 
 #include "devices/DeviceRegistry.h"
+#include "NumericInput.h"
 #include "StudioTheme.h"
 
 #include <algorithm>
@@ -12,6 +13,7 @@ RoutingPanel::RoutingPanel()
 {
     addAndMakeVisible(addButton);
     addAndMakeVisible(trackButton);
+    trackButton.setTooltip("Configure routing for the selected track");
     addButton.onClick = [this] { showAddMenu(); };
     trackButton.onClick = [this] { showTrackMenu(); };
 }
@@ -48,6 +50,12 @@ void RoutingPanel::editConnection(const juce::String& connectionId)
         showRouteMenu(*route);
 }
 
+void RoutingPanel::showAddRouteMenu(
+    juce::Rectangle<int> targetScreenArea)
+{
+    showAddMenu(targetScreenArea);
+}
+
 std::vector<const RoutingConnection*> RoutingPanel::displayedRoutes() const
 {
     std::vector<const RoutingConnection*> result;
@@ -64,12 +72,22 @@ std::vector<const RoutingConnection*> RoutingPanel::displayedRoutes() const
     return result;
 }
 
+int RoutingPanel::preferredHeight() const
+{
+    const auto routeRows = static_cast<int>(
+        displayedRoutes().size());
+    return juce::jlimit(
+        68,
+        154,
+        28 + juce::jmax(40, routeRows * 30));
+}
+
 void RoutingPanel::paint(juce::Graphics& graphics)
 {
     graphics.fillAll(juce::Colour(StudioColours::panel));
     graphics.setColour(juce::Colour(StudioColours::secondaryText));
     graphics.setFont(juce::Font(juce::FontOptions(10.5f, juce::Font::bold)));
-    graphics.drawText("ROUTING", 0, 0, getWidth() - 112, 24,
+    graphics.drawText("ROUTING", 0, 0, getWidth() - 94, 24,
                       juce::Justification::centredLeft);
 
     const auto routes = displayedRoutes();
@@ -113,7 +131,7 @@ void RoutingPanel::resized()
 {
     auto header = getLocalBounds().removeFromTop(24);
     trackButton.setBounds(header.removeFromRight(56).reduced(2));
-    addButton.setBounds(header.removeFromRight(50).reduced(2));
+    addButton.setBounds(header.removeFromRight(34).reduced(2));
 }
 
 void RoutingPanel::mouseDown(const juce::MouseEvent& event)
@@ -126,7 +144,8 @@ void RoutingPanel::mouseDown(const juce::MouseEvent& event)
         showRouteMenu(*routes[static_cast<std::size_t>(index)]);
 }
 
-void RoutingPanel::showAddMenu()
+void RoutingPanel::showAddMenu(
+    juce::Rectangle<int> targetScreenArea)
 {
     const auto* source = project != nullptr ? project->findTrack(trackId) : nullptr;
     if (source == nullptr
@@ -168,9 +187,12 @@ void RoutingPanel::showAddMenu()
         menu.addSubMenu("MIDI destination", midi);
         if (source->type == TrackType::midi)
         {
-            menu.showMenuAsync(
-                juce::PopupMenu::Options().withTargetComponent(
-                    addButton));
+            auto options = juce::PopupMenu::Options();
+            options = targetScreenArea.isEmpty()
+                ? options.withTargetComponent(addButton)
+                : options.withTargetScreenArea(
+                    targetScreenArea);
+            menu.showMenuAsync(options);
             return;
         }
         menu.addSeparator();
@@ -326,7 +348,12 @@ void RoutingPanel::showAddMenu()
     if (hardware.getNumItems() == 0)
         hardware.addItem("No active outputs", false, false, [] {});
     menu.addSubMenu("Hardware output", hardware);
-    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(addButton));
+    auto options = juce::PopupMenu::Options();
+    options = targetScreenArea.isEmpty()
+        ? options.withTargetComponent(addButton)
+        : options.withTargetScreenArea(
+            targetScreenArea);
+    menu.showMenuAsync(options);
 }
 
 void RoutingPanel::showTrackMenu()
@@ -552,7 +579,7 @@ void RoutingPanel::showRouteMenu(const RoutingConnection& route)
              { -18.0f, -12.0f, -6.0f, 0.0f, 6.0f })
         {
             levels.addItem(
-                juce::String(level, 1) + " dB",
+                formatDecibels(level),
                 true,
                 std::abs(route.gainDecibels - level) < 0.001f,
                 [update, level]

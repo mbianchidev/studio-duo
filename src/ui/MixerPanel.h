@@ -25,12 +25,27 @@ public:
     std::function<void(const juce::String&,
                        AutomationTargetType,
                        float)> onAutomationGestureStarted;
+    std::function<void(const juce::String&)> onTrackMute;
+    std::function<void(const juce::String&)> onTrackSolo;
+    std::function<void(const juce::String&)> onTrackArm;
+    std::function<void(const juce::String&)> onToggleTrackVersions;
+    std::function<void(const juce::String&)> onDuplicateTrack;
+    std::function<void(const juce::String&)> onDeleteTrack;
+    std::function<void(const juce::String&, juce::Rectangle<int>)>
+        onInputMenuRequested;
+    std::function<void(const juce::String&, juce::Rectangle<int>)>
+        onAddInsert;
+    std::function<void(const juce::String&, juce::Rectangle<int>)>
+        onAddSend;
     std::function<void(const juce::String&, float)> onVolumeChanged;
     std::function<void(const juce::String&, float)> onPanChanged;
     std::function<void(const juce::String&, const juce::String&)> onPluginOpen;
     std::function<void(const juce::String&, const juce::String&, bool)>
         onPluginEnabledChanged;
     std::function<void(const juce::String&, const juce::String&)> onRouteOpen;
+    std::function<void(const juce::String&,
+                       const juce::String&,
+                       bool)> onRouteEnabledChanged;
 
     void paint(juce::Graphics& graphics) override;
     void resized() override;
@@ -40,8 +55,6 @@ public:
     void mouseDoubleClick(const juce::MouseEvent& event) override;
 
 private:
-    class ItemList;
-
     struct Item
     {
         enum class Type
@@ -59,8 +72,13 @@ private:
     };
 
     [[nodiscard]] std::vector<const Track*> mixerTracks() const;
-    [[nodiscard]] std::vector<Item> items() const;
-    void refreshItems();
+    [[nodiscard]] std::vector<Item> itemsForTrack(
+        const Track& track) const;
+    void beginVolumeEdit(const Track& track,
+                         juce::Rectangle<int> bounds);
+    void commitVolumeEdit();
+    void cancelVolumeEdit();
+    void showTrackContextMenu(const juce::MouseEvent& event);
 
     const Project* project = nullptr;
     juce::String selectedTrack;
@@ -69,13 +87,15 @@ private:
     std::vector<StudioAudioEngine::TrackMeterSnapshot> meters;
     juce::String draggingVolumeTrack;
     juce::String draggingPanTrack;
+    float dragStartX = 0.0f;
     float dragStartY = 0.0f;
     float dragStartVolume = 0.0f;
     float dragPreviewVolume = 0.0f;
     float dragStartPan = 0.0f;
     float dragPreviewPan = 0.0f;
     int dragFaderHeight = 1;
-    juce::Viewport itemsViewport;
-    std::unique_ptr<ItemList> itemList;
+    juce::TextEditor volumeEditor;
+    juce::String editingVolumeTrack;
+    bool committingVolumeEdit = false;
 };
 }
