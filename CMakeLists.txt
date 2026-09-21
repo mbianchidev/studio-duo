@@ -985,9 +985,75 @@ if(STUDIO_DUO_BUILD_TESTS)
             juce::juce_recommended_warning_flags
     )
 
-    add_test(NAME StudioDuoTests COMMAND StudioDuoTests)
+    file(
+        STRINGS
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/ModelTests.cpp"
+        STUDIO_DUO_TEST_SUITE_LINES
+        REGEX "^[ \t]+RUN_SUITE\\([A-Za-z0-9_]+\\);"
+    )
+    set(STUDIO_DUO_TEST_SUITES)
+    foreach(STUDIO_DUO_TEST_SUITE_LINE IN LISTS STUDIO_DUO_TEST_SUITE_LINES)
+        string(
+            REGEX REPLACE
+            "^[ \t]+RUN_SUITE\\(([A-Za-z0-9_]+)\\);.*$"
+            "\\1"
+            STUDIO_DUO_TEST_SUITE
+            "${STUDIO_DUO_TEST_SUITE_LINE}"
+        )
+        list(APPEND STUDIO_DUO_TEST_SUITES "${STUDIO_DUO_TEST_SUITE}")
+    endforeach()
+    if(NOT WIN32)
+        list(REMOVE_ITEM STUDIO_DUO_TEST_SUITES windowsCrashHandlerTests)
+    endif()
+    list(REMOVE_DUPLICATES STUDIO_DUO_TEST_SUITES)
+    if(NOT STUDIO_DUO_TEST_SUITES)
+        message(FATAL_ERROR "No Studio Duo test suites were discovered")
+    endif()
+
+    foreach(STUDIO_DUO_TEST_SUITE IN LISTS STUDIO_DUO_TEST_SUITES)
+        set(STUDIO_DUO_CTEST_NAME "StudioDuoTests.${STUDIO_DUO_TEST_SUITE}")
+        add_test(
+            NAME "${STUDIO_DUO_CTEST_NAME}"
+            COMMAND StudioDuoTests "--suite=${STUDIO_DUO_TEST_SUITE}"
+        )
+        set_tests_properties(
+            "${STUDIO_DUO_CTEST_NAME}"
+            PROPERTIES
+                LABELS "suite"
+                TIMEOUT 300
+        )
+    endforeach()
+
+    set(STUDIO_DUO_HOST_TESTS)
+    foreach(
+        STUDIO_DUO_HOST_SUITE
+        IN ITEMS
+            audioDeviceProbeTests
+            windowsCrashHandlerTests
+            pluginFormatTests
+            pluginCompatibilityTests
+    )
+        if(STUDIO_DUO_HOST_SUITE IN_LIST STUDIO_DUO_TEST_SUITES)
+            list(
+                APPEND
+                STUDIO_DUO_HOST_TESTS
+                "StudioDuoTests.${STUDIO_DUO_HOST_SUITE}"
+            )
+        endif()
+    endforeach()
+    if(STUDIO_DUO_HOST_TESTS)
+        set_tests_properties(
+            ${STUDIO_DUO_HOST_TESTS}
+            PROPERTIES RESOURCE_LOCK studio_duo_host
+        )
+    endif()
     if(WIN32)
         add_test(NAME StudioDuoStartup COMMAND StudioDuo --startup-self-test)
-        set_tests_properties(StudioDuoStartup PROPERTIES TIMEOUT 30)
+        set_tests_properties(
+            StudioDuoStartup
+            PROPERTIES
+                RESOURCE_LOCK studio_duo_host
+                TIMEOUT 30
+        )
     endif()
 endif()
