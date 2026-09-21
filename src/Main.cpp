@@ -70,6 +70,23 @@ public:
         }
 #endif
         const auto arguments = getCommandLineParameterArray();
+#if JUCE_WINDOWS
+        if (!arguments.isEmpty()
+            && arguments[0] == audioDeviceProbeArgument)
+        {
+            WindowsCrashHandler::exchangeContext(
+                WindowsCrashContext::audioDeviceProbe);
+        }
+        else if (commandLine.contains(pluginBridgeProcessId)
+                 || commandLine.contains(pluginScanProcessId)
+                 || commandLine.contains("--validate-plugin")
+                 || commandLine.contains("--validate-scream-forge")
+                 || commandLine.contains("--bridge-plugin-self-test"))
+        {
+            WindowsCrashHandler::exchangeContext(
+                WindowsCrashContext::pluginWorker);
+        }
+#endif
         if (const auto result = runAudioDeviceProbeWorker(arguments, probeNativeAudioDeviceSetup))
         {
             setApplicationReturnValue(*result);
@@ -151,6 +168,10 @@ public:
                 + getApplicationVersion()
                 + " started on "
                 + juce::SystemStats::getOperatingSystemName());
+#if JUCE_WINDOWS
+        WindowsCrashHandler::exchangeContext(
+            WindowsCrashContext::mainWindowStartup);
+#endif
         logInfo("app.startup", "Constructing the main window.");
         fileLogger->flush();
         mainWindow = std::make_unique<MainWindow>(
@@ -159,6 +180,10 @@ public:
             startupProjectFromArguments(arguments));
         logInfo("app.startup", "The main window is ready.");
         fileLogger->flush();
+#if JUCE_WINDOWS
+        WindowsCrashHandler::exchangeContext(
+            WindowsCrashContext::runtime);
+#endif
         if (startupSelfTest)
         {
             juce::Timer::callAfterDelay(750, [this]
@@ -184,6 +209,10 @@ public:
 
     void shutdown() override
     {
+#if JUCE_WINDOWS
+        WindowsCrashHandler::exchangeContext(
+            WindowsCrashContext::shutdown);
+#endif
         const auto mainApplication = mainWindow != nullptr;
         mainWindow.reset();
         pluginScanWorker.reset();

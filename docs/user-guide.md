@@ -798,10 +798,12 @@ plain text, older logs are gzip-compressed, and files older than seven days are
 deleted. Each batch is flushed while the app is running; startup checkpoints
 are also flushed before window creation and native audio initialization.
 
-On Windows, unhandled native exceptions produce a separate
-`studio-duo-crash-*.log` with the exception code, fault address, module filename,
-and thread ID. The main app displays a native error dialog with the report
-location. Probe and plugin workers do not display blocking crash dialogs.
+On Windows, unhandled native exceptions produce a matching
+`studio-duo-crash-*.log` and `studio-duo-crash-*.dmp`. The text report records
+the exception code, fault address, module filename, thread ID, and active
+startup/runtime phase. The native dump records thread stacks and loaded-module
+details for a debugger. The main app displays both locations in its native error
+dialog. Probe and plugin workers do not display blocking crash dialogs.
 Abrupt process termination can bypass an exception handler; an ASIO probe that
 exits without a completed response is still treated as a failure.
 
@@ -815,7 +817,11 @@ Use the actual executable path for a portable or custom installation.
 `--safe-audio` skips automatic audio and MIDI initialization for this launch
 without deleting the saved setup. Open **Settings** (gear icon) > **Audio / MIDI** and
 choose **Windows Audio** or another working driver. Share the newest ordinary
-log and any matching crash report when reporting the problem.
+log plus the matching crash report and dump when reporting the problem. A dump
+can contain fragments of process memory, including project or plug-in data, so
+share it privately with a trusted maintainer rather than posting it publicly.
+Each release publishes a matching Windows symbols archive; dumps must be opened
+with symbols from the exact Studio Duo build that crashed.
 MIDI discovery failures also leave **Updates** available without loading audio
 devices; fix the reported driver or system error before retrying audio Settings.
 

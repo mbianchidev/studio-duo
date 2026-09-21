@@ -3,6 +3,7 @@
 #include "logging/StudioLogger.h"
 
 #include <windows.h>
+#include <dbghelp.h>
 #include <strsafe.h>
 
 #include <atomic>
@@ -13,12 +14,43 @@ namespace studio
 {
 struct WindowsCrashHandler::State
 {
+    using MiniDumpWriteDumpFunction = decltype(&MiniDumpWriteDump);
+
     std::wstring reportPath;
+    std::wstring dumpPath;
     std::wstring version;
     std::atomic<bool> showDialog { false };
+    std::atomic<WindowsCrashContext> context {
+        WindowsCrashContext::processStartup
+    };
     LONG handlingCrash = 0;
     LPTOP_LEVEL_EXCEPTION_FILTER previous = nullptr;
+    HMODULE debugHelpLibrary = nullptr;
+    MiniDumpWriteDumpFunction writeMiniDump = nullptr;
     inline static std::atomic<State*> active { nullptr };
+
+    static const wchar_t* contextName(
+        WindowsCrashContext value) noexcept
+    {
+        switch (value)
+        {
+            case WindowsCrashContext::processStartup:
+                return L"Process startup";
+            case WindowsCrashContext::audioDeviceProbe:
+                return L"Audio/MIDI probe worker";
+            case WindowsCrashContext::pluginWorker:
+                return L"Plug-in worker";
+            case WindowsCrashContext::mainWindowStartup:
+                return L"Main window startup";
+            case WindowsCrashContext::audioStartup:
+                return L"Audio/MIDI startup";
+            case WindowsCrashContext::runtime:
+                return L"Main application runtime";
+            case WindowsCrashContext::shutdown:
+                return L"Application shutdown";
+        }
+        return L"Unknown";
+    }
 
     static LONG WINAPI handleCrash(EXCEPTION_POINTERS* exception)
     {
@@ -33,6 +65,8 @@ struct WindowsCrashHandler::State
         const auto* record = exception != nullptr ? exception->ExceptionRecord : nullptr;
         const auto code = record != nullptr ? record->ExceptionCode : 0;
         const auto address = record != nullptr ? record->ExceptionAddress : nullptr;
+        const auto crashContext =
+            current->context.load(std::memory_order_relaxed);
         wchar_t modulePath[MAX_PATH] {};
         const wchar_t* moduleName = L"<unknown>";
         HMODULE module = nullptr;
@@ -51,19 +85,89 @@ struct WindowsCrashHandler::State
                     moduleName = character + 1;
         }
 
+        auto dumpPersisted = false;
+        auto dumpError = DWORD { ERROR_PROC_NOT_FOUND };
+        if (current->writeMiniDump != nullptr)
+        {
+            const auto dump = CreateFileW(
+                current->dumpPath.c_str(),
+                GENERIC_WRITE,
+                FILE_SHARE_READ,
+                nullptr,
+                CREATE_NEW,
+                FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH,
+                nullptr);
+            if (dump != INVALID_HANDLE_VALUE)
+            {
+                MINIDUMP_EXCEPTION_INFORMATION exceptionInformation {
+                    GetCurrentThreadId(),
+                    exception,
+                    FALSE
+                };
+                constexpr auto dumpType = static_cast<MINIDUMP_TYPE>(
+                    MiniDumpNormal
+                    | MiniDumpWithThreadInfo
+                    | MiniDumpWithUnloadedModules
+                    | MiniDumpWithIndirectlyReferencedMemory
+                    | MiniDumpScanMemory);
+                dumpPersisted = current->writeMiniDump(
+                    GetCurrentProcess(),
+                    GetCurrentProcessId(),
+                    dump,
+                    dumpType,
+                    exception != nullptr ? &exceptionInformation : nullptr,
+                    nullptr,
+                    nullptr)
+                    && FlushFileBuffers(dump);
+                if (!dumpPersisted)
+                    dumpError = GetLastError();
+                if (!CloseHandle(dump) && dumpPersisted)
+                {
+                    dumpPersisted = false;
+                    dumpError = GetLastError();
+                }
+                if (!dumpPersisted)
+                    DeleteFileW(current->dumpPath.c_str());
+            }
+            else
+            {
+                dumpError = GetLastError();
+            }
+        }
+
         SYSTEMTIME now {};
         GetSystemTime(&now);
-        wchar_t report[2048] {};
+        wchar_t dumpStatus[1024] {};
+        if (dumpPersisted)
+        {
+            StringCchPrintfW(
+                dumpStatus,
+                1024,
+                L"%ls",
+                current->dumpPath.c_str());
+        }
+        else
+        {
+            StringCchPrintfW(
+                dumpStatus,
+                1024,
+                L"<unavailable: Windows error %lu>",
+                dumpError);
+        }
+
+        wchar_t report[4096] {};
         StringCchPrintfW(
             report,
-            2048,
+            4096,
             L"Studio Duo %ls native crash\r\n"
             L"UTC: %04u-%02u-%02uT%02u:%02u:%02uZ\r\n"
-            L"Exception: 0x%08lx\r\nAddress: %p\r\nModule: %ls\r\nThread: %lu\r\n",
+            L"Exception: 0x%08lx\r\nAddress: %p\r\nModule: %ls\r\nThread: %lu\r\n"
+            L"Context: %ls\r\nNative dump: %ls\r\n",
             current->version.c_str(),
             now.wYear, now.wMonth, now.wDay,
             now.wHour, now.wMinute, now.wSecond,
-            code, address, moduleName, GetCurrentThreadId());
+            code, address, moduleName, GetCurrentThreadId(),
+            contextName(crashContext), dumpStatus);
 
         auto persisted = false;
         auto writeError = DWORD { ERROR_SUCCESS };
@@ -101,28 +205,43 @@ struct WindowsCrashHandler::State
 
         if (current->showDialog.load(std::memory_order_relaxed))
         {
-            wchar_t message[4096] {};
+            const auto* recovery =
+                crashContext == WindowsCrashContext::audioStartup
+                ? L"If this happened during audio startup, relaunch Studio Duo with "
+                  L"--safe-audio, then choose another driver in Settings."
+                : L"Restart Studio Duo and attach the crash report and native dump "
+                  L"when reporting the problem.";
+            wchar_t message[6144] {};
             if (persisted)
             {
                 StringCchPrintfW(
                     message,
-                    4096,
+                    6144,
                     L"Studio Duo stopped unexpectedly.\n\n"
-                    L"Exception: 0x%08lx\nModule: %ls\n\nCrash report:\n%ls\n\n"
-                    L"If this happened during audio startup, launch Studio Duo with "
-                    L"--safe-audio, then choose another driver in Settings.",
-                    code, moduleName, current->reportPath.c_str());
+                    L"Exception: 0x%08lx\nModule: %ls\nContext: %ls\n\n"
+                    L"Crash report:\n%ls\n\nNative dump:\n%ls\n\n%ls",
+                    code,
+                    moduleName,
+                    contextName(crashContext),
+                    current->reportPath.c_str(),
+                    dumpStatus,
+                    recovery);
             }
             else
             {
                 StringCchPrintfW(
                     message,
-                    4096,
+                    6144,
                     L"Studio Duo stopped unexpectedly.\n\n"
-                    L"Exception: 0x%08lx\nModule: %ls\n\n"
+                    L"Exception: 0x%08lx\nModule: %ls\nContext: %ls\n\n"
                     L"The crash report could not be saved (Windows error %lu).\n"
-                    L"Launch Studio Duo with --safe-audio to skip audio startup.",
-                    code, moduleName, writeError);
+                    L"Native dump: %ls\n\n%ls",
+                    code,
+                    moduleName,
+                    contextName(crashContext),
+                    writeError,
+                    dumpStatus,
+                    recovery);
             }
             MessageBoxW(nullptr, message, L"Studio Duo startup or runtime error", MB_OK | MB_ICONERROR);
         }
@@ -138,6 +257,8 @@ WindowsCrashHandler::~WindowsCrashHandler()
     {
         SetUnhandledExceptionFilter(state->previous);
         State::active.store(nullptr, std::memory_order_release);
+        if (state->debugHelpLibrary != nullptr)
+            FreeLibrary(state->debugHelpLibrary);
     }
 }
 
@@ -150,13 +271,37 @@ juce::Result WindowsCrashHandler::initialise(const juce::File& logDirectory)
             "Could not create the Windows crash report directory: "
             + created.getErrorMessage());
 
-    state = std::make_unique<State>();
-    state->reportPath = logDirectory.getChildFile(
+    const auto baseName =
         "studio-duo-crash-"
         + juce::Time::getCurrentTime().formatted("%Y-%m-%d")
-        + "-" + juce::Uuid().toString() + ".log").getFullPathName().toWideCharPointer();
+        + "-" + juce::Uuid().toString();
+    state = std::make_unique<State>();
+    state->reportPath = logDirectory.getChildFile(
+        baseName + ".log").getFullPathName().toWideCharPointer();
+    state->dumpPath = logDirectory.getChildFile(
+        baseName + ".dmp").getFullPathName().toWideCharPointer();
     state->version = juce::String(STUDIO_DUO_VERSION).toWideCharPointer();
-    ULONG stackReserve = 65536;
+    state->debugHelpLibrary = LoadLibraryExW(
+        L"dbghelp.dll",
+        nullptr,
+        LOAD_LIBRARY_SEARCH_SYSTEM32);
+    if (state->debugHelpLibrary != nullptr)
+    {
+        state->writeMiniDump =
+            reinterpret_cast<State::MiniDumpWriteDumpFunction>(
+                GetProcAddress(
+                    state->debugHelpLibrary,
+                    "MiniDumpWriteDump"));
+    }
+    if (state->writeMiniDump == nullptr)
+    {
+        logError(
+            "app.crash",
+            "Windows native dump support is unavailable (Windows error "
+                + juce::String(static_cast<int>(GetLastError()))
+                + ").");
+    }
+    ULONG stackReserve = 262144;
     if (!SetThreadStackGuarantee(&stackReserve))
         logError("app.crash", "Could not reserve stack space for Windows crash reporting.");
     State::active.store(state.get(), std::memory_order_release);
@@ -168,5 +313,15 @@ void WindowsCrashHandler::enableNativeDialog() noexcept
 {
     if (state != nullptr)
         state->showDialog.store(true, std::memory_order_relaxed);
+}
+
+WindowsCrashContext WindowsCrashHandler::exchangeContext(
+    WindowsCrashContext context) noexcept
+{
+    if (auto* current = State::active.load(std::memory_order_acquire))
+        return current->context.exchange(
+            context,
+            std::memory_order_relaxed);
+    return WindowsCrashContext::processStartup;
 }
 }

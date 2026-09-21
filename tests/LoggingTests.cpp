@@ -31,6 +31,10 @@ void loggingTests()
         .getChildFile("studio-duo-expired.log");
     const auto expiredArchive = maintenanceDirectory
         .getChildFile("studio-duo-expired.log.gz");
+    const auto recentDump = maintenanceDirectory
+        .getChildFile("studio-duo-crash-recent.dmp");
+    const auto expiredDump = maintenanceDirectory
+        .getChildFile("studio-duo-crash-expired.dmp");
     const auto staleTemporary = maintenanceDirectory
         .getChildFile(
             "studio-duo-old.log.gz.tmp-interrupted");
@@ -38,6 +42,8 @@ void loggingTests()
     old.replaceWithText("old");
     expired.replaceWithText("expired");
     expiredArchive.replaceWithText("expired archive");
+    recentDump.replaceWithText("recent dump");
+    expiredDump.replaceWithText("expired dump");
     staleTemporary.replaceWithText("partial archive");
     recent.setLastModificationTime(
         now - juce::RelativeTime::hours(12));
@@ -46,6 +52,10 @@ void loggingTests()
     expired.setLastModificationTime(
         now - juce::RelativeTime::days(8));
     expiredArchive.setLastModificationTime(
+        now - juce::RelativeTime::days(8));
+    recentDump.setLastModificationTime(
+        now - juce::RelativeTime::hours(12));
+    expiredDump.setLastModificationTime(
         now - juce::RelativeTime::days(8));
     staleTemporary.setLastModificationTime(
         now - juce::RelativeTime::days(2));
@@ -91,6 +101,10 @@ void loggingTests()
         !expired.existsAsFile()
             && !expiredArchive.existsAsFile(),
         "Logs older than the retention period are deleted.");
+    expect(
+        recentDump.existsAsFile()
+            && !expiredDump.existsAsFile(),
+        "Native dumps follow retention without compression.");
     expect(
         !staleTemporary.existsAsFile(),
         "Interrupted compression files are cleaned up.");

@@ -261,10 +261,15 @@ Safe-audio mode omits the manager entirely and suppresses periodic MIDI polling.
 Settings keeps Updates accessible if discovery fails and uses shared Windows
 Audio whenever no device is open, rather than implicitly reopening ASIO.
 
-`WindowsCrashHandler` writes native exception metadata through fixed buffers and
-Win32 output, bypassing the asynchronous logger and its locks.
-Crash reports follow the normal log retention policy. Startup checkpoints and
-each background log batch are flushed so a short-lived process leaves evidence.
+`WindowsCrashHandler` preloads the system `DbgHelp.dll`, then writes native
+exception metadata through fixed buffers and Win32 output, bypassing the
+asynchronous logger and its locks. It also writes a matching small minidump with
+thread, unloaded-module, and indirectly referenced memory details. Text reports
+and dumps follow the normal log retention policy; dumps are deleted rather than
+compressed. Windows Release builds emit a matching PDB, and the release workflow
+publishes it as a separate symbols archive from the same build job. Startup
+checkpoints and each background log batch are flushed so a short-lived process
+leaves evidence.
 
 Tracks persist ordered plugin insert records independently from plugin
 availability. Each record keeps the standard plugin identifier, format, vendor,

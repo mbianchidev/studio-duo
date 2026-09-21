@@ -7,6 +7,17 @@
 #if JUCE_WINDOWS
 namespace studio
 {
+enum class WindowsCrashContext
+{
+    processStartup,
+    audioDeviceProbe,
+    pluginWorker,
+    mainWindowStartup,
+    audioStartup,
+    runtime,
+    shutdown
+};
+
 class WindowsCrashHandler final
 {
 public:
@@ -15,6 +26,8 @@ public:
 
     [[nodiscard]] juce::Result initialise(const juce::File& logDirectory);
     void enableNativeDialog() noexcept;
+    static WindowsCrashContext exchangeContext(
+        WindowsCrashContext context) noexcept;
 
 private:
     struct State;
