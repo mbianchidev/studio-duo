@@ -18,6 +18,22 @@
 
 namespace studio
 {
+namespace
+{
+juce::File startupProjectFromArguments(
+    const juce::StringArray& arguments)
+{
+    for (const auto& argument : arguments)
+    {
+        if (!argument.startsWith("-")
+            && argument.endsWithIgnoreCase(
+                ".studioduo"))
+            return juce::File(argument);
+    }
+    return {};
+}
+}
+
 class StudioDuoApplication final : public juce::JUCEApplication
 {
 public:
@@ -139,7 +155,8 @@ public:
         fileLogger->flush();
         mainWindow = std::make_unique<MainWindow>(
             getApplicationName(),
-            !startupSelfTest && !arguments.contains("--safe-audio"));
+            !startupSelfTest && !arguments.contains("--safe-audio"),
+            startupProjectFromArguments(arguments));
         logInfo("app.startup", "The main window is ready.");
         fileLogger->flush();
         if (startupSelfTest)
@@ -439,13 +456,23 @@ private:
     class MainWindow final : public juce::DocumentWindow
     {
     public:
-        MainWindow(const juce::String& name, bool startAudioOnLaunch)
+        MainWindow(
+            const juce::String& name,
+            bool startAudioOnLaunch,
+            juce::File startupProject)
             : juce::DocumentWindow(name,
                                    juce::Colour(StudioColours::window),
                                    juce::DocumentWindow::allButtons)
         {
             setUsingNativeTitleBar(true);
-            setContentOwned(new MainComponent(startAudioOnLaunch), true);
+            setContentOwned(
+                new MainComponent(
+                    startAudioOnLaunch,
+                    std::move(startupProject)),
+                true);
+            setBackgroundColour(
+                juce::Colour(
+                    StudioColours::window));
             setResizable(true, false);
 
             juce::BorderSize<int> nativeFrame;

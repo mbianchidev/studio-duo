@@ -11,17 +11,21 @@
 #include "PluginInsertPanel.h"
 #include "PluginParameterPanel.h"
 #include "RoutingPanel.h"
+#include "StartupHubComponent.h"
 #include "TimelineComponent.h"
+#include "UserGuideComponent.h"
 #include "audio/StudioAudioDeviceManager.h"
 #include "audio/StudioAudioEngine.h"
 #include "dawproject_io/DawProjectIO.h"
 #include "model/LinkedEditModel.h"
 #include "model/ProjectCommands.h"
+#include "model/ProjectTemplates.h"
 #include "model/TransportEditing.h"
 #include "plugin_host/PluginBrowserComponent.h"
 #include "plugin_host/PluginCatalog.h"
 #include "project_io/ProjectFile.h"
 #include "render/RenderEngine.h"
+#include "update/StudioPreferences.h"
 #include "update/UpdateService.h"
 
 #include <juce_audio_utils/juce_audio_utils.h>
@@ -32,15 +36,15 @@
 
 namespace studio
 {
-class StudioPreferences;
-
 class MainComponent final : public juce::Component,
                             private juce::Timer,
                             private juce::KeyListener,
                             private UpdateService::Listener
 {
 public:
-    explicit MainComponent(bool startAudioOnLaunch = true);
+    explicit MainComponent(
+        bool startAudioOnLaunch = true,
+        juce::File startupProject = {});
     ~MainComponent() override;
 
     [[nodiscard]] bool hasAudioDeviceManager() const noexcept;
@@ -49,6 +53,22 @@ public:
     void resized() override;
 
 private:
+    class LogoButton final : public juce::Button
+    {
+    public:
+        LogoButton()
+            : juce::Button("Main menu")
+        {
+        }
+
+        void paintButton(
+            juce::Graphics&,
+            bool,
+            bool) override
+        {
+        }
+    };
+
     class PanelResizer;
 
     class ExportInputBlocker final : public juce::Component
@@ -94,6 +114,11 @@ private:
     [[nodiscard]] juce::AudioIODevice* currentAudioDevice() const noexcept;
     bool connectAudioEngine();
     void createNewProject();
+    void createProjectFromTemplate(
+        const juce::String& templateId);
+    void replaceWithUnsavedProject(
+        Project replacement,
+        const juce::String& statusMessage);
     void beginOpenProject();
     void beginSaveProject();
     void beginImportAudio();
@@ -118,6 +143,15 @@ private:
     void recordCompatibilityReport(
         const CompatibilityReport& report);
     void showSettings(bool showUpdates = false);
+    void applyTheme(
+        const StudioThemePalette& palette);
+    void showHelpMenu();
+    void openUserGuide();
+    void requestStartupHub();
+    void leaveProjectForStartupHub();
+    void showStartupHub(
+        const juce::String& message = {},
+        bool error = false);
     void restartForUpdate();
     void updateStateChanged(
         const UpdateSnapshot& snapshot) override;
@@ -132,7 +166,7 @@ private:
         const juce::File& destinationPackage,
         juce::String& warning,
         juce::String& error) const;
-    void openProjectFrom(const juce::File& package);
+    bool openProjectFrom(const juce::File& package);
     void importAudioFile(const juce::File& source);
     void exportMixTo(const juce::File& destination,
                      MixExportSettings settings);
@@ -294,7 +328,10 @@ private:
     void showError(const juce::String& title, const juce::String& message);
     static juce::String positionText(double seconds, const Project& project);
 
-    StudioTheme theme;
+    StudioPreferences preferences;
+    StudioTheme theme {
+        preferences.themePalette()
+    };
     std::unique_ptr<juce::Drawable> brandLogo;
     UpdateService updateService {
         STUDIO_DUO_VERSION,
@@ -321,6 +358,7 @@ private:
     bool audioEngineInitialised = false;
     bool exportInProgress = false;
     bool shutdownRequestedDuringExport = false;
+    bool returnToStartupHubAfterSave = false;
     MixExportSettings lastMixExportSettings;
     ExportInputBlocker exportInputBlocker;
     bool statusIsError = false;
@@ -361,6 +399,12 @@ private:
         "Settings",
         "Configure audio, MIDI, and automatic updates"
     };
+    StudioIconButton helpButton {
+        StudioIcon::help,
+        "Help",
+        "Open Help and the in-app User Guide"
+    };
+    LogoButton logoButton;
     StudioIconButton undoButton {
         StudioIcon::undo, "Undo", "Undo (Command/Ctrl+Z)"
     };
@@ -546,9 +590,12 @@ private:
     std::unique_ptr<RoutingPanel> routingPanel;
     std::unique_ptr<PluginInsertPanel> insertPanel;
     InfoPanelComponent statusPanel;
+    StartupHubComponent startupHub {
+        preferences
+    };
     std::unique_ptr<juce::FileChooser> fileChooser;
     std::unique_ptr<juce::DialogWindow> settingsWindow;
-    std::unique_ptr<StudioPreferences> preferences;
+    std::unique_ptr<juce::DialogWindow> userGuideWindow;
     UpdateSnapshot latestUpdateSnapshot;
     juce::String lastAvailabilityPromptVersion;
     juce::String lastReadyPromptVersion;

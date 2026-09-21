@@ -104,6 +104,469 @@ private:
     juce::Label status;
 };
 
+class ThemeColourSelector final
+    : public juce::ColourSelector,
+      private juce::ChangeListener
+{
+public:
+    ThemeColourSelector(
+        juce::Colour initial,
+        std::function<void(juce::Colour)> changed)
+        : juce::ColourSelector(
+              showColourAtTop
+                  | editableColour
+                  | showSliders
+                  | showColourspace),
+          colourChanged(std::move(changed))
+    {
+        setName("Theme colour");
+        setSize(320, 400);
+        setCurrentColour(
+            initial.withAlpha(1.0f),
+            juce::dontSendNotification);
+        addChangeListener(this);
+    }
+
+    ~ThemeColourSelector() override
+    {
+        removeChangeListener(this);
+    }
+
+private:
+    void changeListenerCallback(
+        juce::ChangeBroadcaster*) override
+    {
+        if (colourChanged)
+        {
+            colourChanged(
+                getCurrentColour()
+                    .withAlpha(1.0f));
+        }
+    }
+
+    std::function<void(juce::Colour)>
+        colourChanged;
+};
+
+class AppearanceSettingsComponent final
+    : public juce::Component
+{
+public:
+    AppearanceSettingsComponent(
+        StudioPreferences& preferencesToUse,
+        std::function<void(
+            const StudioThemePalette&)>
+            themeChangedToUse)
+        : preferences(preferencesToUse),
+          themeChanged(std::move(
+              themeChangedToUse))
+    {
+        addAndMakeVisible(title);
+        title.setText(
+            "Appearance",
+            juce::dontSendNotification);
+        title.setFont(
+            juce::Font(
+                juce::FontOptions(
+                    22.0f,
+                    juce::Font::bold)));
+
+        addAndMakeVisible(presetLabel);
+        presetLabel.setText(
+            "Theme",
+            juce::dontSendNotification);
+        presetLabel.setColour(
+            juce::Label::textColourId,
+            juce::Colour(
+                StudioColours::secondaryText));
+
+        addAndMakeVisible(presetSelector);
+        int itemId = 1;
+        for (const auto& preset :
+             studioThemePresets())
+        {
+            presetSelector.addItem(
+                preset.name,
+                itemId++);
+        }
+        presetSelector.addItem("Custom", itemId);
+        presetSelector.setTooltip(
+            "Choose a curated theme or edit a custom palette");
+        presetSelector.onChange = [this]
+        {
+            const auto index =
+                presetSelector
+                    .getSelectedItemIndex();
+            if (index < 0)
+                return;
+            const auto& presets =
+                studioThemePresets();
+            if (index
+                >= static_cast<int>(
+                    presets.size()))
+            {
+                const auto result =
+                    preferences
+                        .setThemePreset(
+                            "custom");
+                if (result.failed())
+                {
+                    setStatus(
+                        result.getErrorMessage(),
+                        true);
+                    refresh();
+                    return;
+                }
+                applyTheme(
+                    preferences
+                        .themePalette());
+                setStatus(
+                    "Custom theme applied and saved.",
+                    false);
+                return;
+            }
+            const auto result =
+                preferences.setThemePreset(
+                    presets[
+                        static_cast<std::size_t>(
+                            index)]
+                        .id);
+            if (result.failed())
+            {
+                setStatus(
+                    result.getErrorMessage(),
+                    true);
+                refresh();
+                return;
+            }
+            applyTheme(
+                preferences.themePalette());
+            setStatus(
+                "Theme applied and saved.",
+                false);
+            refresh();
+        };
+
+        addAndMakeVisible(help);
+        help.setText(
+            "Choose a bundled palette or customize the base surfaces, "
+            "text, and focus accent. Custom colors must preserve WCAG AA contrast.",
+            juce::dontSendNotification);
+        help.setColour(
+            juce::Label::textColourId,
+            juce::Colour(
+                StudioColours::secondaryText));
+        help.setJustificationType(
+            juce::Justification::topLeft);
+
+        configureColourButton(
+            baseButton,
+            "BASE",
+            [](auto& palette,
+               std::uint32_t value)
+            {
+                palette.window = value;
+            });
+        configureColourButton(
+            panelButton,
+            "PANEL",
+            [](auto& palette,
+               std::uint32_t value)
+            {
+                palette.panel = value;
+            });
+        configureColourButton(
+            raisedButton,
+            "RAISED",
+            [](auto& palette,
+               std::uint32_t value)
+            {
+                palette.raised = value;
+            });
+        configureColourButton(
+            textButton,
+            "TEXT",
+            [](auto& palette,
+               std::uint32_t value)
+            {
+                palette.text = value;
+            });
+        configureColourButton(
+            accentButton,
+            "ACCENT",
+            [](auto& palette,
+               std::uint32_t value)
+            {
+                palette.orange = value;
+            });
+
+        addAndMakeVisible(resetButton);
+        resetButton.setButtonText(
+            "RESET DEFAULT THEME");
+        resetButton.setTooltip(
+            "Restore the Studio Gray theme");
+        resetButton.onClick = [this]
+        {
+            const auto result =
+                preferences.resetTheme();
+            if (result.failed())
+            {
+                setStatus(
+                    result.getErrorMessage(),
+                    true);
+                return;
+            }
+            applyTheme(
+                preferences.themePalette());
+            setStatus(
+                "Default theme restored.",
+                false);
+            refresh();
+        };
+
+        addAndMakeVisible(status);
+        status.setColour(
+            juce::Label::textColourId,
+            juce::Colour(
+                StudioColours::secondaryText));
+        refresh();
+    }
+
+    void paint(
+        juce::Graphics& graphics) override
+    {
+        graphics.fillAll(
+            juce::Colour(
+                StudioColours::panel));
+    }
+
+    void resized() override
+    {
+        auto bounds =
+            getLocalBounds().reduced(24);
+        title.setBounds(
+            bounds.removeFromTop(36));
+        bounds.removeFromTop(12);
+        presetLabel.setBounds(
+            bounds.removeFromTop(22));
+        presetSelector.setBounds(
+            bounds.removeFromTop(34));
+        bounds.removeFromTop(10);
+        help.setBounds(
+            bounds.removeFromTop(52));
+        bounds.removeFromTop(12);
+        auto firstRow =
+            bounds.removeFromTop(42);
+        baseButton.setBounds(
+            firstRow.removeFromLeft(150)
+                .reduced(2));
+        panelButton.setBounds(
+            firstRow.removeFromLeft(150)
+                .reduced(2));
+        raisedButton.setBounds(
+            firstRow.removeFromLeft(150)
+                .reduced(2));
+        bounds.removeFromTop(8);
+        auto secondRow =
+            bounds.removeFromTop(42);
+        textButton.setBounds(
+            secondRow.removeFromLeft(150)
+                .reduced(2));
+        accentButton.setBounds(
+            secondRow.removeFromLeft(150)
+                .reduced(2));
+        bounds.removeFromTop(20);
+        resetButton.setBounds(
+            bounds.removeFromTop(38)
+                .removeFromLeft(220));
+        bounds.removeFromTop(10);
+        status.setBounds(
+            bounds.removeFromTop(30));
+    }
+
+private:
+    using ColourSetter =
+        std::function<void(
+            StudioThemePalette&,
+            std::uint32_t)>;
+
+    void configureColourButton(
+        juce::TextButton& button,
+        juce::String role,
+        ColourSetter setter)
+    {
+        addAndMakeVisible(button);
+        button.setTooltip(
+            "Customize the " + role.toLowerCase()
+            + " theme color");
+        auto* const buttonToUpdate = &button;
+        button.onClick =
+            [this,
+             buttonToUpdate,
+             roleName = std::move(role),
+             applyColour = std::move(setter)]
+            {
+                const auto initial =
+                    buttonToUpdate->findColour(
+                        juce::TextButton::
+                            buttonColourId);
+                auto selector =
+                    std::make_unique<
+                        ThemeColourSelector>(
+                        initial,
+                        [this,
+                         roleName,
+                         applyColour](
+                            juce::Colour selected)
+                        {
+                            auto palette =
+                                preferences
+                                    .themePalette();
+                            applyColour(
+                                palette,
+                                selected.getARGB());
+                            const auto result =
+                                preferences
+                                    .setCustomThemePalette(
+                                        palette);
+                            if (result.failed())
+                            {
+                                setStatus(
+                                    result
+                                        .getErrorMessage(),
+                                    true);
+                                return;
+                            }
+                            applyTheme(palette);
+                            setStatus(
+                                roleName
+                                    + " color applied.",
+                                false);
+                            refresh();
+                        });
+                juce::CallOutBox::
+                    launchAsynchronously(
+                        std::move(selector),
+                        buttonToUpdate
+                            ->getScreenBounds(),
+                        nullptr);
+            };
+    }
+
+    void applyTheme(
+        const StudioThemePalette& palette)
+    {
+        if (themeChanged)
+            themeChanged(palette);
+    }
+
+    void refresh()
+    {
+        const auto& presets =
+            studioThemePresets();
+        if (preferences.themePresetId()
+            == "custom")
+        {
+            presetSelector.setSelectedId(
+                static_cast<int>(
+                    presets.size())
+                    + 1,
+                juce::dontSendNotification);
+        }
+        else
+        {
+            for (std::size_t index = 0;
+                 index < presets.size();
+                 ++index)
+            {
+                if (preferences
+                        .themePresetId()
+                    == presets[index].id)
+                {
+                    presetSelector
+                        .setSelectedId(
+                            static_cast<int>(
+                                index)
+                                + 1,
+                            juce::dontSendNotification);
+                    break;
+                }
+            }
+        }
+        const auto palette =
+            preferences.themePalette();
+        updateColourButton(
+            baseButton,
+            "BASE",
+            palette.window);
+        updateColourButton(
+            panelButton,
+            "PANEL",
+            palette.panel);
+        updateColourButton(
+            raisedButton,
+            "RAISED",
+            palette.raised);
+        updateColourButton(
+            textButton,
+            "TEXT",
+            palette.text);
+        updateColourButton(
+            accentButton,
+            "ACCENT",
+            palette.orange);
+    }
+
+    static void updateColourButton(
+        juce::TextButton& button,
+        const juce::String& role,
+        std::uint32_t colourValue)
+    {
+        const auto colour =
+            juce::Colour(colourValue);
+        button.setButtonText(
+            role + "  #"
+            + colour.toDisplayString(false));
+        button.setColour(
+            juce::TextButton::buttonColourId,
+            colour);
+        button.setColour(
+            juce::TextButton::textColourOffId,
+            colour.contrasting());
+    }
+
+    void setStatus(
+        const juce::String& message,
+        bool error)
+    {
+        status.setText(
+            message,
+            juce::dontSendNotification);
+        status.setColour(
+            juce::Label::textColourId,
+            juce::Colour(
+                error
+                    ? StudioColours::orange
+                    : StudioColours::secondaryText));
+    }
+
+    StudioPreferences& preferences;
+    std::function<void(
+        const StudioThemePalette&)>
+        themeChanged;
+    juce::Label title;
+    juce::Label presetLabel;
+    juce::ComboBox presetSelector;
+    juce::Label help;
+    juce::TextButton baseButton;
+    juce::TextButton panelButton;
+    juce::TextButton raisedButton;
+    juce::TextButton textButton;
+    juce::TextButton accentButton;
+    juce::TextButton resetButton;
+    juce::Label status;
+};
+
 class VstPluginSettingsComponent final
     : public juce::Component,
       private juce::ListBoxModel,
@@ -686,6 +1149,8 @@ SettingsComponent::SettingsComponent(
     PluginCatalog& pluginCatalog,
     std::function<void(const PluginCatalogEntry&)>
         validatePlugin,
+    std::function<void(const StudioThemePalette&)>
+        themeChanged,
     std::function<void()> restartRequested,
     bool showUpdatesInitially,
     const juce::String& audioUnavailableReason)
@@ -724,6 +1189,11 @@ SettingsComponent::SettingsComponent(
     generalPage =
         std::make_unique<GeneralSettingsComponent>(
             preferences);
+    appearancePage =
+        std::make_unique<
+            AppearanceSettingsComponent>(
+            preferences,
+            std::move(themeChanged));
     vstPage =
         std::make_unique<VstPluginSettingsComponent>(
             pluginCatalog,
@@ -737,6 +1207,11 @@ SettingsComponent::SettingsComponent(
         "General",
         juce::Colour(StudioColours::panel),
         generalPage.get(),
+        false);
+    tabs.addTab(
+        "Appearance",
+        juce::Colour(StudioColours::panel),
+        appearancePage.get(),
         false);
     tabs.addTab(
         "VST Plug-ins",
@@ -770,6 +1245,6 @@ void SettingsComponent::resized()
 
 void SettingsComponent::showUpdates()
 {
-    tabs.setCurrentTabIndex(3);
+    tabs.setCurrentTabIndex(4);
 }
 }

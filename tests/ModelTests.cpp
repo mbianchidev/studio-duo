@@ -1635,6 +1635,7 @@ int main(int argc, char* argv[])
     RUN_SUITE(audioExportOptionsTests);
     RUN_SUITE(pluginCompatibilityTests);
     RUN_SUITE(projectMigrationTests);
+    RUN_SUITE(projectTemplateTests);
     RUN_SUITE(windowSizingTests);
     RUN_SUITE(updateTests);
     RUN_SUITE(midiTests);

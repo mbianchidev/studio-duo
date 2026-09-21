@@ -334,10 +334,10 @@ private:
     juce::Point<int> lastScreenPosition;
 };
 
-MainComponent::MainComponent(bool startAudioOnLaunch)
+MainComponent::MainComponent(
+    bool startAudioOnLaunch,
+    juce::File startupProject)
 {
-    preferences =
-        std::make_unique<StudioPreferences>();
     setLookAndFeel(&theme);
     setOpaque(true);
     setWantsKeyboardFocus(true);
@@ -348,9 +348,18 @@ MainComponent::MainComponent(bool startAudioOnLaunch)
     brandLogo = juce::Drawable::createFromImageData(
         studio_brand::studioduoicon_svg,
         static_cast<std::size_t>(studio_brand::studioduoicon_svgSize));
+    addAndMakeVisible(logoButton);
+    logoButton.setTitle("Main menu");
+    logoButton.setTooltip(
+        "Return to the Studio Duo startup menu");
+    logoButton.onClick = [this]
+    {
+        requestStartupHub();
+    };
     exportInputBlocker.setInterceptsMouseClicks(true, true);
     exportInputBlocker.setWantsKeyboardFocus(true);
     addChildComponent(exportInputBlocker);
+    addChildComponent(startupHub);
 
     leftPanelResizer = std::make_unique<PanelResizer>(true);
     leftPanelResizer->onDrag = [this](int delta)
@@ -403,6 +412,10 @@ MainComponent::MainComponent(bool startAudioOnLaunch)
     configureButton(
         settingsButton,
         "Configure audio, MIDI, and automatic updates");
+    configureButton(
+        helpButton,
+        "Open Studio Duo help and documentation");
+    helpButton.setWantsKeyboardFocus(true);
     configureButton(undoButton, "Undo (Command/Ctrl+Z)");
     configureButton(redoButton, "Redo (Command/Ctrl+Shift+Z)");
     configureButton(playButton, "Play or pause (Space)");
@@ -543,6 +556,26 @@ MainComponent::MainComponent(bool startAudioOnLaunch)
     saveButton.onClick = [this] { beginSaveProject(); };
     exportButton.onClick = [this] { showExportMenu(); };
     settingsButton.onClick = [this] { showSettings(); };
+    helpButton.onClick = [this] { showHelpMenu(); };
+    startupHub.onNewSong = [this]
+    {
+        createNewProject();
+    };
+    startupHub.onOpenExisting = [this]
+    {
+        beginOpenProject();
+    };
+    startupHub.onCreateFromTemplate =
+        [this](const auto& templateId)
+        {
+            createProjectFromTemplate(
+                templateId);
+        };
+    startupHub.onOpenRecent =
+        [this](const auto& package)
+        {
+            return openProjectFrom(package);
+        };
     undoButton.onClick = [this] { undo(); };
     redoButton.onClick = [this] { redo(); };
     playButton.onClick = [this] { togglePlayback(); };
@@ -1991,7 +2024,7 @@ MainComponent::MainComponent(bool startAudioOnLaunch)
                     safe->initialiseAudio();
             });
     }
-    if (preferences->scanPluginsAtStartup())
+    if (preferences.scanPluginsAtStartup())
     {
         juce::Timer::callAfterDelay(
             500,
@@ -2009,6 +2042,29 @@ MainComponent::MainComponent(bool startAudioOnLaunch)
                 return;
             safe->updateService.checkForUpdates();
         });
+    if (startupProject != juce::File())
+    {
+        startupHub.setVisible(false);
+        juce::MessageManager::callAsync(
+            [safe = juce::Component::SafePointer<
+                 MainComponent>(this),
+             projectToOpen =
+                 std::move(startupProject)]
+            {
+                if (safe != nullptr
+                    && !safe->openProjectFrom(
+                        projectToOpen))
+                {
+                    safe->showStartupHub(
+                        "The requested startup project could not be opened.",
+                        true);
+                }
+            });
+    }
+    else
+    {
+        showStartupHub();
+    }
 }
 
 void MainComponent::initialiseAudio()
@@ -2178,15 +2234,31 @@ void MainComponent::paint(juce::Graphics& graphics)
 
     auto bounds = getLocalBounds();
     const auto header = bounds.removeFromTop(mainHeaderHeight);
-    const auto footer =
-        bounds.removeFromBottom(transportFooterHeight);
     graphics.setColour(juce::Colour(StudioColours::panel));
     graphics.fillRect(header);
+    graphics.setColour(juce::Colour(StudioColours::border));
+    graphics.drawHorizontalLine(header.getBottom() - 1, 0.0f, static_cast<float>(getWidth()));
+    if (brandLogo != nullptr)
+    {
+        brandLogo->drawWithin(graphics,
+                              juce::Rectangle<float>(12.0f, 10.0f, 42.0f, 42.0f),
+                              juce::RectanglePlacement::centred,
+                              1.0f);
+    }
+    graphics.setColour(juce::Colour(StudioColours::text));
+    graphics.setFont(juce::Font(juce::FontOptions(12.0f, juce::Font::bold)));
+    graphics.drawText("STUDIO", 60, 15, 54, 18, juce::Justification::centredLeft);
+    graphics.setColour(juce::Colour(StudioColours::orange));
+    graphics.drawText("DUO", 60, 31, 54, 18, juce::Justification::centredLeft);
+    if (startupHub.isVisible())
+        return;
+
+    const auto footer =
+        bounds.removeFromBottom(transportFooterHeight);
     graphics.setColour(
         juce::Colour(StudioColours::transport));
     graphics.fillRect(footer);
     graphics.setColour(juce::Colour(StudioColours::border));
-    graphics.drawHorizontalLine(header.getBottom() - 1, 0.0f, static_cast<float>(getWidth()));
     graphics.drawHorizontalLine(
         footer.getY(),
         0.0f,
@@ -2230,14 +2302,6 @@ void MainComponent::paint(juce::Graphics& graphics)
             static_cast<float>(footer.getY() + 7),
             static_cast<float>(footer.getBottom() - 7));
     }
-    if (brandLogo != nullptr)
-    {
-        brandLogo->drawWithin(graphics,
-                              juce::Rectangle<float>(12.0f, 10.0f, 42.0f, 42.0f),
-                              juce::RectanglePlacement::centred,
-                              1.0f);
-    }
-
     const auto bodyTop = mainHeaderHeight;
     constexpr auto resizerThickness = 6;
     const auto showMidiEditor =
@@ -2309,18 +2373,74 @@ void MainComponent::paint(juce::Graphics& graphics)
                           18,
                           juce::Justification::centredLeft);
     }
-
-    graphics.setColour(juce::Colour(StudioColours::text));
-    graphics.setFont(juce::Font(juce::FontOptions(12.0f, juce::Font::bold)));
-    graphics.drawText("STUDIO", 60, 15, 54, 18, juce::Justification::centredLeft);
-    graphics.setColour(juce::Colour(StudioColours::orange));
-    graphics.drawText("DUO", 60, 31, 54, 18, juce::Justification::centredLeft);
 }
 
 void MainComponent::resized()
 {
     auto bounds = getLocalBounds();
     auto header = bounds.removeFromTop(mainHeaderHeight);
+    const auto startupMode =
+        startupHub.isVisible();
+    for (auto* component :
+         std::array<juce::Component*, 6> {
+             &newButton,
+             &openButton,
+             &saveButton,
+             &exportButton,
+             &projectLabel,
+             &statusPanel
+         })
+    {
+        component->setVisible(!startupMode);
+    }
+    for (auto* component :
+         std::array<juce::Component*, 13> {
+             &positionLabel,
+             &stopButton,
+             &playButton,
+             &recordButton,
+             &loopButton,
+             &loopRangeButton,
+             &metronomeButton,
+             &meterLabel,
+             &tempoLabel,
+             &tempoSlider,
+             &inspectorPanelToggleButton,
+             &mixerPanelToggleButton,
+             &sessionPanelToggleButton
+         })
+    {
+        component->setVisible(!startupMode);
+    }
+    settingsButton.setVisible(true);
+    helpButton.setVisible(true);
+    logoButton.setBounds(
+        0,
+        0,
+        126,
+        mainHeaderHeight);
+    logoButton.toFront(false);
+    if (startupMode)
+    {
+        auto topRow = header.reduced(14, 8);
+        topRow.removeFromLeft(126);
+        settingsButton.setBounds(
+            topRow.removeFromLeft(38)
+                .reduced(3, 8));
+        helpButton.setBounds(
+            topRow.removeFromLeft(38)
+                .reduced(3, 8));
+        startupHub.setBounds(
+            getLocalBounds()
+                .withTrimmedTop(
+                    mainHeaderHeight));
+        startupHub.toFront(false);
+        exportInputBlocker.setBounds(
+            getLocalBounds());
+        if (exportInputBlocker.isVisible())
+            exportInputBlocker.toFront(false);
+        return;
+    }
     auto status =
         bounds.removeFromBottom(transportFooterHeight);
     constexpr auto resizerThickness = 6;
@@ -2391,6 +2511,8 @@ void MainComponent::resized()
                 area.removeFromLeft(38).reduced(3, verticalInset));
             settingsButton.setBounds(
                 area.removeFromLeft(38).reduced(3, verticalInset));
+            helpButton.setBounds(
+                area.removeFromLeft(38).reduced(3, verticalInset));
         };
     const auto layoutTempoControls =
         [this](juce::Rectangle<int> area, int verticalInset)
@@ -2400,7 +2522,7 @@ void MainComponent::resized()
             tempoSlider.setBounds(area.reduced(3, verticalInset));
         };
 
-    layoutFileControls(topRow.removeFromLeft(200), 8);
+    layoutFileControls(topRow.removeFromLeft(228), 8);
     auto statusArea = topRow.removeFromRight(
         juce::jmin(360, topRow.getWidth() / 2));
     statusPanel.setBounds(statusArea.reduced(8, 4));
@@ -2532,6 +2654,13 @@ void MainComponent::resized()
     masteringWorkspace.setVisible(masteringWorkspaceVisible);
     if (masteringWorkspaceVisible)
         masteringWorkspace.toFront(false);
+    startupHub.setBounds(
+        getLocalBounds()
+            .withTrimmedTop(mainHeaderHeight)
+            .withTrimmedBottom(
+                transportFooterHeight));
+    if (startupHub.isVisible())
+        startupHub.toFront(false);
     exportInputBlocker.setBounds(getLocalBounds());
     if (exportInputBlocker.isVisible())
         exportInputBlocker.toFront(false);
@@ -2934,16 +3063,45 @@ bool MainComponent::keyPressed(const juce::KeyPress& key)
 
 void MainComponent::createNewProject()
 {
+    replaceWithUnsavedProject(
+        ProjectTemplates::createBlankSong(),
+        "New blank song created.");
+}
+
+void MainComponent::createProjectFromTemplate(
+    const juce::String& templateId)
+{
+    const auto templateProject =
+        ProjectTemplates::create(templateId);
+    if (!templateProject)
+    {
+        startupHub.setStatus(
+            "The selected song template is unavailable.",
+            true);
+        return;
+    }
+    const auto name = templateProject->name;
+    replaceWithUnsavedProject(
+        std::move(*templateProject),
+        "Created " + name + " from a template.");
+}
+
+void MainComponent::replaceWithUnsavedProject(
+    Project replacement,
+    const juce::String& statusMessage)
+{
     if (hasActiveRecordingTargets() || recordingFinalizationInProgress)
     {
-        setStatus("Stop and finalize the current recording before creating a project.", true);
+        setStatus(
+            "Stop and finalize the current recording before creating a project.",
+            true);
         return;
     }
 
     audioEngine.stop();
     if (projectPackage.exists())
         ProjectFile::clearReducedIsolationMarker(projectPackage);
-    project = Project::createDefault();
+    project = std::move(replacement);
     projectPackage = juce::File();
     transientCompatibilityReport.reset();
     reducedIsolationMarkerSignature.clear();
@@ -2952,13 +3110,18 @@ void MainComponent::createNewProject()
     commandStack.clear();
     selectedClipId.clear();
     copiedClipId.clear();
-    selectedTrackId = project.tracks.front().id;
+    selectedTrackId = project.tracks.empty()
+        ? juce::String()
+        : project.tracks.front().id;
     tempoSlider.setValue(project.tempo, juce::dontSendNotification);
     loopButton.setToggleState(project.loopEnabled, juce::dontSendNotification);
     dirty = false;
     selectTrack(selectedTrackId);
     projectChanged(false, false);
-    setStatus("New project created.");
+    startupHub.setVisible(false);
+    resized();
+    repaint();
+    setStatus(statusMessage);
 }
 
 void MainComponent::beginOpenProject()
@@ -3013,6 +3176,9 @@ void MainComponent::beginSaveProject()
         const auto result = chooser.getResult();
         if (result != juce::File())
             safe->saveProjectTo(result);
+        else
+            safe->returnToStartupHubAfterSave =
+                false;
         safe->fileChooser.reset();
     });
 }
@@ -3637,13 +3803,20 @@ void MainComponent::showSettings(bool showUpdates)
     auto settings = std::make_unique<SettingsComponent>(
         deviceManager.get(),
         updateService,
-        *preferences,
+        preferences,
         pluginCatalog,
         [safe = juce::Component::SafePointer<MainComponent>(this)](
             const PluginCatalogEntry& entry)
         {
             if (safe != nullptr)
                 safe->validatePlugin(entry);
+        },
+        [safe = juce::Component::SafePointer<
+             MainComponent>(this)](
+            const StudioThemePalette& palette)
+        {
+            if (safe != nullptr)
+                safe->applyTheme(palette);
         },
         [safe = juce::Component::SafePointer<MainComponent>(this)]
         {
@@ -3673,6 +3846,204 @@ void MainComponent::showSettings(bool showUpdates)
                     safe->settingsWindow.reset();
             }),
         false);
+}
+
+void MainComponent::applyTheme(
+    const StudioThemePalette& palette)
+{
+    const auto previous = theme.palette();
+    if (previous == palette)
+        return;
+    theme.applyPalette(palette);
+    StudioTheme::recolourComponentTree(
+        *this,
+        previous,
+        palette);
+    sendLookAndFeelChange();
+    repaint();
+    if (auto* window =
+            findParentComponentOfClass<
+                juce::DocumentWindow>())
+    {
+        window->setBackgroundColour(
+            juce::Colour(
+                StudioColours::window));
+        window->repaint();
+    }
+    if (settingsWindow != nullptr)
+    {
+        settingsWindow->setBackgroundColour(
+            juce::Colour(
+                StudioColours::panel));
+        StudioTheme::recolourComponentTree(
+            *settingsWindow,
+            previous,
+            palette);
+        settingsWindow->sendLookAndFeelChange();
+        settingsWindow->repaint();
+    }
+    if (userGuideWindow != nullptr)
+    {
+        userGuideWindow->setBackgroundColour(
+            juce::Colour(
+                StudioColours::panel));
+        StudioTheme::recolourComponentTree(
+            *userGuideWindow,
+            previous,
+            palette);
+        userGuideWindow->sendLookAndFeelChange();
+        userGuideWindow->repaint();
+    }
+}
+
+void MainComponent::showHelpMenu()
+{
+    juce::PopupMenu menu;
+    menu.addItem(1, "User Guide");
+    menu.showMenuAsync(
+        juce::PopupMenu::Options()
+            .withTargetComponent(helpButton),
+        [safe = juce::Component::SafePointer<
+             MainComponent>(this)](int result)
+        {
+            if (safe != nullptr && result == 1)
+                safe->openUserGuide();
+        });
+}
+
+void MainComponent::openUserGuide()
+{
+    if (userGuideWindow != nullptr)
+    {
+        userGuideWindow->toFront(true);
+        return;
+    }
+    auto guide =
+        std::make_unique<UserGuideComponent>();
+    guide->setLookAndFeel(&theme);
+
+    juce::DialogWindow::LaunchOptions options;
+    options.content.setOwned(guide.release());
+    options.dialogTitle =
+        "Studio Duo User Guide";
+    options.dialogBackgroundColour =
+        juce::Colour(StudioColours::panel);
+    options.componentToCentreAround = this;
+    options.escapeKeyTriggersCloseButton = true;
+    options.useNativeTitleBar = true;
+    options.resizable = true;
+    userGuideWindow.reset(options.create());
+    userGuideWindow->enterModalState(
+        true,
+        juce::ModalCallbackFunction::create(
+            [safe = juce::Component::SafePointer<
+                 MainComponent>(this)](int)
+            {
+                if (safe != nullptr)
+                    safe->userGuideWindow.reset();
+            }),
+        false);
+}
+
+void MainComponent::requestStartupHub()
+{
+    if (startupHub.isVisible())
+        return;
+    if (hasActiveRecordingTargets()
+        || recordingFinalizationInProgress
+        || audioEngine.isRecording())
+    {
+        showError(
+            "Cannot return to the main menu",
+            "Stop and finalize the current recording before leaving the project.");
+        return;
+    }
+    const auto projectHasNeverBeenSaved =
+        !projectPackage.exists();
+    if (!dirty
+        && !projectHasNeverBeenSaved)
+    {
+        leaveProjectForStartupHub();
+        return;
+    }
+    juce::AlertWindow::showAsync(
+        juce::MessageBoxOptions()
+            .withIconType(
+                juce::MessageBoxIconType::QuestionIcon)
+            .withTitle(
+                "Return to the main menu?")
+            .withMessage(
+                projectHasNeverBeenSaved
+                    ? "This project has not been saved. Save it before returning "
+                      "to the startup menu, return without saving, or keep working."
+                    : "This project has unsaved changes. Save it before returning "
+                      "to the startup menu, return without saving, or keep working.")
+            .withButton("Save and Return")
+            .withButton(
+                "Return Without Saving")
+            .withButton("Cancel")
+            .withAssociatedComponent(this),
+        [safe = juce::Component::SafePointer<
+             MainComponent>(this)](int result)
+        {
+            if (safe == nullptr)
+                return;
+            if (result == 1)
+            {
+                safe->returnToStartupHubAfterSave =
+                    true;
+                safe->beginSaveProject();
+            }
+            else if (result == 2)
+            {
+                safe->leaveProjectForStartupHub();
+            }
+        });
+}
+
+void MainComponent::leaveProjectForStartupHub()
+{
+    audioEngine.stop();
+    if (projectPackage.exists())
+    {
+        ProjectFile::clearReducedIsolationMarker(
+            projectPackage);
+    }
+    project =
+        ProjectTemplates::createBlankSong();
+    projectPackage = juce::File();
+    transientCompatibilityReport.reset();
+    reducedIsolationMarkerSignature.clear();
+    activeAutomationGesture.reset();
+    pendingAutomationPreview.reset();
+    commandStack.clear();
+    selectedClipId.clear();
+    copiedClipId.clear();
+    selectedTrackId = project.tracks.empty()
+        ? juce::String()
+        : project.tracks.front().id;
+    tempoSlider.setValue(
+        project.tempo,
+        juce::dontSendNotification);
+    loopButton.setToggleState(
+        project.loopEnabled,
+        juce::dontSendNotification);
+    dirty = false;
+    selectTrack(selectedTrackId);
+    projectChanged(false, false);
+    showStartupHub();
+}
+
+void MainComponent::showStartupHub(
+    const juce::String& message,
+    bool error)
+{
+    startupHub.refresh();
+    startupHub.setStatus(message, error);
+    startupHub.setVisible(true);
+    resized();
+    startupHub.toFront(false);
+    startupHub.grabKeyboardFocus();
 }
 
 void MainComponent::restartForUpdate()
@@ -3801,6 +4172,9 @@ void MainComponent::maybePromptForUpdate()
 
 void MainComponent::saveProjectTo(const juce::File& package)
 {
+    const auto returnToHubOnSuccess =
+        returnToStartupHubAfterSave;
+    returnToStartupHubAfterSave = false;
     if (exportInProgress)
     {
         setStatus("Another save or render is already in progress.", true);
@@ -3948,12 +4322,30 @@ void MainComponent::saveProjectTo(const juce::File& package)
     if (resumePlayback)
         audioEngine.play();
     finishSave();
+    juce::String recentWarning;
+    if (const auto recentResult =
+            preferences.recordRecentProject(
+                projectPackage,
+                project.name);
+        recentResult.failed())
+    {
+        recentWarning =
+            " Recent Projects could not be updated: "
+            + recentResult.getErrorMessage();
+        logError(
+            "preferences.recent-projects",
+            recentResult.getErrorMessage());
+    }
     setStatus(
         "Saved "
             + projectPackage.getFullPathName()
             + (stateWarning.isNotEmpty()
                    ? " (preserved prior state: " + stateWarning + ")"
-                   : juce::String()));
+                   : juce::String())
+            + recentWarning,
+        recentWarning.isNotEmpty());
+    if (returnToHubOnSuccess)
+        leaveProjectForStartupHub();
 }
 
 bool MainComponent::captureCurrentPluginStates(
@@ -4094,20 +4486,21 @@ bool MainComponent::materializePluginStateReferences(
     return true;
 }
 
-void MainComponent::openProjectFrom(const juce::File& package)
+bool MainComponent::openProjectFrom(
+    const juce::File& package)
 {
     juce::String error;
     auto opened = ProjectFile::loadForOpen(package, error);
     if (!opened.has_value())
     {
         showError("Project open failed", error);
-        return;
+        return false;
     }
 
     if (hasActiveRecordingTargets() || recordingFinalizationInProgress)
     {
         setStatus("Stop and finalize the current recording before opening a project.", true);
-        return;
+        return false;
     }
     audioEngine.stop();
     projectPackage = ProjectFile::normalisePackagePath(package);
@@ -4151,10 +4544,36 @@ void MainComponent::openProjectFrom(const juce::File& package)
         status += " In-process plugins are disabled until explicitly reloaded.";
     if (opened->warning.isNotEmpty())
         status += " " + opened->warning;
+    auto recentProjectWarning = false;
+    if (const auto recentResult =
+            preferences.recordRecentProject(
+                projectPackage,
+                project.name,
+                opened->recovered
+                    ? juce::Time::getCurrentTime()
+                    : projectPackage
+                          .getChildFile(
+                              "manifest.json")
+                          .getLastModificationTime());
+        recentResult.failed())
+    {
+        recentProjectWarning = true;
+        status +=
+            " Recent Projects could not be updated: "
+            + recentResult.getErrorMessage();
+        logError(
+            "preferences.recent-projects",
+            recentResult.getErrorMessage());
+    }
+    startupHub.setVisible(false);
+    resized();
+    repaint();
     setStatus(status,
               opened->recovered
                   || recoveredInProcess
-                  || opened->warning.isNotEmpty());
+                  || opened->warning.isNotEmpty()
+                  || recentProjectWarning);
+    return true;
 }
 
 void MainComponent::importAudioFile(const juce::File& source)
@@ -9379,10 +9798,22 @@ void MainComponent::projectChanged(bool writeRecovery, bool markDirty)
 
     if (writeRecovery
         && projectPackage.exists()
-        && preferences != nullptr
-        && preferences->autosaveEnabled())
+        && preferences.autosaveEnabled())
         if (const auto result = ProjectFile::writeRecoveryPoint(project, projectPackage); result.failed())
             setStatus(result.getErrorMessage(), true);
+    if (markDirty && projectPackage.exists())
+    {
+        if (const auto result =
+                preferences.recordRecentProject(
+                    projectPackage,
+                    project.name);
+            result.failed())
+        {
+            logError(
+                "preferences.recent-projects",
+                result.getErrorMessage());
+        }
+    }
 }
 
 void MainComponent::updateReducedIsolationMarker()

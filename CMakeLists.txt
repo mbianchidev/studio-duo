@@ -180,6 +180,14 @@ juce_add_binary_data(
 )
 
 juce_add_binary_data(
+    StudioDuoDocumentationData
+    HEADER_NAME StudioDuoDocumentationData.h
+    NAMESPACE studio_documentation
+    SOURCES
+        docs/user-guide.md
+)
+
+juce_add_binary_data(
     StudioDuoDawProjectSchemaData
     HEADER_NAME StudioDuoDawProjectSchemaData.h
     NAMESPACE studio_dawproject_schema
@@ -232,6 +240,8 @@ set(STUDIO_DUO_MODEL_SOURCES
     src/model/TransportEditing.h
     src/model/ProjectModel.cpp
     src/model/ProjectModel.h
+    src/model/ProjectTemplates.cpp
+    src/model/ProjectTemplates.h
     src/project_io/ProjectFile.cpp
     src/project_io/ProjectFile.h
     src/project_io/ProjectCollectionService.cpp
@@ -405,6 +415,8 @@ target_sources(
         src/ui/AudioExportOptionsComponent.h
         src/ui/TransportSettingsComponent.cpp
         src/ui/TransportSettingsComponent.h
+        src/ui/UserGuideComponent.cpp
+        src/ui/UserGuideComponent.h
         src/ui/NumericInput.h
         src/ui/MainWindowSizing.cpp
         src/ui/MainWindowSizing.h
@@ -427,6 +439,8 @@ target_sources(
         src/ui/StudioIconButton.cpp
         src/ui/StudioIconButton.h
         src/ui/StudioPanControl.h
+        src/ui/StartupHubComponent.cpp
+        src/ui/StartupHubComponent.h
         src/ui/StudioTheme.h
         src/ui/TimelineComponent.cpp
         src/ui/TimelineComponent.h
@@ -505,6 +519,7 @@ target_link_libraries(
         clap-helpers
         SampleRate::samplerate
         StudioDuoBrandData
+        StudioDuoDocumentationData
         StudioDuoDawProjectSchemaData
         StudioDuoMp3Encoder
     PUBLIC
@@ -808,6 +823,7 @@ if(STUDIO_DUO_BUILD_TESTS)
             tests/MasteringTests.cpp
             tests/PluginCompatibilityTests.cpp
             tests/ProjectMigrationTests.cpp
+            tests/ProjectTemplateTests.cpp
             tests/WindowSizingTests.cpp
             tests/TransportTests.cpp
             tests/TransportEditingTests.cpp

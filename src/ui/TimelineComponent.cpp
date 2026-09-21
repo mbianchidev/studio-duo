@@ -264,15 +264,39 @@ void TimelineComponent::paint(juce::Graphics& graphics)
     }
 
     auto seconds = 0.0;
+    constexpr auto minimumGridSpacing = 4;
+    constexpr auto minimumBarLabelSpacing = 48;
+    auto lastGridX =
+        trackHeaderWidth - 8;
+    auto lastBarLabelRight =
+        trackHeaderWidth
+        - minimumBarLabelSpacing;
     for (int line = 0; line < 100000 && seconds <= maximumSeconds; ++line)
     {
         const auto x = static_cast<int>(secondsToX(seconds));
         const auto position = project->musicalPositionAt(seconds);
         const auto isBar = position.beat == 1 && position.ticks < 2;
-        graphics.setColour(juce::Colour(isBar ? StudioColours::border : 0xff25292d));
-        graphics.drawVerticalLine(x, static_cast<float>(rulerHeight), static_cast<float>(getHeight()));
+        const auto canDrawLine =
+            x >= trackHeaderWidth
+            && x - lastGridX
+                >= minimumGridSpacing;
+        if (canDrawLine)
+        {
+            graphics.setColour(
+                juce::Colour(
+                    isBar
+                        ? StudioColours::border
+                        : 0xff25292d));
+            graphics.drawVerticalLine(
+                x,
+                static_cast<float>(rulerHeight),
+                static_cast<float>(getHeight()));
+            lastGridX = x;
+        }
 
-        if (isBar)
+        if (isBar
+            && x >= lastBarLabelRight
+                + minimumBarLabelSpacing)
         {
             graphics.setColour(juce::Colour(StudioColours::secondaryText));
             graphics.setFont(12.0f);
@@ -282,6 +306,7 @@ void TimelineComponent::paint(juce::Graphics& graphics)
                               42,
                               rulerHeight - timelineRulerTop,
                               juce::Justification::centredLeft);
+            lastBarLabelRight = x + 42;
         }
 
         const auto quarterBeatStep = 4.0
@@ -425,6 +450,11 @@ void TimelineComponent::paint(juce::Graphics& graphics)
         {
             return candidate.parentTrackId == track.id;
         }));
+        const auto activeTake =
+            childTrack
+            && project->activeTakeTrackId(
+                   track.parentTrackId)
+                == track.id;
         if (children > 0)
         {
             juce::Path disclosure;
@@ -446,17 +476,104 @@ void TimelineComponent::paint(juce::Graphics& graphics)
             graphics.fillPath(disclosure);
         }
 
-        const auto indent = childTrack ? 16 : children > 0 ? 8 : 0;
+        const auto indent =
+            childTrack
+                ? 16
+                : children > 0
+                ? 8
+                : 0;
+        const auto colourBandIndent =
+            !childTrack && children > 0
+                ? 8
+                : 0;
         graphics.setColour(track.colour);
-        graphics.fillRect(viewportPositionX + 12 + indent, y + 17, 4, 42);
+        graphics.fillRect(
+            viewportPositionX
+                + 12
+                + colourBandIndent,
+            y + 12,
+            4,
+            trackHeight - 24);
+        const auto badgeText =
+            activeTake
+                ? juce::String("ACTIVE")
+                : children > 0
+                ? juce::String(children)
+                    + " TAKES"
+                : juce::String();
+        const auto badgeWidth =
+            badgeText.isNotEmpty()
+                ? 54
+                : 0;
+        const auto badgeBounds =
+            juce::Rectangle<int>(
+                viewportPositionX
+                    + trackHeaderWidth
+                    - badgeWidth
+                    - 8,
+                y + 11,
+                badgeWidth,
+                18);
+        const auto nameX =
+            viewportPositionX + 26 + indent;
+        const auto nameRight =
+            badgeText.isNotEmpty()
+                ? badgeBounds.getX() - 6
+                : viewportPositionX
+                    + trackHeaderWidth
+                    - 8;
         graphics.setColour(juce::Colour(StudioColours::text));
         graphics.setFont(14.0f);
         graphics.drawText(track.name,
-                          viewportPositionX + 26 + indent,
+                          nameX,
                           y + 12,
-                          trackHeaderWidth - 38 - indent,
+                          juce::jmax(
+                              0,
+                              nameRight - nameX),
                           24,
-                          juce::Justification::centredLeft);
+                          juce::Justification::centredLeft,
+                          true);
+        if (badgeText.isNotEmpty())
+        {
+            const auto badgeColour =
+                activeTake
+                    ? juce::Colour(
+                          StudioColours::green)
+                    : juce::Colour(
+                          StudioColours::raised);
+            graphics.setColour(
+                activeTake
+                    ? badgeColour.withAlpha(0.18f)
+                    : badgeColour);
+            graphics.fillRoundedRectangle(
+                badgeBounds.toFloat(),
+                3.0f);
+            graphics.setColour(
+                activeTake
+                    ? badgeColour
+                    : juce::Colour(
+                          StudioColours::border));
+            graphics.drawRoundedRectangle(
+                badgeBounds.toFloat(),
+                3.0f,
+                1.0f);
+            graphics.setColour(
+                activeTake
+                    ? badgeColour
+                    : juce::Colour(
+                          StudioColours::secondaryText));
+            graphics.setFont(
+                juce::Font(
+                    juce::FontOptions(
+                        8.0f,
+                        juce::Font::bold)));
+            graphics.drawFittedText(
+                badgeText,
+                badgeBounds,
+                juce::Justification::centred,
+                1,
+                0.75f);
+        }
 
         const auto drawControl = [&graphics, y, this](
                                      int x,
@@ -633,31 +750,6 @@ void TimelineComponent::paint(juce::Graphics& graphics)
                 juce::Justification::centredRight);
         }
 
-        if (children > 0)
-        {
-            graphics.setColour(juce::Colour(StudioColours::secondaryText));
-            graphics.setFont(juce::Font(juce::FontOptions(9.0f)));
-            graphics.drawText(juce::String(children) + " TAKES",
-                              viewportPositionX + 128,
-                              y + 12,
-                              40,
-                              24,
-                              juce::Justification::centredRight);
-        }
-
-        if (childTrack
-            && project->activeTakeTrackId(track.parentTrackId) == track.id)
-        {
-            graphics.setColour(juce::Colour(StudioColours::green));
-            graphics.setFont(juce::Font(juce::FontOptions(8.5f,
-                                                         juce::Font::bold)));
-            graphics.drawText("ACTIVE",
-                              viewportPositionX + 112,
-                              y + 51,
-                              52,
-                              18,
-                              juce::Justification::centredRight);
-        }
         if (!childTrack)
         {
             if (const auto* group = project->editGroupForTrack(track.id))
