@@ -8392,29 +8392,21 @@ void MainComponent::promptProjectMarker(
                 marker.name =
                     dialogSafe->getTextEditorContents("name")
                         .trim();
-                const auto positionText =
-                    dialogSafe
-                        ->getTextEditorContents("position")
-                        .trim()
-                        .toStdString();
-                const auto conversion = std::from_chars(
-                    positionText.data(),
-                    positionText.data()
-                        + positionText.size(),
-                    marker.timeSeconds);
+                const auto position =
+                    parseFiniteNumber(
+                        dialogSafe
+                            ->getTextEditorContents("position")
+                            .trim());
                 if (marker.name.isEmpty()
-                    || conversion.ec != std::errc()
-                    || conversion.ptr
-                        != positionText.data()
-                            + positionText.size()
-                    || !std::isfinite(marker.timeSeconds)
-                    || marker.timeSeconds < 0.0)
+                    || !position.has_value()
+                    || *position < 0.0)
                 {
                     safe->showError(
                         "Marker unavailable",
                         "Enter a name and a finite, non-negative position in seconds.");
                     return;
                 }
+                marker.timeSeconds = *position;
                 if (before.has_value())
                 {
                     safe->perform(
@@ -8511,50 +8503,36 @@ void MainComponent::promptSongSection(double position,
 
                 auto section = before.value_or(SongSection {});
                 section.name = dialogSafe->getTextEditorContents("name").trim();
-                const auto positionText = dialogSafe->getTextEditorContents("position").trim().toStdString();
-                const auto conversion = std::from_chars(
-                    positionText.data(),
-                    positionText.data() + positionText.size(),
-                    section.timeSeconds);
+                const auto position = parseFiniteNumber(
+                    dialogSafe->getTextEditorContents("position"));
                 const auto endText =
                     dialogSafe
                         ->getTextEditorContents("end")
-                        .trim()
-                        .toStdString();
+                        .trim();
                 section.endTimeSeconds.reset();
                 auto validEnd = true;
-                if (!endText.empty())
+                if (endText.isNotEmpty())
                 {
-                    auto endSeconds = 0.0;
-                    const auto endConversion =
-                        std::from_chars(
-                            endText.data(),
-                            endText.data()
-                                + endText.size(),
-                            endSeconds);
+                    const auto endSeconds =
+                        parseFiniteNumber(endText);
                     validEnd =
-                        endConversion.ec == std::errc()
-                        && endConversion.ptr
-                            == endText.data()
-                                + endText.size()
-                        && std::isfinite(endSeconds)
-                        && endSeconds
-                            > section.timeSeconds;
+                        position.has_value()
+                        && endSeconds.has_value()
+                        && *endSeconds > *position;
                     if (validEnd)
                         section.endTimeSeconds =
-                            endSeconds;
+                            *endSeconds;
                 }
                 if (section.name.isEmpty()
-                    || conversion.ec != std::errc()
-                    || conversion.ptr != positionText.data() + positionText.size()
-                    || !std::isfinite(section.timeSeconds)
-                    || section.timeSeconds < 0.0
+                    || !position.has_value()
+                    || *position < 0.0
                     || !validEnd)
                 {
                     safe->showError("Section unavailable",
                                     "Enter a name, a finite non-negative start, and an optional end after the start.");
                     return;
                 }
+                section.timeSeconds = *position;
                 if (before && !juce::exactlyEqual(before->timeSeconds, section.timeSeconds)
                     && (safe->hasActiveRecordingTargets() || safe->audioEngine.isRecording()
                         || safe->recordingFinalizationInProgress))
