@@ -301,7 +301,7 @@ void timelineMarkerTests()
     {
         ++zoomRequests;
     };
-    juce::MouseWheelDetails wheel;
+    juce::MouseWheelDetails wheel {};
     wheel.deltaY = -1.0f;
     const auto headerWheel =
         juce::Point<float>(80.0f, 180.0f);
