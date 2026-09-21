@@ -352,8 +352,8 @@ controls and routing, while Plugin Manager holds the searchable processor catalo
 bottom **Inspect**, **Mixer**, and **Tracks** switches keep controlling the right
 inspector, lower mixer, and left Session pane independently.
 
-Double-click a track name in the Track inspector, timeline, or mixer to edit its name.
-**COLOR** provides palette choices and an HSV/RGB picker. Appearance changes are
+Double-click a track name in the Inspector ribbon, timeline, or mixer to edit its name.
+The colored square opens palette choices and an HSV/RGB picker. Appearance changes are
 persistent and undoable.
 Right-clicking a mixer strip exposes the same mute, solo, arm, name/color,
 version, duplicate, and delete actions as the corresponding timeline track

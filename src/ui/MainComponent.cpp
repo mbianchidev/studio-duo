@@ -482,6 +482,9 @@ MainComponent::MainComponent(bool startAudioOnLaunch)
         armButton,
         "Arm audio tracks for recording or MIDI and instrument tracks for live input");
     configureButton(trackColourButton, "Change selected track colour");
+    trackColourButton.setTitle("Track colour");
+    trackColourButton.setDescription(
+        "Change selected track colour");
     configureButton(stereoInputButton, "Capture this input and the following input as stereo");
     configureButton(monitorButton, "Monitor the selected track input through Studio Duo");
     configureButton(splitClipButton, "Split the selected clip at the playhead");
@@ -2508,7 +2511,8 @@ void MainComponent::resized()
     muteButton.setBounds(toggles.removeFromLeft(40).reduced(2));
     soloButton.setBounds(toggles.removeFromLeft(40).reduced(2));
     armButton.setBounds(toggles.removeFromLeft(40).reduced(2));
-    trackColourButton.setBounds(toggles.removeFromLeft(76).reduced(2));
+    trackColourButton.setBounds(
+        toggles.removeFromLeft(40).reduced(2));
     inspector.removeFromTop(10);
     routingPanel->setBounds(
         inspector.removeFromTop(

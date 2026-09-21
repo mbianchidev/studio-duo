@@ -488,7 +488,7 @@ private:
         "Arm track",
         "Arm audio tracks for recording or MIDI and instrument tracks for live input"
     };
-    juce::TextButton trackColourButton { "COLOR" };
+    juce::TextButton trackColourButton;
     StudioIconButton splitClipButton {
         StudioIcon::split,
         "Split clip",
