@@ -59,6 +59,10 @@ hardening remains before the complete DAW described in the
   compatibility mode, crash records, state recovery, and missing placeholders
 - Thirteen bundled devices plus plugin-backed reamp snapshots, freeze, print,
   level-matched comparison, batch rendering, and reports
+- Startup hub with blank songs, curated templates, ordered recent projects,
+  and stale-entry cleanup
+- Four accessible dark themes, persisted custom surface/accent colors, and
+  version-matched in-app access to the user guide
 
 ## Build
 

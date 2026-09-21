@@ -232,6 +232,8 @@ set(STUDIO_DUO_MODEL_SOURCES
     src/model/TransportEditing.h
     src/model/ProjectModel.cpp
     src/model/ProjectModel.h
+    src/model/ProjectTemplates.cpp
+    src/model/ProjectTemplates.h
     src/project_io/ProjectFile.cpp
     src/project_io/ProjectFile.h
     src/project_io/ProjectCollectionService.cpp
@@ -427,6 +429,8 @@ target_sources(
         src/ui/StudioIconButton.cpp
         src/ui/StudioIconButton.h
         src/ui/StudioPanControl.h
+        src/ui/StartupHubComponent.cpp
+        src/ui/StartupHubComponent.h
         src/ui/StudioTheme.h
         src/ui/TimelineComponent.cpp
         src/ui/TimelineComponent.h
@@ -479,6 +483,7 @@ target_compile_definitions(
         JUCE_MODAL_LOOPS_PERMITTED=1
         STUDIO_DUO_VERSION="${PROJECT_VERSION}"
         STUDIO_DUO_UPDATE_MANIFEST_URL="https://github.com/mbianchidev/studio-duo/releases/latest/download/update-manifest.json"
+        STUDIO_DUO_USER_GUIDE_URL="https://github.com/mbianchidev/studio-duo/blob/v${PROJECT_VERSION}/docs/user-guide.md"
 )
 
 if(WIN32)
@@ -808,6 +813,7 @@ if(STUDIO_DUO_BUILD_TESTS)
             tests/MasteringTests.cpp
             tests/PluginCompatibilityTests.cpp
             tests/ProjectMigrationTests.cpp
+            tests/ProjectTemplateTests.cpp
             tests/WindowSizingTests.cpp
             tests/TransportTests.cpp
             tests/TransportEditingTests.cpp

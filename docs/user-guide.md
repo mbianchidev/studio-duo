@@ -93,6 +93,22 @@ track list vertically. On macOS, pinch gestures continue to zoom the timeline.
 
 ## Start a session
 
+When Studio Duo opens without a `.studioduo` project path, the startup hub
+offers three immediate choices:
+
+- **New Song** creates a blank song with a master track.
+- **Create From Template** starts from the bundled Metal Tracking, Songwriting,
+  or Mix Session layouts.
+- **Open Existing Project** opens the project chooser.
+
+The hub also lists up to 12 recent projects, newest edit first. Opening,
+saving, or editing a saved project moves it to the top. Missing or inaccessible
+entries are labeled clearly and include a **Remove** action; use **Open Existing
+Project** if the package moved. Passing a `.studioduo` path to the application
+opens it directly instead of showing the hub.
+
+After choosing a project:
+
 1. Open **Settings** (gear icon) > **Audio / MIDI** and enable the required
    hardware inputs and outputs.
 2. Add audio, instrument, or MIDI tracks with **Add Track** (plus icon). Import
@@ -729,6 +745,13 @@ It is enabled by default and persists across launches. Autosave updates the
 recovery copy inside an already-saved `.studioduo` package; manual Save still
 publishes the durable project generation.
 
+The **Appearance** tab provides Studio Gray, Slate Blue, Forest, and Aubergine
+themes. Studio Gray is the default and uses layered dark-gray surfaces rather
+than near-black backgrounds. Theme selection applies immediately and persists
+across launches. The base, panel, raised, text, and accent colors can be
+customized; Studio Duo rejects combinations that do not preserve WCAG AA text
+contrast. **Reset Default Theme** restores Studio Gray.
+
 The **VST Plug-ins** Settings tab lists active default and custom VST3 search
 folders. Defaults are scanned at startup unless **Scan plug-in folders at
 startup** is disabled. Add custom folders, remove either custom or default
@@ -743,6 +766,10 @@ and must match the release manifest's filename, byte size, and SHA-256 checksum.
 The current app keeps running after the download. Choose **Restart and Update**
 only when convenient; Studio Duo then quits, installs the staged version, and
 reopens.
+
+Open **Help > User Guide** in the top application bar to view documentation for
+the installed Studio Duo release in the system browser. Studio Duo reports an
+error with the destination URL if the browser cannot be opened.
 
 On macOS, the updater accepts the project's normal ad-hoc-signed application
 bundle and does not require notarization or an Apple update-signing key. The

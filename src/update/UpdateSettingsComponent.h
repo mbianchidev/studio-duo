@@ -59,6 +59,8 @@ public:
         PluginCatalog& pluginCatalog,
         std::function<void(const PluginCatalogEntry&)>
             validatePlugin,
+        std::function<void(const StudioThemePalette&)>
+            themeChanged,
         std::function<void()> restartRequested,
         bool showUpdatesInitially,
         const juce::String& audioUnavailableReason = {});
@@ -71,6 +73,7 @@ private:
     std::unique_ptr<juce::AudioDeviceSelectorComponent> audioPage;
     juce::Label audioUnavailableLabel;
     std::unique_ptr<juce::Component> generalPage;
+    std::unique_ptr<juce::Component> appearancePage;
     std::unique_ptr<juce::Component> vstPage;
     std::unique_ptr<UpdateSettingsComponent> updatePage;
     juce::TabbedComponent tabs {

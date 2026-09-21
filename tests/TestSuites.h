@@ -26,6 +26,7 @@ void audioExportTests();
 void audioExportOptionsTests();
 void pluginCompatibilityTests();
 void projectMigrationTests();
+void projectTemplateTests();
 void windowSizingTests();
 void transportTests();
 void transportEditingTests();

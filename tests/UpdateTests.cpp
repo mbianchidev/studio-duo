@@ -160,6 +160,18 @@ void preferencePersistence()
         expect(preferences.setScanPluginsAtStartup(false).wasOk()
                    && !preferences.scanPluginsAtStartup(),
                "Startup plug-in scanning can be disabled and persisted.");
+        expect(preferences.setThemePreset("slate-blue").wasOk()
+                   && preferences.themePresetId() == "slate-blue",
+               "A bundled theme can be selected.");
+        expect(preferences.recordRecentProject(
+                   directory.getChildFile("older.studioduo"),
+                   "Older",
+                   juce::Time(1000)).wasOk()
+                   && preferences.recordRecentProject(
+                       directory.getChildFile("newer.studioduo"),
+                       "Newer",
+                       juce::Time(2000)).wasOk(),
+               "Recent projects can be recorded.");
     }
     {
         studio::StudioPreferences preferences(file);
@@ -167,6 +179,52 @@ void preferencePersistence()
                "Autosave recovery preference survives reload.");
         expect(!preferences.scanPluginsAtStartup(),
                "Startup plug-in scan preference survives reload.");
+        expect(preferences.themePresetId() == "slate-blue"
+                   && preferences.themePalette()
+                       == *studio::studioThemePaletteForPreset(
+                           "slate-blue"),
+               "Theme selection survives reload.");
+        expect(preferences.recentProjects().size() == 2
+                   && preferences.recentProjects().front().name
+                       == "Newer",
+               "Recent projects reload in descending edit order.");
+        expect(preferences.removeRecentProject(
+                   directory.getChildFile("older.studioduo")).wasOk()
+                   && preferences.recentProjects().size() == 1,
+               "Recent projects can be removed.");
+        auto inaccessible = preferences.themePalette();
+        inaccessible.text = inaccessible.panel;
+        expect(preferences.setCustomThemePalette(inaccessible).failed()
+                   && preferences.themePresetId() == "slate-blue",
+               "Custom themes that fail WCAG text contrast are rejected.");
+        auto custom = preferences.themePalette();
+        custom.orange = 0xff87b7e3;
+        expect(preferences.setCustomThemePalette(custom).wasOk()
+                   && preferences.themePresetId() == "custom",
+               "Accessible custom themes are persisted.");
+    }
+    {
+        studio::StudioPreferences preferences(file);
+        expect(preferences.themePresetId() == "custom"
+                   && preferences.themePalette().orange
+                       == 0xff87b7e3,
+               "Custom theme colors survive reload.");
+    }
+    expect(studio::studioThemePresets()
+                   .front()
+                   .palette.window
+               != 0xff101214,
+           "The default theme uses a lighter gray base than the previous near-black surface.");
+    for (const auto& preset : studio::studioThemePresets())
+    {
+        juce::String error;
+        expect(preset.palette.isAccessible(error),
+               ("Bundled theme is accessible: "
+                + juce::String(preset.name)
+                + (error.isNotEmpty()
+                       ? " (" + error + ")"
+                       : juce::String()))
+                   .toRawUTF8());
     }
     file.replaceWithText("{\"autosaveEnabled\":\"invalid\"}");
     {
