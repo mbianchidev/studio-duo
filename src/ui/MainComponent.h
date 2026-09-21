@@ -455,10 +455,9 @@ private:
         "Show or hide the mixer"
     };
 
-    juce::TabbedComponent leftRibbonTabs {
+    juce::TabbedComponent inspectorRibbonTabs {
         juce::TabbedButtonBar::TabsAtTop
     };
-    juce::Component sessionContent;
     juce::Component inspectorContent;
     juce::Viewport inspectorViewport;
     juce::Label inspectorName;
@@ -534,8 +533,10 @@ private:
     std::unique_ptr<MixerPanel> mixer;
     MidiEditorComponent midiEditor;
     std::unique_ptr<PanelResizer> leftPanelResizer;
+    std::unique_ptr<PanelResizer> inspectorPanelResizer;
     std::unique_ptr<PanelResizer> mixerPanelResizer;
-    int leftPanelWidth = 316;
+    int leftPanelWidth = 286;
+    int inspectorPanelWidth = 286;
     int mixerPanelHeight = 480;
     int midiEditorHeight = 330;
     bool leftPanelCollapsed = false;

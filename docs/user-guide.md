@@ -205,9 +205,10 @@ priority for recording while ordinary playback keeps using the loop range.
 The bottom transport strip keeps position, Stop, Play/Pause, Record, Loop,
 loop-range, metronome, time signature, and tempo controls in compact grouped
 modules. **Inspect**, **Mixer**, and **Tracks** switches at the far right own the
-left ribbon's Track and Session pages plus the lower mixer. The same ribbon's
-**Plugin Manager** page owns plug-in discovery and validation. File and project
-tools remain in the top header, while
+right inspector, lower mixer, and left Session pane. The inspector's
+**Track** and **Plugin Manager** ribbons switch between selected-track controls
+and plug-in discovery/validation. File and project tools remain in the top
+header, while
 undo, redo, scissors, trim, delete, Snap, a visible 1/4-1/32 grid selector, and
 zoom tools share the edit toolbar. Snap applies to clip, marker, and section
 dragging without introducing separate pointer/eraser tool modes.
@@ -343,11 +344,12 @@ a send or sidechain to open its routing editor, or use the power control on
 either row to enable/bypass it in one step. The taller mixer keeps these
 processing rows visible with the fader, meters, and pan control.
 
-The left ribbon groups **Session**, **Track**, and **Plugin Manager** pages.
-Session holds project and track actions, Track holds the selected-track
-inspector and routing controls, and Plugin Manager holds the searchable
-processor catalog. The bottom **Inspect**, **Mixer**, and **Tracks** switches
-open the matching ribbon page or lower mixer and can collapse the active area.
+The left Session pane remains dedicated to project and track actions and no
+longer contains the processor catalog. The right inspector groups **Track** and
+**Plugin Manager** ribbons: Track holds the selected-track inspector and routing
+controls, while Plugin Manager holds the searchable processor catalog. The
+bottom **Inspect**, **Mixer**, and **Tracks** switches keep controlling the right
+inspector, lower mixer, and left Session pane independently.
 
 Double-click a track name in the Track inspector, timeline, or mixer to edit its name.
 **COLOR** provides palette choices and an HSV/RGB picker. Appearance changes are

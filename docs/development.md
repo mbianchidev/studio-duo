@@ -652,9 +652,10 @@ the existing undoable `SetTrackMixCommand`.
 Each parent mixer strip renders its own compact Inserts and Sends sections.
 The insert add control launches a track-targeted `PluginBrowserComponent`
 callout, while send add routes to the existing routing menu. Row power controls
-reuse insert-bypass and routing-update commands. The main left rail is a tabbed
-ribbon containing Session controls, the selected-track inspector, and the
-persistent Plugin Manager catalog; there is no duplicate right inspector.
+reuse insert-bypass and routing-update commands. The left Session pane keeps
+only project and track actions. The right inspector is a tabbed ribbon that
+switches between the existing selected-track inspector and the persistent
+Plugin Manager catalog.
 
 Audio tracks persist their first hardware input, mono/stereo mode, and software
 monitoring state. The lock-free recorder copies only those selected callback
