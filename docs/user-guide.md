@@ -207,7 +207,7 @@ The bottom transport strip keeps position, Stop, Play/Pause, Record, Loop,
 loop-range, metronome, time signature, and tempo controls in compact grouped
 modules. **Inspect**, **Mixer**, and **Tracks** switches at the far right own the
 right inspector, lower mixer, and left Session pane. The inspector's
-**Track** and **Plugin Manager** ribbons switch between selected-track controls
+**Inspector** and **Plugin Manager** ribbons switch between selected-track controls
 and plug-in discovery/validation. File and project tools remain in the top
 header, while
 undo, redo, scissors, trim, delete, Snap, a visible 1/4-1/32 grid selector, and
@@ -346,9 +346,9 @@ either row to enable/bypass it in one step. The taller mixer keeps these
 processing rows visible with the fader, meters, and pan control.
 
 The left Session pane remains dedicated to project and track actions and no
-longer contains the processor catalog. The right inspector groups **Track** and
-**Plugin Manager** ribbons: Track holds the selected-track inspector and routing
-controls, while Plugin Manager holds the searchable processor catalog. The
+longer contains the processor catalog. The right inspector groups
+**Inspector** and **Plugin Manager** ribbons: Inspector holds the selected-track
+controls and routing, while Plugin Manager holds the searchable processor catalog. The
 bottom **Inspect**, **Mixer**, and **Tracks** switches keep controlling the right
 inspector, lower mixer, and left Session pane independently.
 

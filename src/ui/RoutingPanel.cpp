@@ -71,6 +71,16 @@ std::vector<const RoutingConnection*> RoutingPanel::displayedRoutes() const
     return result;
 }
 
+int RoutingPanel::preferredHeight() const
+{
+    const auto routeRows = static_cast<int>(
+        displayedRoutes().size());
+    return juce::jlimit(
+        68,
+        154,
+        28 + juce::jmax(40, routeRows * 30));
+}
+
 void RoutingPanel::paint(juce::Graphics& graphics)
 {
     graphics.fillAll(juce::Colour(StudioColours::panel));

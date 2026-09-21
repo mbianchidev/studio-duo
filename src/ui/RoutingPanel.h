@@ -17,6 +17,7 @@ public:
 
     void setProject(const Project* value);
     void setTrack(const juce::String& value);
+    [[nodiscard]] int preferredHeight() const;
     void setHardwareOutputs(juce::StringArray names);
     void editConnection(const juce::String& connectionId);
     void showAddRouteMenu();

@@ -1954,7 +1954,7 @@ MainComponent::MainComponent(bool startAudioOnLaunch)
     inspectorRibbonTabs.setTabBarDepth(32);
     inspectorRibbonTabs.setOutline(1);
     inspectorRibbonTabs.addTab(
-        "TRACK",
+        "INSPECTOR",
         juce::Colour(StudioColours::panel),
         &inspectorViewport,
         false);
@@ -2510,8 +2510,10 @@ void MainComponent::resized()
     armButton.setBounds(toggles.removeFromLeft(40).reduced(2));
     trackColourButton.setBounds(toggles.removeFromLeft(76).reduced(2));
     inspector.removeFromTop(10);
-    routingPanel->setBounds(inspector.removeFromTop(154));
-    inspector.removeFromTop(10);
+    routingPanel->setBounds(
+        inspector.removeFromTop(
+            routingPanel->preferredHeight()));
+    inspector.removeFromTop(6);
     insertPanel->setBounds(inspector);
 
     updateTimelineSize();
