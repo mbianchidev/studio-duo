@@ -1699,7 +1699,6 @@ MainComponent::MainComponent(bool startAudioOnLaunch)
     {
         validatePlugin(entry);
     };
-    addAndMakeVisible(*pluginBrowser);
 
     routingPanel = std::make_unique<RoutingPanel>();
     routingPanel->setProject(&project);
