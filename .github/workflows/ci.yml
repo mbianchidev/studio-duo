@@ -142,6 +142,7 @@ jobs:
           path: |
             ${{ runner.temp }}/studio-duo-windows-packages/*.exe
             ${{ runner.temp }}/studio-duo-windows-packages/*.zip
+            build/StudioDuo_artefacts/Release/Studio Duo.pdb
           if-no-files-found: error
           retention-days: 7
 

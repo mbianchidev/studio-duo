@@ -146,6 +146,14 @@ jobs:
             -SkipTrustVerification
           & ./packaging/windows/test-installed-startup.ps1 `
             -Installer "Studio-Duo-$env:VERSION-Windows-x64-Setup.exe"
+          $pdb = "build/StudioDuo_artefacts/Release/Studio Duo.pdb"
+          if (-not (Test-Path -LiteralPath $pdb -PathType Leaf)) {
+            throw "Studio Duo release symbols are missing: $pdb"
+          }
+          Compress-Archive `
+            -LiteralPath $pdb `
+            -DestinationPath "Studio-Duo-$env:VERSION-Windows-x64-symbols.zip" `
+            -CompressionLevel Optimal
 
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v7
@@ -154,6 +162,7 @@ jobs:
           path: |
             Studio-Duo-${{ needs.validate.outputs.version }}-Windows-x64.zip
             Studio-Duo-${{ needs.validate.outputs.version }}-Windows-x64-Setup.exe
+            Studio-Duo-${{ needs.validate.outputs.version }}-Windows-x64-symbols.zip
           if-no-files-found: error
           retention-days: 7
 

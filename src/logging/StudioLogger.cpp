@@ -243,6 +243,21 @@ juce::StringArray maintainStudioLogFiles(
     for (const auto& file : logDirectory.findChildFiles(
              juce::File::findFiles,
              false,
+             "studio-duo-crash-*.dmp"))
+    {
+        if (file.getLastModificationTime() < deleteBefore
+            && !file.deleteFile())
+        {
+            errors.add(
+                "Could not delete expired native dump "
+                + file.getFileName()
+                + ".");
+        }
+    }
+
+    for (const auto& file : logDirectory.findChildFiles(
+             juce::File::findFiles,
+             false,
              "studio-duo-*.log"))
     {
         if (file == activeLogFile)

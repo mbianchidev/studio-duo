@@ -8,6 +8,9 @@
 #include "logging/StudioLogger.h"
 #include "update/UpdateSettingsComponent.h"
 #include "plugin_host/PluginStateStore.h"
+#if JUCE_WINDOWS
+#include "platform/WindowsCrashHandler.h"
+#endif
 #include "reamp/ReampSnapshotService.h"
 #include "render/RenderEngine.h"
 
@@ -28,6 +31,28 @@ namespace
 {
 constexpr int mainHeaderHeight = 64;
 constexpr int transportFooterHeight = 44;
+
+#if JUCE_WINDOWS
+class ScopedWindowsCrashContext final
+{
+public:
+    explicit ScopedWindowsCrashContext(
+        WindowsCrashContext context) noexcept
+        : previous(
+            WindowsCrashHandler::exchangeContext(
+                context))
+    {
+    }
+
+    ~ScopedWindowsCrashContext()
+    {
+        WindowsCrashHandler::exchangeContext(previous);
+    }
+
+private:
+    WindowsCrashContext previous;
+};
+#endif
 
 bool sameAutomationTarget(const AutomationTarget& left,
                           const AutomationTarget& right)
@@ -2069,6 +2094,10 @@ MainComponent::MainComponent(
 
 void MainComponent::initialiseAudio()
 {
+#if JUCE_WINDOWS
+    const ScopedWindowsCrashContext crashContext(
+        WindowsCrashContext::audioStartup);
+#endif
     if (appShutdownPrepared || !ensureAudioDeviceManager())
         return;
 

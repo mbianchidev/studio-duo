@@ -499,6 +499,20 @@ if(WIN32)
     target_compile_definitions(StudioDuo PRIVATE JUCE_ASIO=1)
 endif()
 
+if(MSVC)
+    set_property(
+        TARGET StudioDuo
+        PROPERTY MSVC_DEBUG_INFORMATION_FORMAT ProgramDatabase
+    )
+    target_link_options(
+        StudioDuo
+        PRIVATE
+            "$<$<CONFIG:Release>:/DEBUG:FULL>"
+            "$<$<CONFIG:Release>:/OPT:REF>"
+            "$<$<CONFIG:Release>:/OPT:ICF>"
+    )
+endif()
+
 if(APPLE)
     target_compile_definitions(StudioDuo PRIVATE JUCE_PLUGINHOST_AU=1)
 else()
