@@ -61,8 +61,8 @@ hardening remains before the complete DAW described in the
   level-matched comparison, batch rendering, and reports
 - Startup hub with blank songs, curated templates, ordered recent projects,
   and stale-entry cleanup
-- Four accessible dark themes, persisted custom surface/accent colors, and
-  version-matched in-app access to the user guide
+- Four accessible dark themes, persisted custom surface/accent colors, and an
+  offline, version-matched in-app user guide
 
 ## Build
 

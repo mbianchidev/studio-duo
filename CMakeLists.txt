@@ -180,6 +180,14 @@ juce_add_binary_data(
 )
 
 juce_add_binary_data(
+    StudioDuoDocumentationData
+    HEADER_NAME StudioDuoDocumentationData.h
+    NAMESPACE studio_documentation
+    SOURCES
+        docs/user-guide.md
+)
+
+juce_add_binary_data(
     StudioDuoDawProjectSchemaData
     HEADER_NAME StudioDuoDawProjectSchemaData.h
     NAMESPACE studio_dawproject_schema
@@ -407,6 +415,8 @@ target_sources(
         src/ui/AudioExportOptionsComponent.h
         src/ui/TransportSettingsComponent.cpp
         src/ui/TransportSettingsComponent.h
+        src/ui/UserGuideComponent.cpp
+        src/ui/UserGuideComponent.h
         src/ui/NumericInput.h
         src/ui/MainWindowSizing.cpp
         src/ui/MainWindowSizing.h
@@ -483,7 +493,6 @@ target_compile_definitions(
         JUCE_MODAL_LOOPS_PERMITTED=1
         STUDIO_DUO_VERSION="${PROJECT_VERSION}"
         STUDIO_DUO_UPDATE_MANIFEST_URL="https://github.com/mbianchidev/studio-duo/releases/latest/download/update-manifest.json"
-        STUDIO_DUO_USER_GUIDE_URL="https://github.com/mbianchidev/studio-duo/blob/v${PROJECT_VERSION}/docs/user-guide.md"
 )
 
 if(WIN32)
@@ -510,6 +519,7 @@ target_link_libraries(
         clap-helpers
         SampleRate::samplerate
         StudioDuoBrandData
+        StudioDuoDocumentationData
         StudioDuoDawProjectSchemaData
         StudioDuoMp3Encoder
     PUBLIC

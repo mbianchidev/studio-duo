@@ -767,9 +767,10 @@ The current app keeps running after the download. Choose **Restart and Update**
 only when convenient; Studio Duo then quits, installs the staged version, and
 reopens.
 
-Open **Help > User Guide** in the top application bar to view documentation for
-the installed Studio Duo release in the system browser. Studio Duo reports an
-error with the destination URL if the browser cannot be opened.
+Open **Help > User Guide** in the top application bar to read the documentation
+inside Studio Duo. The searchable guide is embedded when the application is
+built, so it always matches the installed Studio Duo release and remains
+available offline.
 
 On macOS, the updater accepts the project's normal ad-hoc-signed application
 bundle and does not require notarization or an Apple update-signing key. The

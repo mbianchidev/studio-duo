@@ -2226,15 +2226,31 @@ void MainComponent::paint(juce::Graphics& graphics)
 
     auto bounds = getLocalBounds();
     const auto header = bounds.removeFromTop(mainHeaderHeight);
-    const auto footer =
-        bounds.removeFromBottom(transportFooterHeight);
     graphics.setColour(juce::Colour(StudioColours::panel));
     graphics.fillRect(header);
+    graphics.setColour(juce::Colour(StudioColours::border));
+    graphics.drawHorizontalLine(header.getBottom() - 1, 0.0f, static_cast<float>(getWidth()));
+    if (brandLogo != nullptr)
+    {
+        brandLogo->drawWithin(graphics,
+                              juce::Rectangle<float>(12.0f, 10.0f, 42.0f, 42.0f),
+                              juce::RectanglePlacement::centred,
+                              1.0f);
+    }
+    graphics.setColour(juce::Colour(StudioColours::text));
+    graphics.setFont(juce::Font(juce::FontOptions(12.0f, juce::Font::bold)));
+    graphics.drawText("STUDIO", 60, 15, 54, 18, juce::Justification::centredLeft);
+    graphics.setColour(juce::Colour(StudioColours::orange));
+    graphics.drawText("DUO", 60, 31, 54, 18, juce::Justification::centredLeft);
+    if (startupHub.isVisible())
+        return;
+
+    const auto footer =
+        bounds.removeFromBottom(transportFooterHeight);
     graphics.setColour(
         juce::Colour(StudioColours::transport));
     graphics.fillRect(footer);
     graphics.setColour(juce::Colour(StudioColours::border));
-    graphics.drawHorizontalLine(header.getBottom() - 1, 0.0f, static_cast<float>(getWidth()));
     graphics.drawHorizontalLine(
         footer.getY(),
         0.0f,
@@ -2278,14 +2294,6 @@ void MainComponent::paint(juce::Graphics& graphics)
             static_cast<float>(footer.getY() + 7),
             static_cast<float>(footer.getBottom() - 7));
     }
-    if (brandLogo != nullptr)
-    {
-        brandLogo->drawWithin(graphics,
-                              juce::Rectangle<float>(12.0f, 10.0f, 42.0f, 42.0f),
-                              juce::RectanglePlacement::centred,
-                              1.0f);
-    }
-
     const auto bodyTop = mainHeaderHeight;
     constexpr auto resizerThickness = 6;
     const auto showMidiEditor =
@@ -2357,18 +2365,68 @@ void MainComponent::paint(juce::Graphics& graphics)
                           18,
                           juce::Justification::centredLeft);
     }
-
-    graphics.setColour(juce::Colour(StudioColours::text));
-    graphics.setFont(juce::Font(juce::FontOptions(12.0f, juce::Font::bold)));
-    graphics.drawText("STUDIO", 60, 15, 54, 18, juce::Justification::centredLeft);
-    graphics.setColour(juce::Colour(StudioColours::orange));
-    graphics.drawText("DUO", 60, 31, 54, 18, juce::Justification::centredLeft);
 }
 
 void MainComponent::resized()
 {
     auto bounds = getLocalBounds();
     auto header = bounds.removeFromTop(mainHeaderHeight);
+    const auto startupMode =
+        startupHub.isVisible();
+    for (auto* component :
+         std::array<juce::Component*, 6> {
+             &newButton,
+             &openButton,
+             &saveButton,
+             &exportButton,
+             &projectLabel,
+             &statusPanel
+         })
+    {
+        component->setVisible(!startupMode);
+    }
+    for (auto* component :
+         std::array<juce::Component*, 13> {
+             &positionLabel,
+             &stopButton,
+             &playButton,
+             &recordButton,
+             &loopButton,
+             &loopRangeButton,
+             &metronomeButton,
+             &meterLabel,
+             &tempoLabel,
+             &tempoSlider,
+             &inspectorPanelToggleButton,
+             &mixerPanelToggleButton,
+             &sessionPanelToggleButton
+         })
+    {
+        component->setVisible(!startupMode);
+    }
+    settingsButton.setVisible(true);
+    helpButton.setVisible(true);
+    if (startupMode)
+    {
+        auto topRow = header.reduced(14, 8);
+        topRow.removeFromLeft(126);
+        settingsButton.setBounds(
+            topRow.removeFromLeft(38)
+                .reduced(3, 8));
+        helpButton.setBounds(
+            topRow.removeFromLeft(38)
+                .reduced(3, 8));
+        startupHub.setBounds(
+            getLocalBounds()
+                .withTrimmedTop(
+                    mainHeaderHeight));
+        startupHub.toFront(false);
+        exportInputBlocker.setBounds(
+            getLocalBounds());
+        if (exportInputBlocker.isVisible())
+            exportInputBlocker.toFront(false);
+        return;
+    }
     auto status =
         bounds.removeFromBottom(transportFooterHeight);
     constexpr auto resizerThickness = 6;
@@ -2440,7 +2498,7 @@ void MainComponent::resized()
             settingsButton.setBounds(
                 area.removeFromLeft(38).reduced(3, verticalInset));
             helpButton.setBounds(
-                area.removeFromLeft(58).reduced(3, verticalInset));
+                area.removeFromLeft(38).reduced(3, verticalInset));
         };
     const auto layoutTempoControls =
         [this](juce::Rectangle<int> area, int verticalInset)
@@ -2450,7 +2508,7 @@ void MainComponent::resized()
             tempoSlider.setBounds(area.reduced(3, verticalInset));
         };
 
-    layoutFileControls(topRow.removeFromLeft(258), 8);
+    layoutFileControls(topRow.removeFromLeft(228), 8);
     auto statusArea = topRow.removeFromRight(
         juce::jmin(360, topRow.getWidth() / 2));
     statusPanel.setBounds(statusArea.reduced(8, 4));
@@ -3047,6 +3105,8 @@ void MainComponent::replaceWithUnsavedProject(
     selectTrack(selectedTrackId);
     projectChanged(false, false);
     startupHub.setVisible(false);
+    resized();
+    repaint();
     setStatus(statusMessage);
 }
 
@@ -3805,6 +3865,18 @@ void MainComponent::applyTheme(
         settingsWindow->sendLookAndFeelChange();
         settingsWindow->repaint();
     }
+    if (userGuideWindow != nullptr)
+    {
+        userGuideWindow->setBackgroundColour(
+            juce::Colour(
+                StudioColours::panel));
+        StudioTheme::recolourComponentTree(
+            *userGuideWindow,
+            previous,
+            palette);
+        userGuideWindow->sendLookAndFeelChange();
+        userGuideWindow->repaint();
+    }
 }
 
 void MainComponent::showHelpMenu()
@@ -3824,17 +3896,36 @@ void MainComponent::showHelpMenu()
 
 void MainComponent::openUserGuide()
 {
-    const auto url =
-        juce::URL(STUDIO_DUO_USER_GUIDE_URL);
-    if (!url.launchInDefaultBrowser())
+    if (userGuideWindow != nullptr)
     {
-        showError(
-            "User guide could not be opened",
-            "Studio Duo could not open the documentation in your "
-            "default browser. Visit "
-                + url.toString(false)
-                + " manually.");
+        userGuideWindow->toFront(true);
+        return;
     }
+    auto guide =
+        std::make_unique<UserGuideComponent>();
+    guide->setLookAndFeel(&theme);
+
+    juce::DialogWindow::LaunchOptions options;
+    options.content.setOwned(guide.release());
+    options.dialogTitle =
+        "Studio Duo User Guide";
+    options.dialogBackgroundColour =
+        juce::Colour(StudioColours::panel);
+    options.componentToCentreAround = this;
+    options.escapeKeyTriggersCloseButton = true;
+    options.useNativeTitleBar = true;
+    options.resizable = true;
+    userGuideWindow.reset(options.create());
+    userGuideWindow->enterModalState(
+        true,
+        juce::ModalCallbackFunction::create(
+            [safe = juce::Component::SafePointer<
+                 MainComponent>(this)](int)
+            {
+                if (safe != nullptr)
+                    safe->userGuideWindow.reset();
+            }),
+        false);
 }
 
 void MainComponent::showStartupHub(
@@ -4364,6 +4455,8 @@ bool MainComponent::openProjectFrom(
             recentResult.getErrorMessage());
     }
     startupHub.setVisible(false);
+    resized();
+    repaint();
     setStatus(status,
               opened->recovered
                   || recoveredInProcess

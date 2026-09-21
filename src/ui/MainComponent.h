@@ -13,6 +13,7 @@
 #include "RoutingPanel.h"
 #include "StartupHubComponent.h"
 #include "TimelineComponent.h"
+#include "UserGuideComponent.h"
 #include "audio/StudioAudioDeviceManager.h"
 #include "audio/StudioAudioEngine.h"
 #include "dawproject_io/DawProjectIO.h"
@@ -379,7 +380,11 @@ private:
         "Settings",
         "Configure audio, MIDI, and automatic updates"
     };
-    juce::TextButton helpButton { "HELP" };
+    StudioIconButton helpButton {
+        StudioIcon::help,
+        "Help",
+        "Open Help and the in-app User Guide"
+    };
     StudioIconButton undoButton {
         StudioIcon::undo, "Undo", "Undo (Command/Ctrl+Z)"
     };
@@ -570,6 +575,7 @@ private:
     };
     std::unique_ptr<juce::FileChooser> fileChooser;
     std::unique_ptr<juce::DialogWindow> settingsWindow;
+    std::unique_ptr<juce::DialogWindow> userGuideWindow;
     UpdateSnapshot latestUpdateSnapshot;
     juce::String lastAvailabilityPromptVersion;
     juce::String lastReadyPromptVersion;
