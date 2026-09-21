@@ -33,7 +33,8 @@ public:
     std::function<void(const juce::String&)> onDeleteTrack;
     std::function<void(const juce::String&, juce::Rectangle<int>)>
         onInputMenuRequested;
-    std::function<void(const juce::String&)> onAddInsert;
+    std::function<void(const juce::String&, juce::Rectangle<int>)>
+        onAddInsert;
     std::function<void(const juce::String&)> onAddSend;
     std::function<void(const juce::String&, float)> onVolumeChanged;
     std::function<void(const juce::String&, float)> onPanChanged;
@@ -53,8 +54,6 @@ public:
     void mouseDoubleClick(const juce::MouseEvent& event) override;
 
 private:
-    class ItemList;
-
     struct Item
     {
         enum class Type
@@ -72,8 +71,8 @@ private:
     };
 
     [[nodiscard]] std::vector<const Track*> mixerTracks() const;
-    [[nodiscard]] std::vector<Item> items() const;
-    void refreshItems();
+    [[nodiscard]] std::vector<Item> itemsForTrack(
+        const Track& track) const;
     void beginVolumeEdit(const Track& track,
                          juce::Rectangle<int> bounds);
     void commitVolumeEdit();
@@ -97,9 +96,5 @@ private:
     juce::TextEditor volumeEditor;
     juce::String editingVolumeTrack;
     bool committingVolumeEdit = false;
-    bool insertsExpanded = true;
-    bool sendsExpanded = true;
-    juce::Viewport itemsViewport;
-    std::unique_ptr<ItemList> itemList;
 };
 }

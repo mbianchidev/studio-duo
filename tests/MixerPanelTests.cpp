@@ -65,9 +65,18 @@ void mixerPanelTests()
     auto project = studio::Project::createDefault();
     auto& track = project.tracks.front();
     track.pan = 0.0f;
+    studio::PluginInsert insert;
+    insert.name = "Fixture EQ";
+    insert.format = "VST3";
+    track.inserts.push_back(insert);
+    studio::RoutingConnection send;
+    send.name = "Cue send";
+    send.kind = studio::RouteKind::send;
+    send.sourceTrackId = track.id;
+    project.routingConnections.push_back(send);
 
     studio::MixerPanel mixer;
-    mixer.setBounds(0, 0, 900, 260);
+    mixer.setBounds(0, 0, 900, 480);
     mixer.setProject(&project);
 
     juce::String inputTrack;
@@ -92,8 +101,8 @@ void mixerPanelTests()
         pan = value;
     };
 
-    const juce::Point<float> panCentre(70.0f, 217.0f);
-    const juce::Point<float> panRight(126.0f, 217.0f);
+    const juce::Point<float> panCentre(82.0f, 437.0f);
+    const juce::Point<float> panRight(138.0f, 437.0f);
     mixer.mouseDown(mixerMouseEvent(
         mixer,
         panCentre,
@@ -112,7 +121,7 @@ void mixerPanelTests()
     expect(pan > 0.99f,
            "Dragging the mixer pan control right produces full-right pan.");
 
-    const juce::Point<float> panLeft(14.0f, 217.0f);
+    const juce::Point<float> panLeft(26.0f, 437.0f);
     mixer.mouseDown(mixerMouseEvent(
         mixer,
         panCentre,
@@ -144,6 +153,62 @@ void mixerPanelTests()
         false));
     expect(mutedTrack == track.id,
            "Mixer strip mute icons target the clicked track.");
+
+    juce::String insertTrack;
+    juce::Rectangle<int> insertTarget;
+    mixer.onAddInsert =
+        [&insertTrack, &insertTarget](
+            const juce::String& trackId,
+            juce::Rectangle<int> target)
+    {
+        insertTrack = trackId;
+        insertTarget = target;
+    };
+    const juce::Point<float> insertPlus(135.0f, 145.0f);
+    mixer.mouseDown(mixerMouseEvent(
+        mixer,
+        insertPlus,
+        insertPlus,
+        false));
+    expect(insertTrack == track.id
+               && !insertTarget.isEmpty(),
+           "Each mixer strip insert plus action targets its own track.");
+
+    juce::String enabledInsert;
+    auto insertEnabled = true;
+    mixer.onPluginEnabledChanged =
+        [&enabledInsert, &insertEnabled](
+            const juce::String&,
+            const juce::String& insertId,
+            bool enabled)
+    {
+        enabledInsert = insertId;
+        insertEnabled = enabled;
+    };
+    const juce::Point<float> insertPower(136.0f, 171.0f);
+    mixer.mouseDown(mixerMouseEvent(
+        mixer,
+        insertPower,
+        insertPower,
+        false));
+    expect(enabledInsert == insert.id
+               && !insertEnabled,
+           "Mixer strip insert power buttons toggle the clicked plug-in.");
+
+    juce::String sendTrack;
+    mixer.onAddSend =
+        [&sendTrack](const juce::String& trackId)
+    {
+        sendTrack = trackId;
+    };
+    const juce::Point<float> sendPlus(135.0f, 225.0f);
+    mixer.mouseDown(mixerMouseEvent(
+        mixer,
+        sendPlus,
+        sendPlus,
+        false));
+    expect(sendTrack == track.id,
+           "Each mixer strip send plus action targets its own track.");
 
     auto appliedVolume = 99.0f;
     mixer.onVolumeChanged =

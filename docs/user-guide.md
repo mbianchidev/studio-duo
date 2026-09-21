@@ -205,7 +205,9 @@ priority for recording while ordinary playback keeps using the loop range.
 The bottom transport strip keeps position, Stop, Play/Pause, Record, Loop,
 loop-range, metronome, time signature, and tempo controls in compact grouped
 modules. **Inspect**, **Mixer**, and **Tracks** switches at the far right own the
-three docked work areas. File and project tools remain in the top header, while
+left ribbon's Track and Session pages plus the lower mixer. The same ribbon's
+**Plugin Manager** page owns plug-in discovery and validation. File and project
+tools remain in the top header, while
 undo, redo, scissors, trim, delete, Snap, a visible 1/4-1/32 grid selector, and
 zoom tools share the edit toolbar. Snap applies to clip, marker, and section
 dragging without introducing separate pointer/eraser tool modes.
@@ -334,21 +336,20 @@ Double-click a fader lane to return to `0.0 dB` or a pan control to return to
 center. Solo is exclusive: selecting a new solo clears the previous solo, and
 clicking the active solo again restores normal playback.
 
-The mixer also contains collapsible, scrollable **INSERTS** and
-**SENDS** sections for the selected track. Their `+` controls reveal the
-processor browser or route-add menu. Click an insert to open its editor, click a
-send or sidechain to open its routing editor, or use the power control on either
-row to enable/bypass it in one step.
+Every mixer strip contains its own compact **INSERTS** and **SENDS** sections.
+The insert `+` opens a plug-in selection dialog already targeted to that track;
+the send `+` opens its route-add menu. Click an insert to open its editor, click
+a send or sidechain to open its routing editor, or use the power control on
+either row to enable/bypass it in one step. The taller mixer keeps these
+processing rows visible with the fader, meters, and pan control.
 
-Use the single sidebar arrow to collapse Session controls to an icon rail. The
-expanded Session pane shows each action's icon and full name; collapsing it
-removes the labels and returns the same controls to compact icon-only buttons.
-The bottom **Inspect**, **Mixer**, and **Tracks** switches are the only panel
-visibility buttons. Their dividers also collapse when dragged closed and restore
-when dragged open or double-clicked.
-The processor search moves above its action buttons on narrow layouts.
+The left ribbon groups **Session**, **Track**, and **Plugin Manager** pages.
+Session holds project and track actions, Track holds the selected-track
+inspector and routing controls, and Plugin Manager holds the searchable
+processor catalog. The bottom **Inspect**, **Mixer**, and **Tracks** switches
+open the matching ribbon page or lower mixer and can collapse the active area.
 
-Double-click a track name in the inspector, timeline, or mixer to edit its name.
+Double-click a track name in the Track inspector, timeline, or mixer to edit its name.
 **COLOR** provides palette choices and an HSV/RGB picker. Appearance changes are
 persistent and undoable.
 Right-clicking a mixer strip exposes the same mute, solo, arm, name/color,

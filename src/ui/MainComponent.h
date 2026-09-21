@@ -151,6 +151,9 @@ private:
     void showAddTrackMenu();
     void duplicateSelectedTrack();
     void deleteSelectedTrack();
+    void showPluginPickerForTrack(
+        const juce::String& trackId,
+        juce::Rectangle<int> targetArea);
     void addPluginToSelectedTrack(const PluginCatalogEntry& entry);
     void openPluginEditor(const juce::String& trackId,
                           const juce::String& insertId);
@@ -452,6 +455,10 @@ private:
         "Show or hide the mixer"
     };
 
+    juce::TabbedComponent leftRibbonTabs {
+        juce::TabbedButtonBar::TabsAtTop
+    };
+    juce::Component sessionContent;
     juce::Component inspectorContent;
     juce::Viewport inspectorViewport;
     juce::Label inspectorName;
@@ -527,11 +534,9 @@ private:
     std::unique_ptr<MixerPanel> mixer;
     MidiEditorComponent midiEditor;
     std::unique_ptr<PanelResizer> leftPanelResizer;
-    std::unique_ptr<PanelResizer> inspectorPanelResizer;
     std::unique_ptr<PanelResizer> mixerPanelResizer;
-    int leftPanelWidth = 286;
-    int inspectorPanelWidth = 250;
-    int mixerPanelHeight = 260;
+    int leftPanelWidth = 316;
+    int mixerPanelHeight = 480;
     int midiEditorHeight = 330;
     bool leftPanelCollapsed = false;
     bool masteringWorkspaceVisible = false;

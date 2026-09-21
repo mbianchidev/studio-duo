@@ -649,9 +649,12 @@ behavior identical.
 Timeline headers and mixer strips forward their compact input dropdowns to one
 MainComponent menu, which lists the current device's input channels and applies
 the existing undoable `SetTrackMixCommand`.
-The selected mixer's scrollable processing pane separates collapsible Inserts
-and Sends sections. Add controls route to the processor browser and routing
-menu; row power controls reuse insert-bypass and routing-update commands.
+Each parent mixer strip renders its own compact Inserts and Sends sections.
+The insert add control launches a track-targeted `PluginBrowserComponent`
+callout, while send add routes to the existing routing menu. Row power controls
+reuse insert-bypass and routing-update commands. The main left rail is a tabbed
+ribbon containing Session controls, the selected-track inspector, and the
+persistent Plugin Manager catalog; there is no duplicate right inspector.
 
 Audio tracks persist their first hardware input, mono/stereo mode, and software
 monitoring state. The lock-free recorder copies only those selected callback

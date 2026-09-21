@@ -12,313 +12,28 @@ namespace studio
 {
 namespace
 {
-constexpr int stripWidth = 112;
+constexpr int stripWidth = 136;
 constexpr int stripGap = 8;
 constexpr int stripTop = 34;
 constexpr int stripControlY = 48;
 constexpr int stripControlSize = 22;
-constexpr int stripFaderTop = 100;
+constexpr int stripProcessingTop = 100;
+constexpr int processingHeaderHeight = 24;
+constexpr int processingRowHeight = 28;
+constexpr int visibleProcessingRows = 2;
+constexpr int stripFaderTop =
+    stripProcessingTop
+    + 2 * (processingHeaderHeight
+           + visibleProcessingRows * processingRowHeight)
+    + 10;
 constexpr int stripBottomControls = 54;
+constexpr int processingSectionHeight =
+    processingHeaderHeight
+    + visibleProcessingRows * processingRowHeight;
 }
-
-class MixerPanel::ItemList final : public juce::Component
-{
-public:
-    explicit ItemList(MixerPanel& ownerToUse)
-        : owner(ownerToUse)
-    {
-    }
-
-    void paint(juce::Graphics& graphics) override
-    {
-        graphics.fillAll(juce::Colour(StudioColours::panel));
-        const auto values = owner.items();
-        const auto drawHeader = [&graphics, this](
-                                    int y,
-                                    const juce::String& title,
-                                    bool expanded)
-        {
-            juce::Rectangle<int> bounds(
-                4,
-                y,
-                getWidth() - 8,
-                26);
-            graphics.setColour(
-                juce::Colour(StudioColours::transportRaised));
-            graphics.fillRoundedRectangle(
-                bounds.toFloat(),
-                3.0f);
-            graphics.setColour(
-                juce::Colour(StudioColours::text));
-            graphics.setFont(
-                juce::Font(
-                    juce::FontOptions(10.0f,
-                                      juce::Font::bold)));
-            graphics.drawText(
-                expanded ? "v" : ">",
-                bounds.removeFromLeft(22),
-                juce::Justification::centred);
-            graphics.drawText(
-                title,
-                bounds.withTrimmedRight(32),
-                juce::Justification::centredLeft);
-            graphics.setFont(
-                juce::Font(
-                    juce::FontOptions(15.0f,
-                                      juce::Font::bold)));
-            graphics.drawText(
-                "+",
-                bounds.removeFromRight(30),
-                juce::Justification::centred);
-        };
-
-        constexpr auto rowHeight = 36;
-        const auto drawRow = [&graphics, this](
-                                 const Item& item,
-                                 int y)
-        {
-            const juce::Rectangle<int> row(
-                4,
-                y,
-                getWidth() - 8,
-                rowHeight - 2);
-            graphics.setColour(juce::Colour(StudioColours::raised));
-            graphics.fillRoundedRectangle(row.toFloat(), 3.0f);
-            graphics.setColour(juce::Colour(StudioColours::border));
-            graphics.drawRoundedRectangle(row.toFloat(), 3.0f, 1.0f);
-
-            const auto textWidth = row.getWidth() - 58;
-            graphics.setColour(juce::Colour(StudioColours::text));
-            graphics.setFont(juce::Font(
-                juce::FontOptions(10.5f, juce::Font::bold)));
-            graphics.drawFittedText(
-                item.title,
-                row.getX() + 7,
-                row.getY() + 2,
-                textWidth,
-                15,
-                juce::Justification::centredLeft,
-                1);
-            graphics.setColour(juce::Colour(
-                StudioColours::secondaryText));
-            graphics.setFont(juce::Font(juce::FontOptions(8.5f)));
-            graphics.drawFittedText(
-                item.detail,
-                row.getX() + 7,
-                row.getY() + 18,
-                textWidth,
-                13,
-                juce::Justification::centredLeft,
-                1);
-
-            const auto toggle = row.withLeft(
-                row.getRight() - 46).reduced(5, 6);
-            graphics.setColour(juce::Colour(
-                item.enabled
-                    ? StudioColours::green
-                    : StudioColours::amber));
-            graphics.fillRoundedRectangle(toggle.toFloat(), 3.0f);
-            drawStudioIcon(
-                graphics,
-                StudioIcon::power,
-                toggle.toFloat().reduced(7.0f),
-                juce::Colours::white,
-                1.2f);
-        };
-
-        auto y = 0;
-        drawHeader(y, "INSERTS", owner.insertsExpanded);
-        y += 30;
-        if (owner.insertsExpanded)
-        {
-            for (const auto& item : values)
-            {
-                if (item.type != Item::Type::plugin)
-                    continue;
-                drawRow(item, y);
-                y += rowHeight;
-            }
-            if (std::none_of(
-                    values.cbegin(),
-                    values.cend(),
-                    [](const auto& item)
-                    {
-                        return item.type == Item::Type::plugin;
-                    }))
-            {
-                graphics.setColour(
-                    juce::Colour(
-                        StudioColours::secondaryText));
-                graphics.setFont(9.0f);
-                graphics.drawText(
-                    "No inserts",
-                    12,
-                    y,
-                    getWidth() - 24,
-                    28,
-                    juce::Justification::centredLeft);
-                y += 30;
-            }
-        }
-
-        drawHeader(y, "SENDS", owner.sendsExpanded);
-        y += 30;
-        if (owner.sendsExpanded)
-        {
-            for (const auto& item : values)
-            {
-                if (item.type != Item::Type::route)
-                    continue;
-                drawRow(item, y);
-                y += rowHeight;
-            }
-            if (std::none_of(
-                    values.cbegin(),
-                    values.cend(),
-                    [](const auto& item)
-                    {
-                        return item.type == Item::Type::route;
-                    }))
-            {
-                graphics.setColour(
-                    juce::Colour(
-                        StudioColours::secondaryText));
-                graphics.setFont(9.0f);
-                graphics.drawText(
-                    "No sends",
-                    12,
-                    y,
-                    getWidth() - 24,
-                    28,
-                    juce::Justification::centredLeft);
-            }
-        }
-    }
-
-    void mouseDown(const juce::MouseEvent& event) override
-    {
-        constexpr auto headerHeight = 30;
-        constexpr auto rowHeight = 36;
-        const auto values = owner.items();
-        auto y = 0;
-        if (event.y < headerHeight)
-        {
-            if (event.x >= getWidth() - 38)
-            {
-                if (owner.onAddInsert
-                    && owner.selectedTrack.isNotEmpty())
-                    owner.onAddInsert(owner.selectedTrack);
-            }
-            else
-            {
-                owner.insertsExpanded =
-                    !owner.insertsExpanded;
-                owner.refreshItems();
-            }
-            return;
-        }
-        y += headerHeight;
-        if (owner.insertsExpanded)
-        {
-            for (const auto& item : values)
-            {
-                if (item.type != Item::Type::plugin)
-                    continue;
-                const juce::Rectangle<int> row(
-                    4,
-                    y,
-                    getWidth() - 8,
-                    rowHeight - 2);
-                if (row.contains(event.getPosition()))
-                {
-                    if (row.withLeft(row.getRight() - 46)
-                            .contains(event.getPosition()))
-                    {
-                        if (owner.onPluginEnabledChanged)
-                            owner.onPluginEnabledChanged(
-                                item.trackId,
-                                item.objectId,
-                                !item.enabled);
-                    }
-                    else if (owner.onPluginOpen)
-                        owner.onPluginOpen(
-                            item.trackId,
-                            item.objectId);
-                    return;
-                }
-                y += rowHeight;
-            }
-            if (std::none_of(
-                    values.cbegin(),
-                    values.cend(),
-                    [](const auto& item)
-                    {
-                        return item.type == Item::Type::plugin;
-                    }))
-                y += 30;
-        }
-        if (event.y >= y
-            && event.y < y + headerHeight)
-        {
-            if (event.x >= getWidth() - 38)
-            {
-                if (owner.onAddSend
-                    && owner.selectedTrack.isNotEmpty())
-                    owner.onAddSend(owner.selectedTrack);
-            }
-            else
-            {
-                owner.sendsExpanded =
-                    !owner.sendsExpanded;
-                owner.refreshItems();
-            }
-            return;
-        }
-        y += headerHeight;
-        if (!owner.sendsExpanded)
-            return;
-        for (const auto& item : values)
-        {
-            if (item.type != Item::Type::route)
-                continue;
-            const juce::Rectangle<int> row(
-                4,
-                y,
-                getWidth() - 8,
-                rowHeight - 2);
-            if (row.contains(event.getPosition()))
-            {
-                if (row.withLeft(row.getRight() - 46)
-                        .contains(event.getPosition()))
-                {
-                    if (owner.onRouteEnabledChanged)
-                        owner.onRouteEnabledChanged(
-                            item.trackId,
-                            item.objectId,
-                            !item.enabled);
-                }
-                else if (owner.onRouteOpen)
-                    owner.onRouteOpen(
-                        item.trackId,
-                        item.objectId);
-                return;
-            }
-            y += rowHeight;
-        }
-    }
-
-private:
-    MixerPanel& owner;
-};
 
 MixerPanel::MixerPanel()
 {
-    itemList = std::make_unique<ItemList>(*this);
-    itemsViewport.setViewedComponent(itemList.get(), false);
-    itemsViewport.setScrollBarsShown(true, false);
-    itemsViewport.setScrollBarThickness(8);
-    addAndMakeVisible(itemsViewport);
-
     addChildComponent(volumeEditor);
     volumeEditor.setJustification(
         juce::Justification::centred);
@@ -352,7 +67,6 @@ MixerPanel::MixerPanel()
 
 MixerPanel::~MixerPanel()
 {
-    itemsViewport.setViewedComponent(nullptr, false);
 }
 
 void MixerPanel::setProject(const Project* value)
@@ -360,14 +74,12 @@ void MixerPanel::setProject(const Project* value)
     if (volumeEditor.isVisible())
         cancelVolumeEdit();
     project = value;
-    refreshItems();
     repaint();
 }
 
 void MixerPanel::setSelection(const juce::String& value)
 {
     selectedTrack = value;
-    refreshItems();
     repaint();
 }
 
@@ -397,108 +109,42 @@ std::vector<const Track*> MixerPanel::mixerTracks() const
     return result;
 }
 
-std::vector<MixerPanel::Item> MixerPanel::items() const
+std::vector<MixerPanel::Item> MixerPanel::itemsForTrack(
+    const Track& track) const
 {
     std::vector<Item> result;
     if (project == nullptr)
         return result;
-    const auto* selected =
-        project->findTrack(selectedTrack);
-    if (selected == nullptr)
-        return result;
-    const auto* insertOwner =
-        selected->parentTrackId.isNotEmpty()
-            ? project->findTrack(selected->parentTrackId)
-            : selected;
-    if (insertOwner != nullptr)
+    for (const auto& insert : track.inserts)
     {
-        for (const auto& insert : insertOwner->inserts)
-        {
-            result.push_back({
-                Item::Type::plugin,
-                insertOwner->id,
-                insert.id,
-                insert.name,
-                (selected->parentTrackId.isNotEmpty()
-                     ? "INHERITED / "
-                     : "")
-                    + insert.format,
-                !insert.bypassed
-            });
-        }
+        result.push_back({
+            Item::Type::plugin,
+            track.id,
+            insert.id,
+            insert.name,
+            insert.format,
+            !insert.bypassed
+        });
     }
-    if (selected->parentTrackId.isEmpty())
+    for (const auto& route : project->routingConnections)
     {
-        for (const auto& route : project->routingConnections)
-        {
-            if (route.sourceTrackId != selected->id
-                || route.kind == RouteKind::mainOutput)
-                continue;
-            result.push_back({
-                Item::Type::route,
-                selected->id,
-                route.id,
-                route.name,
-                routeKindToString(route.kind).toUpperCase()
-                    + " / "
-                    + routeTapToString(route.tap).toUpperCase(),
-                route.enabled && !route.muted
-            });
-        }
+        if (route.sourceTrackId != track.id
+            || route.kind == RouteKind::mainOutput)
+            continue;
+        result.push_back({
+            Item::Type::route,
+            track.id,
+            route.id,
+            route.name,
+            routeKindToString(route.kind).toUpperCase(),
+            route.enabled && !route.muted
+        });
     }
     return result;
 }
 
-void MixerPanel::refreshItems()
-{
-    if (itemList == nullptr)
-        return;
-    constexpr auto rowHeight = 36;
-    const auto values = items();
-    const auto inserts = static_cast<int>(
-        std::count_if(
-            values.cbegin(),
-            values.cend(),
-            [](const auto& item)
-            {
-                return item.type == Item::Type::plugin;
-            }));
-    const auto sends = static_cast<int>(
-        std::count_if(
-            values.cbegin(),
-            values.cend(),
-            [](const auto& item)
-            {
-                return item.type == Item::Type::route;
-            }));
-    const auto contentHeight =
-        60
-        + (insertsExpanded
-               ? juce::jmax(30, inserts * rowHeight)
-               : 0)
-        + (sendsExpanded
-               ? juce::jmax(30, sends * rowHeight)
-               : 0);
-    itemList->setSize(
-        juce::jmax(1, itemsViewport.getWidth() - 8),
-        juce::jmax(
-            itemsViewport.getHeight(),
-            contentHeight));
-    itemList->repaint();
-}
-
 void MixerPanel::resized()
 {
-    const auto listWidth = juce::jlimit(
-        300,
-        420,
-        getWidth() / 3);
-    itemsViewport.setBounds(
-        getWidth() - listWidth,
-        30,
-        listWidth,
-        juce::jmax(0, getHeight() - 38));
-    refreshItems();
 }
 
 void MixerPanel::paint(juce::Graphics& graphics)
@@ -507,12 +153,11 @@ void MixerPanel::paint(juce::Graphics& graphics)
     if (project == nullptr || project->tracks.empty())
         return;
 
-    const auto itemListLeft = itemsViewport.getX();
     auto x = 14;
 
     for (const auto* track : mixerTracks())
     {
-        if (x + stripWidth > itemListLeft - 36)
+        if (x + stripWidth > getWidth() - 42)
             break;
         const juce::Rectangle<int> strip(
             x,
@@ -734,6 +379,142 @@ void MixerPanel::paint(juce::Graphics& graphics)
             decibelBounds.toNearestInt(),
             juce::Justification::centred);
 
+        const auto values = itemsForTrack(*track);
+        const auto drawProcessingSection =
+            [&graphics, &strip, &values](
+                Item::Type type,
+                const juce::String& title,
+                int sectionTop)
+        {
+            const auto count = static_cast<int>(
+                std::count_if(
+                    values.cbegin(),
+                    values.cend(),
+                    [type](const auto& item)
+                    {
+                        return item.type == type;
+                    }));
+            auto header = juce::Rectangle<int>(
+                strip.getX() + 4,
+                sectionTop,
+                strip.getWidth() - 8,
+                processingHeaderHeight - 2);
+            graphics.setColour(
+                juce::Colour(
+                    StudioColours::transportRaised));
+            graphics.fillRoundedRectangle(
+                header.toFloat(),
+                3.0f);
+            graphics.setColour(
+                juce::Colour(StudioColours::text));
+            graphics.setFont(
+                juce::Font(
+                    juce::FontOptions(
+                        9.0f,
+                        juce::Font::bold)));
+            graphics.drawText(
+                title
+                    + (count > 0
+                           ? " " + juce::String(count)
+                           : juce::String()),
+                header.withTrimmedLeft(6)
+                    .withTrimmedRight(28),
+                juce::Justification::centredLeft);
+            graphics.setFont(
+                juce::Font(
+                    juce::FontOptions(
+                        15.0f,
+                        juce::Font::bold)));
+            graphics.drawText(
+                "+",
+                header.removeFromRight(26),
+                juce::Justification::centred);
+
+            auto rowY =
+                sectionTop + processingHeaderHeight;
+            auto drawn = 0;
+            for (const auto& item : values)
+            {
+                if (item.type != type
+                    || drawn >= visibleProcessingRows)
+                    continue;
+                const auto row = juce::Rectangle<int>(
+                    strip.getX() + 4,
+                    rowY,
+                    strip.getWidth() - 8,
+                    processingRowHeight - 2);
+                graphics.setColour(
+                    juce::Colour(StudioColours::window));
+                graphics.fillRoundedRectangle(
+                    row.toFloat(),
+                    3.0f);
+                graphics.setColour(
+                    juce::Colour(StudioColours::border));
+                graphics.drawRoundedRectangle(
+                    row.toFloat(),
+                    3.0f,
+                    1.0f);
+                graphics.setColour(
+                    juce::Colour(StudioColours::text));
+                graphics.setFont(
+                    juce::Font(
+                        juce::FontOptions(8.5f)));
+                graphics.drawFittedText(
+                    item.title,
+                    row.withTrimmedLeft(6)
+                        .withTrimmedRight(28),
+                    juce::Justification::centredLeft,
+                    1);
+                const auto toggle =
+                    row.withLeft(row.getRight() - 26)
+                        .reduced(3);
+                graphics.setColour(
+                    juce::Colour(
+                        item.enabled
+                            ? StudioColours::green
+                            : StudioColours::amber));
+                graphics.fillRoundedRectangle(
+                    toggle.toFloat(),
+                    3.0f);
+                drawStudioIcon(
+                    graphics,
+                    StudioIcon::power,
+                    toggle.toFloat().reduced(5.0f),
+                    juce::Colours::white,
+                    1.2f);
+                rowY += processingRowHeight;
+                ++drawn;
+            }
+            if (drawn == 0)
+            {
+                graphics.setColour(
+                    juce::Colour(
+                        StudioColours::secondaryText));
+                graphics.setFont(
+                    juce::Font(
+                        juce::FontOptions(8.0f)));
+                graphics.drawText(
+                    type == Item::Type::plugin
+                        ? "No inserts"
+                        : "No sends",
+                    strip.getX() + 10,
+                    rowY,
+                    strip.getWidth() - 20,
+                    processingRowHeight,
+                    juce::Justification::centredLeft);
+            }
+        };
+        const auto insertTop =
+            strip.getY() + stripProcessingTop;
+        drawProcessingSection(
+            Item::Type::plugin,
+            "INSERTS",
+            insertTop);
+        drawProcessingSection(
+            Item::Type::route,
+            "SENDS",
+            insertTop + processingSectionHeight);
+
         graphics.setColour(
             juce::Colour(StudioColours::secondaryText));
         graphics.setFont(juce::Font(juce::FontOptions(7.5f)));
@@ -824,23 +605,7 @@ void MixerPanel::paint(juce::Graphics& graphics)
         x += stripWidth + stripGap;
     }
 
-    graphics.setColour(juce::Colour(StudioColours::border));
-    graphics.drawVerticalLine(
-        itemListLeft - 8,
-        0.0f,
-        static_cast<float>(getHeight()));
-    graphics.setColour(juce::Colour(StudioColours::secondaryText));
-    graphics.setFont(juce::Font(
-        juce::FontOptions(10.0f, juce::Font::bold)));
-    graphics.drawText(
-        "INSERTS & SENDS",
-        itemListLeft,
-        4,
-        itemsViewport.getWidth(),
-        20,
-        juce::Justification::centredLeft);
-
-    const auto meterX = itemListLeft - 30;
+    const auto meterX = getWidth() - 28;
     const auto meterHeight = getHeight() - 58;
     graphics.setColour(juce::Colour(StudioColours::window));
     graphics.fillRoundedRectangle(static_cast<float>(meterX),
@@ -945,6 +710,103 @@ void MixerPanel::mouseDown(const juce::MouseEvent& event)
             onTrackArm(track->id);
         return;
     }
+
+    const auto values = itemsForTrack(*track);
+    const auto handleProcessingSection =
+        [this, &event, &strip, &values, track](
+            Item::Type type,
+            int sectionTop) -> bool
+    {
+        const auto header = juce::Rectangle<int>(
+            strip.getX() + 4,
+            sectionTop,
+            strip.getWidth() - 8,
+            processingHeaderHeight - 2);
+        if (header.contains(event.getPosition()))
+        {
+            const auto addBounds =
+                header.withLeft(header.getRight() - 30);
+            if (!addBounds.contains(event.getPosition()))
+                return true;
+            if (type == Item::Type::plugin)
+            {
+                if (onAddInsert)
+                    onAddInsert(
+                        track->id,
+                        localAreaToGlobal(addBounds));
+            }
+            else if (onAddSend)
+            {
+                onAddSend(track->id);
+            }
+            return true;
+        }
+
+        auto rowY = sectionTop + processingHeaderHeight;
+        auto drawn = 0;
+        for (const auto& item : values)
+        {
+            if (item.type != type
+                || drawn >= visibleProcessingRows)
+                continue;
+            const auto row = juce::Rectangle<int>(
+                strip.getX() + 4,
+                rowY,
+                strip.getWidth() - 8,
+                processingRowHeight - 2);
+            if (row.contains(event.getPosition()))
+            {
+                const auto power = row.withLeft(
+                    row.getRight() - 28);
+                if (power.contains(event.getPosition()))
+                {
+                    if (type == Item::Type::plugin
+                        && onPluginEnabledChanged)
+                    {
+                        onPluginEnabledChanged(
+                            item.trackId,
+                            item.objectId,
+                            !item.enabled);
+                    }
+                    else if (type == Item::Type::route
+                             && onRouteEnabledChanged)
+                    {
+                        onRouteEnabledChanged(
+                            item.trackId,
+                            item.objectId,
+                            !item.enabled);
+                    }
+                }
+                else if (type == Item::Type::plugin
+                         && onPluginOpen)
+                {
+                    onPluginOpen(
+                        item.trackId,
+                        item.objectId);
+                }
+                else if (type == Item::Type::route
+                         && onRouteOpen)
+                {
+                    onRouteOpen(
+                        item.trackId,
+                        item.objectId);
+                }
+                return true;
+            }
+            rowY += processingRowHeight;
+            ++drawn;
+        }
+        return false;
+    };
+    const auto insertTop =
+        strip.getY() + stripProcessingTop;
+    if (handleProcessingSection(
+            Item::Type::plugin,
+            insertTop)
+        || handleProcessingSection(
+            Item::Type::route,
+            insertTop + processingSectionHeight))
+        return;
 
     if (track->type == TrackType::folder
         || track->type == TrackType::midi)
