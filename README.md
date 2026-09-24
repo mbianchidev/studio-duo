@@ -8,6 +8,8 @@ Studio Duo is an open-source native desktop DAW for recording, editing, mixing,
 and mastering music. It follows familiar professional workflows while making
 modern metal production faster.
 
+<img width="1829" height="1107" alt="image" src="https://github.com/user-attachments/assets/2f5e3319-cefe-4782-bcd7-119bf23c1c42" />
+
 ## Status
 
 The working C++20 and JUCE 9 application includes Phases 1 through 5: tracking,
