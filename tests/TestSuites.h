@@ -40,3 +40,4 @@ void uiIconTests();
 void timelineMarkerTests();
 void mixerPanelTests();
 void infoPanelTests();
+void reentrancySafeTimerTests();

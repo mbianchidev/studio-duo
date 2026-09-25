@@ -339,6 +339,7 @@ private:
     };
     std::unique_ptr<StudioAudioDeviceManager> deviceManager;
     juce::String audioStartupError;
+    bool audioInitialiseInFlight = false;
     StudioAudioEngine audioEngine;
     Project project { Project::createDefault() };
     CommandStack commandStack;

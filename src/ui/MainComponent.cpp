@@ -2,6 +2,7 @@
 
 #include "AudioExportOptionsComponent.h"
 #include "NumericInput.h"
+#include "ReentrancySafeTimer.h"
 #include "TransportSettingsComponent.h"
 #include "automation/AutomationRecorder.h"
 #include "audio/AudioDeviceProbe.h"
@@ -2041,7 +2042,7 @@ MainComponent::MainComponent(
     setSize(1480, 900);
     if (startAudioOnLaunch)
     {
-        juce::Timer::callAfterDelay(
+        callAfterDelaySafely(
             250,
             [safe = juce::Component::SafePointer<MainComponent>(this)]
             {
@@ -2051,7 +2052,7 @@ MainComponent::MainComponent(
     }
     if (preferences.scanPluginsAtStartup())
     {
-        juce::Timer::callAfterDelay(
+        callAfterDelaySafely(
             500,
             [safe = juce::Component::SafePointer<MainComponent>(this)]
             {
@@ -2059,7 +2060,7 @@ MainComponent::MainComponent(
                     safe->pluginCatalog.startScan(false);
             });
     }
-    juce::Timer::callAfterDelay(
+    callAfterDelaySafely(
         1200,
         [safe = juce::Component::SafePointer<MainComponent>(this)]
         {
@@ -2098,7 +2099,19 @@ void MainComponent::initialiseAudio()
     const ScopedWindowsCrashContext crashContext(
         WindowsCrashContext::audioStartup);
 #endif
-    if (appShutdownPrepared || !ensureAudioDeviceManager())
+    if (appShutdownPrepared)
+        return;
+    if (audioInitialiseInFlight)
+    {
+        logError(
+            "audio.startup",
+            "Ignored a re-entrant audio initialization request.");
+        return;
+    }
+    const juce::ScopedValueSetter<bool> initialiseGuard(
+        audioInitialiseInFlight,
+        true);
+    if (!ensureAudioDeviceManager())
         return;
 
     if (currentAudioDevice() != nullptr)
@@ -4155,7 +4168,7 @@ void MainComponent::maybePromptForUpdate()
                     safe->showSettings(true);
                     return;
                 }
-                juce::Timer::callAfterDelay(
+                callAfterDelaySafely(
                     5000,
                     [safe]
                     {

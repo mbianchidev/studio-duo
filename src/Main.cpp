@@ -1,5 +1,6 @@
 #include "ui/MainComponent.h"
 #include "ui/MainWindowSizing.h"
+#include "ui/ReentrancySafeTimer.h"
 #include "plugin_host/PluginBridgeClient.h"
 #include "plugin_host/PluginBridgeWorker.h"
 #include "plugin_host/PluginScanWorker.h"
@@ -186,7 +187,7 @@ public:
 #endif
         if (startupSelfTest)
         {
-            juce::Timer::callAfterDelay(750, [this]
+            callAfterDelaySafely(750, [this]
             {
                 const auto* content = mainWindow != nullptr
                     ? dynamic_cast<MainComponent*>(mainWindow->getContentComponent())
