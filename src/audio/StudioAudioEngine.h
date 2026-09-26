@@ -850,8 +850,8 @@ private:
     };
     static constexpr int softwareMidiCapacity = 512;
     juce::AbstractFifo softwareMidiFifo { softwareMidiCapacity };
-    std::array<SoftwareMidiEvent, softwareMidiCapacity> queuedSoftwareMidi;
-    std::array<SoftwareMidiEvent, softwareMidiCapacity> incomingSoftwareMidi;
+    std::unique_ptr<SoftwareMidiEvent[]> queuedSoftwareMidi;
+    std::unique_ptr<SoftwareMidiEvent[]> incomingSoftwareMidi;
     std::atomic<std::uint64_t> softwareMidiGeneration { 0 };
     std::atomic<bool> softwareMidiAuditionEnabled { false };
     MidiCaptureBuffer midiCapture;

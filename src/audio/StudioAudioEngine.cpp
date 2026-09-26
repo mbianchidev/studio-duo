@@ -406,7 +406,9 @@ void StudioAudioEngine::LockFreeRecorder::run()
 StudioAudioEngine::StudioAudioEngine(
     juce::File pluginBridgeWorker)
     : pluginBridgeWorkerExecutable(
-          std::move(pluginBridgeWorker))
+          std::move(pluginBridgeWorker)),
+      queuedSoftwareMidi(std::make_unique<SoftwareMidiEvent[]>(softwareMidiCapacity)),
+      incomingSoftwareMidi(std::make_unique<SoftwareMidiEvent[]>(softwareMidiCapacity))
 {
     formatManager.registerBasicFormats();
     midiCollector.reset(sampleRate.load(std::memory_order_relaxed));

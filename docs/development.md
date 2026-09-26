@@ -461,7 +461,8 @@ leaving the existing live fan-out untouched. Stop converts the captured
 channel messages into ordinary notes outside the callback.
 
 `StudioAudioEngine::enqueueMidiInput` accepts track-targeted software MIDI from
-the UI. A bounded, preallocated FIFO transfers timestamped short messages to
+the UI. A bounded FIFO with buffers allocated on the heap during engine
+construction transfers timestamped short messages to
 the audio callback, which schedules them within the input block and injects
 them into the selected track's existing MIDI/plugin graph. Hardware input
 retains its armed-track fan-out. Software input tags its destination in the
