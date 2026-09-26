@@ -31,8 +31,8 @@ void DrumPerformanceComponent::PadButton::paintButton(
     graphics.drawRoundedRectangle(
         bounds, 5.0f, hasKeyboardFocus(true) || getToggleState() ? 2.0f : 1.0f);
 
-    auto text = getLocalBounds().reduced(8, 5);
-    auto badge = text.removeFromTop(18);
+    auto contentBounds = getLocalBounds().reduced(8, 5);
+    auto badge = contentBounds.removeFromTop(18);
     graphics.setColour(accent);
     graphics.setFont(juce::Font(juce::FontOptions(13.0f, juce::Font::bold)));
     graphics.drawText(juce::String::charToString(static_cast<juce::juce_wchar>(keyCode)),
@@ -43,7 +43,7 @@ void DrumPerformanceComponent::PadButton::paintButton(
                       juce::Justification::centredRight);
     graphics.setColour(juce::Colour(StudioColours::text));
     graphics.setFont(13.0f);
-    graphics.drawFittedText(soundName, text, juce::Justification::centredLeft, 2);
+    graphics.drawFittedText(soundName, contentBounds, juce::Justification::centredLeft, 2);
 }
 
 DrumPerformanceComponent::DrumPerformanceComponent()
