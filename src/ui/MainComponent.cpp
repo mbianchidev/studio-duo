@@ -1719,6 +1719,31 @@ MainComponent::MainComponent(
         applyMidiRoutingTemplate(templateId);
     };
     midiEditor.onClose = [this] { selectTrack(selectedTrackId); };
+    auto& drumPads = midiEditor.drumPerformance();
+    drumPads.onMidiMessage = [this](const auto& trackId, const auto& message)
+    {
+        if (currentAudioDevice() == nullptr)
+            return juce::Result::fail(
+                "Open Settings > Audio / MIDI and enable an audio output before playing drum pads.");
+        return audioEngine.enqueueMidiInput(trackId, message);
+    };
+    drumPads.onStatus = [this](const auto& message, bool error)
+    {
+        setStatus(message, error);
+    };
+    drumPads.onAuditionChanged = [this](bool enabled)
+    {
+        audioEngine.setMidiAuditionEnabled(enabled);
+    };
+    drumPads.onPlay = [this] { togglePlayback(); };
+    drumPads.onRecord = [this] { toggleRecording(); };
+    drumPads.onClick = [this]
+    {
+        changeTransportState([](auto& state)
+        {
+            state.metronomeEnabled = !state.metronomeEnabled;
+        });
+    };
     midiEditor.setVisible(false);
     addAndMakeVisible(midiEditor);
 
@@ -2259,6 +2284,8 @@ bool MainComponent::prepareForShutdown()
         return true;
     appShutdownPrepared = true;
     stopTimer();
+    midiEditor.drumPerformance().setKeyboardEnabled(false);
+    audioEngine.setMidiAuditionEnabled(false);
     compatibilityValidator.removeAllJobs(true, 2000);
     exportWorker.removeAllJobs(true, 30000);
     if (audioEngine.isRecording())
@@ -2766,6 +2793,12 @@ void MainComponent::timerCallback()
     playButton.setTooltip(
         playing ? "Pause playback (Space)" : "Play (Space)");
     const auto recording = hasActiveRecordingTargets();
+    midiEditor.drumPerformance().setTransportState(
+        juce::String(musicalPosition.bar) + "." + juce::String(musicalPosition.beat)
+            + "  " + juce::String(project.tempoAt(position), 1) + " BPM",
+        playing, recording, project.metronomeEnabled,
+        recording && position < activeRecordingPlan.captureStartSeconds
+            && audioEngine.midiRecordingDurationSeconds() <= 0.0);
     recordButton.setIcon(
         recording ? StudioIcon::stop : StudioIcon::record);
     recordButton.setAccessibleLabel(
@@ -4883,6 +4916,20 @@ void MainComponent::toggleRecording()
         return;
     }
 
+    if (midiEditor.isShowingDrumPads())
+    {
+        const auto* track = project.findTrack(selectedTrackId);
+        if (track != nullptr && !track->armed
+            && (track->type == TrackType::midi || track->type == TrackType::instrument))
+        {
+            const auto before = TrackMixState::fromTrack(*track);
+            auto after = before;
+            after.armed = true;
+            if (!perform(std::make_unique<SetTrackMixCommand>(track->id, before, after)))
+                return;
+        }
+    }
+
     auto parentIds = project.armedAudioParentTrackIds();
     std::vector<juce::String> midiTrackIds;
     for (const auto& track : project.tracks)
@@ -5048,6 +5095,7 @@ void MainComponent::finishRecording()
     if (!hasActiveRecordingTargets() && !audioEngine.isRecording())
         return;
 
+    midiEditor.drumPerformance().releaseAllNotes();
     auto pendingTargets = std::move(activeRecordingTargets);
     activeRecordingTargets.clear();
     auto pendingMidiTrackIds = std::move(activeMidiRecordingTrackIds);
@@ -5249,6 +5297,8 @@ void MainComponent::completeRecording(
                     continue;
                 }
                 const DrumMap* drumMap = nullptr;
+                const auto* performanceClip = track->id == selectedTrackId
+                    ? project.findMidiClip(selectedClipId) : nullptr;
                 const auto existingDrumClip = std::find_if(
                     track->midiClips.cbegin(),
                     track->midiClips.cend(),
@@ -5257,7 +5307,9 @@ void MainComponent::completeRecording(
                         return clip.editorMode == MidiEditorMode::drums
                             && clip.drumMapId.isNotEmpty();
                     });
-                if (existingDrumClip != track->midiClips.cend())
+                if (performanceClip != nullptr)
+                    drumMap = project.findDrumMap(performanceClip->drumMapId);
+                if (drumMap == nullptr && existingDrumClip != track->midiClips.cend())
                     drumMap = project.findDrumMap(
                         existingDrumClip->drumMapId);
                 if (drumMap == nullptr
@@ -5272,15 +5324,27 @@ void MainComponent::completeRecording(
                      ++passIndex)
                 {
                     const auto& pass = passes[passIndex];
+                    const auto passStart = midiRecording->captureStartStreamSample
+                        + static_cast<std::int64_t>(std::llround(
+                            pass.sourceOffsetSeconds * midiRecording->sampleRate));
+                    const auto passEnd = passStart + static_cast<std::int64_t>(
+                        std::llround(pass.durationSeconds * midiRecording->sampleRate));
+                    const auto targetKey = midiInputTrackKey(track->id);
+                    if (std::none_of(
+                            midiRecording->captured.events.cbegin(),
+                            midiRecording->captured.events.cend(),
+                            [passStart, passEnd, targetKey](const auto& event)
+                            {
+                                return (event.targetTrackKey == 0 || event.targetTrackKey == targetKey)
+                                    && event.streamSample >= passStart && event.streamSample < passEnd
+                                    && juce::MidiMessage(event.data.data(), event.size, 0.0).isNoteOn();
+                            }))
+                        continue;
                     juce::String conversionError;
                     auto converted = convertCapturedMidiToClip(
                         project,
                         midiRecording->captured,
-                        midiRecording->captureStartStreamSample
-                            + static_cast<std::int64_t>(
-                                std::llround(
-                                    pass.sourceOffsetSeconds
-                                    * midiRecording->sampleRate)),
+                        passStart,
                         pass.timelineStartSeconds,
                         pass.durationSeconds,
                         midiRecording->sampleRate,
@@ -5293,7 +5357,8 @@ void MainComponent::completeRecording(
                                            static_cast<int>(
                                                passIndex + 1))
                                    : juce::String()),
-                        conversionError);
+                        conversionError,
+                        track->id);
                     if (!converted.has_value())
                     {
                         warning << (warning.isNotEmpty() ? " " : "")
@@ -5301,6 +5366,8 @@ void MainComponent::completeRecording(
                                 << conversionError;
                         continue;
                     }
+                    if (performanceClip != nullptr)
+                        converted->clip.drumPadBindings = performanceClip->drumPadBindings;
                     if (selectionTrackId.isEmpty())
                     {
                         selectionTrackId = track->id;
@@ -5471,6 +5538,7 @@ void MainComponent::showAddTrackMenu()
     };
     menu.addItem("Audio track", add(TrackType::audio));
     menu.addItem("Instrument track", add(TrackType::instrument));
+    menu.addItem("Drum performance track", [this] { addDrumPerformanceTrack(); });
     menu.addItem("MIDI track", add(TrackType::midi));
     menu.addItem("Aux track", add(TrackType::aux));
     menu.addItem("Bus track", add(TrackType::bus));
@@ -5490,6 +5558,24 @@ void MainComponent::showAddTrackMenu()
                  add(TrackType::controlRoom));
     menu.showMenuAsync(
         juce::PopupMenu::Options().withTargetComponent(addTrackButton));
+}
+
+void MainComponent::addDrumPerformanceTrack()
+{
+    if (hasActiveRecordingTargets() || recordingFinalizationInProgress)
+    {
+        setStatus("Stop and finalize the current take before adding a drum performance track.", true);
+        return;
+    }
+    auto track = ProjectTemplates::createDrumPerformanceTrack(project, audioEngine.positionSeconds());
+    const auto trackId = track.id;
+    const auto clipId = track.midiClips.front().id;
+    if (perform(std::make_unique<AddTrackCommand>(std::move(track))))
+    {
+        selectClip(trackId, clipId);
+        midiEditor.showDrumPads();
+        setStatus("Added a drum instrument and pads. Enable Keyboard to play; Record uses the song's count-in and click.");
+    }
 }
 
 void MainComponent::duplicateSelectedTrack()
@@ -6281,7 +6367,7 @@ void MainComponent::captureRetrospectiveMidi()
         return;
     }
 
-    auto capture = audioEngine.captureRetrospectiveMidi(30.0);
+    auto capture = audioEngine.captureRetrospectiveMidi(30.0, track->id);
     if (capture.result.failed())
     {
         setStatus(capture.result.getErrorMessage(), true);
@@ -6304,12 +6390,15 @@ void MainComponent::captureRetrospectiveMidi()
         capture.sampleRate,
         map,
         "Retrospective MIDI",
-        error);
+        error,
+        track->id);
     if (!converted.has_value())
     {
         setStatus(error, true);
         return;
     }
+    if (const auto* selected = project.findMidiClip(selectedClipId))
+        converted->clip.drumPadBindings = selected->drumPadBindings;
     const auto clipId = converted->clip.id;
     if (perform(std::make_unique<AddMidiClipCommand>(
             track->id,
@@ -6391,7 +6480,7 @@ void MainComponent::importDrumMap()
                 edited.editorMode = MidiEditorMode::drums;
                 edited.drumMapId = map->id;
                 for (auto& note : edited.notes)
-                    applyDrumMapMetadata(note, &*map, 0);
+                    applyDrumMapMetadata(note, &*map);
                 commands.push_back(
                     std::make_unique<SetMidiClipStateCommand>(
                         safe->selectedTrackId,

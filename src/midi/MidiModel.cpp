@@ -1,6 +1,7 @@
 #include "MidiModel.h"
 
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <cmath>
 #include <limits>
@@ -346,6 +347,15 @@ juce::var MidiClip::toVar() const
     object->setProperty("humanizeTimingTicks", humanizeTimingTicks);
     object->setProperty("humanizeVelocity", humanizeVelocity);
     object->setProperty("muted", muted);
+    juce::Array<juce::var> padValues;
+    for (const auto& binding : drumPadBindings)
+    {
+        auto pad = std::make_unique<juce::DynamicObject>();
+        pad->setProperty("noteNumber", binding.noteNumber);
+        pad->setProperty("keyCode", binding.keyCode);
+        padValues.add(juce::var(pad.release()));
+    }
+    object->setProperty("drumPadBindings", juce::var(padValues));
     juce::Array<juce::var> noteValues;
     noteValues.ensureStorageAllocated(static_cast<int>(notes.size()));
     for (const auto& note : notes)
@@ -401,6 +411,46 @@ std::optional<MidiClip> MidiClip::fromVar(const juce::var& value,
         "humanizeVelocity",
         0);
     clip.muted = booleanProperty(*object, "muted", false);
+    const auto padValues = object->getProperty("drumPadBindings");
+    if (!padValues.isVoid())
+    {
+        if (!padValues.isArray()
+            || (padValues.size() != 0
+                && padValues.size() != static_cast<int>(drumPadCount)))
+        {
+            error = "Drum-pad bindings must be empty or contain exactly 12 pads.";
+            return std::nullopt;
+        }
+        for (const auto& padValue : *padValues.getArray())
+        {
+            const auto* pad = requireObject(padValue, error, "Drum-pad binding");
+            if (pad == nullptr)
+                return std::nullopt;
+            const auto pitch = pad->getProperty("noteNumber");
+            const auto key = pad->getProperty("keyCode");
+            if ((!pitch.isInt() && !pitch.isInt64())
+                || static_cast<juce::int64>(pitch) < 0
+                || static_cast<juce::int64>(pitch) > 127
+                || (!key.isInt() && !key.isInt64())
+                || static_cast<juce::int64>(key) < '0'
+                || static_cast<juce::int64>(key) > 'Z'
+                || !isDrumPadKey(static_cast<int>(key))
+                || std::any_of(
+                    clip.drumPadBindings.cbegin(),
+                    clip.drumPadBindings.cend(),
+                    [&key](const auto& binding)
+                    {
+                        return binding.keyCode == static_cast<int>(key);
+                    }))
+            {
+                error = "Drum pads require MIDI notes 0-127 and unique A-Z or 0-9 keys.";
+                return std::nullopt;
+            }
+            clip.drumPadBindings.push_back({
+                static_cast<int>(pitch), static_cast<int>(key)
+            });
+        }
+    }
     const auto noteValues = object->getProperty("notes");
     if (!noteValues.isArray())
     {
@@ -905,6 +955,29 @@ std::optional<CymbalState> cymbalStateFromString(
     if (value == "closed") return CymbalState::closed;
     if (value == "pedal") return CymbalState::pedal;
     return std::nullopt;
+}
+
+bool isDrumPadKey(int keyCode) noexcept
+{
+    return (keyCode >= 'A' && keyCode <= 'Z')
+        || (keyCode >= '0' && keyCode <= '9');
+}
+
+std::vector<DrumPadBinding> defaultDrumPadBindings(const DrumMap* map)
+{
+    constexpr std::array pitches { 49, 51, 48, 45, 42, 46, 38, 41, 36, 37, 39, 52 };
+    constexpr std::array keys { 'Q', 'W', 'E', 'R', 'A', 'S', 'D', 'F', 'Z', 'X', 'C', 'V' };
+    std::vector<DrumPadBinding> result;
+    result.reserve(drumPadCount);
+    for (std::size_t index = 0; index < drumPadCount; ++index)
+    {
+        auto pitch = pitches[index];
+        if (map != nullptr && !map->entries.empty()
+            && map->entryForPitch(pitch) == nullptr)
+            pitch = map->entries[index % map->entries.size()].noteNumber;
+        result.push_back({ pitch, keys[index] });
+    }
+    return result;
 }
 
 DrumMap createDefaultMetalDrumMap()

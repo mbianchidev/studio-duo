@@ -453,7 +453,7 @@ MidiNote createMidiNote(const MidiClip& clip,
 
 void applyDrumMapMetadata(MidiNote& note,
                           const DrumMap* drumMap,
-                          std::size_t roundRobinIndex)
+                          std::optional<std::size_t> roundRobinIndex)
 {
     note.drumMapEntryId.clear();
     note.articulation.clear();
@@ -461,12 +461,16 @@ void applyDrumMapMetadata(MidiNote& note,
     note.cymbalState = CymbalState::none;
     note.footControlValue = -1;
     note.roundRobinHint = -1;
-    applyDrumMetadata(
-        note,
-        drumMap != nullptr
-            ? drumMap->entryForPitch(note.pitch)
-            : nullptr,
-        roundRobinIndex);
+    const auto* entry = drumMap != nullptr ? drumMap->entryForPitch(note.pitch) : nullptr;
+    if (!roundRobinIndex.has_value() && entry != nullptr)
+    {
+        const auto found = std::find(
+            entry->roundRobinNotes.cbegin(), entry->roundRobinNotes.cend(), note.pitch);
+        roundRobinIndex = found != entry->roundRobinNotes.cend()
+            ? static_cast<std::size_t>(std::distance(entry->roundRobinNotes.cbegin(), found)) + 1
+            : 0;
+    }
+    applyDrumMetadata(note, entry, roundRobinIndex.value_or(0));
 }
 
 bool moveMidiNotes(MidiClip& clip,
@@ -719,7 +723,8 @@ std::optional<MidiCaptureConversion> convertCapturedMidiToClip(
     double sampleRate,
     const DrumMap* drumMap,
     juce::String clipName,
-    juce::String& error)
+    juce::String& error,
+    const juce::String& targetTrackId)
 {
     if (!std::isfinite(timelineStartSeconds)
         || !std::isfinite(captureDurationSeconds)
@@ -749,6 +754,20 @@ std::optional<MidiCaptureConversion> convertCapturedMidiToClip(
 
     std::array<std::vector<std::size_t>, 16 * 128> activeByKey;
     std::array<std::vector<std::size_t>, 16> activeByChannel;
+    std::array<int, 16 * 128> footControlValues;
+    footControlValues.fill(-1);
+    std::array<bool, 128> mappedFootControllers {};
+    if (drumMap != nullptr)
+        for (const auto& entry : drumMap->entries)
+        {
+            if (entry.footControlCC < -1 || entry.footControlCC > 127)
+            {
+                error = "The drum map contains an invalid foot controller.";
+                return std::nullopt;
+            }
+            if (entry.footControlCC >= 0)
+                mappedFootControllers[static_cast<std::size_t>(entry.footControlCC)] = true;
+        }
     const auto beatAtEvent = [&](const CapturedMidiEvent& event)
     {
         const auto seconds = static_cast<double>(
@@ -760,8 +779,18 @@ std::optional<MidiCaptureConversion> convertCapturedMidiToClip(
             - result.clip.startBeats;
     };
 
-    for (const auto& event : captured.events)
+    auto orderedEvents = captured.events;
+    std::stable_sort(
+        orderedEvents.begin(), orderedEvents.end(),
+        [](const auto& left, const auto& right)
+        {
+            return left.streamSample < right.streamSample;
+        });
+    const auto targetKey = midiInputTrackKey(targetTrackId);
+    for (const auto& event : orderedEvents)
     {
+        if (event.targetTrackKey != 0 && event.targetTrackKey != targetKey)
+            continue;
         if (event.streamSample < captureStartStreamSample
             || event.streamSample
                 > captureStartStreamSample
@@ -783,6 +812,24 @@ std::optional<MidiCaptureConversion> convertCapturedMidiToClip(
             0.0,
             result.clip.durationBeats,
             beatAtEvent(event));
+        if (message.isController()
+            && mappedFootControllers[static_cast<std::size_t>(message.getControllerNumber())])
+        {
+            const auto controller = message.getControllerNumber();
+            footControlValues[channelIndex * 128 + static_cast<std::size_t>(controller)]
+                = message.getControllerValue();
+            for (const auto noteIndex : activeByChannel[channelIndex])
+            {
+                auto& activeNote = result.clip.notes[noteIndex];
+                const auto* entry = drumMap->entryForId(activeNote.drumMapEntryId);
+                if (entry != nullptr && entry->footControlCC == controller)
+                    addRecordedExpression(
+                        activeNote, MidiExpressionType::controller, controller,
+                        std::max(0.0, relativeBeat - activeNote.actualStartBeats()),
+                        static_cast<double>(message.getControllerValue()) / 127.0);
+            }
+            continue;
+        }
         if (message.isNoteOn())
         {
             if (relativeBeat >= result.clip.durationBeats)
@@ -803,12 +850,15 @@ std::optional<MidiCaptureConversion> convertCapturedMidiToClip(
                 std::max(
                     1.0 / 128.0,
                     result.clip.durationBeats - relativeBeat));
-            applyDrumMetadata(
-                note,
-                drumMap != nullptr
-                    ? drumMap->entryForPitch(note.pitch)
-                    : nullptr,
-                result.clip.notes.size());
+            const auto* entry = drumMap != nullptr ? drumMap->entryForPitch(note.pitch) : nullptr;
+            applyDrumMapMetadata(note, drumMap);
+            if (entry != nullptr && entry->footControlCC >= 0)
+            {
+                const auto value = footControlValues[
+                    channelIndex * 128 + static_cast<std::size_t>(entry->footControlCC)];
+                if (value >= 0)
+                    note.footControlValue = value;
+            }
             const auto index = result.clip.notes.size();
             result.clip.notes.push_back(std::move(note));
             activeByKey[channelIndex * 128

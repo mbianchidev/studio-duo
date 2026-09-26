@@ -8,6 +8,7 @@
 #include "midi/MidiEditing.h"
 #include "model/ProjectCommands.h"
 #include "model/ProjectModel.h"
+#include "model/ProjectTemplates.h"
 
 #include <algorithm>
 #include <array>
@@ -567,6 +568,38 @@ void drumTailAndVoiceReuse()
            "A dense repeated kit pattern with eight cymbal hits per second reuses expired voices without exhausting the fixed pool.");
 }
 
+void liveDrumPadAudio()
+{
+    auto project = studio::ProjectTemplates::createBlankSong();
+    project.metronomeEnabled = false;
+    auto track = studio::ProjectTemplates::createDrumPerformanceTrack(project, 0.0);
+    track.armed = false;
+    studio::AddTrackCommand addTrack(track);
+    juce::String error;
+    expect(addTrack.perform(project, error), error.toRawUTF8());
+    studio::StudioAudioEngine engine;
+    expect(engine.updateProject(project, { requestFor(track, track.inserts.front()) }).wasOk()
+               && waitForRuntime(engine),
+           "The ready-to-play drum preset creates an actual audio runtime.");
+    engine.setMidiAuditionEnabled(true);
+    const auto silence = engine.renderActiveBlockForTesting(512);
+    expect(magnitude(silence, 0) < 0.000001f,
+           "The drum preset is silent until a pad is played.");
+    expect(engine.enqueueMidiInput(
+               track.id, juce::MidiMessage::noteOn(1, 36, juce::uint8(112))).wasOk(),
+           "A visual drum-pad hit reaches the bundled instrument.");
+    juce::ignoreUnused(engine.renderActiveBlockForTesting(512));
+    const auto hit = engine.renderActiveBlockForTesting(2048);
+    expect(magnitude(hit, 0) > 0.001f && magnitude(hit, 1) > 0.001f,
+           "Drum pads produce stereo audio through the ordinary mixer while stopped and unarmed.");
+    expect(engine.enqueueMidiInput(track.id, juce::MidiMessage::noteOff(1, 36)).wasOk(),
+           "The live drum-pad note can be released.");
+    juce::ignoreUnused(engine.renderActiveBlockForTesting(512));
+    const auto tail = engine.renderActiveBlockForTesting(512);
+    expect(magnitude(tail, 0) > 0.0001f,
+           "One-shot drum tails continue between input events instead of being truncated.");
+}
+
 void drumEngineRoutingAndRender()
 {
     auto project = studio::Project::createDefault();
@@ -1072,6 +1105,7 @@ void bundledDeviceTests()
     registryMetadata();
     drumProcessor();
     drumTailAndVoiceReuse();
+    liveDrumPadAudio();
     drumEngineRoutingAndRender();
     ampCabinetPublicationRace();
     ampProcessorAndCabinetState();

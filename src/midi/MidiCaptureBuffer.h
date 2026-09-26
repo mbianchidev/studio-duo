@@ -25,9 +25,16 @@ struct CapturedMidiEvent
     std::uint64_t ordinal = 0;
     std::int64_t streamSample = 0;
     std::int64_t timelineSample = 0;
+    std::uint64_t targetTrackKey = 0;
     std::array<std::uint8_t, 3> data {};
     std::uint8_t size = 0;
 };
+
+[[nodiscard]] inline std::uint64_t midiInputTrackKey(
+    const juce::String& trackId) noexcept
+{
+    return static_cast<std::uint64_t>(trackId.hashCode64());
+}
 
 struct CapturedMidiWindow
 {
@@ -48,6 +55,10 @@ public:
     void push(const juce::MidiBuffer& messages,
               std::int64_t streamBlockStart,
               std::int64_t timelineBlockStart) noexcept;
+    void pushEvent(const juce::MidiMessage& message,
+                   std::int64_t streamSample,
+                   std::int64_t timelineSample,
+                   std::uint64_t targetTrackKey) noexcept;
 
     [[nodiscard]] std::uint64_t writeOrdinal() const noexcept;
     [[nodiscard]] std::uint64_t unsupportedEventCount() const noexcept;
@@ -72,6 +83,7 @@ private:
         };
         std::atomic<std::int64_t> streamSample { 0 };
         std::atomic<std::int64_t> timelineSample { 0 };
+        std::atomic<std::uint64_t> targetTrackKey { 0 };
         std::atomic<std::uint32_t> packedData { 0 };
         std::atomic<std::uint8_t> size { 0 };
     };
