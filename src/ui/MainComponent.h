@@ -182,6 +182,7 @@ private:
     void addAudioTrack();
     void addBusTrack();
     void addTrack(TrackType type);
+    void addDrumPerformanceTrack();
     void showAddTrackMenu();
     void duplicateSelectedTrack();
     void deleteSelectedTrack();

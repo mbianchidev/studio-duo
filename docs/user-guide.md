@@ -83,6 +83,9 @@ DAWproject exchange, and Phase 5 mastering and release workflows.
 | Piano-roll note move | Arrow keys |
 | Piano-roll note resize | `Shift+Left/Right` |
 | Edit selected MIDI lane | `Alt+Up/Down` |
+| Play drum pads, with Keyboard enabled | `Q W E R`, `A S D F`, `Z X C V` by default |
+| Accent a drum-pad hit | Hold `Shift` with a pad key |
+| Leave drum keyboard/binding mode | `Escape` |
 | Select all notes | `Command/Ctrl+A` while the editor is focused |
 | Zoom timeline out or in | `Command/Ctrl+-` or `Command/Ctrl++` |
 | Reset timeline zoom | `Command/Ctrl+0` |
@@ -409,7 +412,9 @@ of channels 1-16; the metal multi-output template uses those filters.
 Arm any combination of root MIDI and instrument tracks, then press **Start
 Recording** (circle icon).
 Studio Duo records the same enabled hardware MIDI input delivered to live
-routing while audio tracks can record in the same pass. Stopping creates
+routing while audio tracks can record in the same pass. Visual drum-pad input
+is recorded only on its destination track, not every other armed instrument.
+Stopping creates
 ordinary beat-based MIDI clips through one undoable command. Loop passes become
 separate clips at the loop position. Notes keep their channel, velocity,
 release velocity, duration, probability, timing offset, drum metadata, and
@@ -446,6 +451,52 @@ and shows choke groups, cymbal edge/bow/bell/open/closed/pedal/choke states,
 foot-control CCs, and round-robin hints. **IMPORT MAP** accepts the documented
 JSON drum-map object. **EDIT MAP** changes the selected row without replacing
 its stable ID.
+
+### Live drum pads
+
+Choose **Add Track > Drum performance track** for an armed instrument track,
+the bundled Metal Drum Composer, and a one-bar MIDI clip at the playhead.
+The pad view opens immediately; no MIDI controller or sample download is
+required. An audio output must be enabled in **Settings > Audio / MIDI**.
+For an existing MIDI/instrument track, select a clip and choose **DRUM PADS**.
+This uses that track's existing instrument and routes; it does not replace
+inserts or delete the clip's notes.
+
+Click one of the twelve pads to hear and select it. **Sound / Articulation**
+chooses the selected pad's sound: named kit pieces appear first, followed by
+other MIDI notes for custom instruments. The instrument determines which notes
+produce sound. **Velocity** sets hit strength, and **Channel** selects MIDI
+channel 1-16. Import a matching drum map when using another drum instrument.
+
+Enable **KEYBOARD** to play the displayed bindings. The default layout is
+`Q W E R / A S D F / Z X C V`; simultaneous keys play together, and holding a
+key does not repeatedly retrigger it. Hold `Shift` for a full-velocity accent.
+Choose a pad and **BIND KEY** to assign an unused letter or number. Sound and
+key assignments are undoable and saved in the clip, including native project
+save/reopen, copying, and duplication.
+
+Keyboard playing is scoped to the pad surface and pad buttons, not text
+fields or sound selectors. `Space` still plays/pauses, and `Command/Ctrl`
+shortcuts remain available. `Escape`, leaving the panel, hiding it, or changing
+clips releases held notes and exits keyboard mode. Buttons and selectors also
+work through normal keyboard focus; `Enter` auditions a focused pad.
+
+Use **PLAY** to practice against other tracks and **CLICK** to toggle the
+song's metronome. **RECORD** arms this track if necessary and uses the existing
+recording transport, including configured count-in/pre-roll, punch, and loop
+settings. The position/BPM display follows the song's tempo map. Stop the take
+to create new, undoable MIDI clips; existing clips remain intact, and loop
+passes become separate clips. Timing is captured as played, without automatic
+quantization. **CAPTURE** can also recover recent pad playing on the selected
+track.
+
+Choose **DRUM PADS** again to return to the drum grid, or **DRUMS/PIANO** to
+switch editor type. Recorded pitches, articulations, velocity, timing, and
+duration remain ordinary notes editable in either grid. Pad assignments are a
+Studio Duo editing preference; DAWproject exchange carries the resulting
+musical notes, not the keyboard layout.
+
+### Drum grid tools
 
 The **FLAM**, **ROLL**, **GRAVITY**, **BLAST**, and **DOUBLE KICK** tools insert
 fixed grid-derived notes, never opaque generated regions. Saved pattern aliases

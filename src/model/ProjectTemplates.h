@@ -18,6 +18,8 @@ class ProjectTemplates
 {
 public:
     [[nodiscard]] static Project createBlankSong();
+    [[nodiscard]] static Track createDrumPerformanceTrack(
+        const Project& project, double startSeconds);
     [[nodiscard]] static const std::vector<
         ProjectTemplateDescriptor>& descriptors();
     [[nodiscard]] static std::optional<Project> create(

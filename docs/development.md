@@ -191,6 +191,17 @@ a sample-accurate audio editor.
    repeated-hit variation, hi-hat CC4, and mapped choke notes are audible.
    Create aux or bus tracks and route the insert's Kick, Snare, Toms, and
    Cymbals outputs from the routing panel.
+8. Choose **Add Track > Drum performance track** without a hardware MIDI
+   input. Play the pads with the mouse, enable Keyboard, and play simultaneous
+   kick/snare/hat keys with and without Shift accents. Held keys must not
+   auto-repeat. Rebind a pad, change its sound, undo/redo, and save/reopen.
+9. Play an accompaniment track, enable the click, and record the pads. Verify
+   count-in/pre-roll and loop passes, then edit the take in the piano roll.
+   Arm a second instrument and verify it neither hears nor records these pad
+   hits. Hardware MIDI must still fan out to all armed tracks.
+10. Hold a pad key, then use Escape, change clips, switch windows, or close the
+    editor. Verify note release and that typing in a text field never triggers
+    pads. Stop immediately after a hit and verify no queued hit sounds later.
 
 ## Manual bundled amp test
 
@@ -425,6 +436,10 @@ summing dependency and aligns sidechains to the input of their selected insert.
 and routing-template records. Notes use musical beats plus an explicit saved
 timing offset; velocity, duration, probability, articulation metadata,
 foot-control values, and round-robin hints remain ordinary editable fields.
+MIDI clips may also carry `drumPadBindings`: twelve ordered `{ noteNumber,
+keyCode }` records. Pitches are 0-127 and keys are unique ASCII A-Z or 0-9.
+An absent or empty array uses the default pad layout, keeping existing native
+projects compatible. Bindings use the same clip-state commands as note edits.
 Every persisted MIDI object has a stable ID, and project loading rejects
 duplicate IDs or dangling drum-map references. MIDI commands use the same
 `CommandStack` and atomic batch behavior as audio edits.
@@ -445,6 +460,23 @@ or logging. Normal recording stores quiesced ordinal/sample boundaries while
 leaving the existing live fan-out untouched. Stop converts the captured
 channel messages into ordinary notes outside the callback.
 
+`StudioAudioEngine::enqueueMidiInput` accepts track-targeted software MIDI from
+the UI. A bounded, preallocated FIFO transfers timestamped short messages to
+the audio callback, which schedules them within the input block and injects
+them into the selected track's existing MIDI/plugin graph. Hardware input
+retains its armed-track fan-out. Software input tags its destination in the
+same capture ring's atomically published slot; recording and retrospective
+conversion filter that tag before producing clips. Mixed input is ordered by
+stream sample outside the callback. Stop, device changes, and queue overflow
+invalidate pending software input; overflow returns an explicit error rather
+than silently losing note-offs. Visible pads keep the normal graph processing
+while stopped so auditioned drum tails are not cut between hits.
+
+Drum capture preserves the incoming MIDI pitch and explicit round-robin
+variant rather than assigning a new variant based on event order. Mapped foot
+controllers preceding a hit become its foot-control value; subsequent foot
+gestures remain controller expression on the affected active drum notes.
+
 Scheduled note state uses fixed per-track/channel/key counters in the published
 snapshot. Pause, seek, loop wrap, and automatic transport end inject note-offs
 plus channel all-notes-off messages through the same MIDI routing graph before
@@ -464,6 +496,13 @@ before/after clip states to typed commands, so drags remain one undo step.
 Standard controls remain tabbable with a visible focus ring; `Enter`, arrows,
 `Shift+Left/Right`, `Alt+Up/Down`, select-all, and delete provide keyboard
 alternatives for note and lane editing.
+Its alternate `DrumPerformanceComponent` provides twelve native pad buttons,
+sound/channel/velocity controls, explicit keyboard and key-binding modes, and
+callbacks to the existing transport. It never inserts a note on a UI timer:
+all performance notes come back through the audio engine's capture conversion.
+Key-up, focus/visibility changes, and clip changes release held notes to their
+original track. `ProjectTemplates::createDrumPerformanceTrack` supplies the
+bundled-instrument quick-start without replacing an existing instrument.
 
 Automation lanes use seconds or musical beats and compile off-thread to integer
 sample positions. Track and route controls evaluate per sample. External plugin

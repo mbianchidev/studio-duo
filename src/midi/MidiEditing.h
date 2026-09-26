@@ -82,7 +82,7 @@ struct MidiCaptureConversion
     const DrumMap* drumMap);
 void applyDrumMapMetadata(MidiNote& note,
                           const DrumMap* drumMap,
-                          std::size_t roundRobinIndex = 0);
+                          std::optional<std::size_t> roundRobinIndex = std::nullopt);
 [[nodiscard]] bool moveMidiNotes(
     MidiClip& clip,
     const std::vector<juce::String>& noteIds,
@@ -118,5 +118,6 @@ convertCapturedMidiToClip(
     double sampleRate,
     const DrumMap* drumMap,
     juce::String clipName,
-    juce::String& error);
+    juce::String& error,
+    const juce::String& targetTrackId = {});
 }
