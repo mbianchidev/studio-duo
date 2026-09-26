@@ -70,9 +70,9 @@ DrumPerformanceComponent::DrumPerformanceComponent()
     recordButton.onClick = [this] { if (onRecord) onRecord(); };
     clickButton.setTooltip("Toggle the song's metronome");
     clickButton.onClick = [this] { if (onClick) onClick(); };
-    transportLabel.setFont(12.0f);
+    transportLabel.setFont(juce::Font(juce::FontOptions(12.0f)));
     soundLabel.setText("SOUND / ARTICULATION", juce::dontSendNotification);
-    soundLabel.setFont(11.0f);
+    soundLabel.setFont(juce::Font(juce::FontOptions(11.0f)));
     soundSelector.setTitle("Selected drum pad sound");
     soundSelector.setTooltip("Choose the MIDI note and articulation played by the selected pad");
     soundSelector.onChange = [this]
@@ -81,7 +81,7 @@ DrumPerformanceComponent::DrumPerformanceComponent()
             showFailure(assignSound(selectedPad, soundSelector.getSelectedId() - 1));
     };
     velocityLabel.setText("VELOCITY", juce::dontSendNotification);
-    velocityLabel.setFont(11.0f);
+    velocityLabel.setFont(juce::Font(juce::FontOptions(11.0f)));
     velocitySlider.setSliderStyle(juce::Slider::LinearHorizontal);
     velocitySlider.setTextBoxStyle(juce::Slider::TextBoxLeft, false, 42, 22);
     velocitySlider.setRange(1.0, 127.0, 1.0);
@@ -89,7 +89,7 @@ DrumPerformanceComponent::DrumPerformanceComponent()
     velocitySlider.setTitle("Drum hit velocity");
     velocitySlider.setTooltip("Velocity for mouse and keyboard hits; hold Shift for full-velocity accents");
     channelLabel.setText("CHANNEL", juce::dontSendNotification);
-    channelLabel.setFont(11.0f);
+    channelLabel.setFont(juce::Font(juce::FontOptions(11.0f)));
     channelSelector.setTitle("Drum MIDI channel");
     for (int channel = 1; channel <= 16; ++channel)
         channelSelector.addItem(juce::String(channel), channel);
@@ -104,9 +104,9 @@ DrumPerformanceComponent::DrumPerformanceComponent()
             grabKeyboardFocus();
         refreshHint();
     };
-    detailsLabel.setFont(12.0f);
+    detailsLabel.setFont(juce::Font(juce::FontOptions(12.0f)));
     detailsLabel.setJustificationType(juce::Justification::topLeft);
-    hintLabel.setFont(11.0f);
+    hintLabel.setFont(juce::Font(juce::FontOptions(11.0f)));
 
     for (std::size_t index = 0; index < pads.size(); ++index)
     {
