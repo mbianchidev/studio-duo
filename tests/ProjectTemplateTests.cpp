@@ -100,6 +100,16 @@ void projectTemplateTests()
     expectProjectStructure(blank, "Untitled");
     expect(blank.tracks.size() == 1,
            "A blank song starts with only its master track.");
+    const auto drums = studio::ProjectTemplates::createDrumPerformanceTrack(blank, 2.0);
+    expect(drums.type == studio::TrackType::instrument && drums.armed
+               && drums.inserts.size() == 1
+               && drums.inserts.front().pluginIdentifier == "studio.device.drum-composer"
+               && drums.inserts.front().bundledDevice
+               && drums.midiClips.size() == 1
+               && drums.midiClips.front().editorMode == studio::MidiEditorMode::drums
+               && std::abs(drums.midiClips.front().startBeats - blank.beatsAt(2.0)) < 0.0000001
+               && drums.midiClips.front().drumPadBindings.size() == studio::drumPadCount,
+           "The drum performance preset creates an armed, playable bundled instrument with an editable mapped clip at the playhead.");
 
     const auto& descriptors =
         studio::ProjectTemplates::descriptors();

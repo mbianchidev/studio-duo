@@ -142,6 +142,9 @@ public:
     void seekSeconds(double seconds) noexcept;
     [[nodiscard]] bool resetPluginProcessing();
     void setMetronomeEnabled(bool enabled) noexcept;
+    void setMidiAuditionEnabled(bool enabled) noexcept;
+    juce::Result enqueueMidiInput(const juce::String& trackId,
+                                 const juce::MidiMessage& message);
 
     [[nodiscard]] bool isPlaying() const noexcept;
     [[nodiscard]] bool isRecording() const noexcept;
@@ -228,7 +231,8 @@ public:
     void stopRecordingAsync(std::function<void(std::vector<RecordingResult>)> completion);
     [[nodiscard]] MidiRecordingResult stopMidiRecording();
     [[nodiscard]] MidiRecordingResult captureRetrospectiveMidi(
-        double durationSeconds) const;
+        double durationSeconds,
+        const juce::String& targetTrackId = {}) const;
     [[nodiscard]] double midiRecordingDurationSeconds() const noexcept;
     std::optional<double> audioFileDuration(const juce::File& source, juce::String& error);
     std::vector<double> analyseTransients(const AudioClip& clip, juce::String& error);
@@ -835,6 +839,21 @@ private:
     std::atomic<std::uint64_t> midiTerminationHandled { 0 };
     juce::MidiMessageCollector midiCollector;
     juce::MidiBuffer incomingMidi;
+    struct SoftwareMidiEvent
+    {
+        std::uint64_t targetTrackKey = 0;
+        std::uint64_t generation = 0;
+        double timestampSeconds = 0.0;
+        std::array<std::uint8_t, 3> data {};
+        int size = 0;
+        int samplePosition = 0;
+    };
+    static constexpr int softwareMidiCapacity = 512;
+    juce::AbstractFifo softwareMidiFifo { softwareMidiCapacity };
+    std::unique_ptr<SoftwareMidiEvent[]> queuedSoftwareMidi;
+    std::unique_ptr<SoftwareMidiEvent[]> incomingSoftwareMidi;
+    std::atomic<std::uint64_t> softwareMidiGeneration { 0 };
+    std::atomic<bool> softwareMidiAuditionEnabled { false };
     MidiCaptureBuffer midiCapture;
     std::atomic<std::int64_t> streamSampleClock { 0 };
     std::atomic<bool> midiRecordingActive { false };

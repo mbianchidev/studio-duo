@@ -10,6 +10,13 @@ processing, and offline render paths as hosted plugins.
 the default Studio Duo Metal drum map. It synthesizes a usable basic kit, so no
 sample library or external file is required.
 
+**Add Track > Drum performance track** creates this instrument, an armed track,
+and a mapped MIDI clip with twelve mouse/keyboard pads. Pad sound assignments
+select notes/articulations from the drum map; they do not replace the
+instrument's synthesis or require sample files. The [live drum-pad
+workflow](user-guide.md#live-drum-pads) records ordinary MIDI through the same
+graph as hardware input and the piano roll.
+
 The instrument responds to normal MIDI:
 
 - note velocity controls hit level through the automatable velocity curve;

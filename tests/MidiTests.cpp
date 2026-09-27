@@ -7,6 +7,7 @@
 #include "model/ProjectCommands.h"
 #include "project_io/ProjectFile.h"
 #include "ui/MidiEditorComponent.h"
+#include "ui/DrumPerformanceComponent.h"
 
 #include <algorithm>
 #include <array>
@@ -100,6 +101,8 @@ void midiPersistence()
     auto project = studio::Project::createDefault();
     auto track = makeMidiTrack(project);
     auto clip = makeMidiClip(project);
+    clip.drumPadBindings = studio::defaultDrumPadBindings(&project.drumMaps.front());
+    clip.drumPadBindings[8] = { 52, 'B' };
     const auto trackId = track.id;
     const auto clipId = clip.id;
     project.findTrack(trackId)->midiClips.push_back(clip);
@@ -154,8 +157,9 @@ void midiPersistence()
     expect(loadedClip != nullptr
                && loadedClip->notes.front().expressions.front().id
                       == clip.notes.front().expressions.front().id
+               && loadedClip->drumPadBindings == clip.drumPadBindings
                && loaded->findDrumMap(clip.drumMapId) != nullptr,
-           "Native project generations restore exact MIDI notes, expression IDs, and maps.");
+           "Native project generations restore exact MIDI notes, expression IDs, maps, and custom drum-pad assignments.");
     package.deleteRecursively();
 
     auto legacy = project.toVar();
@@ -272,6 +276,418 @@ void sustainedCaptureFinalization()
                       - laterOffset)
                       < 0.0000001,
            "Held notes close at the tempo-aware capture end after raw expression offsets are sorted and clamped.");
+}
+
+void drumPadBindingsPersistence()
+{
+    auto clip = studio::MidiClip {};
+    auto encoded = clip.toVar();
+    juce::Array<juce::var> bindings;
+    const juce::String keys = "QWERASDFZXCV";
+    for (int index = 0; index < keys.length(); ++index)
+    {
+        auto binding = std::make_unique<juce::DynamicObject>();
+        binding->setProperty("noteNumber", 36 + index);
+        binding->setProperty("keyCode", static_cast<int>(keys[index]));
+        bindings.add(juce::var(binding.release()));
+    }
+    encoded.getDynamicObject()->setProperty("drumPadBindings", bindings);
+
+    juce::String error;
+    const auto restored = studio::MidiClip::fromVar(encoded, error);
+    expect(restored.has_value()
+               && juce::JSON::toString(
+                      restored->toVar().getProperty("drumPadBindings", {}),
+                      false)
+                   == juce::JSON::toString(juce::var(bindings), false),
+           "Custom drum-pad sounds and keyboard assignments survive MIDI clip serialization.");
+
+    auto legacy = clip.toVar();
+    legacy.getDynamicObject()->removeProperty("drumPadBindings");
+    expect(studio::MidiClip::fromVar(legacy, error).has_value(),
+           "Existing MIDI clips without pad settings remain loadable.");
+    auto invalid = encoded.clone();
+    auto* invalidPads = invalid.getDynamicObject()
+                            ->getProperty("drumPadBindings").getArray();
+    (*invalidPads)[1].getDynamicObject()->setProperty("keyCode", 'Q');
+    expect(!studio::MidiClip::fromVar(invalid, error).has_value()
+               && error.isNotEmpty(),
+           "Duplicate drum keyboard bindings fail validation instead of shadowing a pad.");
+    invalid = encoded.clone();
+    invalid.getDynamicObject()->getProperty("drumPadBindings")
+        .getArray()->getReference(0).getDynamicObject()
+        ->setProperty("noteNumber", static_cast<juce::int64>(0x100000024LL));
+    expect(!studio::MidiClip::fromVar(invalid, error).has_value(),
+           "Oversized drum note values cannot wrap into valid MIDI pitches.");
+}
+
+void drumPerformanceKeyboard()
+{
+    auto project = studio::Project::createDefault();
+    auto clip = makeMidiClip(project);
+    const auto* map = project.findDrumMap(clip.drumMapId);
+    studio::DrumPerformanceComponent pads;
+    std::vector<juce::MidiMessage> messages;
+    std::vector<juce::String> destinations;
+    pads.onMidiMessage = [&](const auto& trackId, const auto& message)
+    {
+        destinations.push_back(trackId);
+        messages.push_back(message);
+        return juce::Result::ok();
+    };
+    pads.onBindingsEdited = [&](const auto& bindings)
+    {
+        clip.drumPadBindings = bindings;
+        return true;
+    };
+    pads.setContext("synthetic-drums", &clip, map);
+    pads.setSize(760, 294);
+    expect(!pads.keyPressed(juce::KeyPress('Z')) && messages.empty(),
+           "Drum keys do not intercept normal editing until keyboard mode is enabled.");
+    pads.setKeyboardEnabled(true);
+    expect(pads.keyPressed(juce::KeyPress('Z'))
+               && pads.keyPressed(juce::KeyPress('Z'))
+               && pads.keyPressed(juce::KeyPress('D')),
+           "Keyboard performance accepts simultaneous kick/snare keys and consumes key repeat.");
+    expect(messages.size() == 2
+               && messages[0].isNoteOn()
+               && messages[0].getNoteNumber() == 36
+               && messages[1].getNoteNumber() == 38,
+           "Held-key repeats do not retrigger notes and chords retain both drum hits.");
+    expect(!pads.keyPressed(juce::KeyPress(
+               'S', juce::ModifierKeys::commandModifier, 0)),
+           "Save and other Command/Ctrl shortcuts are not stolen by drum keys.");
+    pads.keyStateChanged(false);
+    expect(messages.size() == 4
+               && messages[2].isNoteOff()
+               && messages[3].isNoteOff(),
+           "Key releases terminate each held note.");
+
+    expect(pads.assignSound(8, 52).wasOk()
+               && pads.assignKey(8, 'B').wasOk()
+               && clip.drumPadBindings.size() == studio::drumPadCount,
+           "Selecting a pad sound and binding a key persist through the edit callback.");
+    expect(pads.assignKey(8, 'D').failed()
+               && pads.assignKey(8, juce::KeyPress::spaceKey).failed()
+               && pads.assignSound(8, 128).failed(),
+           "Conflicting keys, transport keys, and invalid notes are rejected.");
+    messages.clear();
+    expect(pads.keyPressed(juce::KeyPress('Z'))
+               && messages.empty()
+               && pads.keyPressed(juce::KeyPress('B'))
+               && messages.size() == 1
+               && messages.front().getNoteNumber() == 52,
+           "Rebound pads play only from their new key; unmapped letters cannot trigger arrangement shortcuts.");
+    pads.setContext("synthetic-other-drums", &clip, map);
+    expect(messages.size() == 2
+               && messages.back().isNoteOff()
+               && destinations.back() == "synthetic-drums"
+               && !pads.isKeyboardEnabled(),
+           "Changing tracks releases notes to their original track and disables keyboard capture.");
+    pads.setKeyboardEnabled(true);
+    pads.keyPressed(juce::KeyPress('B'));
+    pads.keyPressed(juce::KeyPress(juce::KeyPress::escapeKey));
+    expect(!pads.isKeyboardEnabled() && messages.back().isNoteOff(),
+           "Escape releases held notes and exits keyboard mode.");
+
+    pads.setKeyboardEnabled(true);
+    messages.clear();
+    pads.keyPressed(juce::KeyPress('S'));
+    expect(messages.size() == 2
+               && messages.front().isControllerOfType(4)
+               && messages.front().getControllerValue() == 0
+               && messages.back().getNoteNumber() == 46,
+           "The open hi-hat sends its mapped foot control before the hit.");
+    pads.releaseAllNotes();
+
+    for (const auto width : { 560, 760, 1120 })
+    {
+        pads.setSize(width, 294);
+        auto visiblePads = 0;
+        for (auto* child : pads.getChildren())
+        {
+            if (!child->getComponentID().startsWith("drum-pad-"))
+                continue;
+            ++visiblePads;
+            expect(pads.getLocalBounds().contains(child->getBounds())
+                       && child->getWidth() >= 64
+                       && child->getHeight() >= 40,
+                   "All drum pads remain visible and usable at supported lower-editor widths.");
+        }
+        expect(visiblePads == static_cast<int>(studio::drumPadCount),
+               "The drum performance view exposes twelve accessible pad buttons.");
+    }
+}
+
+void targetedSoftwareMidi()
+{
+    auto project = studio::Project::createDefault();
+    const auto drums = makeMidiTrack(project, "Synthetic drums");
+    const auto keys = makeMidiTrack(project, "Synthetic keys");
+    project.findTrack(drums.id)->armed = true;
+    project.findTrack(keys.id)->armed = true;
+    studio::StudioAudioEngine engine;
+    expect(engine.updateProject(project).wasOk(),
+           "A two-track live MIDI graph can be prepared.");
+    for (auto attempt = 0;
+         attempt < 200 && engine.pluginRuntimeTransitionPending();
+         ++attempt)
+        juce::Thread::sleep(10);
+    engine.setMidiAuditionEnabled(true);
+    studio::RecordingPlan plan;
+    expect(engine.startRecording({}, plan, true).wasOk(),
+           "Software drums reuse the ordinary MIDI recording session.");
+    expect(engine.enqueueMidiInput(
+               drums.id,
+               juce::MidiMessage::noteOn(1, 36, juce::uint8(110))).wasOk(),
+           "A software drum hit is admitted to its selected track.");
+    juce::MidiBuffer hardware;
+    hardware.addEvent(
+        juce::MidiMessage::noteOn(2, 60, juce::uint8(90)), 8);
+    engine.clearMidiEventsForTesting();
+    juce::ignoreUnused(engine.renderActiveBlockWithMidiForTesting(hardware, 512));
+    const auto routed = engine.takeMidiEventsForTesting();
+    const auto receives = [&](const auto& trackId, int pitch)
+    {
+        return std::any_of(routed.cbegin(), routed.cend(), [&](const auto& event)
+        {
+            const juce::MidiMessage message(event.data.data(), event.size, 0.0);
+            return event.runtimeKey
+                    == studio::StudioAudioEngine::runtimeKeyForTesting(trackId)
+                && message.isNoteOn() && message.getNoteNumber() == pitch;
+        });
+    };
+    expect(receives(drums.id, 36) && !receives(keys.id, 36)
+               && receives(drums.id, 60) && receives(keys.id, 60),
+           "Software pad MIDI is track-specific while hardware input keeps its existing armed-track fan-out.");
+    expect(engine.enqueueMidiInput(
+               drums.id, juce::MidiMessage::noteOff(1, 36)).wasOk(),
+           "Software drum releases use the same queue as note-ons.");
+    hardware.clear();
+    hardware.addEvent(juce::MidiMessage::noteOff(2, 60), 32);
+    juce::ignoreUnused(engine.renderActiveBlockWithMidiForTesting(hardware, 512));
+    auto recording = engine.stopMidiRecording();
+    engine.stopRecording();
+    juce::String error;
+    const auto convert = [&](const juce::String& trackId)
+    {
+        return studio::convertCapturedMidiToClip(
+            project, recording.captured, recording.captureStartStreamSample,
+            recording.timelineStartSeconds, recording.durationSeconds,
+            recording.sampleRate, nullptr, "Synthetic performance", error, trackId);
+    };
+    const auto drumTake = convert(drums.id);
+    const auto keyTake = convert(keys.id);
+    expect(drumTake.has_value() && drumTake->clip.notes.size() == 2
+               && keyTake.has_value() && keyTake->clip.notes.size() == 1
+               && keyTake->clip.notes.front().pitch == 60,
+           "Recorded software drums do not leak into another armed instrument's MIDI clip.");
+    const auto retrospective = engine.captureRetrospectiveMidi(30.0, keys.id);
+    expect(retrospective.result.wasOk()
+               && retrospective.captured.events.size() == 2,
+           "Retrospective capture filters software MIDI before determining the selected track's range.");
+    expect(engine.enqueueMidiInput(
+               "missing-track", juce::MidiMessage::noteOff(1, 36)).failed(),
+           "Software input to a missing track reports an error.");
+}
+
+void alternateDrumEditor()
+{
+    auto project = studio::Project::createDefault();
+    const auto track = makeMidiTrack(project);
+    studio::MidiClip clip;
+    project.findTrack(track.id)->midiClips.push_back(clip);
+    studio::MidiEditorComponent editor;
+    editor.onClipEdited = [&](const auto&, const auto&, const auto& after, const auto&)
+    {
+        *project.findMidiClip(clip.id) = after;
+        editor.setProject(&project);
+    };
+    editor.setProject(&project);
+    editor.setSelection(track.id, clip.id);
+    editor.setSize(760, 330);
+    editor.showDrumPads();
+    expect(editor.isShowingDrumPads()
+               && project.findMidiClip(clip.id)->editorMode == studio::MidiEditorMode::drums
+               && project.findMidiClip(clip.id)->notes.empty(),
+           "Opening drum pads assigns the drum map without replacing or inserting MIDI notes.");
+    expect(editor.drumPerformance().assignKey(8, 'B').wasOk()
+               && project.findMidiClip(clip.id)->drumPadBindings[8].keyCode == 'B',
+           "Pad assignments use the editor's ordinary undoable clip-edit callback.");
+    editor.keyPressed(juce::KeyPress(juce::KeyPress::returnKey));
+    expect(project.findMidiClip(clip.id)->notes.empty(),
+           "Pad-view keyboard input cannot insert notes into the hidden piano roll.");
+    editor.showDrumPads(false);
+    editor.keyPressed(juce::KeyPress(juce::KeyPress::returnKey));
+    expect(project.findMidiClip(clip.id)->notes.size() == 1,
+           "The existing MIDI grid's Enter-to-create workflow remains available after leaving pads.");
+    auto& recorded = project.findMidiClip(clip.id)->notes.front();
+    recorded.pitch = 47;
+    studio::applyDrumMapMetadata(recorded, &project.drumMaps.front(), 1);
+    for (auto* child : editor.getChildren())
+        if (auto* button = dynamic_cast<juce::TextButton*>(child);
+            button != nullptr && button->getButtonText() == "DRUMS")
+        {
+            button->onClick();
+            break;
+        }
+    editor.showDrumPads();
+    expect(project.findMidiClip(clip.id)->notes.front().pitch == 47
+               && project.findMidiClip(clip.id)->notes.front().roundRobinHint == 1,
+           "Switching a recorded round-robin sound through piano roll and pads does not change its playback pitch.");
+    editor.showDrumPads(false);
+    for (auto* child : editor.getChildren())
+        if (auto* box = dynamic_cast<juce::ComboBox*>(child);
+            box != nullptr && box->getText() == "Velocity")
+            box->setSelectedId(5, juce::sendNotificationSync);
+    auto expressionControlVisible = false;
+    for (auto* child : editor.getChildren())
+        if (auto* box = dynamic_cast<juce::ComboBox*>(child);
+            box != nullptr && box->getText() == "Poly pressure")
+            expressionControlVisible = box->isVisible() && box->getWidth() > 40;
+    expect(expressionControlVisible,
+           "The compact editor toolbar gives expression controls space when their lane is selected.");
+}
+
+void drumCaptureFidelity()
+{
+    auto project = studio::Project::createDefault();
+    project.tempo = 60.0;
+    project.tempoChanges = { { 0.0, 60.0, false }, { 0.5, 120.0, false } };
+    studio::CapturedMidiWindow capture;
+    capture.events = {
+        capturedEvent(0, 300, juce::MidiMessage::noteOn(1, 38, juce::uint8(110))),
+        capturedEvent(1, 400, juce::MidiMessage::noteOff(1, 38)),
+        capturedEvent(2, 50, juce::MidiMessage::controllerEvent(1, 4, 27)),
+        capturedEvent(3, 50, juce::MidiMessage::noteOn(1, 46, juce::uint8(92))),
+        capturedEvent(4, 150, juce::MidiMessage::noteOff(1, 46)),
+        capturedEvent(5, 450, juce::MidiMessage::noteOn(1, 47, juce::uint8(102))),
+        capturedEvent(6, 650, juce::MidiMessage::noteOff(1, 47))
+    };
+    juce::String error;
+    const auto converted = studio::convertCapturedMidiToClip(
+        project, capture, 0, 0.0, 1.0, 1000.0,
+        &project.drumMaps.front(), "Synthetic kit performance", error);
+    expect(converted.has_value(), error.toRawUTF8());
+    if (!converted.has_value() || converted->clip.notes.size() != 3)
+        return;
+    const auto& notes = converted->clip.notes;
+    expect(notes[0].pitch == 46 && notes[0].footControlValue == 27
+               && notes[1].pitch == 38 && notes[2].pitch == 47
+               && notes[2].roundRobinHint == 1
+               && converted->ignoredEvents == 0,
+           "Captured drums preserve exact played sounds, explicit round robins, and pre-hit foot control without ignored-event warnings.");
+    expect(std::abs(notes[2].durationBeats - 0.35) < 0.0000001
+               && std::abs(notes[2].startBeats - 0.45) < 0.0000001,
+           "A drum hit spanning a tempo change keeps its actual performance timing.");
+}
+
+void softwareMidiCancellationAndOverflow()
+{
+    auto project = studio::Project::createDefault();
+    const auto drums = makeMidiTrack(project);
+    studio::StudioAudioEngine engine;
+    expect(engine.updateProject(project).wasOk(), "The software-input cancellation fixture loads.");
+    for (auto attempt = 0;
+         attempt < 200 && engine.pluginRuntimeTransitionPending(); ++attempt)
+        juce::Thread::sleep(10);
+    engine.setMidiAuditionEnabled(true);
+    const auto hit = juce::MidiMessage::noteOn(1, 36, juce::uint8(100));
+    studio::RecordingPlan plan;
+    expect(engine.startRecording({}, plan, true).wasOk(), "A cancellable drum take starts.");
+    expect(engine.enqueueMidiInput(drums.id, hit).wasOk(), "A pending drum hit queues.");
+    juce::ignoreUnused(engine.stopMidiRecording());
+    engine.stopRecording();
+    engine.clearMidiEventsForTesting();
+    engine.processActiveBlockForTesting(512);
+    const auto stoppedEvents = engine.takeMidiEventsForTesting();
+    expect(std::none_of(stoppedEvents.cbegin(), stoppedEvents.cend(), [](const auto& event)
+    {
+        return juce::MidiMessage(event.data.data(), event.size, 0.0).isNoteOn();
+    }), "Stopping a take cancels queued hits instead of sounding them after recording ended.");
+
+    auto overflowReported = false;
+    for (int index = 0; index < 1024; ++index)
+    {
+        if (engine.enqueueMidiInput(drums.id, hit).failed())
+        {
+            overflowReported = true;
+            break;
+        }
+    }
+    expect(overflowReported, "Software MIDI has a bounded queue and reports overflow.");
+    engine.clearMidiEventsForTesting();
+    engine.processActiveBlockForTesting(512);
+    const auto overflowEvents = engine.takeMidiEventsForTesting();
+    expect(std::none_of(overflowEvents.cbegin(), overflowEvents.cend(), [](const auto& event)
+    {
+        return juce::MidiMessage(event.data.data(), event.size, 0.0).isNoteOn();
+    }), "An overflow discards the entire stale generation rather than losing only note-offs.");
+    expect(engine.enqueueMidiInput(drums.id, hit).wasOk(),
+           "Software MIDI recovers after the audio consumer drains an overflow.");
+    engine.processActiveBlockForTesting(512);
+    const auto recoveredEvents = engine.takeMidiEventsForTesting();
+    expect(std::any_of(recoveredEvents.cbegin(), recoveredEvents.cend(), [](const auto& event)
+    {
+        return juce::MidiMessage(event.data.data(), event.size, 0.0).isNoteOn();
+    }), "An unarmed track can audition new software input after recovery.");
+}
+
+void softwareMidiTransportBoundaries()
+{
+    for (const auto looping : { false, true })
+    {
+        auto project = studio::Project::createDefault();
+        const auto drums = makeMidiTrack(project);
+        project.loopEnabled = looping;
+        project.loopStartSeconds = 0.0;
+        project.loopEndSeconds = 0.1;
+        project.preRollSeconds = looping ? 0.0 : 0.1;
+        studio::StudioAudioEngine engine;
+        expect(engine.updateProject(project).wasOk(), "The drum transport fixture loads.");
+        for (auto attempt = 0;
+             attempt < 200 && engine.pluginRuntimeTransitionPending(); ++attempt)
+            juce::Thread::sleep(10);
+        engine.setMidiAuditionEnabled(true);
+        const auto plan = project.recordingPlan(looping ? 0.0 : 0.1);
+        expect(engine.startRecording({}, plan, true).wasOk(),
+               "Drum performance starts with the existing pre-roll or loop recording plan.");
+        expect(engine.enqueueMidiInput(
+                   drums.id, juce::MidiMessage::noteOn(1, 36, juce::uint8(100))).wasOk(),
+               "A hit before the first transport boundary queues.");
+        engine.processActiveBlockForTesting(512);
+        expect(engine.enqueueMidiInput(drums.id, juce::MidiMessage::noteOff(1, 36)).wasOk(),
+               "The first transport-boundary hit releases.");
+        engine.processActiveBlockForTesting(512);
+        engine.processActiveBlockForTesting(3776);
+        expect(engine.enqueueMidiInput(
+                   drums.id, juce::MidiMessage::noteOn(1, 38, juce::uint8(115))).wasOk(),
+               "A hit after the pre-roll or loop boundary queues.");
+        engine.processActiveBlockForTesting(512);
+        expect(engine.enqueueMidiInput(drums.id, juce::MidiMessage::noteOff(1, 38)).wasOk(),
+               "The second transport-boundary hit releases.");
+        engine.processActiveBlockForTesting(512);
+        const auto recording = engine.stopMidiRecording();
+        engine.stopRecording();
+        expect(recording.result.wasOk(), "The drum transport take finalizes.");
+        const auto passes = studio::recordingPasses(recording.durationSeconds, plan);
+        expect(passes.size() == (looping ? 2u : 1u),
+               "Drum input uses ordinary pass boundaries without duplicating pre-roll.");
+        for (std::size_t index = 0; index < passes.size(); ++index)
+        {
+            const auto& pass = passes[index];
+            juce::String error;
+            const auto converted = studio::convertCapturedMidiToClip(
+                project, recording.captured,
+                recording.captureStartStreamSample + static_cast<std::int64_t>(
+                    std::llround(pass.sourceOffsetSeconds * recording.sampleRate)),
+                pass.timelineStartSeconds, pass.durationSeconds, recording.sampleRate,
+                &project.drumMaps.front(), "Synthetic drum pass", error, drums.id);
+            expect(converted.has_value() && converted->clip.notes.size() == 1
+                       && converted->clip.notes.front().pitch == (looping && index == 0 ? 36 : 38),
+                   "Pre-roll hits are excluded and each loop pass retains only its own played drum note.");
+        }
+    }
 }
 
 void midiCapturePublicationAndStopBoundary()
@@ -1340,6 +1756,13 @@ void midiTests()
 {
     midiPersistence();
     sustainedCaptureFinalization();
+    drumPadBindingsPersistence();
+    drumPerformanceKeyboard();
+    targetedSoftwareMidi();
+    alternateDrumEditor();
+    drumCaptureFidelity();
+    softwareMidiCancellationAndOverflow();
+    softwareMidiTransportBoundaries();
     midiCapturePublicationAndStopBoundary();
     pianoRollNoteCreation();
     midiClipDrumMapReferenceValidation();

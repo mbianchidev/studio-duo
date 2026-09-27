@@ -1,6 +1,7 @@
 #include "ProjectTemplates.h"
 
 #include <array>
+#include <algorithm>
 
 namespace studio
 {
@@ -64,6 +65,41 @@ Project createProject(
 Project ProjectTemplates::createBlankSong()
 {
     return createProject("Untitled", 120.0, {});
+}
+
+Track ProjectTemplates::createDrumPerformanceTrack(
+    const Project& project, double startSeconds)
+{
+    Track track;
+    track.name = "Drums " + juce::String(1 + static_cast<int>(std::count_if(
+        project.tracks.cbegin(), project.tracks.cend(), [](const auto& existing)
+        {
+            return existing.name.startsWithIgnoreCase("Drums");
+        })));
+    track.type = TrackType::instrument;
+    track.colour = juce::Colour(0xff5d7fa3);
+    track.armed = true;
+    PluginInsert instrument;
+    instrument.pluginIdentifier = "studio.device.drum-composer";
+    instrument.name = "Metal Drum Composer";
+    instrument.manufacturer = "Studio Duo";
+    instrument.format = "Studio Duo";
+    instrument.bundledDevice = true;
+    instrument.bridgeMode = PluginBridgeMode::trustedInProcess;
+    track.inserts.push_back(std::move(instrument));
+
+    const auto* map = project.drumMaps.empty() ? nullptr : &project.drumMaps.front();
+    const auto start = std::max(0.0, startSeconds);
+    const auto meter = project.meterAt(start);
+    MidiClip clip;
+    clip.name = track.name + " MIDI";
+    clip.startBeats = project.beatsAt(start);
+    clip.durationBeats = static_cast<double>(meter.numerator) * 4.0 / meter.denominator;
+    clip.editorMode = MidiEditorMode::drums;
+    clip.drumMapId = map != nullptr ? map->id : juce::String();
+    clip.drumPadBindings = defaultDrumPadBindings(map);
+    track.midiClips.push_back(std::move(clip));
+    return track;
 }
 
 const std::vector<ProjectTemplateDescriptor>&

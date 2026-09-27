@@ -43,6 +43,7 @@ MidiEditorComponent::MidiEditorComponent()
         button.setTooltip(tooltip);
     };
     addButton(modeButton, "Switch between piano roll and metal drum editor");
+    addButton(padsButton, "Open visual drum pads and keyboard performance without replacing the MIDI grid");
     addButton(captureButton, "Capture recent MIDI input (Command/Ctrl+Shift+M)");
     addButton(humanizeButton, "Apply deterministic seeded timing and velocity humanization");
     addButton(importMapButton, "Import a Studio Duo drum-map JSON file");
@@ -76,6 +77,7 @@ MidiEditorComponent::MidiEditorComponent()
     {
         expressionSelector.setVisible(
             selectedLane() == MidiEditorLane::expression);
+        resized();
         repaint();
     };
 
@@ -103,24 +105,24 @@ MidiEditorComponent::MidiEditorComponent()
         const auto* clip = currentClip();
         if (clip == nullptr)
             return;
-        auto after = *clip;
-        after.editorMode = clip->editorMode == MidiEditorMode::drums
+        showingPads = false;
+        changeEditorMode(clip->editorMode == MidiEditorMode::drums
             ? MidiEditorMode::pianoRoll
-            : MidiEditorMode::drums;
-        if (after.editorMode == MidiEditorMode::drums
-            && after.drumMapId.isEmpty()
-            && project != nullptr
-            && !project->drumMaps.empty())
-            after.drumMapId = project->drumMaps.front().id;
-        if (after.editorMode == MidiEditorMode::drums)
-        {
-            const auto* map = project != nullptr
-                ? project->findDrumMap(after.drumMapId)
-                : nullptr;
-            for (auto& note : after.notes)
-                applyDrumMapMetadata(note, map, 0);
-        }
-        commitEdit(*clip, std::move(after), "Change MIDI editor mode");
+            : MidiEditorMode::drums);
+        refreshControls();
+    };
+    padsButton.onClick = [this] { showDrumPads(!showingPads); };
+    addChildComponent(drumPerformancePanel);
+    drumPerformancePanel.onBindingsEdited = [this](const auto& bindings)
+    {
+        const auto* clip = currentClip();
+        if (clip == nullptr)
+            return false;
+        auto after = *clip;
+        after.drumPadBindings = bindings;
+        commitEdit(*clip, std::move(after), "Change drum-pad assignments");
+        const auto* updated = currentClip();
+        return updated != nullptr && updated->drumPadBindings == bindings;
     };
     captureButton.onClick = [this]
     {
@@ -194,6 +196,8 @@ void MidiEditorComponent::setProject(const Project* projectToEdit)
 void MidiEditorComponent::setSelection(juce::String trackId,
                                        juce::String clipId)
 {
+    if (trackId != selectedTrackId)
+        showingPads = false;
     const auto changedClip = clipId != selectedClipId;
     if (changedClip)
     {
@@ -205,6 +209,9 @@ void MidiEditorComponent::setSelection(juce::String trackId,
     }
     selectedTrackId = std::move(trackId);
     selectedClipId = std::move(clipId);
+    if (const auto* clip = currentClip();
+        clip == nullptr || clip->editorMode != MidiEditorMode::drums)
+        showingPads = false;
     if (const auto* clip = currentClip(); clip != nullptr && !clip->notes.empty())
     {
         cursorPitch = clip->notes.front().pitch;
@@ -247,6 +254,46 @@ void MidiEditorComponent::setSelection(juce::String trackId,
     repaint();
 }
 
+void MidiEditorComponent::changeEditorMode(MidiEditorMode mode)
+{
+    const auto* clip = currentClip();
+    if (clip == nullptr)
+        return;
+    auto after = *clip;
+    after.editorMode = mode;
+    if (mode == MidiEditorMode::drums && after.drumMapId.isEmpty()
+        && project != nullptr && !project->drumMaps.empty())
+        after.drumMapId = project->drumMaps.front().id;
+    if (mode == MidiEditorMode::drums)
+    {
+        const auto* map = project != nullptr ? project->findDrumMap(after.drumMapId) : nullptr;
+        for (auto& note : after.notes)
+            applyDrumMapMetadata(note, map);
+    }
+    commitEdit(*clip, std::move(after), "Change MIDI editor mode");
+}
+
+void MidiEditorComponent::showDrumPads(bool show)
+{
+    const auto* clip = currentClip();
+    showingPads = show && clip != nullptr;
+    if (showingPads
+        && (clip->editorMode != MidiEditorMode::drums || clip->drumMapId.isEmpty()))
+        changeEditorMode(MidiEditorMode::drums);
+    refreshControls();
+    repaint();
+}
+
+bool MidiEditorComponent::isShowingDrumPads() const noexcept
+{
+    return showingPads;
+}
+
+DrumPerformanceComponent& MidiEditorComponent::drumPerformance() noexcept
+{
+    return drumPerformancePanel;
+}
+
 void MidiEditorComponent::paint(juce::Graphics& graphics)
 {
     graphics.fillAll(juce::Colour(StudioColours::window));
@@ -257,6 +304,8 @@ void MidiEditorComponent::paint(juce::Graphics& graphics)
         toolbarHeight - 1,
         0.0f,
         static_cast<float>(getWidth()));
+    if (showingPads)
+        return;
 
     const auto* clipPointer = currentClip();
     if (clipPointer == nullptr)
@@ -551,15 +600,24 @@ void MidiEditorComponent::resized()
     auto first = toolbar.removeFromTop(28);
     toolbar.removeFromTop(4);
     auto second = toolbar.removeFromTop(28);
+    closeButton.setBounds(first.removeFromRight(36).reduced(2));
     modeButton.setBounds(first.removeFromLeft(72).reduced(2));
+    padsButton.setBounds(first.removeFromLeft(94).reduced(2));
+    if (showingPads)
+    {
+        captureButton.setBounds(first.removeFromLeft(78).reduced(2));
+        importMapButton.setBounds(first.removeFromLeft(36).reduced(2));
+        drumPerformancePanel.setBounds(getLocalBounds().withTrimmedTop(36));
+        return;
+    }
     laneSelector.setBounds(first.removeFromLeft(112).reduced(2));
-    expressionSelector.setBounds(first.removeFromLeft(104).reduced(2));
+    expressionSelector.setBounds(first.removeFromLeft(
+        expressionSelector.isVisible() ? 104 : 0).reduced(2));
     gridSelector.setBounds(first.removeFromLeft(76).reduced(2));
     captureButton.setBounds(first.removeFromLeft(78).reduced(2));
     humanizeButton.setBounds(first.removeFromLeft(92).reduced(2));
     importMapButton.setBounds(first.removeFromLeft(36).reduced(2));
     editMapButton.setBounds(first.removeFromLeft(36).reduced(2));
-    closeButton.setBounds(first.removeFromRight(36).reduced(2));
 
     flamButton.setBounds(second.removeFromLeft(66).reduced(2));
     rollButton.setBounds(second.removeFromLeft(66).reduced(2));
@@ -718,6 +776,8 @@ void MidiEditorComponent::mouseWheelMove(
 
 bool MidiEditorComponent::keyPressed(const juce::KeyPress& key)
 {
+    if (showingPads)
+        return drumPerformancePanel.keyPressed(key);
     const auto command = key.getModifiers().isCommandDown();
     const auto shift = key.getModifiers().isShiftDown();
     if (command && shift && key.getKeyCode() == 'M')
@@ -1209,13 +1269,20 @@ void MidiEditorComponent::refreshControls()
         &applyRoutingButton
     };
     for (auto* component : controls)
+    {
         component->setEnabled(enabled);
+        component->setVisible(!showingPads);
+    }
+    modeButton.setVisible(true);
+    padsButton.setEnabled(enabled);
+    padsButton.setToggleState(showingPads, juce::dontSendNotification);
+    captureButton.setVisible(true);
     modeButton.setButtonText(
         clip != nullptr && clip->editorMode == MidiEditorMode::drums
             ? "DRUMS"
             : "PIANO");
     editMapButton.setVisible(
-        clip != nullptr && clip->editorMode == MidiEditorMode::drums);
+        !showingPads && clip != nullptr && clip->editorMode == MidiEditorMode::drums);
     importMapButton.setVisible(
         clip != nullptr && clip->editorMode == MidiEditorMode::drums);
     for (auto* button : {
@@ -1225,9 +1292,11 @@ void MidiEditorComponent::refreshControls()
              &blastButton,
              &doubleKickButton })
         button->setVisible(
-            clip != nullptr && clip->editorMode == MidiEditorMode::drums);
+            !showingPads && clip != nullptr && clip->editorMode == MidiEditorMode::drums);
     expressionSelector.setVisible(
-        selectedLane() == MidiEditorLane::expression);
+        !showingPads && selectedLane() == MidiEditorLane::expression);
+    drumPerformancePanel.setContext(selectedTrackId, clip, currentDrumMap());
+    drumPerformancePanel.setVisible(showingPads && enabled);
 
     patternSelector.clear(juce::dontSendNotification);
     routingTemplateSelector.clear(juce::dontSendNotification);

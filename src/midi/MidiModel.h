@@ -75,6 +75,16 @@ struct MidiNote
                                            juce::String& error);
 };
 
+struct DrumPadBinding
+{
+    int noteNumber = 36;
+    int keyCode = 'Z';
+
+    bool operator==(const DrumPadBinding&) const = default;
+};
+
+inline constexpr std::size_t drumPadCount = 12;
+
 struct MidiClip
 {
     juce::String id { juce::Uuid().toString() };
@@ -87,6 +97,7 @@ struct MidiClip
     int humanizeTimingTicks = 0;
     int humanizeVelocity = 0;
     bool muted = false;
+    std::vector<DrumPadBinding> drumPadBindings;
     std::vector<MidiNote> notes;
 
     [[nodiscard]] double endBeats() const noexcept;
@@ -194,6 +205,9 @@ struct MidiRoutingTemplate
     const juce::String& value);
 
 [[nodiscard]] DrumMap createDefaultMetalDrumMap();
+[[nodiscard]] bool isDrumPadKey(int keyCode) noexcept;
+[[nodiscard]] std::vector<DrumPadBinding> defaultDrumPadBindings(
+    const DrumMap* map = nullptr);
 [[nodiscard]] std::vector<MidiPatternAlias> createDefaultMetalPatterns(
     const DrumMap& map);
 [[nodiscard]] MidiRoutingTemplate createDefaultMetalRoutingTemplate(

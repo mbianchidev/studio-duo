@@ -1,6 +1,7 @@
 #pragma once
 
 #include "StudioIconButton.h"
+#include "DrumPerformanceComponent.h"
 #include "midi/MidiEditing.h"
 #include "model/ProjectModel.h"
 
@@ -34,6 +35,9 @@ public:
 
     void setProject(const Project* projectToEdit);
     void setSelection(juce::String trackId, juce::String clipId);
+    void showDrumPads(bool show = true);
+    [[nodiscard]] bool isShowingDrumPads() const noexcept;
+    [[nodiscard]] DrumPerformanceComponent& drumPerformance() noexcept;
 
     std::function<void(const juce::String&,
                        const MidiClip&,
@@ -88,6 +92,7 @@ private:
     [[nodiscard]] MidiExpressionType selectedExpressionType() const noexcept;
 
     void refreshControls();
+    void changeEditorMode(MidiEditorMode mode);
     void commitEdit(const MidiClip& before,
                     MidiClip after,
                     const juce::String& commandName);
@@ -111,8 +116,11 @@ private:
     double cursorBeat = 0.0;
     int cursorPitch = 60;
     int rowOffset = 0;
+    bool showingPads = false;
 
     juce::TextButton modeButton { "PIANO" };
+    juce::TextButton padsButton { "DRUM PADS" };
+    DrumPerformanceComponent drumPerformancePanel;
     juce::ComboBox laneSelector;
     juce::ComboBox expressionSelector;
     juce::ComboBox gridSelector;

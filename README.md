@@ -40,6 +40,9 @@ hardening remains before the complete DAW described in the
   timing, duration, probability, per-note expression, editable drum maps,
   deterministic entry tools, seeded humanization, pattern expansion, and
   multi-output routing templates
+- A ready-to-play drum-track preset and twelve visual performance pads with
+  saved sound/key assignments, velocity accents, track-isolated live recording,
+  and the existing song transport, click, and MIDI editing workflow
 - A deterministic bundled metal drum instrument with velocity, round robin,
   cymbal chokes/foot control, a useful synthesized kit, and routable kick,
   snare, tom, and cymbal outputs
