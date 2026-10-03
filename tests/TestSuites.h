@@ -35,6 +35,7 @@ void transportSettingsTests();
 void updateTests();
 void midiTests();
 void dawProjectTests();
+void studioOneProjectTests();
 void masteringTests();
 void uiIconTests();
 void timelineMarkerTests();

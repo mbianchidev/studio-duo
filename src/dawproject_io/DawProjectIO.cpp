@@ -4,7 +4,9 @@
 #include "DawProjectSchemaValidator.h"
 #include "devices/DeviceRegistry.h"
 #include "plugin_host/PluginStateStore.h"
+#include "project_io/ProjectArchiveReader.h"
 #include "project_io/ProjectFile.h"
+#include "project_io/ZipUtilities.h"
 
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_cryptography/juce_cryptography.h>
@@ -23,65 +25,17 @@ namespace studio
 {
 namespace
 {
+using project_archive::Crc32;
+using project_archive::normalizedArchivePath;
+using project_archive::readLittleEndian16;
+using project_archive::readLittleEndian32;
+using project_archive::safeArchivePath;
+
 constexpr auto formatName = "DAWproject 1.0";
 constexpr auto projectEntryName = "project.xml";
 constexpr auto metadataEntryName = "metadata.xml";
-constexpr auto maxXmlBytes = static_cast<juce::int64>(64 * 1024 * 1024);
 constexpr auto maxArchiveBytes =
     static_cast<juce::int64>(0x7fffffff);
-
-class Crc32
-{
-public:
-    void update(const void* data, std::size_t size)
-    {
-        const auto* bytes = static_cast<const std::uint8_t*>(data);
-        for (std::size_t index = 0; index < size; ++index)
-            value = table()[(value ^ bytes[index]) & 0xff] ^ (value >> 8);
-    }
-
-    [[nodiscard]] std::uint32_t result() const noexcept
-    {
-        return value ^ 0xffffffffu;
-    }
-
-private:
-    std::uint32_t value = 0xffffffffu;
-
-    static const std::array<std::uint32_t, 256>& table()
-    {
-        static const auto values = []
-        {
-            std::array<std::uint32_t, 256> result {};
-            for (std::uint32_t index = 0; index < result.size(); ++index)
-            {
-                auto crc = index;
-                for (auto bit = 0; bit < 8; ++bit)
-                    crc = (crc & 1u) != 0
-                        ? 0xedb88320u ^ (crc >> 1)
-                        : crc >> 1;
-                result[index] = crc;
-            }
-            return result;
-        }();
-        return values;
-    }
-};
-
-std::uint16_t readLittleEndian16(const std::uint8_t* bytes)
-{
-    return static_cast<std::uint16_t>(
-        bytes[0] | (static_cast<std::uint16_t>(bytes[1]) << 8));
-}
-
-std::uint32_t readLittleEndian32(const std::uint8_t* bytes)
-{
-    return static_cast<std::uint32_t>(
-        bytes[0]
-        | (static_cast<std::uint32_t>(bytes[1]) << 8)
-        | (static_cast<std::uint32_t>(bytes[2]) << 16)
-        | (static_cast<std::uint32_t>(bytes[3]) << 24));
-}
 
 juce::String formatNumber(double value)
 {
@@ -2727,34 +2681,6 @@ private:
     }
 };
 
-juce::String normalizedArchivePath(juce::String path)
-{
-    path = path.replaceCharacter('\\', '/');
-    while (path.startsWith("./"))
-        path = path.substring(2);
-    return path;
-}
-
-bool safeArchivePath(const juce::String& original)
-{
-    const auto path = normalizedArchivePath(original);
-    if (path.isEmpty()
-        || path.startsWithChar('/')
-        || juce::File::isAbsolutePath(path)
-        || path.containsChar(':'))
-    {
-        return false;
-    }
-    const auto segments =
-        juce::StringArray::fromTokens(path, "/", {});
-    if (segments.isEmpty())
-        return false;
-    for (const auto& segment : segments)
-        if (segment.isEmpty() || segment == "." || segment == "..")
-            return false;
-    return true;
-}
-
 juce::String textHash(const juce::String& text)
 {
     const auto utf8 = text.toStdString();
@@ -2762,387 +2688,6 @@ juce::String textHash(const juce::String& text)
         .toHexString()
         .toLowerCase();
 }
-
-class ArchiveReader
-{
-public:
-    explicit ArchiveReader(const juce::File& archive)
-        : source(archive),
-          zip(archive)
-    {
-    }
-
-    juce::Result validate()
-    {
-        if (!source.existsAsFile())
-            return juce::Result::fail(
-                "The selected DAWproject archive does not exist.");
-        if (zip.getNumEntries() <= 0)
-            return juce::Result::fail(
-                "The selected file is not a readable ZIP archive.");
-        if (const auto central = parseCentralDirectory();
-            central.failed())
-            return central;
-        if (!has(projectEntryName) || !has(metadataEntryName))
-            return juce::Result::fail(
-                "The DAWproject archive must contain project.xml and metadata.xml at its root.");
-        return juce::Result::ok();
-    }
-
-    bool has(const juce::String& path) const
-    {
-        return paths.find(normalizedArchivePath(path)) != paths.cend();
-    }
-
-    std::optional<juce::String> readText(const juce::String& path,
-                                         juce::String& error)
-    {
-        const auto normalized = normalizedArchivePath(path);
-        const auto found = paths.find(normalized);
-        if (found == paths.cend())
-        {
-            error = "Archive entry is missing: " + normalized;
-            return std::nullopt;
-        }
-        if (found->second.uncompressedSize > maxXmlBytes)
-        {
-            error = "XML entry is too large: " + normalized;
-            return std::nullopt;
-        }
-        juce::MemoryBlock data;
-        if (!readEntry(normalized, found->second, error,
-                       [&data](const void* bytes, std::size_t size)
-                       {
-                           data.append(bytes, size);
-                           return true;
-                       }))
-            return std::nullopt;
-        return juce::String::fromUTF8(
-            static_cast<const char*>(data.getData()),
-            static_cast<int>(data.getSize()));
-    }
-
-    bool readData(const juce::String& path,
-                  juce::MemoryBlock& data,
-                  juce::String& error,
-                  juce::int64 maximumBytes = 512 * 1024 * 1024)
-    {
-        const auto normalized = normalizedArchivePath(path);
-        const auto found = paths.find(normalized);
-        if (found == paths.cend())
-        {
-            error = "Archive entry is missing: " + normalized;
-            return false;
-        }
-        if (found->second.uncompressedSize > maximumBytes)
-        {
-            error = "Archive entry exceeds the supported size: " + normalized;
-            return false;
-        }
-        data.reset();
-        return readEntry(
-            normalized,
-            found->second,
-            error,
-            [&data](const void* bytes, std::size_t size)
-            {
-                data.append(bytes, size);
-                return true;
-            });
-    }
-
-    bool copyTo(const juce::String& path,
-                const juce::File& destination,
-                juce::String& error)
-    {
-        const auto normalized = normalizedArchivePath(path);
-        const auto found = paths.find(normalized);
-        if (found == paths.cend())
-        {
-            error = "Archive entry is missing: " + normalized;
-            return false;
-        }
-        if (!destination.getParentDirectory().createDirectory())
-        {
-            error = "Could not prepare imported media: "
-                + destination.getFullPathName();
-            return false;
-        }
-        const auto temporary = destination.getSiblingFile(
-            destination.getFileName()
-            + ".tmp-" + juce::Uuid().toString());
-        {
-            auto output = temporary.createOutputStream();
-            if (output == nullptr)
-            {
-                error = "Could not create imported media: "
-                    + temporary.getFullPathName();
-                return false;
-            }
-            if (!readEntry(
-                    normalized,
-                    found->second,
-                    error,
-                    [&output](const void* bytes, std::size_t size)
-                    {
-                        return output->write(bytes, size);
-                    }))
-            {
-                output.reset();
-                temporary.deleteFile();
-                return false;
-            }
-            output->flush();
-            if (output->getStatus().failed())
-            {
-                error = output->getStatus().getErrorMessage();
-                output.reset();
-                temporary.deleteFile();
-                return false;
-            }
-        }
-        const auto published = destination.existsAsFile()
-            ? temporary.replaceFileIn(destination)
-            : temporary.moveFileTo(destination);
-        if (!published)
-        {
-            temporary.deleteFile();
-            error = "Could not publish imported media: "
-                + destination.getFullPathName();
-            return false;
-        }
-        return true;
-    }
-
-private:
-    struct EntryMetadata
-    {
-        int index = -1;
-        juce::int64 uncompressedSize = 0;
-        std::uint32_t crc = 0;
-    };
-
-    juce::File source;
-    juce::ZipFile zip;
-    std::map<juce::String, EntryMetadata> paths;
-
-    juce::Result parseCentralDirectory()
-    {
-        const auto fileSize = source.getSize();
-        if (fileSize < 22 || fileSize > maxArchiveBytes)
-            return juce::Result::fail(
-                "The DAWproject archive exceeds the supported classic ZIP size.");
-        auto input = source.createInputStream();
-        if (input == nullptr)
-            return juce::Result::fail(
-                "Could not read the DAWproject archive.");
-        const auto tailSize = static_cast<std::size_t>(
-            std::min<juce::int64>(fileSize, 1024 * 1024));
-        juce::MemoryBlock tail(tailSize, true);
-        if (!input->setPosition(fileSize - static_cast<juce::int64>(tailSize))
-            || input->read(
-                   tail.getData(),
-                   static_cast<int>(tailSize))
-                   != static_cast<int>(tailSize))
-        {
-            return juce::Result::fail(
-                "Could not read the ZIP central directory.");
-        }
-        const auto* tailBytes =
-            static_cast<const std::uint8_t*>(tail.getData());
-        std::optional<std::size_t> endOffset;
-        for (auto offset = tailSize - 22;; --offset)
-        {
-            if (readLittleEndian32(tailBytes + offset)
-                == 0x06054b50u)
-            {
-                endOffset = offset;
-                break;
-            }
-            if (offset == 0)
-                break;
-        }
-        if (!endOffset.has_value())
-            return juce::Result::fail(
-                "The ZIP end-of-directory record is missing.");
-        const auto* end = tailBytes + *endOffset;
-        if (readLittleEndian16(end + 4) != 0
-            || readLittleEndian16(end + 6) != 0)
-        {
-            return juce::Result::fail(
-                "Multi-disk ZIP archives are not supported.");
-        }
-        const auto entriesOnDisk = readLittleEndian16(end + 8);
-        const auto entryCount = readLittleEndian16(end + 10);
-        const auto directorySize = readLittleEndian32(end + 12);
-        const auto directoryOffset = readLittleEndian32(end + 16);
-        if (entriesOnDisk == 0xffffu
-            || entryCount == 0xffffu
-            || directorySize == 0xffffffffu
-            || directoryOffset == 0xffffffffu)
-        {
-            return juce::Result::fail(
-                "ZIP64 DAWproject archives are not supported by this build.");
-        }
-        if (entryCount != entriesOnDisk
-            || entryCount == 0
-            || entryCount > 10000
-            || static_cast<juce::int64>(directoryOffset)
-                       + directorySize
-                   > fileSize
-            || directorySize > 64 * 1024 * 1024)
-        {
-            return juce::Result::fail(
-                "The ZIP central directory is invalid or too large.");
-        }
-        juce::MemoryBlock directory(directorySize, true);
-        if (!input->setPosition(directoryOffset)
-            || input->read(
-                   directory.getData(),
-                   static_cast<int>(directorySize))
-                   != static_cast<int>(directorySize))
-        {
-            return juce::Result::fail(
-                "The ZIP central directory is truncated.");
-        }
-        const auto* bytes =
-            static_cast<const std::uint8_t*>(directory.getData());
-        std::size_t position = 0;
-        juce::int64 totalSize = 0;
-        paths.clear();
-        for (auto index = 0; index < entryCount; ++index)
-        {
-            if (position + 46 > directorySize
-                || readLittleEndian32(bytes + position)
-                    != 0x02014b50u)
-            {
-                return juce::Result::fail(
-                    "The ZIP central directory contains a malformed entry.");
-            }
-            const auto flags =
-                readLittleEndian16(bytes + position + 8);
-            const auto method =
-                readLittleEndian16(bytes + position + 10);
-            const auto crc =
-                readLittleEndian32(bytes + position + 16);
-            const auto compressedSize =
-                readLittleEndian32(bytes + position + 20);
-            const auto uncompressedSize =
-                readLittleEndian32(bytes + position + 24);
-            const auto nameLength =
-                readLittleEndian16(bytes + position + 28);
-            const auto extraLength =
-                readLittleEndian16(bytes + position + 30);
-            const auto commentLength =
-                readLittleEndian16(bytes + position + 32);
-            const auto localOffset =
-                readLittleEndian32(bytes + position + 42);
-            const auto entrySize =
-                static_cast<std::size_t>(46)
-                + nameLength + extraLength + commentLength;
-            if (position + entrySize > directorySize
-                || nameLength == 0
-                || (flags & 1u) != 0
-                || (method != 0 && method != 8)
-                || localOffset >= static_cast<std::uint64_t>(fileSize)
-                || compressedSize > maxArchiveBytes
-                || uncompressedSize > maxArchiveBytes
-                || totalSize > maxArchiveBytes - uncompressedSize)
-            {
-                return juce::Result::fail(
-                    "The ZIP entry is encrypted, unsupported, oversized, or malformed.");
-            }
-            const auto path = normalizedArchivePath(
-                juce::String::fromUTF8(
-                    reinterpret_cast<const char*>(
-                        bytes + position + 46),
-                    nameLength));
-            if (!safeArchivePath(path))
-                return juce::Result::fail(
-                    "The DAWproject archive contains an unsafe path: "
-                    + path);
-            const auto* juceEntry = zip.getEntry(index);
-            if (juceEntry == nullptr
-                || juceEntry->isSymbolicLink
-                || normalizedArchivePath(juceEntry->filename) != path
-                || juceEntry->uncompressedSize
-                       != static_cast<juce::int64>(uncompressedSize))
-            {
-                return juce::Result::fail(
-                    "The ZIP entry metadata is inconsistent.");
-            }
-            if (!paths.emplace(
-                    path,
-                    EntryMetadata {
-                        index,
-                        static_cast<juce::int64>(uncompressedSize),
-                        crc
-                    })
-                     .second)
-            {
-                return juce::Result::fail(
-                    "The DAWproject archive contains a duplicate path: "
-                    + path);
-            }
-            totalSize += uncompressedSize;
-            position += entrySize;
-        }
-        if (zip.getNumEntries() != entryCount)
-            return juce::Result::fail(
-                "The ZIP entry count is inconsistent.");
-        return juce::Result::ok();
-    }
-
-    template <typename Consumer>
-    bool readEntry(const juce::String& path,
-                   const EntryMetadata& metadata,
-                   juce::String& error,
-                   Consumer&& consumer)
-    {
-        std::unique_ptr<juce::InputStream> input(
-            zip.createStreamForEntry(metadata.index));
-        if (input == nullptr)
-        {
-            error = "Could not read archive entry: " + path;
-            return false;
-        }
-        Crc32 crc;
-        std::array<std::uint8_t, 64 * 1024> buffer {};
-        juce::int64 remaining = metadata.uncompressedSize;
-        while (remaining > 0)
-        {
-            const auto requested = static_cast<int>(
-                std::min<juce::int64>(
-                    remaining,
-                    static_cast<juce::int64>(buffer.size())));
-            const auto read = input->read(buffer.data(), requested);
-            if (read <= 0)
-            {
-                error = "Archive entry is truncated: " + path;
-                return false;
-            }
-            crc.update(buffer.data(), static_cast<std::size_t>(read));
-            if (!consumer(buffer.data(), static_cast<std::size_t>(read)))
-            {
-                error = "Could not consume archive entry: " + path;
-                return false;
-            }
-            remaining -= read;
-        }
-        std::uint8_t extra = 0;
-        if (input->read(&extra, 1) > 0)
-        {
-            error = "Archive entry expands beyond its declared size: " + path;
-            return false;
-        }
-        if (crc.result() != metadata.crc)
-        {
-            error = "Archive entry failed its CRC check: " + path;
-            return false;
-        }
-        return true;
-    }
-};
 
 enum class ParameterDomain
 {
@@ -3291,7 +2836,7 @@ public:
           destinationPackage(
               ProjectFile::normalisePackagePath(destination)),
           report(makeReport("import", source, destinationPackage)),
-          archive(source)
+          archive(source, "DAWproject")
     {
         formats.registerBasicFormats();
     }
@@ -3300,7 +2845,8 @@ public:
     {
         DawProjectImportResult output;
         output.package = destinationPackage;
-        if (const auto archiveResult = archive.validate();
+        if (const auto archiveResult = archive.validate(
+                { projectEntryName, metadataEntryName });
             archiveResult.failed())
         {
             fail(
@@ -3436,7 +2982,7 @@ private:
     juce::File sourceArchive;
     juce::File destinationPackage;
     CompatibilityReport report;
-    ArchiveReader archive;
+    ProjectArchiveReader archive;
     DawProjectIdMapper ids;
     Project project;
     std::unique_ptr<juce::XmlElement> projectXml;

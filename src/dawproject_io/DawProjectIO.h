@@ -1,11 +1,11 @@
 #pragma once
 
 #include "model/ProjectModel.h"
+#include "project_io/ProjectImportResult.h"
 
 #if STUDIO_DUO_TESTING
 #include <functional>
 #endif
-#include <optional>
 
 namespace studio
 {
@@ -22,21 +22,7 @@ struct DawProjectExportResult
     }
 };
 
-struct DawProjectImportResult
-{
-    juce::Result result = juce::Result::fail(
-        "DAWproject import did not run.");
-    CompatibilityReport report;
-    std::optional<Project> project;
-    juce::File package;
-
-    [[nodiscard]] bool succeeded() const noexcept
-    {
-        return result.wasOk()
-            && project.has_value()
-            && package.exists();
-    }
-};
+using DawProjectImportResult = ProjectImportResult;
 
 class DawProjectIO
 {

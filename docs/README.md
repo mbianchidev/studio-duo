@@ -10,6 +10,8 @@
   state, and plugin targets
 - [DAWproject interchange](dawproject.md): supported mappings, schema
   validation, deterministic archives, transactions, and compatibility reports
+- [Studio One import](studio-one.md): direct native song import, guided
+  DAWproject migration, media relocation, and explicit compatibility boundaries
 - [Mastering and release](mastering.md): album sequencing, loudness analysis,
   master/DDP exports, signed reports, portable copies, and repair
 - [Releasing](releasing.md): versioning, release minting, CI artifacts, and

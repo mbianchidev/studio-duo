@@ -420,6 +420,17 @@ external and embedded media, plug-in state, scenes, invalid archives, semantic
 validation, compatibility reports, deterministic output, and native migration.
 See [dawproject.md](dawproject.md).
 
+Studio One native import lives in `studio_one_io/`. `ProjectImportService`
+provides one source classifier/dispatcher for the startup action, Open chooser,
+command-line startup, and drag/drop. `ProjectArchiveReader` shares bounded
+ZIP/CRC handling with DAWproject; native input additionally bounds XML depth and
+element count before parsing. `ProjectCollectionService` collects/hash-validates
+audio and publishes the portable native package. Private native data requires
+explicit partial-import confirmation, while unsupported tempo/meter maps and
+invalid input cannot publish. `studioOneProjectTests` uses synthetic fixtures
+for both source paths and startup keyboard/layout coverage. See
+[studio-one.md](studio-one.md).
+
 Routing snapshots compile main outputs, arbitrary pre/post-fader sends,
 per-insert sidechains, parallel paths, hardware maps, folders, VCAs, solo-safe
 closure, and control-room monitoring into a topological processing plan.

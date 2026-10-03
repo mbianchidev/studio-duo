@@ -52,6 +52,9 @@ hardening remains before the complete DAW described in the
 - Transactional DAWproject 1.0 import/export with official embedded schema
   validation, deterministic ZIP output, media and plug-in state transfer,
   preserved scenes, and object-specific compatibility reports
+- Guided Studio One migration through direct native `.song` audio/mixer import
+  or its broader DAWproject export, with Open/drag-and-drop access and explicit
+  confirmation before any partial native transfer
 - Dedicated multi-song mastering with alternate source mixes, gaps, overlaps,
   fades, metadata, BS.1770/R128 loudness analysis, true peak, configurable audio
   export, deterministic TPDF dither, signed reports, and external licensed DDP
@@ -110,6 +113,7 @@ or MIDI. See [startup troubleshooting and logs](docs/user-guide.md#logs-and-diag
 - [Bundled devices](docs/devices.md)
 - [Mastering and release](docs/mastering.md)
 - [DAWproject interchange](docs/dawproject.md)
+- [Studio One import](docs/studio-one.md)
 - [Contributing](docs/contributing.md)
 - [Releasing](docs/releasing.md)
 

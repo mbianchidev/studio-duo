@@ -248,6 +248,15 @@ set(STUDIO_DUO_MODEL_SOURCES
     src/project_io/ProjectCollectionService.h
     src/project_io/ProjectMigration.cpp
     src/project_io/ProjectMigration.h
+    src/project_io/ProjectImportResult.h
+    src/project_io/ProjectImportService.cpp
+    src/project_io/ProjectImportService.h
+    src/project_io/ProjectArchiveReader.cpp
+    src/project_io/ProjectArchiveReader.h
+    src/project_io/ZipUtilities.h
+    src/util/NumberParsing.h
+    src/studio_one_io/StudioOneProjectIO.cpp
+    src/studio_one_io/StudioOneProjectIO.h
     src/reamp/ReampSnapshotService.cpp
     src/reamp/ReampSnapshotService.h
     src/render/AudioExport.cpp
@@ -853,6 +862,7 @@ if(STUDIO_DUO_BUILD_TESTS)
             tests/InfoPanelTests.cpp
             tests/ReentrancySafeTimerTests.cpp
             tests/DawProjectTests.cpp
+            tests/StudioOneProjectTests.cpp
             src/ui/TransportSettingsComponent.cpp
             src/ui/TransportSettingsComponent.h
             src/ui/NumericInput.h
@@ -877,6 +887,8 @@ if(STUDIO_DUO_BUILD_TESTS)
             src/ui/MidiEditorComponent.h
             src/ui/DrumPerformanceComponent.cpp
             src/ui/DrumPerformanceComponent.h
+            src/ui/StartupHubComponent.cpp
+            src/ui/StartupHubComponent.h
             src/audio/StudioAudioDeviceManager.cpp
             src/audio/StudioAudioDeviceManager.h
             src/audio/AudioDeviceProbe.cpp

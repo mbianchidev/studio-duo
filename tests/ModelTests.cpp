@@ -1640,6 +1640,7 @@ int main(int argc, char* argv[])
     RUN_SUITE(updateTests);
     RUN_SUITE(midiTests);
     RUN_SUITE(dawProjectTests);
+    RUN_SUITE(studioOneProjectTests);
     RUN_SUITE(masteringTests);
     RUN_SUITE(uiIconTests);
     RUN_SUITE(timelineMarkerTests);

@@ -20,6 +20,7 @@ public:
 
     std::function<void()> onNewSong;
     std::function<void()> onOpenExisting;
+    std::function<void()> onImportStudioOne;
     std::function<void(const juce::String&)>
         onCreateFromTemplate;
     std::function<bool(const juce::File&)>
@@ -45,6 +46,9 @@ private:
     };
     juce::TextButton openExistingButton {
         "OPEN EXISTING PROJECT"
+    };
+    juce::TextButton studioOneImportButton {
+        "IMPORT FROM STUDIO ONE"
     };
     juce::Label templateTitle;
     juce::ComboBox templateSelector;
