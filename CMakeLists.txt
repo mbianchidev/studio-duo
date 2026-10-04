@@ -683,6 +683,9 @@ set_target_properties(
     PROPERTIES
         PREFIX ""
         OUTPUT_NAME "StudioDuoBundledDevices"
+        C_VISIBILITY_PRESET hidden
+        CXX_VISIBILITY_PRESET hidden
+        VISIBILITY_INLINES_HIDDEN TRUE
 )
 if(APPLE)
     set_target_properties(

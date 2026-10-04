@@ -550,6 +550,8 @@ schema-1 restoration selects the unchanged original kit. Validation completes
 before any state is applied. The CLAP adapter advertises integer-stepped enum
 values and converts them consistently for processing, flushing, text, and
 state capture without changing continuous parameter ranges.
+Its embedded JUCE/C++ symbols remain hidden, like the VST3 and Audio Unit
+targets, so a JUCE-based host cannot coalesce the plugin's internal state.
 
 `AmpDeviceProcessor` shares nonlinear preamp, tone, bass-blend, cabinet, and
 state code between the in-app device and plugin targets. Cabinet decoding,
