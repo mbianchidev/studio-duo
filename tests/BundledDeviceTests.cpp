@@ -14,7 +14,9 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <bit>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 #include <thread>
 
@@ -69,6 +71,12 @@ float maximumDifference(const juce::AudioBuffer<float>& first,
                 difference, residual);
         }
     return difference;
+}
+
+bool sameFloatBits(float first, float second)
+{
+    return std::bit_cast<std::uint32_t>(first)
+        == std::bit_cast<std::uint32_t>(second);
 }
 
 int outputChannel(const juce::AudioProcessor& processor,
@@ -360,10 +368,10 @@ void drumSoundPresetState()
                    && restored.getCurrentProgram() == preset,
                "Reopening processor state restores the selected genre sound.");
         for (int index = 0; index < static_cast<int>(mix.size()); ++index)
-            expect(drum.getParameters()[index]->getValue()
-                       == mix[static_cast<std::size_t>(index)]
-                       && restored.getParameters()[index]->getValue()
-                           == mix[static_cast<std::size_t>(index)],
+            expect(sameFloatBits(drum.getParameters()[index]->getValue(),
+                                 mix[static_cast<std::size_t>(index)])
+                       && sameFloatBits(restored.getParameters()[index]->getValue(),
+                                        mix[static_cast<std::size_t>(index)]),
                    "Selecting and restoring presets preserves the user's existing mix controls.");
         drum.reset();
         juce::AudioBuffer<float> original(drum.getTotalNumOutputChannels(), 4096);
@@ -382,7 +390,10 @@ void drumSoundPresetState()
     const auto restore = [&drum](const juce::var& value)
     {
         const auto json = juce::JSON::toString(value, false);
-        return drum.restoreValidatedState(json.toRawUTF8(), json.getNumBytesAsUTF8());
+        const auto size = json.getNumBytesAsUTF8();
+        if (size > static_cast<std::size_t>(std::numeric_limits<int>::max()))
+            return juce::Result::fail("The synthetic drum state is too large.");
+        return drum.restoreValidatedState(json.toRawUTF8(), static_cast<int>(size));
     };
     for (const auto& invalidPreset : {
              juce::var(), juce::var("unknown-kit"), juce::var(4) })
@@ -419,8 +430,8 @@ void drumSoundPresetState()
     expect(restore(legacy).wasOk() && drum.getCurrentProgram() == 0,
            "Legacy drum states reopen with their original Basic Metal Kit sound.");
     for (int index = 0; index < static_cast<int>(mix.size()); ++index)
-        expect(drum.getParameters()[index]->getValue()
-                   == mix[static_cast<std::size_t>(index)],
+        expect(sameFloatBits(drum.getParameters()[index]->getValue(),
+                             mix[static_cast<std::size_t>(index)]),
                "Legacy drum states preserve every existing mix parameter.");
 }
 
