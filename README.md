@@ -74,7 +74,7 @@ hardening remains before the complete DAW described in the
 
 ## Build
 
-Requirements: CMake 3.25+, a C++20 compiler, and either macOS with Xcode
+Requirements: CMake 3.25+, Git, a C++20 compiler, and either macOS with Xcode
 command-line tools or Windows with Visual Studio 2022.
 
 ```sh
@@ -125,7 +125,8 @@ option. On Windows, Studio Duo uses JUCE's dual-licensed Steinberg ASIO SDK
 headers under their GPLv3 option. Signalsmith Stretch 1.1.0, CLAP 1.2.10, and
 clap-helpers are MIT licensed. libsamplerate 0.2.2 is BSD-2-Clause licensed.
 ARA SDK 2.3.0 is Apache-2.0 licensed.
-The bundled, encoder-only LAME 3.100 library is LGPL-2.0-or-later licensed;
+The bundled, encoder-only LAME 3.100 library is LGPL-2.0-or-later licensed and
+includes documented portability fixes;
 its license, library and application source archives, scalar build configuration,
 and rebuilding/relinking notice ship with the application.
 The vendored DAWproject 1.0 schemas and upstream XML example are MIT licensed.

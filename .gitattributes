@@ -1,2 +1,4 @@
 third_party/dawproject/v1.0.0/** text eol=lf
 third_party/dawproject/v1.0.0/*.xsd whitespace=-blank-at-eof
+third_party/lame/*.patch text eol=lf whitespace=-blank-at-eol
+third_party/libsamplerate/*.patch text eol=lf whitespace=-blank-at-eol

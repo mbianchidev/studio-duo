@@ -1,0 +1,48 @@
+diff --git a/libmp3lame/VbrTag.c b/libmp3lame/VbrTag.c
+--- a/libmp3lame/VbrTag.c
++++ b/libmp3lame/VbrTag.c
+@@ -250,7 +250,8 @@
+     return (isTag0 || isTag1);
+ }
+ 
+-#define SHIFT_IN_BITS_VALUE(x,n,v) ( x = (x << (n)) | ( (v) & ~(-1 << (n)) ) )
++/* Studio Duo, 2026-10-04: unsigned masks avoid undefined signed shifts. */
++#define SHIFT_IN_BITS_VALUE(x,n,v) ( x = (x << (n)) | ( (v) & ~(~0u << (n)) ) )
+ 
+ static void
+ setLameTagFrameHeader(lame_internal_flags const *gfc, unsigned char *buffer)
+@@ -429,8 +430,6 @@
+     if (head_flags & TOC_FLAG) {
+-        if (pTagData->toc != NULL) {
+-            for (i = 0; i < NUMTOCENTRIES; i++)
+-                pTagData->toc[i] = buf[i];
+-        }
++        for (i = 0; i < NUMTOCENTRIES; i++)
++            pTagData->toc[i] = buf[i];
+         buf += NUMTOCENTRIES;
+     }
+ 
+diff --git a/libmp3lame/VbrTag.h b/libmp3lame/VbrTag.h
+--- a/libmp3lame/VbrTag.h
++++ b/libmp3lame/VbrTag.h
+@@ -64,5 +64,5 @@
+     int     bytes;           /* total bit stream bytes from Vbr header data */
+     int     vbr_scale;       /* encoded vbr scale from Vbr header data */
+-    unsigned char toc[NUMTOCENTRIES]; /* may be NULL if toc not desired */
++    unsigned char toc[NUMTOCENTRIES]; /* Studio Duo, 2026-10-04: always allocated. */
+     int     headersize;      /* size of VBR header, in bytes */
+     int     enc_delay;       /* encoder delay */
+diff --git a/libmp3lame/machine.h b/libmp3lame/machine.h
+--- a/libmp3lame/machine.h
++++ b/libmp3lame/machine.h
+@@ -168,6 +168,7 @@
+ #if 1
++/* Studio Duo, 2026-10-04: make fabs argument promotions explicit. */
+ #define EQ(a,b) (\
+-(fabs(a) > fabs(b)) \
+- ? (fabs((a)-(b)) <= (fabs(a) * 1e-6f)) \
+- : (fabs((a)-(b)) <= (fabs(b) * 1e-6f)))
++(fabs((double) (a)) > fabs((double) (b))) \
++ ? (fabs((double) ((a)-(b))) <= (fabs((double) (a)) * 1e-6f)) \
++ : (fabs((double) ((a)-(b))) <= (fabs((double) (b)) * 1e-6f)))
+ #else

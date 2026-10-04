@@ -6,7 +6,10 @@ already installed. It also fetches the MIT-licensed Signalsmith Stretch 1.1.0
 headers used for pitch-preserving elastic audio, CLAP 1.2.10 and clap-helpers
 for CLAP hosting, and the Apache-2.0 ARA SDK 2.3.0 for ARA compatibility mode.
 MP3 export statically links the LGPL-2.0-or-later LAME 3.100 encoder from a
-SHA-256-pinned upstream archive. It builds without the command-line frontend,
+SHA-256-pinned upstream archive. An idempotent, checked patch fixes its signed
+bit-mask shifts, array-null check, and integer-to-`fabs` argument warnings without
+disabling diagnostics. The bundled library source and notice include these
+modifications. It builds without the command-line frontend,
 mpglib decoder, or architecture-specific assembly. No runtime encoder
 installation or network access is required. The upstream license, scalar build
 configuration, complete library/application source archives, and relinking
@@ -16,6 +19,12 @@ application so they include the source used for that build, rather than relying
 solely on an upstream download URL. To rebuild against a modified encoder,
 extract both archives and set `FETCHCONTENT_SOURCE_DIR_STUDIO_DUO_LAME` to the
 extracted LAME directory.
+Configuration requires Git to apply/verify the versioned dependency patches.
+The pinned libsamplerate 0.2.2 source is also patched before its CMake project
+is added, correcting its policy-version range and selecting modern MSVC runtime
+handling. Both patches apply on clean sources and verify already-patched cached
+sources; a mismatched custom dependency source fails with an actionable error.
+For a customized LAME source override, retain/apply the portability fixes too.
 Phase 4 MIDI/editor workflows and bundled drum/guitar/bass devices are
 implemented. The dedicated DAWproject 1.0 translation, schema-validation, ZIP,
 scene, and compatibility-report layer is also implemented without runtime
@@ -24,6 +33,7 @@ network access.
 ## Prerequisites
 
 - CMake 3.25 or newer
+- Git
 - A C++20 compiler
 - macOS with Xcode command-line tools, or Windows with Visual Studio 2022
 

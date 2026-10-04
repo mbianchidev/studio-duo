@@ -22,6 +22,7 @@ option(STUDIO_DUO_AUDIO_EXPORT_TESTS_ONLY "Build only the headless audio export 
 set(STUDIO_DUO_BUNDLE_ID "dev.mbianchi.studioduo")
 
 include(FetchContent)
+include(cmake/StudioDuoDependencyPatches.cmake)
 
 # Official LAME 3.100 source (LGPL-2.0-or-later); no executable or decoder is built.
 # The archive hash is also published by Buildroot's package/lame/lame.hash.
@@ -32,6 +33,12 @@ FetchContent_Declare(
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE
 )
 FetchContent_MakeAvailable(studio_duo_lame)
+foreach(STUDIO_DUO_LAME_PATCH IN ITEMS 3.100-portability.patch 3.100-preset-portability.patch)
+    studio_duo_apply_dependency_patch(
+        "${studio_duo_lame_SOURCE_DIR}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/third_party/lame/${STUDIO_DUO_LAME_PATCH}"
+    )
+endforeach()
 
 # A scalar, encoder-only build avoids platform assembly and mpglib entirely.
 # Do not use configMS.h: it enables x86 intrinsics even for universal builds.
@@ -132,14 +139,20 @@ set(LIBSAMPLERATE_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(LIBSAMPLERATE_INSTALL OFF CACHE BOOL "" FORCE)
 unset(LIBSAMPLERATE_TESTS CACHE)
 set(BUILD_TESTING OFF CACHE BOOL "Disable dependency test targets" FORCE)
-set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
 FetchContent_Declare(
     libsamplerate
     GIT_REPOSITORY https://github.com/libsndfile/libsamplerate.git
     GIT_TAG 0.2.2
     GIT_SHALLOW TRUE
+    # Apply the versioned patch before evaluating upstream CMake.
+    SOURCE_SUBDIR studio-duo-patched
 )
 FetchContent_MakeAvailable(libsamplerate)
+studio_duo_apply_dependency_patch(
+    "${libsamplerate_SOURCE_DIR}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/libsamplerate/0.2.2-cmake.patch"
+)
+add_subdirectory("${libsamplerate_SOURCE_DIR}" "${libsamplerate_BINARY_DIR}" EXCLUDE_FROM_ALL)
 
 set(CLAP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(
@@ -341,7 +354,7 @@ add_custom_target(
         "${CMAKE_COMMAND}" -E tar czf
         "${STUDIO_DUO_LAME_CONFIG_DIR}/studio-duo-source.tar.gz"
         CMakeLists.txt VERSION LICENSE README.md
-        src assets third_party docs packaging scripts tests
+        src assets third_party docs packaging scripts tests cmake
     BYPRODUCTS ${STUDIO_DUO_SOURCE_ARCHIVES}
     COMMENT "Packaging MP3 library and application source for rebuilding and relinking"
     VERBATIM
@@ -353,11 +366,16 @@ Studio Duo includes the LAME 3.100 MP3 encoder, licensed under LGPL-2.0-or-later
 Project: https://lame.sourceforge.io/
 Unmodified upstream source: https://downloads.sourceforge.net/project/lame/lame/3.100/lame-3.100.tar.gz
 SHA-256: ddfe36cab873794038ae2c1210557ad34857a4b6bdc515785d1da9e175b1da1e
+Studio Duo modifies libmp3lame/VbrTag.c, VbrTag.h, machine.h, and presets.c on 2026-10-04
+to fix undefined signed bit-mask shifts, an impossible array-null check, and
+implicit integer arguments to fabs. These fixes do not change encoder options.
+The modifications are recorded in third_party/lame/3.100-portability.patch and
+third_party/lame/3.100-preset-portability.patch.
 The bundled decoder (mpglib), executables, and assembly routines are not built.
-The accompanying lame-3.100-source.tar.gz contains the complete library source,
+The accompanying lame-3.100-source.tar.gz contains the complete modified library source,
 and lame-config.h records the scalar encoder build configuration.
 The accompanying studio-duo-source.tar.gz contains the application source,
-build scripts, assets, tests, and documentation needed to rebuild and relink.
+build scripts, dependency patches, assets, tests, and documentation needed to rebuild and relink.
 Extract the application archive into an empty directory and follow README.md
 or docs/development.md. Set FETCHCONTENT_SOURCE_DIR_STUDIO_DUO_LAME to the
 extracted library directory to rebuild with a modified encoder.

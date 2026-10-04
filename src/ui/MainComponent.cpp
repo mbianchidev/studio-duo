@@ -3579,10 +3579,10 @@ void MainComponent::chooseProjectImportSource(
         true,
         false,
         this);
-    const auto flags = juce::FileBrowserComponent::openMode
+    const auto chooserFlags = juce::FileBrowserComponent::openMode
         | juce::FileBrowserComponent::canSelectFiles;
     fileChooser->launchAsync(
-        flags,
+        chooserFlags,
         [safe = juce::Component::SafePointer<MainComponent>(this)](
             const auto& chooser)
         {
@@ -3612,10 +3612,10 @@ void MainComponent::chooseProjectImportDestination(
         true,
         true,
         this);
-    const auto flags = juce::FileBrowserComponent::saveMode
+    const auto chooserFlags = juce::FileBrowserComponent::saveMode
         | juce::FileBrowserComponent::canSelectFiles;
     fileChooser->launchAsync(
-        flags,
+        chooserFlags,
         [safe = juce::Component::SafePointer<MainComponent>(this),
          sourceArchive,
          projectId = project.id](const auto& chooser)
@@ -3771,10 +3771,10 @@ void MainComponent::beginExportDawProject()
         true,
         false,
         this);
-    const auto flags = juce::FileBrowserComponent::saveMode
+    const auto chooserFlags = juce::FileBrowserComponent::saveMode
         | juce::FileBrowserComponent::canSelectFiles;
     fileChooser->launchAsync(
-        flags,
+        chooserFlags,
         [safe = juce::Component::SafePointer<MainComponent>(this)](
             const auto& chooser)
         {
@@ -4034,10 +4034,10 @@ void MainComponent::beginSaveCompatibilityReport()
         true,
         false,
         this);
-    const auto flags = juce::FileBrowserComponent::saveMode
+    const auto chooserFlags = juce::FileBrowserComponent::saveMode
         | juce::FileBrowserComponent::canSelectFiles;
     fileChooser->launchAsync(
-        flags,
+        chooserFlags,
         [safe = juce::Component::SafePointer<MainComponent>(this),
          reportCopy](const auto& chooser)
         {
