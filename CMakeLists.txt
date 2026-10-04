@@ -950,6 +950,11 @@ if(STUDIO_DUO_BUILD_TESTS)
         )
     endif()
     if(APPLE)
+        set_property(
+            SOURCE tests/BundledDeviceTests.cpp
+            APPEND PROPERTY COMPILE_DEFINITIONS
+                STUDIO_DUO_BUNDLED_CLAP_PATH="$<TARGET_BUNDLE_DIR:StudioDuoBundledDevicesClap>"
+        )
         target_compile_definitions(
             StudioDuoTests
             PRIVATE
@@ -960,6 +965,11 @@ if(STUDIO_DUO_BUILD_TESTS)
                 STUDIO_DUO_BRIDGE_WORKER_PATH="$<TARGET_FILE:StudioDuo>"
         )
     else()
+        set_property(
+            SOURCE tests/BundledDeviceTests.cpp
+            APPEND PROPERTY COMPILE_DEFINITIONS
+                STUDIO_DUO_BUNDLED_CLAP_PATH="$<TARGET_FILE:StudioDuoBundledDevicesClap>"
+        )
         target_compile_definitions(
             StudioDuoTests
             PRIVATE
@@ -976,6 +986,7 @@ if(STUDIO_DUO_BUILD_TESTS)
         StudioDuoDdpEncoderFixture
         StudioDuoAraFixture_VST3
         StudioDuoClapFixture
+        StudioDuoBundledDevicesClap
         StudioDuoRoutingFixture_VST3
     )
     if(APPLE)

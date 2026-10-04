@@ -9,11 +9,13 @@
 #include "model/ProjectCommands.h"
 #include "model/ProjectModel.h"
 #include "model/ProjectTemplates.h"
+#include "plugin_host/ClapPluginFormat.h"
 
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <cmath>
+#include <limits>
 #include <thread>
 
 namespace
@@ -47,6 +49,26 @@ float magnitude(const juce::AudioBuffer<float>& audio,
         ? audio.getNumSamples() - start
         : std::min(samples, audio.getNumSamples() - start);
     return count > 0 ? audio.getMagnitude(channel, start, count) : 0.0f;
+}
+
+float maximumDifference(const juce::AudioBuffer<float>& first,
+                        const juce::AudioBuffer<float>& second)
+{
+    if (first.getNumChannels() != second.getNumChannels()
+        || first.getNumSamples() != second.getNumSamples())
+        return std::numeric_limits<float>::infinity();
+    auto difference = 0.0f;
+    for (int channel = 0; channel < first.getNumChannels(); ++channel)
+        for (int sample = 0; sample < first.getNumSamples(); ++sample)
+        {
+            const auto residual = std::abs(first.getSample(channel, sample)
+                                           - second.getSample(channel, sample));
+            if (!std::isfinite(residual))
+                return std::numeric_limits<float>::infinity();
+            difference = std::max(
+                difference, residual);
+        }
+    return difference;
 }
 
 int outputChannel(const juce::AudioProcessor& processor,
@@ -203,6 +225,422 @@ void registryMetadata()
            "The bundled registry advertises both cabinet amp effects.");
 }
 
+void drumSoundPresetPrograms()
+{
+    studio::DrumDeviceProcessor drum;
+    const std::array<juce::String, 6> names {
+        "Basic Metal Kit", "Punk", "Hardcore Punk",
+        "Death Metal", "Modern Metal", "Deathcore"
+    };
+    expect(drum.getNumPrograms() == static_cast<int>(names.size())
+               && drum.getCurrentProgram() == 0,
+           "Drums expose the original kit plus five genre sound presets, keeping the original default.");
+    for (int index = 0; index < static_cast<int>(names.size()); ++index)
+    {
+        drum.setCurrentProgram(index);
+        expect(drum.getProgramName(index) == names[static_cast<std::size_t>(index)]
+                   && drum.getCurrentProgram() == index,
+               "Each named drum sound preset is selectable through the processor program interface.");
+    }
+    expect(drum.getParameters().size() == 9
+               && drum.getParameters()[8]->isDiscrete()
+               && drum.getParameters()[8]->getNumSteps() == 6
+               && setParameter(drum, "kitPreset", 0.4f)
+               && drum.getCurrentProgram() == 2,
+           "Kit sound is a discrete host parameter appended after the eight existing mix controls.");
+    drum.setCurrentProgram(-1);
+    drum.setCurrentProgram(static_cast<int>(names.size()));
+    expect(drum.getCurrentProgram() == 2,
+           "Out-of-range drum programs cannot change the selected kit.");
+}
+
+void drumSoundPresetTimbres()
+{
+    studio::DrumDeviceProcessor drum;
+    drum.prepareToPlay(48000.0, 4096);
+    constexpr std::array notes { 36, 38, 41, 42, 49 };
+    constexpr std::array buses {
+        studio::DrumDeviceProcessor::kickOutput,
+        studio::DrumDeviceProcessor::snareOutput,
+        studio::DrumDeviceProcessor::tomsOutput,
+        studio::DrumDeviceProcessor::cymbalsOutput,
+        studio::DrumDeviceProcessor::cymbalsOutput
+    };
+    for (std::size_t piece = 0; piece < notes.size(); ++piece)
+    {
+        std::array<juce::AudioBuffer<float>, 6> rendered;
+        for (int preset = 0; preset < static_cast<int>(rendered.size()); ++preset)
+        {
+            drum.setCurrentProgram(preset);
+            drum.reset();
+            auto& audio = rendered[static_cast<std::size_t>(preset)];
+            audio.setSize(drum.getTotalNumOutputChannels(), 4096);
+            juce::MidiBuffer midi;
+            midi.addEvent(
+                juce::MidiMessage::noteOn(1, notes[piece], juce::uint8(110)), 0);
+            drum.processBlock(audio, midi);
+            const auto channel = outputChannel(drum, buses[piece], 0);
+            auto finite = true;
+            for (int output = 0; output < audio.getNumChannels(); ++output)
+                for (int sample = 0; sample < audio.getNumSamples(); ++sample)
+                    finite = finite && std::isfinite(audio.getSample(output, sample));
+            expect(finite && magnitude(audio, channel) > 0.01f
+                       && drum.getCurrentProgram() == preset,
+                   "Every preset renders finite, audible kit pieces and survives a transport reset.");
+            for (int bus = studio::DrumDeviceProcessor::kickOutput;
+                 bus < studio::DrumDeviceProcessor::outputBusCount; ++bus)
+                if (bus != buses[piece])
+                    expect(magnitude(audio, outputChannel(drum, bus, 0)) < 0.000001f,
+                           "Genre presets preserve the existing kick/snare/tom/cymbal stem mapping.");
+        }
+        const auto channel = outputChannel(drum, buses[piece], 0);
+        for (std::size_t first = 0; first < rendered.size(); ++first)
+            for (std::size_t second = first + 1; second < rendered.size(); ++second)
+            {
+                const auto* left = rendered[first].getReadPointer(channel);
+                const auto* right = rendered[second].getReadPointer(channel);
+                auto leftEnergy = 0.0;
+                auto rightEnergy = 0.0;
+                auto product = 0.0;
+                for (int sample = 0; sample < 4096; ++sample)
+                {
+                    leftEnergy += static_cast<double>(left[sample]) * left[sample];
+                    rightEnergy += static_cast<double>(right[sample]) * right[sample];
+                    product += static_cast<double>(left[sample]) * right[sample];
+                }
+                const auto gain = rightEnergy > 0.0 ? product / rightEnergy : 0.0;
+                auto difference = 0.0;
+                for (int sample = 0; sample < 4096; ++sample)
+                {
+                    const auto residual = left[sample] - right[sample] * gain;
+                    difference += residual * residual;
+                }
+                expect(leftEnergy > 0.0 && difference > leftEnergy * 0.0025,
+                       "Every pair of genre presets changes each kit piece's timbre by more than gain alone.");
+            }
+    }
+}
+
+void drumSoundPresetState()
+{
+    studio::DrumDeviceProcessor drum;
+    drum.prepareToPlay(48000.0, 4096);
+    expect(setParameter(drum, "kick", 0.65f)
+               && setParameter(drum, "room", 0.31f)
+               && setParameter(drum, "tuning", 0.625f),
+           "The preset state fixture retains user-edited mix, room, and tuning controls.");
+    std::array<float, 8> mix;
+    for (int index = 0; index < static_cast<int>(mix.size()); ++index)
+        mix[static_cast<std::size_t>(index)] = drum.getParameters()[index]->getValue();
+    const std::array<juce::String, 6> ids {
+        "basic-metal", "punk", "hardcore-punk",
+        "death-metal", "modern-metal", "deathcore"
+    };
+    juce::MidiBuffer sequence;
+    for (const auto note : { 36, 38, 41, 42, 49 })
+        sequence.addEvent(juce::MidiMessage::noteOn(1, note, juce::uint8(105)), 0);
+    for (int preset = 0; preset < static_cast<int>(ids.size()); ++preset)
+    {
+        drum.setCurrentProgram(preset);
+        juce::MemoryBlock state;
+        expect(drum.saveValidatedState(state).wasOk(),
+               "Every genre sound preset can be saved as processor state.");
+        const auto encoded = juce::JSON::parse(
+            juce::String::fromUTF8(static_cast<const char*>(state.getData()),
+                                   static_cast<int>(state.getSize())));
+        expect(encoded.getProperty("schema", {}) == juce::var(2)
+                   && encoded.getProperty("kitPreset", {}).toString()
+                       == ids[static_cast<std::size_t>(preset)],
+               "Drum preset state uses a stable preset ID rather than a menu index.");
+        studio::DrumDeviceProcessor restored;
+        restored.prepareToPlay(48000.0, 4096);
+        restored.setCurrentProgram((preset + 1) % static_cast<int>(ids.size()));
+        expect(restored.restoreValidatedState(
+                   state.getData(), static_cast<int>(state.getSize())).wasOk()
+                   && restored.getCurrentProgram() == preset,
+               "Reopening processor state restores the selected genre sound.");
+        for (int index = 0; index < static_cast<int>(mix.size()); ++index)
+            expect(drum.getParameters()[index]->getValue()
+                       == mix[static_cast<std::size_t>(index)]
+                       && restored.getParameters()[index]->getValue()
+                           == mix[static_cast<std::size_t>(index)],
+                   "Selecting and restoring presets preserves the user's existing mix controls.");
+        drum.reset();
+        juce::AudioBuffer<float> original(drum.getTotalNumOutputChannels(), 4096);
+        juce::AudioBuffer<float> reopened(restored.getTotalNumOutputChannels(), 4096);
+        drum.processBlock(original, sequence);
+        restored.processBlock(reopened, sequence);
+        expect(maximumDifference(original, reopened) < 0.000001f,
+               "Restoring every preset reproduces its complete stereo mix and stems deterministically.");
+    }
+
+    juce::MemoryBlock state;
+    drum.saveValidatedState(state);
+    const auto encoded = juce::JSON::parse(
+        juce::String::fromUTF8(static_cast<const char*>(state.getData()),
+                               static_cast<int>(state.getSize())));
+    const auto restore = [&drum](const juce::var& value)
+    {
+        const auto json = juce::JSON::toString(value, false);
+        return drum.restoreValidatedState(json.toRawUTF8(), json.getNumBytesAsUTF8());
+    };
+    for (const auto& invalidPreset : {
+             juce::var(), juce::var("unknown-kit"), juce::var(4) })
+    {
+        auto invalid = encoded.clone();
+        invalid.getDynamicObject()->setProperty("schema", 2);
+        invalid.getDynamicObject()->setProperty("kitPreset", invalidPreset);
+        expect(restore(invalid).failed(),
+               "Missing, unknown, and non-string drum preset IDs fail validation.");
+    }
+    for (const auto& invalidSchema : {
+             juce::var(3), juce::var(2.5),
+             juce::var(static_cast<juce::int64>(0x100000002LL)) })
+    {
+        auto invalid = encoded.clone();
+        invalid.getDynamicObject()->setProperty("schema", invalidSchema);
+        expect(restore(invalid).failed(),
+               "Unsupported, fractional, and oversized drum state schemas cannot become valid by truncation.");
+    }
+    auto invalid = encoded.clone();
+    invalid.getDynamicObject()->setProperty("schema", 2);
+    invalid.getDynamicObject()->setProperty("kitPreset", "punk");
+    invalid.getDynamicObject()->setProperty("room", 1.5);
+    expect(restore(invalid).failed(),
+           "Invalid mix settings reject the entire preset state.");
+    juce::MemoryBlock afterInvalid;
+    drum.saveValidatedState(afterInvalid);
+    expect(state == afterInvalid,
+           "Rejected preset states leave both the selected kit and all mix controls untouched.");
+
+    auto legacy = encoded.clone();
+    legacy.getDynamicObject()->setProperty("schema", 1);
+    legacy.getDynamicObject()->removeProperty("kitPreset");
+    expect(restore(legacy).wasOk() && drum.getCurrentProgram() == 0,
+           "Legacy drum states reopen with their original Basic Metal Kit sound.");
+    for (int index = 0; index < static_cast<int>(mix.size()); ++index)
+        expect(drum.getParameters()[index]->getValue()
+                   == mix[static_cast<std::size_t>(index)],
+               "Legacy drum states preserve every existing mix parameter.");
+}
+
+void drumSoundPresetClap()
+{
+    studio::ClapPluginFormat format;
+    juce::OwnedArray<juce::PluginDescription> descriptions;
+    format.findAllTypesForFile(descriptions, STUDIO_DUO_BUNDLED_CLAP_PATH);
+    const auto description = std::find_if(
+        descriptions.begin(), descriptions.end(),
+        [](const auto* candidate) { return candidate->isInstrument; });
+    expect(descriptions.size() == 3 && description != descriptions.end(),
+           "The actual bundled CLAP module exports the drum instrument and both amps.");
+    if (description == descriptions.end())
+        return;
+    juce::String error;
+    auto instance = format.createInstanceFromDescription(**description, 48000.0, 512, error);
+    expect(instance != nullptr, error.toRawUTF8());
+    if (instance == nullptr)
+        return;
+    expect(instance->getParameters().size() == 9,
+           "Bundled CLAP drums preserve the eight existing parameter IDs and append kit presets.");
+    if (instance->getParameters().size() != 9)
+        return;
+    auto* preset = instance->getParameters()[8];
+    expect(preset->getName(128) == "Kit sound preset" && preset->isDiscrete()
+               && preset->getNumSteps() == 6
+               && std::abs(preset->getValueForText("Hardcore Punk") - 0.4f) < 0.000001f,
+           "CLAP advertises six integer-stepped kit choices with correct normalized text conversion.");
+
+    studio::DrumDeviceProcessor reference;
+    reference.prepareToPlay(48000.0, 512);
+    juce::MidiBuffer sequence;
+    auto offset = 0;
+    for (const auto note : { 36, 38, 41, 42, 49 })
+    {
+        sequence.addEvent(juce::MidiMessage::noteOn(1, note, juce::uint8(105)), offset);
+        offset += 64;
+    }
+    for (int index = 0; index < reference.getNumPrograms(); ++index)
+    {
+        instance->prepareToPlay(48000.0, 512);
+        reference.reset();
+        reference.setCurrentProgram(index);
+        preset->setValueNotifyingHost(static_cast<float>(index) / 5.0f);
+        juce::AudioBuffer<float> hosted(instance->getTotalNumOutputChannels(), 512);
+        juce::AudioBuffer<float> direct(reference.getTotalNumOutputChannels(), 512);
+        auto hostedMidi = sequence;
+        instance->processBlock(hosted, hostedMidi);
+        reference.processBlock(direct, sequence);
+        const auto difference = maximumDifference(hosted, direct);
+        expect(preset->getText(preset->getValue(), 128) == reference.getProgramName(index)
+                   && magnitude(hosted, 0) > 0.01f && difference < 0.000001f,
+               ("CLAP must render the in-app " + reference.getProgramName(index)
+                + " sound and stems (difference " + juce::String(difference, 8) + ").").toRawUTF8());
+    }
+    instance->prepareToPlay(48000.0, 512);
+    reference.reset();
+    reference.setCurrentProgram(3);
+    preset->setValueNotifyingHost(0.74f);
+    juce::AudioBuffer<float> stepped(instance->getTotalNumOutputChannels(), 512);
+    juce::AudioBuffer<float> truncated(reference.getTotalNumOutputChannels(), 512);
+    auto steppedMidi = sequence;
+    instance->processBlock(stepped, steppedMidi);
+    reference.processBlock(truncated, sequence);
+    expect(preset->getText(preset->getValue(), 128) == "Death Metal"
+               && maximumDifference(stepped, truncated) < 0.000001f,
+           "Fractional CLAP enum values truncate to an integer step as required by the CLAP specification.");
+    preset->setValueNotifyingHost(0.4f);
+    juce::MemoryBlock state;
+    auto* validated = dynamic_cast<studio::ValidatedPluginStateTarget*>(instance.get());
+    expect(validated != nullptr && validated->saveValidatedState(state).wasOk(),
+           "Saving a CLAP kit flushes a pending preset change even without another audio block.");
+    if (validated == nullptr || state.isEmpty())
+        return;
+    auto restored = format.createInstanceFromDescription(**description, 48000.0, 512, error);
+    expect(restored != nullptr, error.toRawUTF8());
+    if (restored == nullptr)
+        return;
+    auto* restoredState = dynamic_cast<studio::ValidatedPluginStateTarget*>(restored.get());
+    expect(restoredState != nullptr
+               && restoredState->restoreValidatedState(
+                   state.getData(), static_cast<int>(state.getSize())).wasOk(),
+           "The actual bundled CLAP drum preset restores through its state extension.");
+    restored->prepareToPlay(48000.0, 512);
+    reference.reset();
+    reference.setCurrentProgram(2);
+    juce::AudioBuffer<float> reopened(restored->getTotalNumOutputChannels(), 512);
+    juce::AudioBuffer<float> expected(reference.getTotalNumOutputChannels(), 512);
+    auto reopenedMidi = sequence;
+    restored->processBlock(reopened, reopenedMidi);
+    reference.processBlock(expected, sequence);
+    expect(maximumDifference(reopened, expected) < 0.000001f,
+           "CLAP parameter flushing and saved state preserve Hardcore Punk instead of clamping it to Deathcore.");
+}
+
+void drumSoundPresetTails()
+{
+    studio::DrumDeviceProcessor drum;
+    constexpr auto sampleRate = 8000.0;
+    constexpr auto blockSamples = 256;
+    drum.prepareToPlay(sampleRate, blockSamples);
+    setParameter(drum, "room", 1.0f);
+    for (int preset = 0; preset < drum.getNumPrograms(); ++preset)
+    {
+        drum.setCurrentProgram(preset);
+        drum.reset();
+        const auto tailSamples = static_cast<int>(
+            std::ceil(drum.getTailLengthSeconds() * sampleRate));
+        juce::AudioBuffer<float> audio(drum.getTotalNumOutputChannels(), blockSamples);
+        juce::MidiBuffer empty;
+        for (int cursor = 0; cursor < tailSamples; cursor += blockSamples)
+        {
+            audio.setSize(drum.getTotalNumOutputChannels(),
+                          std::min(blockSamples, tailSamples - cursor));
+            juce::MidiBuffer midi;
+            if (cursor == 0)
+            {
+                midi.addEvent(juce::MidiMessage::controllerEvent(1, 4, 0), 0);
+                for (const auto note : { 46, 49, 51 })
+                    midi.addEvent(juce::MidiMessage::noteOn(1, note, juce::uint8(127)), 0);
+            }
+            drum.processBlock(audio, midi);
+        }
+        audio.setSize(drum.getTotalNumOutputChannels(), blockSamples);
+        drum.processBlock(audio, empty);
+        expect(drum.activeVoiceCountForTesting() == 0
+                   && magnitude(audio, 0) < 0.0001f
+                   && magnitude(audio, outputChannel(
+                       drum, studio::DrumDeviceProcessor::cymbalsOutput, 0)) < 0.0001f,
+               "Every preset's longest cymbals and maximum room decay fit the declared export tail.");
+    }
+
+    studio::DrumDeviceProcessor original;
+    original.prepareToPlay(48000.0, 512);
+    drum.prepareToPlay(48000.0, 512);
+    drum.setCurrentProgram(0);
+    setParameter(drum, "room", 0.0f);
+    setParameter(original, "room", 0.0f);
+    juce::AudioBuffer<float> changedAudio(drum.getTotalNumOutputChannels(), 512);
+    juce::AudioBuffer<float> originalAudio(original.getTotalNumOutputChannels(), 512);
+    juce::MidiBuffer kick;
+    kick.addEvent(juce::MidiMessage::noteOn(1, 36, juce::uint8(110)), 0);
+    drum.processBlock(changedAudio, kick);
+    original.processBlock(originalAudio, kick);
+    drum.setCurrentProgram(5);
+    juce::MidiBuffer empty;
+    drum.processBlock(changedAudio, empty);
+    original.processBlock(originalAudio, empty);
+    expect(drum.activeVoiceCountForTesting() == 1
+               && maximumDifference(changedAudio, originalAudio) < 0.000001f,
+           "Changing kit presets leaves already-sounding drum voices intact.");
+    drum.processBlock(changedAudio, kick);
+    original.processBlock(originalAudio, kick);
+    expect(maximumDifference(changedAudio, originalAudio) > 0.01f,
+           "New hits adopt the new preset while earlier hits finish naturally.");
+}
+
+void drumSoundPresetEngine()
+{
+    auto project = studio::ProjectTemplates::createBlankSong();
+    project.metronomeEnabled = false;
+    auto track = studio::ProjectTemplates::createDrumPerformanceTrack(project, 0.0);
+    track.midiClips.front().notes.push_back(studio::createMidiNote(
+        track.midiClips.front(), 0.0, 38, 0.25, 110,
+        project.findDrumMap(track.midiClips.front().drumMapId)));
+    studio::AddTrackCommand add(track);
+    juce::String error;
+    expect(add.perform(project, error), error.toRawUTF8());
+    const auto& insert = track.inserts.front();
+    studio::StudioAudioEngine engine;
+    expect(engine.updateProject(project, { requestFor(track, insert) }).wasOk()
+               && waitForRuntime(engine),
+           "The drum preset integration fixture creates an ordinary instrument runtime.");
+    auto statuses = engine.pluginRuntimeStatuses();
+    const auto status = std::find_if(statuses.cbegin(), statuses.cend(),
+        [&insert](const auto& candidate) { return candidate.insertId == insert.id; });
+    expect(status != statuses.cend(), "The bundled drum runtime exposes its parameter metadata.");
+    if (status == statuses.cend())
+        return;
+    const auto parameter = std::find_if(
+        status->parameters.cbegin(), status->parameters.cend(),
+        [](const auto& candidate) { return candidate.id == "kitPreset"; });
+    expect(parameter != status->parameters.cend() && parameter->index == 8
+               && parameter->automatable,
+           "The kit preset uses a stable, appended, automatable engine parameter.");
+    if (parameter == status->parameters.cend())
+        return;
+    expect(engine.setPluginParameter(insert.id, parameter->index, 1.0f, error),
+           error.toRawUTF8());
+    expect(engine.updateProject(project, { requestFor(track, insert) }).wasOk()
+               && waitForRuntime(engine),
+           "Refreshing the project preserves the live drum processor.");
+    const auto captures = engine.capturePluginStates(2000);
+    const auto capture = std::find_if(captures.cbegin(), captures.cend(),
+        [&insert](const auto& candidate) { return candidate.insertId == insert.id; });
+    expect(capture != captures.cend() && capture->result.wasOk(),
+           "The live genre preset participates in the existing project-save and export state capture.");
+    if (capture == captures.cend() || capture->result.failed())
+        return;
+    studio::DrumDeviceProcessor restored;
+    expect(restored.restoreValidatedState(
+               capture->state.getData(), static_cast<int>(capture->state.getSize())).wasOk()
+               && restored.getCurrentProgram() == 5,
+           "Project refresh and live state capture retain the selected Deathcore sound.");
+    studio::StudioAudioEngine renderer;
+    juce::AudioBuffer<float> deathcore;
+    juce::AudioBuffer<float> basic;
+    expect(renderer.renderToBuffer(
+               project, deathcore, 8000.0, { requestFor(track, insert, capture->state) }).wasOk()
+               && renderer.renderToBuffer(
+                   project, basic, 8000.0, { requestFor(track, insert) }).wasOk(),
+           "Offline MIDI exports accept captured genre state and the legacy default kit.");
+    expect(deathcore.getNumSamples() == basic.getNumSamples()
+               && deathcore.getNumChannels() == basic.getNumChannels()
+               && magnitude(deathcore, 0) > 0.001f && magnitude(basic, 0) > 0.001f
+               && maximumDifference(deathcore, basic) > 0.01f,
+           "Mix export renders the captured live preset rather than silently falling back to Basic Metal Kit.");
+}
+
 void drumProcessor()
 {
     auto drum = studio::DeviceRegistry::create(
@@ -289,19 +727,7 @@ void drumProcessor()
         1024);
     deterministicB.clear();
     drum->processBlock(deterministicB, sequence);
-    auto maximumDifference = 0.0f;
-    for (int channel = 0;
-         channel < deterministicA.getNumChannels();
-         ++channel)
-        for (int sample = 0;
-             sample < deterministicA.getNumSamples();
-             ++sample)
-            maximumDifference = std::max(
-                maximumDifference,
-                std::abs(
-                    deterministicA.getSample(channel, sample)
-                    - deterministicB.getSample(channel, sample)));
-    expect(maximumDifference < 0.000001f,
+    expect(maximumDifference(deterministicA, deterministicB) < 0.000001f,
            "Drum round robin and noise reset to a deterministic sequence.");
     const auto kickChannel = outputChannel(
         *drum,
@@ -1103,6 +1529,12 @@ void ampRuntimeStateAndAutomation()
 void bundledDeviceTests()
 {
     registryMetadata();
+    drumSoundPresetPrograms();
+    drumSoundPresetTimbres();
+    drumSoundPresetState();
+    drumSoundPresetClap();
+    drumSoundPresetTails();
+    drumSoundPresetEngine();
     drumProcessor();
     drumTailAndVoiceReuse();
     liveDrumPadAudio();

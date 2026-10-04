@@ -419,6 +419,73 @@ void drumPerformanceKeyboard()
     }
 }
 
+void drumSoundPresetControl()
+{
+    auto project = studio::Project::createDefault();
+    auto clip = makeMidiClip(project);
+    const auto* map = project.findDrumMap(clip.drumMapId);
+    studio::DrumPerformanceComponent pads;
+    pads.setContext("synthetic-drums", &clip, map);
+    auto* selector = dynamic_cast<juce::ComboBox*>(
+        pads.findChildWithID("drum-kit-preset"));
+    expect(selector != nullptr && selector->getNumItems() == 6
+               && !selector->isEnabled(),
+           "Drum pads expose a separate six-choice kit preset control, disabled without a compatible instrument.");
+    if (selector == nullptr)
+        return;
+
+    auto changes = 0;
+    auto selectedPreset = -1;
+    auto reject = false;
+    juce::String destination;
+    juce::String reportedError;
+    pads.onSoundPresetChanged = [&](const auto& trackId, int preset)
+    {
+        ++changes;
+        destination = trackId;
+        selectedPreset = preset;
+        return reject ? juce::Result::fail("Synthetic preset change failure")
+                      : juce::Result::ok();
+    };
+    pads.onStatus = [&](const auto& message, bool error)
+    {
+        if (error)
+            reportedError = message;
+    };
+    pads.setSoundPresetContext(0);
+    expect(selector->isEnabled() && selector->getSelectedId() == 1 && changes == 0,
+           "Reflecting the current instrument preset never writes it back to the engine.");
+    const auto before = juce::JSON::toString(clip.toVar(), false);
+    selector->setSelectedId(4, juce::sendNotificationSync);
+    expect(changes == 1 && destination == "synthetic-drums" && selectedPreset == 3
+               && selector->getText() == "Death Metal"
+               && juce::JSON::toString(clip.toVar(), false) == before,
+           "Kit preset selection targets the current track without editing MIDI notes or pad assignments.");
+    pads.setSoundPresetContext(4);
+    expect(selector->getSelectedId() == 5 && changes == 1,
+           "Host parameter and automation changes update the displayed kit preset without feedback.");
+    reject = true;
+    selector->setSelectedId(6, juce::sendNotificationSync);
+    expect(changes == 2 && selector->getSelectedId() == 5
+               && reportedError == "Synthetic preset change failure",
+           "Failed preset changes restore the previous selection and report the error.");
+
+    for (const auto width : { 560, 760, 1120 })
+    {
+        pads.setSize(width, 258);
+        expect(pads.getLocalBounds().contains(selector->getBounds())
+                   && selector->getWidth() >= 150 && selector->getHeight() >= 22,
+               "The kit preset control remains visible at supported lower-editor sizes.");
+    }
+    pads.setContext("synthetic-external-instrument", &clip, map);
+    expect(!selector->isEnabled() && selector->getSelectedId() == 0 && changes == 2,
+           "Changing tracks clears the old kit preset until the new instrument is identified.");
+    pads.setSoundPresetContext(2);
+    pads.setContext({}, nullptr, nullptr);
+    expect(!selector->isEnabled() && changes == 2,
+           "Removing the MIDI selection disables kit changes without modifying any processor.");
+}
+
 void targetedSoftwareMidi()
 {
     auto project = studio::Project::createDefault();
@@ -1758,6 +1825,7 @@ void midiTests()
     sustainedCaptureFinalization();
     drumPadBindingsPersistence();
     drumPerformanceKeyboard();
+    drumSoundPresetControl();
     targetedSoftwareMidi();
     alternateDrumEditor();
     drumCaptureFidelity();

@@ -1,6 +1,7 @@
 #include "DrumPerformanceComponent.h"
 
 #include "StudioTheme.h"
+#include "devices/DrumDeviceProcessor.h"
 #include "midi/MidiEditing.h"
 
 #include <algorithm>
@@ -53,7 +54,8 @@ DrumPerformanceComponent::DrumPerformanceComponent()
     setTitle("Drum performance pads");
     for (auto* component : std::initializer_list<juce::Component*> {
              &keyboardButton, &playButton, &recordButton, &clickButton,
-             &transportLabel, &selectedPadLabel, &soundLabel, &soundSelector,
+             &transportLabel, &soundPresetLabel, &soundPresetSelector,
+             &selectedPadLabel, &soundLabel, &soundSelector,
              &velocityLabel, &velocitySlider, &channelLabel, &channelSelector,
              &bindKeyButton, &detailsLabel, &hintLabel })
         addAndMakeVisible(*component);
@@ -71,6 +73,33 @@ DrumPerformanceComponent::DrumPerformanceComponent()
     clickButton.setTooltip("Toggle the song's metronome");
     clickButton.onClick = [this] { if (onClick) onClick(); };
     transportLabel.setFont(juce::Font(juce::FontOptions(12.0f)));
+    soundPresetLabel.setText("KIT SOUND PRESET", juce::dontSendNotification);
+    soundPresetLabel.setFont(juce::Font(juce::FontOptions(11.0f)));
+    soundPresetSelector.setComponentID("drum-kit-preset");
+    soundPresetSelector.setTitle("Drum kit sound preset");
+    soundPresetSelector.setTooltip(
+        "Change the whole Metal Drum Composer kit's tone without changing MIDI notes, pad assignments, or mix controls.");
+    soundPresetSelector.addItemList(DrumDeviceProcessor::soundPresetNames(), 1);
+    soundPresetSelector.setTextWhenNothingSelected("Use instrument editor");
+    soundPresetSelector.onChange = [this]
+    {
+        const auto preset = soundPresetSelector.getSelectedItemIndex();
+        if (soundPresetIndex < 0 || preset < 0 || preset == soundPresetIndex)
+            return;
+        const auto result = onSoundPresetChanged
+            ? onSoundPresetChanged(selectedTrackId, preset)
+            : juce::Result::fail("The drum instrument's sound preset control is unavailable.");
+        if (result.failed())
+        {
+            soundPresetSelector.setSelectedId(soundPresetIndex + 1, juce::dontSendNotification);
+            showFailure(result);
+        }
+        else
+        {
+            soundPresetIndex = preset;
+        }
+    };
+    setSoundPresetContext(-1);
     soundLabel.setText("SOUND / ARTICULATION", juce::dontSendNotification);
     soundLabel.setFont(juce::Font(juce::FontOptions(11.0f)));
     soundSelector.setTitle("Selected drum pad sound");
@@ -144,6 +173,8 @@ void DrumPerformanceComponent::setContext(
     const auto clipId = clip != nullptr ? clip->id : juce::String();
     auto nextBindings = clip != nullptr && !clip->drumPadBindings.empty()
         ? clip->drumPadBindings : defaultDrumPadBindings(map);
+    if (selectedTrackId != trackId)
+        setSoundPresetContext(-1);
     if (selectedTrackId != trackId || selectedClipId != clipId)
         setKeyboardEnabled(false);
     else if (bindings != nextBindings)
@@ -177,8 +208,20 @@ void DrumPerformanceComponent::setContext(
     const auto enabled = selectedTrackId.isNotEmpty() && selectedClipId.isNotEmpty();
     for (auto* child : getChildren())
         child->setEnabled(enabled);
+    setSoundPresetContext(soundPresetIndex);
     refreshPads();
     refreshAuditionState();
+}
+
+void DrumPerformanceComponent::setSoundPresetContext(int presetIndex)
+{
+    soundPresetIndex = juce::isPositiveAndBelow(
+        presetIndex, soundPresetSelector.getNumItems()) ? presetIndex : -1;
+    const auto enabled = soundPresetIndex >= 0
+        && selectedTrackId.isNotEmpty() && selectedClipId.isNotEmpty();
+    soundPresetLabel.setEnabled(enabled);
+    soundPresetSelector.setEnabled(enabled);
+    soundPresetSelector.setSelectedId(soundPresetIndex + 1, juce::dontSendNotification);
 }
 
 void DrumPerformanceComponent::setKeyboardEnabled(bool enabled)
@@ -509,15 +552,18 @@ void DrumPerformanceComponent::resized()
     area.removeFromTop(6);
     auto details = area.removeFromRight(getWidth() < 700 ? 180 : 220);
     area.removeFromRight(8);
-    selectedPadLabel.setBounds(details.removeFromTop(23));
-    soundLabel.setBounds(details.removeFromTop(18));
-    soundSelector.setBounds(details.removeFromTop(27).reduced(2));
-    velocityLabel.setBounds(details.removeFromTop(18));
-    velocitySlider.setBounds(details.removeFromTop(26));
-    auto channelRow = details.removeFromTop(26);
+    soundPresetLabel.setBounds(details.removeFromTop(14));
+    soundPresetSelector.setBounds(details.removeFromTop(26).reduced(2, 1));
+    selectedPadLabel.setBounds(details.removeFromTop(20));
+    soundLabel.setBounds(details.removeFromTop(14));
+    soundSelector.setBounds(details.removeFromTop(26).reduced(2, 1));
+    velocityLabel.setBounds(details.removeFromTop(14));
+    velocitySlider.setBounds(details.removeFromTop(24));
+    auto channelRow = details.removeFromTop(24);
     channelLabel.setBounds(channelRow.removeFromLeft(82));
     channelSelector.setBounds(channelRow.reduced(2));
-    bindKeyButton.setBounds(details.removeFromTop(28).reduced(2));
+    bindKeyButton.setBounds(details.removeFromTop(26).reduced(2));
+    detailsLabel.setVisible(details.getHeight() >= 28);
     detailsLabel.setBounds(details.reduced(2, 3));
     for (int row = 0; row < 3; ++row)
         for (int column = 0; column < 4; ++column)

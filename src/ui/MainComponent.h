@@ -183,6 +183,7 @@ private:
     void addBusTrack();
     void addTrack(TrackType type);
     void addDrumPerformanceTrack();
+    juce::Result changeDrumSoundPreset(const juce::String& trackId, int presetIndex);
     void showAddTrackMenu();
     void duplicateSelectedTrack();
     void deleteSelectedTrack();

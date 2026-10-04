@@ -128,6 +128,30 @@ std::unique_ptr<juce::AudioProcessor> createProcessor(
     return {};
 }
 
+double clapParameterMaximum(const juce::AudioProcessorParameter& parameter)
+{
+    return parameter.isDiscrete()
+        ? static_cast<double>(std::max(1, parameter.getNumSteps() - 1))
+        : 1.0;
+}
+
+float normalizedClapValue(const juce::AudioProcessorParameter& parameter,
+                          double value)
+{
+    const auto maximum = clapParameterMaximum(parameter);
+    const auto bounded = juce::jlimit(0.0, maximum, value);
+    const auto plain = parameter.isDiscrete() ? std::trunc(bounded) : bounded;
+    return static_cast<float>(plain / maximum);
+}
+
+double plainClapValue(const juce::AudioProcessorParameter& parameter,
+                      float normalized)
+{
+    const auto value = static_cast<double>(juce::jlimit(0.0f, 1.0f, normalized))
+        * clapParameterMaximum(parameter);
+    return parameter.isDiscrete() ? std::round(value) : value;
+}
+
 bool writeAll(const clap_ostream_t* stream,
               const void* data,
               std::uint64_t size)
@@ -322,8 +346,9 @@ bool collectEvents(ClapDevice& instance,
                     instance.parameterEventCount++)];
             target.time = header->time;
             target.index = parameterIndex;
-            target.value = static_cast<float>(
-                juce::jlimit(0.0, 1.0, event.value));
+            target.value = normalizedClapValue(
+                *instance.processor->getParameters()[static_cast<int>(parameterIndex)],
+                event.value);
             continue;
         }
         if (!addMidiEvent(instance, *header))
@@ -617,6 +642,10 @@ bool paramsGetInfo(const clap_plugin_t* plugin,
     info->flags = parameter->isAutomatable()
         ? CLAP_PARAM_IS_AUTOMATABLE
         : 0;
+    if (parameter->isDiscrete())
+        info->flags |= CLAP_PARAM_IS_STEPPED;
+    if (dynamic_cast<const juce::AudioParameterChoice*>(parameter) != nullptr)
+        info->flags |= CLAP_PARAM_IS_ENUM | CLAP_PARAM_REQUIRES_PROCESS;
     info->cookie = const_cast<juce::AudioProcessorParameter*>(
         parameter);
     const auto name = parameter->getName(128);
@@ -631,8 +660,8 @@ bool paramsGetInfo(const clap_plugin_t* plugin,
         "%s",
         "Studio Duo");
     info->min_value = 0.0;
-    info->max_value = 1.0;
-    info->default_value = parameter->getDefaultValue();
+    info->max_value = clapParameterMaximum(*parameter);
+    info->default_value = plainClapValue(*parameter, parameter->getDefaultValue());
     return true;
 }
 
@@ -645,8 +674,8 @@ bool paramsGetValue(const clap_plugin_t* plugin,
         || parameterId == 0
         || parameterId > static_cast<clap_id>(parameters.size()))
         return false;
-    *value = parameters[static_cast<int>(parameterId - 1)]
-        ->getValue();
+    const auto* parameter = parameters[static_cast<int>(parameterId - 1)];
+    *value = plainClapValue(*parameter, parameter->getValue());
     return true;
 }
 
@@ -662,12 +691,9 @@ bool paramsValueToText(const clap_plugin_t* plugin,
         || parameterId == 0
         || parameterId > static_cast<clap_id>(parameters.size()))
         return false;
-    const auto display =
-        parameters[static_cast<int>(parameterId - 1)]
-            ->getText(
-                static_cast<float>(
-                    juce::jlimit(0.0, 1.0, value)),
-                static_cast<int>(capacity));
+    const auto* parameter = parameters[static_cast<int>(parameterId - 1)];
+    const auto display = parameter->getText(
+        normalizedClapValue(*parameter, value), static_cast<int>(capacity));
     std::snprintf(text, capacity, "%s", display.toRawUTF8());
     return true;
 }
@@ -683,8 +709,9 @@ bool paramsTextToValue(const clap_plugin_t* plugin,
         || parameterId == 0
         || parameterId > static_cast<clap_id>(parameters.size()))
         return false;
-    *value = parameters[static_cast<int>(parameterId - 1)]
-        ->getValueForText(juce::String::fromUTF8(text));
+    const auto* parameter = parameters[static_cast<int>(parameterId - 1)];
+    *value = plainClapValue(
+        *parameter, parameter->getValueForText(juce::String::fromUTF8(text)));
     return true;
 }
 
@@ -710,9 +737,8 @@ void paramsFlush(const clap_plugin_t* plugin,
             || event.param_id
                 > static_cast<clap_id>(parameters.size()))
             continue;
-        parameters[static_cast<int>(event.param_id - 1)]
-            ->setValue(static_cast<float>(
-                juce::jlimit(0.0, 1.0, event.value)));
+        auto* parameter = parameters[static_cast<int>(event.param_id - 1)];
+        parameter->setValue(normalizedClapValue(*parameter, event.value));
     }
 }
 

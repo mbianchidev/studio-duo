@@ -8,7 +8,7 @@ namespace studio
 {
 namespace
 {
-constexpr auto stateSchema = 1;
+constexpr auto stateSchema = 2;
 constexpr auto hiHatFootController = 4;
 constexpr auto hiHatClosedThreshold = 0.85f;
 constexpr auto voiceSilenceThreshold = 0.00003f;
@@ -16,6 +16,63 @@ constexpr auto maximumVoiceLifetimeSeconds = 3.8;
 constexpr auto roomTailAllowanceSeconds = 0.2;
 constexpr auto reportedTailSeconds =
     maximumVoiceLifetimeSeconds + roomTailAllowanceSeconds;
+
+struct DrumTone
+{
+    float pitch = 1.0f;
+    float decay = 1.0f;
+    float brightness = 1.0f;
+    float level = 1.0f;
+    float drive = 0.0f;
+};
+
+struct SoundPreset
+{
+    const char* id;
+    const char* name;
+    std::array<DrumTone, 5> tones {};
+    float roomScale = 1.0f;
+};
+
+// Tone rows follow VoiceKind: kick, snare, tom, hat, cymbal.
+constexpr std::array soundPresets {
+    SoundPreset { "basic-metal", "Basic Metal Kit" },
+    SoundPreset { "punk", "Punk", {{
+        { 1.15f, 1.20f, 0.50f, 0.95f, 0.40f },
+        { 1.18f, 1.32f, 0.84f, 1.00f, 0.70f },
+        { 1.08f, 1.20f, 0.80f, 0.92f, 0.20f },
+        { 0.92f, 1.18f, 0.88f, 1.02f, 0.00f },
+        { 0.92f, 1.12f, 0.90f, 1.06f, 0.00f }
+    }}, 1.55f },
+    SoundPreset { "hardcore-punk", "Hardcore Punk", {{
+        { 1.08f, 0.72f, 0.85f, 1.10f, 1.50f },
+        { 1.36f, 0.65f, 1.15f, 1.12f, 1.80f },
+        { 1.18f, 0.78f, 0.96f, 1.02f, 0.80f },
+        { 1.08f, 0.75f, 1.15f, 1.06f, 0.00f },
+        { 1.05f, 0.78f, 1.05f, 0.98f, 0.00f }
+    }}, 0.75f },
+    SoundPreset { "death-metal", "Death Metal", {{
+        { 0.86f, 0.65f, 1.95f, 1.12f, 1.10f },
+        { 1.04f, 0.72f, 1.28f, 1.06f, 1.00f },
+        { 0.88f, 0.66f, 1.24f, 1.08f, 0.45f },
+        { 1.03f, 0.62f, 1.20f, 0.90f, 0.00f },
+        { 1.10f, 0.70f, 1.10f, 0.88f, 0.00f }
+    }}, 0.42f },
+    SoundPreset { "modern-metal", "Modern Metal", {{
+        { 0.98f, 0.90f, 1.38f, 1.18f, 1.25f },
+        { 0.91f, 0.88f, 1.06f, 1.12f, 0.90f },
+        { 0.97f, 0.92f, 1.06f, 1.10f, 0.50f },
+        { 0.97f, 0.84f, 0.98f, 0.88f, 0.00f },
+        { 0.98f, 0.90f, 0.96f, 0.93f, 0.00f }
+    }}, 0.70f },
+    SoundPreset { "deathcore", "Deathcore", {{
+        { 0.76f, 0.82f, 2.50f, 1.22f, 1.60f },
+        { 0.82f, 0.58f, 1.48f, 1.15f, 1.75f },
+        { 0.73f, 0.78f, 1.38f, 1.18f, 1.00f },
+        { 1.14f, 0.50f, 1.35f, 0.82f, 0.00f },
+        { 0.85f, 0.65f, 1.15f, 0.90f, 0.00f }
+    }}, 0.28f }
+};
 
 float decayForLifetime(float seconds, double sampleRate)
 {
@@ -99,6 +156,13 @@ DrumDeviceProcessor::DrumDeviceProcessor()
              "Velocity curve",
              { 0.5f, 2.0f },
              1.0f);
+    auto preset = std::make_unique<juce::AudioParameterChoice>(
+        juce::ParameterID("kitPreset", 1),
+        "Kit sound preset",
+        soundPresetNames(),
+        0);
+    kitPreset = preset.get();
+    addParameter(preset.release());
 }
 
 juce::AudioParameterFloat* DrumDeviceProcessor::addFloat(
@@ -397,8 +461,11 @@ void DrumDeviceProcessor::startVoice(int note, float velocity) noexcept
     const auto tuning = std::pow(
         2.0f,
         parameter(ParameterSlot::tuning) / 12.0f);
+    const auto& preset = soundPresets[
+        static_cast<std::size_t>(kitPreset->getIndex())];
+    const auto& tone = preset.tones[static_cast<std::size_t>(hit.kind)];
     const auto variation = variant == 0 ? 0.992f : 1.008f;
-    voice.frequency = hit.frequency * tuning * variation;
+    voice.frequency = hit.frequency * tuning * variation * tone.pitch;
     voice.targetFrequency = voice.frequency
         * (hit.kind == VoiceKind::kick ? 0.48f : 0.94f);
     voice.frequencyTwo = voice.frequency
@@ -410,11 +477,16 @@ void DrumDeviceProcessor::startVoice(int note, float velocity) noexcept
         duration *= 0.35f + openness * 1.65f;
     }
     voice.decayMultiplier = decayForLifetime(
-        duration,
+        std::min(duration * tone.decay,
+                 static_cast<float>(maximumVoiceLifetimeSeconds)),
         currentSampleRate);
     voice.pan = (variant == 0 ? -1.0f : 1.0f)
         * (hit.kind == VoiceKind::cymbal ? 0.16f : 0.035f);
-    voice.brightness = hit.brightness;
+    voice.brightness = hit.brightness * tone.brightness;
+    voice.drive = tone.drive;
+    voice.gain = tone.level;
+    if (tone.drive > 0.0f)
+        voice.gain /= std::tanh(tone.drive);
     voice.ordinal = ++voiceOrdinal;
     voice.noiseState = 0x9e3779b9U
         ^ (static_cast<std::uint32_t>(note) * 0x45d9f3bU)
@@ -463,7 +535,10 @@ void DrumDeviceProcessor::renderSamples(
     };
     const auto mainGain = juce::Decibels::decibelsToGain(
         parameter(ParameterSlot::mainLevel));
-    const auto roomAmount = parameter(ParameterSlot::room);
+    const auto& preset = soundPresets[
+        static_cast<std::size_t>(kitPreset->getIndex())];
+    const auto roomAmount = std::min(
+        1.0f, parameter(ParameterSlot::room) * preset.roomScale);
     std::array<juce::AudioBuffer<float>*, outputBusCount> outputs {
         &main,
         &kick,
@@ -527,6 +602,9 @@ void DrumDeviceProcessor::renderSamples(
                         * voice.brightness;
                     break;
             }
+            if (voice.drive > 0.0f)
+                value = std::tanh(value * voice.drive);
+            value *= voice.gain;
 
             voice.phase = wrapPhase(
                 voice.phase
@@ -688,25 +766,47 @@ bool DrumDeviceProcessor::hasEditor() const
 
 int DrumDeviceProcessor::getNumPrograms()
 {
-    return 1;
+    return static_cast<int>(soundPresets.size());
 }
 
 int DrumDeviceProcessor::getCurrentProgram()
 {
-    return 0;
+    return kitPreset->getIndex();
 }
 
-void DrumDeviceProcessor::setCurrentProgram(int)
+void DrumDeviceProcessor::setCurrentProgram(int index)
 {
+    if (!juce::isPositiveAndBelow(index, getNumPrograms()))
+    {
+        juce::Logger::writeToLog(
+            "Metal Drum Composer: invalid sound preset index "
+            + juce::String(index) + ".");
+        return;
+    }
+    *kitPreset = index;
+    updateHostDisplay(ChangeDetails().withProgramChanged(true));
 }
 
-const juce::String DrumDeviceProcessor::getProgramName(int)
+const juce::String DrumDeviceProcessor::getProgramName(int index)
 {
-    return "Basic Metal Kit";
+    return juce::isPositiveAndBelow(index, getNumPrograms())
+        ? soundPresetNames()[index] : juce::String();
 }
 
 void DrumDeviceProcessor::changeProgramName(int, const juce::String&)
 {
+}
+
+const juce::StringArray& DrumDeviceProcessor::soundPresetNames()
+{
+    static const auto names = []
+    {
+        juce::StringArray result;
+        for (const auto& preset : soundPresets)
+            result.add(preset.name);
+        return result;
+    }();
+    return names;
 }
 
 void DrumDeviceProcessor::getStateInformation(
@@ -718,7 +818,9 @@ void DrumDeviceProcessor::getStateInformation(
 
 void DrumDeviceProcessor::setStateInformation(const void* data, int size)
 {
-    restoreValidatedState(data, size);
+    if (const auto result = restoreValidatedState(data, size); result.failed())
+        juce::Logger::writeToLog(
+            "Metal Drum Composer: " + result.getErrorMessage());
 }
 
 juce::Result DrumDeviceProcessor::saveValidatedState(
@@ -727,6 +829,8 @@ juce::Result DrumDeviceProcessor::saveValidatedState(
     auto object = std::make_unique<juce::DynamicObject>();
     object->setProperty("schema", stateSchema);
     object->setProperty("device", "studio.device.drum-composer");
+    object->setProperty("kitPreset",
+                       soundPresets[static_cast<std::size_t>(kitPreset->getIndex())].id);
     for (const auto& [id, value] : parameterLookup)
     {
         object->setProperty(
@@ -756,14 +860,37 @@ juce::Result DrumDeviceProcessor::restoreValidatedState(
             static_cast<const char*>(data),
             size));
     const auto* object = value.getDynamicObject();
+    const auto schema = object != nullptr
+        ? object->getProperty("schema") : juce::var();
     if (object == nullptr
-        || static_cast<int>(object->getProperty("schema"))
-            != stateSchema
+        || !(schema.isInt() || schema.isInt64())
+        || (static_cast<juce::int64>(schema) != 1
+            && static_cast<juce::int64>(schema) != stateSchema)
         || object->getProperty("device").toString()
             != "studio.device.drum-composer")
     {
         return juce::Result::fail(
             "Drum device state has an unsupported format.");
+    }
+
+    auto presetIndex = 0;
+    if (static_cast<juce::int64>(schema) == stateSchema)
+    {
+        const auto savedPreset = object->getProperty("kitPreset");
+        if (!savedPreset.isString())
+            return juce::Result::fail(
+                "Drum device state is missing a valid kit sound preset.");
+        const auto preset = std::find_if(
+            soundPresets.cbegin(), soundPresets.cend(),
+            [&savedPreset](const auto& candidate)
+            {
+                return savedPreset.toString() == candidate.id;
+            });
+        if (preset == soundPresets.cend())
+            return juce::Result::fail(
+                "Drum device state names an unknown kit sound preset: "
+                + savedPreset.toString() + ".");
+        presetIndex = static_cast<int>(std::distance(soundPresets.cbegin(), preset));
     }
 
     std::vector<std::pair<juce::AudioParameterFloat*, float>> values;
@@ -794,6 +921,8 @@ juce::Result DrumDeviceProcessor::restoreValidatedState(
         static_cast<juce::AudioProcessorParameter*>(parameterValue)
             ->setValue(normalized);
     }
+    static_cast<juce::AudioProcessorParameter*>(kitPreset)->setValue(
+        kitPreset->convertTo0to1(static_cast<float>(presetIndex)));
     reset();
     return juce::Result::ok();
 }

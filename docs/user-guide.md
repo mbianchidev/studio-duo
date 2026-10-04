@@ -468,6 +468,29 @@ other MIDI notes for custom instruments. The instrument determines which notes
 produce sound. **Velocity** sets hit strength, and **Channel** selects MIDI
 channel 1-16. Import a matching drum map when using another drum instrument.
 
+**Kit Sound Preset** changes the whole bundled kit's sound, independently of
+the selected pad's **Sound / Articulation**. No sample download is required:
+the presets shape the synthesized kit's tuning, attack, decay, saturation,
+piece balance, and room sound.
+
+| Preset | Sound |
+| --- | --- |
+| Basic Metal Kit | The original kit, still the default for new and older projects |
+| Punk | Warmer kick, ringing snare and toms, loose cymbals, more room |
+| Hardcore Punk | Higher, cracking snare, short drums, raw punch |
+| Death Metal | Clicky kick, tight toms and cymbals, dry room |
+| Modern Metal | Full, punchy kick and snare with controlled sustain |
+| Deathcore | Deeper kick and toms, sharp attack, aggressive snare, very dry room |
+
+Changing presets keeps your existing mix controls, MIDI notes, articulations,
+pad assignments, and routing. Already-sounding voices finish naturally; new
+hits use the chosen sound. The selection is saved with the instrument and used
+for live playing, song playback, mix export, and drum stems. It is also available
+as **Kit sound preset** in the instrument editor and as a discrete automatable
+parameter. The bundled VST3, Audio Unit, and CLAP versions use the same presets.
+For other drum instruments, the pad view disables this selector: choose their
+presets in their own editor rather than replacing the instrument.
+
 Enable **KEYBOARD** to play the displayed bindings. The default layout is
 `Q W E R / A S D F / Z X C V`; simultaneous keys play together, and holding a
 key does not repeatedly retrigger it. Hold `Shift` for a full-velocity accent.
