@@ -427,6 +427,8 @@ target_sources(
         src/ui/MidiEditorComponent.h
         src/ui/DrumPerformanceComponent.cpp
         src/ui/DrumPerformanceComponent.h
+        src/ui/DrumKitTuningComponent.cpp
+        src/ui/DrumKitTuningComponent.h
         src/ui/AutomationPanel.cpp
         src/ui/AutomationPanel.h
         src/ui/MixerPanel.cpp
@@ -880,6 +882,8 @@ if(STUDIO_DUO_BUILD_TESTS)
             src/ui/MidiEditorComponent.h
             src/ui/DrumPerformanceComponent.cpp
             src/ui/DrumPerformanceComponent.h
+            src/ui/DrumKitTuningComponent.cpp
+            src/ui/DrumKitTuningComponent.h
             src/audio/StudioAudioDeviceManager.cpp
             src/audio/StudioAudioDeviceManager.h
             src/audio/AudioDeviceProbe.cpp

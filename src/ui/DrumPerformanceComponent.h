@@ -37,6 +37,7 @@ public:
         onMidiMessage;
     std::function<bool(const std::vector<DrumPadBinding>&)> onBindingsEdited;
     std::function<juce::Result(const juce::String&, int)> onSoundPresetChanged;
+    std::function<void(const juce::String&, int)> onTuneKitRequested;
     std::function<void(const juce::String&, bool)> onStatus;
     std::function<void(bool)> onAuditionChanged;
     std::function<void()> onPlay;
@@ -90,6 +91,7 @@ private:
     bool auditionActive = false;
 
     juce::TextButton keyboardButton { "KEYBOARD OFF" };
+    juce::TextButton tuneKitButton { "TUNE KIT" };
     juce::TextButton playButton { "PLAY" };
     juce::TextButton recordButton { "RECORD" };
     juce::TextButton clickButton { "CLICK" };

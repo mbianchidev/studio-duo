@@ -54,6 +54,24 @@ public:
 
     static juce::String outputBusName(int index);
     static const juce::StringArray& soundPresetNames();
+    static constexpr int tunableDrumCount = 5;
+    static constexpr int tuningParameterCount = tunableDrumCount * 3 + 1;
+
+    struct KitTuningParameter
+    {
+        const char* id;
+        const char* name;
+        int drum;
+        float minimum;
+        float maximum;
+        float defaultValue;
+        const char* unit;
+    };
+
+    static const std::array<KitTuningParameter, tuningParameterCount>& kitTuningParameters();
+    static const juce::StringArray& tunableDrumNames();
+    static int tunableDrumForNote(int note) noexcept;
+    static int tunableDrumNote(int drum) noexcept;
 
 #if STUDIO_DUO_TESTING
     [[nodiscard]] int activeVoiceCountForTesting() const noexcept;
@@ -70,7 +88,8 @@ private:
         room,
         tuning,
         velocityCurve,
-        count
+        firstDrumTuning,
+        count = firstDrumTuning + tuningParameterCount
     };
 
     enum class VoiceKind
@@ -101,6 +120,9 @@ private:
         float brightness = 0.5f;
         float gain = 1.0f;
         float drive = 0.0f;
+        float resonance = 0.0f;
+        float wireLevel = 1.0f;
+        float wireDecay = 1.0f;
         std::uint32_t noiseState = 1;
         std::uint64_t ordinal = 0;
     };
@@ -125,8 +147,10 @@ private:
         const juce::String& id,
         const juce::String& name,
         juce::NormalisableRange<float> range,
-        float defaultValue);
+        float defaultValue,
+        const juce::String& unit = {});
     [[nodiscard]] float parameter(ParameterSlot slot) const noexcept;
+    [[nodiscard]] float drumTuning(int drum, int control) const noexcept;
     [[nodiscard]] HitDescription describeHit(int note) const noexcept;
     void handleMidiMessage(const juce::MidiMessage& message) noexcept;
     void startVoice(int note, float velocity) noexcept;

@@ -53,7 +53,7 @@ DrumPerformanceComponent::DrumPerformanceComponent()
     setFocusContainerType(FocusContainerType::focusContainer);
     setTitle("Drum performance pads");
     for (auto* component : std::initializer_list<juce::Component*> {
-             &keyboardButton, &playButton, &recordButton, &clickButton,
+             &keyboardButton, &tuneKitButton, &playButton, &recordButton, &clickButton,
              &transportLabel, &soundPresetLabel, &soundPresetSelector,
              &selectedPadLabel, &soundLabel, &soundSelector,
              &velocityLabel, &velocitySlider, &channelLabel, &channelSelector,
@@ -65,6 +65,16 @@ DrumPerformanceComponent::DrumPerformanceComponent()
     keyboardButton.onClick = [this]
     {
         setKeyboardEnabled(keyboardButton.getToggleState());
+    };
+    tuneKitButton.setComponentID("drum-kit-tune");
+    tuneKitButton.setTooltip("Tune individual drum heads, damping, and snare wires, like an acoustic kit.");
+    tuneKitButton.onClick = [this]
+    {
+        setKeyboardEnabled(false);
+        if (onTuneKitRequested && selectedPad < bindings.size())
+            onTuneKitRequested(selectedTrackId, bindings[selectedPad].noteNumber);
+        else
+            showFailure(juce::Result::fail("The drum kit tuner is unavailable."));
     };
     playButton.setTooltip("Play or pause the song and click (Space)");
     playButton.onClick = [this] { if (onPlay) onPlay(); };
@@ -221,6 +231,7 @@ void DrumPerformanceComponent::setSoundPresetContext(int presetIndex)
         && selectedTrackId.isNotEmpty() && selectedClipId.isNotEmpty();
     soundPresetLabel.setEnabled(enabled);
     soundPresetSelector.setEnabled(enabled);
+    tuneKitButton.setEnabled(enabled);
     soundPresetSelector.setSelectedId(soundPresetIndex + 1, juce::dontSendNotification);
 }
 
@@ -544,6 +555,7 @@ void DrumPerformanceComponent::resized()
     auto area = getLocalBounds().reduced(6);
     auto toolbar = area.removeFromTop(28);
     keyboardButton.setBounds(toolbar.removeFromLeft(112).reduced(2));
+    tuneKitButton.setBounds(toolbar.removeFromLeft(88).reduced(2));
     playButton.setBounds(toolbar.removeFromLeft(62).reduced(2));
     recordButton.setBounds(toolbar.removeFromLeft(84).reduced(2));
     clickButton.setBounds(toolbar.removeFromLeft(64).reduced(2));

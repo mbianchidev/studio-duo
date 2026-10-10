@@ -45,8 +45,9 @@ hardening remains before the complete DAW described in the
   and the existing song transport, click, and MIDI editing workflow
 - A deterministic bundled metal drum instrument with velocity, round robin,
   cymbal chokes/foot control, synthesized Punk, Hardcore Punk, Death Metal,
-  Modern Metal, and Deathcore sound presets, and routable kick, snare, tom,
-  and cymbal outputs
+  Modern Metal, and Deathcore sound presets, individual batter/resonant head
+  tuning, damping, snare-wire tension, and routable kick, snare, tom, and
+  cymbal outputs
 - Bundled guitar and bass amps with nonlinear tone stages, embedded cabinets,
   validated user cabinet IR loading, persistent state, and fixed-latency
   partitioned convolution

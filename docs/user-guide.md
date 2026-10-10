@@ -491,6 +491,33 @@ parameter. The bundled VST3, Audio Unit, and CLAP versions use the same presets.
 For other drum instruments, the pad view disables this selector: choose their
 presets in their own editor rather than replacing the instrument.
 
+Choose **TUNE KIT** to shape the synthesized kit like an acoustic kit. Select
+the kick, snare, floor tom, mid tom, or high tom; each shell has independent
+controls. The popup starts with the selected pad's shell when possible.
+
+| Control | Effect |
+| --- | --- |
+| Batter head | Tune the struck head from -12 to +12 semitones relative to the preset; +12 doubles the fundamental pitch |
+| Resonant head | Tune the opposite head to change overtones, ring, and sustain; looser settings ring longer |
+| Damping | Add 0-100% damping, like a gel, damping ring, or kick pillow, to shorten sustain |
+| Snare wires | Disengage the wires at 0%, keep the preset response at 50%, or tighten above 50% for a drier buzz |
+
+Use **TAP DRUM** to hear the selected shell through its existing track and
+routing; an audio output must be enabled. This is ordinary live MIDI, so taps
+also follow the song's normal recording/capture behavior. **RESET THIS DRUM**
+restores only that shell's neutral head, damping, and wire settings. It does
+not change another drum, your mix, or the genre preset. Double-click a control
+to restore its neutral value, use arrow keys, or type an exact value.
+
+Custom tuning stays in place when switching presets, saves with the instrument,
+and is used in playback, mix export, and stems. Existing projects reopen with
+neutral offsets and their original sound. Changes apply to new hits rather
+than abruptly retuning an already-ringing drum. The same controls are available
+in the instrument and bundled plug-in parameter editors and support normal
+parameter automation. Cymbals have no heads to tune: their MIDI articulations,
+foot control, and chokes remain separate. **TUNE KIT** is disabled for other
+instruments; use their own editors. `Escape` closes the tuning popup.
+
 Enable **KEYBOARD** to play the displayed bindings. The default layout is
 `Q W E R / A S D F / Z X C V`; simultaneous keys play together, and holding a
 key does not repeatedly retrigger it. Hold `Shift` for a full-velocity accent.

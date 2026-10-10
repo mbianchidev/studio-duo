@@ -544,14 +544,27 @@ brightness, saturation, gain, and room scaling. New voices snapshot their tone
 profile; program changes do not reset existing voices, and all preset decays
 remain bounded by the reported tail. The appended `kitPreset` choice parameter
 preserves the original eight parameter indices and shares the JUCE program,
-native editor, drum-pad, automation, and offline-render paths. Schema-2 drum
-state stores a stable preset ID plus the existing normalized mix controls;
-schema-1 restoration selects the unchanged original kit. Validation completes
-before any state is applied. The CLAP adapter advertises integer-stepped enum
-values and converts them consistently for processing, flushing, text, and
-state capture without changing continuous parameter ranges.
+native editor, drum-pad, automation, and offline-render paths. Schema-3 drum
+state stores a stable preset ID, normalized mix controls, and per-shell head,
+damping, and snare-wire settings. Schema-1 and schema-2 restoration initialize
+the new controls to neutral; schema-1 selects the unchanged original kit.
+Validation completes before any state is applied. The CLAP adapter advertises
+integer-stepped enum values and converts them consistently for processing,
+flushing, text, and state capture without changing continuous parameter ranges.
 Its embedded JUCE/C++ symbols remain hidden, like the VST3 and Audio Unit
 targets, so a JUCE-based host cannot coalesce the plugin's internal state.
+
+Sixteen continuous tuning parameters append after the existing nine controls.
+The five shells have independent batter/resonant offsets and damping; snare
+wire tension adds disengagement and shorter buzz. `kitTuningParameters()`
+defines their IDs, units, ranges, and neutral defaults for DSP and UI.
+New voices snapshot tuning, resonance, damping, and wire response; the fixed
+voice pool and declared tail remain unchanged. These are acoustic-inspired
+controls on the synthesized kit, not a sampled kit or a full physical simulation.
+`DrumKitTuningComponent` provides a native, keyboard-accessible **TUNE KIT**
+popup with audition and per-drum reset. It uses the existing engine parameter
+and automation gesture paths, reflects host changes without feedback, preserves
+active numeric edits during polling, and reports/rolls back failed edits.
 
 `AmpDeviceProcessor` shares nonlinear preamp, tone, bass-blend, cabinet, and
 state code between the in-app device and plugin targets. Cabinet decoding,
