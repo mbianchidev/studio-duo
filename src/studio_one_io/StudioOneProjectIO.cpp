@@ -15,12 +15,21 @@
 #include <cmath>
 #include <cstring>
 #include <map>
+#include <set>
 #include <string>
 
 namespace studio
 {
 namespace
 {
+#if STUDIO_DUO_TESTING
+StudioOneProjectIO::MediaReadTestHook& mediaReadTestHook()
+{
+    static StudioOneProjectIO::MediaReadTestHook hook;
+    return hook;
+}
+#endif
+
 juce::String objectId(const juce::XmlElement& element)
 {
     for (auto index = 0; index < element.getNumAttributes(); ++index)
@@ -237,10 +246,16 @@ public:
             track.folderTrackId = element->getStringAttribute("parentFolder");
             if (!trackIds.emplace(normalizedId(externalId), track.id).second)
                 fail("import.track-id", path, "The Studio One song contains a duplicate track ID.");
-            if (const auto* channel = childWithId(*element, "UID", "channelID"))
+            auto channelReferences = 0;
+            for (const auto* channel : element->getChildIterator())
             {
-                channelTrackIds.emplace(
-                    normalizedId(channel->getStringAttribute("uid")), track.id);
+                if (!channel->hasTagName("UID") || objectId(*channel) != "channelID")
+                    continue;
+                const auto channelReference = normalizedId(channel->getStringAttribute("uid"));
+                if (++channelReferences > 1 || channelReference.isEmpty()
+                    || !channelTrackIds.emplace(channelReference, track.id).second)
+                    fail("import.channel-id", path + "/UID[channelID]",
+                         "Native tracks require one non-empty, unique mixer channel reference.");
                 if (mixer == nullptr)
                     fail("import.mixer-missing", path,
                          "This native track references a mixer document that is missing. Export DAWproject instead.");
@@ -321,6 +336,14 @@ public:
     }
 
 private:
+    struct CachedMedia
+    {
+        juce::String hash;
+        double sampleRate = 0.0;
+        juce::int64 lengthInSamples = 0;
+        unsigned int numChannels = 0;
+    };
+
     juce::File source;
     juce::File destination;
     ProjectArchiveReader archive;
@@ -330,6 +353,7 @@ private:
     DawProjectIdMapper ids;
     std::map<juce::String, juce::String> trackIds;
     std::map<juce::String, juce::String> channelTrackIds;
+    std::map<juce::File, CachedMedia> mediaCache;
     bool allowPartial = false;
     bool hasUnsupportedContent = false;
 
@@ -497,7 +521,7 @@ private:
         const auto value = element.getStringAttribute("color").trim();
         if (value.length() != 8 || !value.containsOnly("0123456789abcdefABCDEF"))
         {
-            warn("unsupported.colour", path, "The native Studio One colour could not be decoded.");
+            unsupported("unsupported.colour", path, "The native Studio One colour could not be decoded.");
             return fallback;
         }
         return juce::Colour::fromString(value);
@@ -631,13 +655,19 @@ private:
     void importMixer(const juce::XmlElement& mixer)
     {
         auto hasMaster = false;
+        std::set<juce::String> definedChannelIds;
         for (const auto* channel : mixerChannels(mixer))
         {
             const auto externalId = channelId(*channel);
             const auto path = "/Devices/audiomixer.xml/Channel[" + externalId + "]";
-            if (externalId.isEmpty())
+            auto declarations = 0;
+            for (const auto* child : channel->getChildIterator())
+                if (child->hasTagName("UID") && objectId(*child) == "uniqueID")
+                    ++declarations;
+            if (declarations != 1 || externalId.isEmpty()
+                || !definedChannelIds.insert(externalId).second)
             {
-                fail("import.channel-id", path, "The Studio One mixer channel has no unique ID.");
+                fail("import.channel-id", path, "Studio One mixer channel IDs must be non-empty and unique.");
                 continue;
             }
             const auto existing = channelTrackIds.find(externalId);
@@ -981,17 +1011,32 @@ private:
         const auto mediaFile = resolveMediaFile(media->second, path);
         if (mediaFile == juce::File())
             return;
-        std::unique_ptr<juce::AudioFormatReader> reader(
-            formats.createReaderFor(mediaFile));
-        if (reader == nullptr || reader->sampleRate <= 0.0 || reader->lengthInSamples <= 0)
+        auto cached = mediaCache.find(mediaFile);
+        if (cached == mediaCache.end())
         {
-            fail("import.media-missing", path, "Studio One audio is missing or unreadable: " + mediaFile.getFullPathName());
-            return;
+#if STUDIO_DUO_TESTING
+            if (const auto& hook = mediaReadTestHook(); hook)
+                hook(mediaFile);
+#endif
+            std::unique_ptr<juce::AudioFormatReader> reader(
+                formats.createReaderFor(mediaFile));
+            if (reader == nullptr || reader->sampleRate <= 0.0 || reader->lengthInSamples <= 0)
+            {
+                fail("import.media-missing", path, "Studio One audio is missing or unreadable: " + mediaFile.getFullPathName());
+                return;
+            }
+            cached = mediaCache.emplace(
+                mediaFile,
+                CachedMedia {
+                    juce::SHA256(mediaFile).toHexString(), reader->sampleRate,
+                    reader->lengthInSamples, reader->numChannels
+                }).first;
         }
+        const auto& mediaInfo = cached->second;
         AudioClip clip;
         clip.name = event.getStringAttribute("name", mediaFile.getFileNameWithoutExtension());
         clip.sourceFile = mediaFile;
-        clip.sourceHash = juce::SHA256(mediaFile).toHexString();
+        clip.sourceHash = mediaInfo.hash;
         const auto unit = timeFormat == "2" ? 60.0 / project.tempo : 1.0;
         clip.startSeconds = *start * unit;
         clip.durationSeconds = *length * unit;
@@ -999,20 +1044,27 @@ private:
         clip.playbackRate = *speed;
         clip.colour = importColour(event, track.colour, path);
         clip.muted = flag(event, "mute", path) || flag(event, "muted", path);
-        clip.sourceLengthSeconds = static_cast<double>(reader->lengthInSamples) / reader->sampleRate;
+        clip.sourceLengthSeconds = static_cast<double>(mediaInfo.lengthInSamples) / mediaInfo.sampleRate;
         clip.sourceRangeEndSeconds = clip.sourceLengthSeconds;
         if (!std::isfinite(clip.startSeconds) || !std::isfinite(clip.durationSeconds)
             || clip.sourceOffsetSeconds + clip.durationSeconds * clip.playbackRate
-                > clip.sourceLengthSeconds + std::max(0.0001, 1.0 / reader->sampleRate))
+                > clip.sourceLengthSeconds + std::max(0.0001, 1.0 / mediaInfo.sampleRate))
         {
             fail("import.audio-bounds", path, "The native audio event exceeds the source audio's valid bounds.");
             return;
         }
-        track.channelLayout = reader->numChannels == 1 ? ChannelLayout::mono : ChannelLayout::stereo;
+        track.channelLayout = mediaInfo.numChannels == 1 ? ChannelLayout::mono : ChannelLayout::stereo;
         track.clips.push_back(std::move(clip));
     }
 };
 }
+
+#if STUDIO_DUO_TESTING
+void StudioOneProjectIO::setMediaReadTestHookForTesting(MediaReadTestHook hook)
+{
+    mediaReadTestHook() = std::move(hook);
+}
+#endif
 
 ProjectImportResult StudioOneProjectIO::importSong(
     const juce::File& source,

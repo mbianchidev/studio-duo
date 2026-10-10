@@ -61,10 +61,13 @@ Direct import deliberately handles a verified ZIP/XML subset:
 When supported content can be imported but other native content cannot,
 Studio Duo first displays a compatibility report and offers **Use DAWproject**,
 **Import Supported Content**, or **Cancel**. Partial import is never automatic.
+This includes colour values that cannot be decoded: a fallback colour is only
+used after consent, whether it belongs to a track, audio event, or mixer channel.
 The MIDI track may remain as an empty instrument track, but the importer does
 not invent notes or imply that private native data was restored.
 
-Missing media, invalid audio bounds or routing, unsafe/duplicate ZIP paths,
+Missing media, invalid audio bounds or routing, empty/duplicate normalized mixer
+IDs or channel references, repeated ID declarations, unsafe/duplicate ZIP paths,
 corrupt entry CRCs, malformed XML, and excessive XML depth/size stop the import.
 Existing destination packages are rejected. Native input does not initialize
 audio hardware or load the source song's processors.
@@ -85,8 +88,15 @@ are not accepted as songs.
 `ProjectArchiveReader` shares bounded ZIP validation and CRC-checked reads
 with the existing DAWproject importer. Native import uses the portable-copy
 service to stage, hash-check, validate, and publish collected audio.
+Native media metadata and digests are cached by resolved file path within each
+import, including different media IDs referencing the same file. Portable
+collection, manifest creation, and verification maintain separate per-operation
+digest caches, so full-file reads scale with unique files rather than event
+count. Every logical reference is still checked, and verification independently
+hashes the collected bytes instead of trusting an import/collection cache.
 
 `studioOneProjectTests` creates only synthetic XML, ZIPs, audio, MIDI,
 processor descriptors, and preferences. It covers native mapping, relocated
-Windows paths, source immutability, private-content confirmation, invalid
-sources, shared DAWproject dispatch, and the keyboard-accessible startup action.
+Windows paths, source immutability, private-content and colour-loss confirmation,
+invalid and duplicate channel IDs, per-file read counts, reference/hash
+corruption, shared DAWproject dispatch, and the keyboard-accessible startup action.

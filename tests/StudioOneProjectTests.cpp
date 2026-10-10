@@ -2,6 +2,7 @@
 #include "TestSuites.h"
 
 #include "project_io/ProjectFile.h"
+#include "project_io/ProjectCollectionService.h"
 #include "project_io/ProjectArchiveReader.h"
 #include "project_io/ProjectImportService.h"
 #include "dawproject_io/DawProjectIO.h"
@@ -12,6 +13,7 @@
 #include <juce_cryptography/juce_cryptography.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <functional>
 #include <map>
@@ -111,6 +113,15 @@ struct SongFixture
         expect(output != nullptr
                    && builder.writeToStream(*output, nullptr),
                "Synthetic Studio One archive can be written.");
+    }
+};
+
+struct ScopedResourceTestHooks
+{
+    ~ScopedResourceTestHooks()
+    {
+        studio::StudioOneProjectIO::setMediaReadTestHookForTesting({});
+        studio::ProjectCollectionService::setResourceTestHookForTesting({});
     }
 };
 
@@ -313,6 +324,320 @@ bool hasIssue(const studio::CompatibilityReport& report,
     return std::any_of(
         report.issues.begin(), report.issues.end(),
         [&code](const auto& issue) { return issue.code == code; });
+}
+
+void nativeChannelIdsMustBeUnique()
+{
+    const std::vector<std::function<void(SongFixture&)>> invalidCases {
+        [](auto& fixture)
+        {
+            fixture.entries["Song/song.xml"] =
+                fixture.entries["Song/song.xml"].replace("uid=\"audio-channel\"", "uid=\" \"");
+        },
+        [](auto& fixture)
+        {
+            fixture.entries["Song/song.xml"] =
+                fixture.entries["Song/song.xml"].replace(
+                    "</MediaTrack>", R"xml(</MediaTrack>
+<MediaTrack mediaType="Audio" trackID="second-track" name="Synthetic Second">
+<UID x:id="channelID" uid="AUDIO-CHANNEL"/>
+</MediaTrack>)xml");
+        },
+        [](auto& fixture)
+        {
+            fixture.entries["Song/song.xml"] =
+                fixture.entries["Song/song.xml"].replace(
+                    "<List x:id=\"Events\">",
+                    "<UID x:id=\"channelID\" uid=\"second-channel\"/><List x:id=\"Events\">");
+        },
+        [](auto& fixture)
+        {
+            fixture.entries["Devices/audiomixer.xml"] =
+                fixture.entries["Devices/audiomixer.xml"].replace("uid=\"audio-channel\"", "uid=\"\"");
+        },
+        [](auto& fixture)
+        {
+            fixture.entries["Devices/audiomixer.xml"] =
+                fixture.entries["Devices/audiomixer.xml"].replace(
+                    "</ChannelGroup>", R"xml(<AudioTrackChannel label="Synthetic Duplicate" gain="0.5">
+<UID x:id="uniqueID" uid="AUDIO-CHANNEL"/>
+</AudioTrackChannel></ChannelGroup>)xml");
+        },
+        [](auto& fixture)
+        {
+            fixture.entries["Devices/audiomixer.xml"] =
+                fixture.entries["Devices/audiomixer.xml"].replace(
+                    "<UID x:id=\"uniqueID\" uid=\"audio-channel\"/>",
+                    "<UID x:id=\"uniqueID\" uid=\"audio-channel\"/>"
+                    "<UID x:id=\"uniqueID\" uid=\"second-channel\"/>");
+        },
+        [](auto& fixture)
+        {
+            fixture.entries["Song/song.xml"] =
+                fixture.entries["Song/song.xml"]
+                    .replace("uid=\"audio-channel\"", "uid=\"{01234567-89AB-4CDE-8F01-23456789ABCD}\"")
+                    .replace("</MediaTrack>", R"xml(</MediaTrack>
+<MediaTrack mediaType="Audio" trackID="second-track" name="Synthetic Second">
+<UID x:id="channelID" uid="0123456789ab4cde8f0123456789abcd"/>
+</MediaTrack>)xml");
+        }
+    };
+    for (const auto& modify : invalidCases)
+    {
+        SongFixture fixture;
+        fixture.entries["Song/song.xml"] =
+            fixture.entries["Song/song.xml"].replace(
+                "<List x:id=\"Events\">",
+                "<UID x:id=\"channelID\" uid=\"audio-channel\"/><List x:id=\"Events\">");
+        fixture.entries["Devices/audiomixer.xml"] = R"xml(<AudioMixer><ChannelGroup>
+<AudioTrackChannel label="Synthetic Audio" gain="1">
+<UID x:id="uniqueID" uid="audio-channel"/>
+</AudioTrackChannel>
+</ChannelGroup></AudioMixer>)xml";
+        modify(fixture);
+        fixture.write();
+        const auto sourceHash = juce::SHA256(fixture.song).toHexString();
+        const auto result = studio::StudioOneProjectIO::importSong(
+            fixture.song, fixture.destination, true);
+        expect(!result.succeeded() && !result.project.has_value()
+                   && !result.requiresCompatibilityConfirmation
+                   && !fixture.destination.exists()
+                   && hasIssue(result.report, "import.channel-id")
+                   && std::any_of(
+                       result.report.issues.begin(), result.report.issues.end(),
+                       [](const auto& issue)
+                       {
+                           return issue.code == "import.channel-id"
+                               && issue.severity == studio::CompatibilitySeverity::error
+                               && issue.objectPath.isNotEmpty();
+                       })
+                   && juce::SHA256(fixture.song).toHexString() == sourceHash,
+               "Empty, repeated, and normalized-equivalent native channel IDs fail without publishing or changing the source.");
+    }
+}
+
+void nativeFolderChannelMapping()
+{
+    SongFixture fixture;
+    fixture.entries["Song/song.xml"] =
+        fixture.entries["Song/song.xml"]
+            .replace("<List x:id=\"Tracks\">", R"xml(<List x:id="Tracks">
+<FolderTrack trackID="folder-track" name="Synthetic Folder">
+<UID x:id="channelID" uid="folder-channel"/>
+</FolderTrack>)xml")
+            .replace("trackNumber=\"1\"", "trackNumber=\"1\" parentFolder=\"folder-track\"")
+            .replace("<List x:id=\"Events\">",
+                     "<UID x:id=\"channelID\" uid=\"audio-channel\"/><List x:id=\"Events\">");
+    fixture.entries["Devices/audiomixer.xml"] = R"xml(<AudioMixer><ChannelGroup>
+<AudioGroupChannel label="Synthetic Folder Bus" gain="1">
+<UID x:id="uniqueID" uid="folder-channel"/>
+</AudioGroupChannel>
+<AudioTrackChannel label="Synthetic Audio" gain="1">
+<UID x:id="uniqueID" uid="audio-channel"/>
+<Connection x:id="destination" objectID="folder-channel/Input"/>
+</AudioTrackChannel>
+</ChannelGroup></AudioMixer>)xml";
+    fixture.write();
+    const auto result = studio::StudioOneProjectIO::importSong(
+        fixture.song, fixture.destination);
+    expect(result.succeeded(), "A unique folder-to-mixer channel reference remains valid.");
+    if (!result.project.has_value())
+        return;
+    const auto* folder = trackNamed(*result.project, "Synthetic Folder");
+    const auto* bus = trackNamed(*result.project, "Synthetic Folder Bus");
+    const auto* audio = trackNamed(*result.project, "Synthetic Audio");
+    expect(folder != nullptr && bus != nullptr && audio != nullptr
+               && folder->type == studio::TrackType::folder
+               && bus->type == studio::TrackType::bus
+               && audio->folderTrackId == folder->id
+               && bus->folderTrackId == folder->id
+               && audio->outputTrackId == bus->id,
+           "Folder channel bindings still create the correct bus and preserve audio routing.");
+}
+
+void nativeColourLossRequiresConsent()
+{
+    const std::vector<std::function<void(SongFixture&)>> invalidColours {
+        [](auto& fixture)
+        {
+            fixture.entries["Song/song.xml"] =
+                fixture.entries["Song/song.xml"].replace("color=\"FF336699\"", "color=\"invalid\"");
+        },
+        [](auto& fixture)
+        {
+            fixture.entries["Song/song.xml"] =
+                fixture.entries["Song/song.xml"].replace("speed=\"1\"", "speed=\"1\" color=\"\"");
+        },
+        [](auto& fixture)
+        {
+            fixture.entries["Devices/audiomixer.xml"] = R"xml(<AudioMixer><ChannelGroup>
+<AudioTrackChannel label="Synthetic Colour Channel" gain="1" color="FF12345">
+<UID x:id="uniqueID" uid="colour-channel"/>
+</AudioTrackChannel>
+</ChannelGroup></AudioMixer>)xml";
+        }
+    };
+    for (const auto& modify : invalidColours)
+    {
+        SongFixture fixture;
+        modify(fixture);
+        fixture.write();
+        const auto before = juce::SHA256(fixture.song).toHexString();
+        const auto blocked = studio::StudioOneProjectIO::importSong(
+            fixture.song, fixture.destination);
+        expect(!blocked.succeeded() && !blocked.project.has_value()
+                   && blocked.requiresCompatibilityConfirmation
+                   && !blocked.report.hasErrors() && !fixture.destination.exists()
+                   && hasIssue(blocked.report, "unsupported.colour"),
+               "Unsupported track, event, or mixer colours cannot publish before partial-import consent.");
+        if (!blocked.requiresCompatibilityConfirmation)
+            continue;
+        const auto accepted = studio::StudioOneProjectIO::importSong(
+            fixture.song, fixture.destination, true);
+        expect(accepted.succeeded() && !accepted.requiresCompatibilityConfirmation
+                   && accepted.project->compatibilityReports.size() == 1
+                   && hasIssue(accepted.project->compatibilityReports.front(), "unsupported.colour")
+                   && juce::SHA256(fixture.song).toHexString() == before,
+               "Explicit colour-loss consent publishes a native package with its compatibility notice preserved.");
+    }
+}
+
+void repeatedNativeMediaIsReadOncePerPhase()
+{
+    SongFixture fixture;
+    constexpr auto eventCount = 32;
+    juce::String events;
+    for (auto index = 0; index < eventCount; ++index)
+    {
+        const auto mediaId = index % 2 == 0 ? "audio-media" : "alias-media";
+        events += "<AudioEvent clipID=\"" + juce::String(mediaId)
+            + "\" start=\"" + juce::String(index * 2)
+            + "\" timeFormat=\"2\" length=\"2\" offset=\"0.25\" speed=\"1\"/>";
+    }
+    fixture.entries["Song/song.xml"] =
+        fixture.entries["Song/song.xml"].replace(
+            R"xml(<AudioEvent clipID="audio-media" timeFormat="2" start="2" length="2" offset="0.25" name="Synthetic Clip" speed="1"/>)xml",
+            events);
+    fixture.entries["Song/mediapool.xml"] =
+        fixture.entries["Song/mediapool.xml"].replace(
+            "</MediaFolder>",
+            "<AudioClip mediaID=\"alias-media\"><Url x:id=\"path\" url=\""
+                + fixture.source.getChildFile("Media/clip.wav").getFullPathName()
+                + "\"/></AudioClip></MediaFolder>");
+    fixture.write();
+    const auto expectedHash = juce::SHA256(fixture.source.getChildFile("Media/clip.wav")).toHexString();
+    const ScopedResourceTestHooks hooks;
+    auto nativeReads = 0;
+    std::array<int, 3> hashReads {};
+    studio::StudioOneProjectIO::setMediaReadTestHookForTesting(
+        [&nativeReads](const auto&) { ++nativeReads; });
+    studio::ProjectCollectionService::setResourceTestHookForTesting(
+        [&hashReads](auto phase, const auto&)
+        {
+            ++hashReads[static_cast<std::size_t>(phase)];
+        });
+    for (auto attempt = 1; attempt <= 2; ++attempt)
+    {
+        const auto destination = fixture.root.getChildFile(
+            "Repeated-" + juce::String(attempt) + ".studioduo");
+        const auto result = studio::StudioOneProjectIO::importSong(fixture.song, destination);
+        expect(result.succeeded(), "Repeated native media references import successfully.");
+        expect(nativeReads == attempt && hashReads == std::array<int, 3> { attempt, attempt, attempt },
+               "Metadata and full-file digest reads scale with unique files per import/collection/manifest/verification phase, not event count.");
+        if (!result.project.has_value())
+            continue;
+        const auto* track = trackNamed(*result.project, "Synthetic Audio");
+        expect(track != nullptr && track->clips.size() == eventCount
+                   && result.package.getChildFile("media").getNumberOfChildFiles(juce::File::findFiles) == 1
+                   && std::all_of(
+                       track->clips.begin(), track->clips.end(),
+                       [&expectedHash](const auto& clip)
+                       {
+                           return clip.sourceHash == expectedHash
+                               && clip.sourceFile.existsAsFile()
+                               && juce::SHA256(clip.sourceFile).toHexString() == expectedHash;
+                       }),
+               "All alias references retain their independently verified bytes and share one portable media file.");
+    }
+    const auto package = fixture.root.getChildFile("Repeated-2.studioduo");
+    juce::String error;
+    const auto validation = studio::ProjectCollectionService::validatePortableCopy(package, error);
+    expect(validation.has_value() && validation->invalidResources == 0
+               && hashReads == std::array<int, 3> { 2, 2, 3 },
+           "Each independent verification rehashes every unique file instead of trusting an earlier phase's cache.");
+    const auto manifestFile = package.getChildFile("portable-manifest.json");
+    auto manifest = juce::JSON::parse(manifestFile.loadFileAsString());
+    auto* object = manifest.getDynamicObject();
+    auto* resources = object != nullptr ? object->getProperty("resources").getArray() : nullptr;
+    expect(resources != nullptr && resources->size() == eventCount,
+           "Every logical reference remains represented in the portable manifest.");
+    if (resources == nullptr || resources->size() != eventCount)
+        return;
+    resources->getReference(eventCount - 1).getDynamicObject()->setProperty(
+        "sha256", juce::String::repeatedString("f", 64));
+    expect(manifestFile.replaceWithText(juce::JSON::toString(manifest)),
+           "Synthetic per-reference digest corruption can be written.");
+    const auto corrupted = studio::ProjectCollectionService::validatePortableCopy(package, error);
+    expect(corrupted.has_value() && corrupted->invalidResources > 0
+               && hashReads == std::array<int, 3> { 2, 2, 4 },
+           "A cached file digest is still compared against every manifest reference.");
+}
+
+void cachedMediaKeepsSourceIntegrity()
+{
+    SongFixture fixture;
+    const auto source = fixture.source.getChildFile("Media/clip.wav");
+    const auto sourceHash = juce::SHA256(source).toHexString();
+    auto project = studio::Project::createDefault();
+    studio::AudioClip clip;
+    clip.sourceFile = source;
+    clip.sourceHash = sourceHash;
+    clip.durationSeconds = 1.0;
+    clip.sourceLengthSeconds = 4.0;
+    clip.sourceRangeEndSeconds = 4.0;
+    auto other = clip;
+    other.id = juce::Uuid().toString();
+    other.sourceHash = juce::String::repeatedString("f", 64);
+    project.tracks.front().clips = { clip, other };
+    const ScopedResourceTestHooks hooks;
+    auto sourceReads = 0;
+    studio::ProjectCollectionService::setResourceTestHookForTesting(
+        [&sourceReads](auto phase, const auto&)
+        {
+            if (phase == studio::ProjectCollectionService::ResourceTestPhase::sourceHash)
+                ++sourceReads;
+        });
+    juce::String error;
+    const auto conflicting = studio::ProjectCollectionService::savePortableCopy(
+        project, fixture.source, fixture.destination, error);
+    expect(!conflicting.has_value() && error.isNotEmpty()
+               && !fixture.destination.exists() && sourceReads == 1,
+           "Repeated source references with conflicting expected digests are rejected even on a cache hit.");
+
+    other.sourceHash = sourceHash;
+    project.tracks.front().clips = { clip, other };
+    auto corruptedOnce = false;
+    studio::ProjectCollectionService::setResourceTestHookForTesting(
+        [&corruptedOnce](auto phase, const auto& file)
+        {
+            if (phase != studio::ProjectCollectionService::ResourceTestPhase::manifestHash || corruptedOnce)
+                return;
+            corruptedOnce = true;
+            juce::MemoryBlock bytes;
+            expect(file.loadFileAsData(bytes) && bytes.getSize() > 0,
+                   "Collected synthetic audio can be read for the corruption fixture.");
+            if (bytes.isEmpty())
+                return;
+            auto* data = static_cast<unsigned char*>(bytes.getData());
+            data[bytes.getSize() - 1] ^= 1;
+            expect(file.replaceWithData(bytes.getData(), bytes.getSize()),
+                   "Collected synthetic audio can be corrupted without changing its size.");
+        });
+    const auto corrupted = studio::ProjectCollectionService::savePortableCopy(
+        project, fixture.source, fixture.destination, error);
+    expect(corruptedOnce && !corrupted.has_value() && !fixture.destination.exists()
+               && error.isNotEmpty() && juce::SHA256(source).toHexString() == sourceHash,
+           "Staged bytes must match their source reference digest, not merely a regenerated manifest digest.");
 }
 
 void nativeCompatibilityRequiresConfirmation()
@@ -639,6 +964,11 @@ void studioOneProjectTests()
     nativeMixerImport();
     nativeTransportAndMetadata();
     relocatedNativeMedia();
+    nativeChannelIdsMustBeUnique();
+    nativeFolderChannelMapping();
+    nativeColourLossRequiresConsent();
+    repeatedNativeMediaIsReadOncePerPhase();
+    cachedMediaKeepsSourceIntegrity();
     nativeCompatibilityRequiresConfirmation();
     invalidNativeSourcesAreTransactional();
     unknownNativeContentIsReported();
