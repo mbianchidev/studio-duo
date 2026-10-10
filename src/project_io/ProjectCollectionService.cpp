@@ -8,12 +8,21 @@
 #include <algorithm>
 #include <functional>
 #include <map>
+#include <set>
 #include <unordered_map>
 
 namespace studio
 {
 namespace
 {
+#if STUDIO_DUO_TESTING
+ProjectCollectionService::ResourceTestHook& resourceTestHook()
+{
+    static ProjectCollectionService::ResourceTestHook hook;
+    return hook;
+}
+#endif
+
 using ResourceCallback = std::function<void(
     const juce::String&,
     juce::File&,
@@ -270,11 +279,21 @@ juce::var resourceManifest(const Project& project,
 {
     auto copy = project;
     juce::Array<juce::var> resources;
-    const auto addEntry = [&resources, &package](
+    std::map<juce::File, juce::String> resourceHashes;
+    const auto addEntry = [&resources, &package, &resourceHashes](
                               const juce::String& objectPath,
                               const juce::File& file,
                               const juce::String& referenceHash)
     {
+        auto cached = resourceHashes.find(file);
+        if (cached == resourceHashes.end())
+        {
+#if STUDIO_DUO_TESTING
+            if (const auto& hook = resourceTestHook(); hook)
+                hook(ProjectCollectionService::ResourceTestPhase::manifestHash, file);
+#endif
+            cached = resourceHashes.emplace(file, juce::SHA256(file).toHexString()).first;
+        }
         auto object = std::make_unique<juce::DynamicObject>();
         object->setProperty("objectPath", objectPath);
         object->setProperty(
@@ -283,7 +302,7 @@ juce::var resourceManifest(const Project& project,
                 .replaceCharacter('\\', '/'));
         object->setProperty(
             "sha256",
-            juce::SHA256(file).toHexString());
+            cached->second);
         object->setProperty("referenceHash", referenceHash);
         object->setProperty("size", file.getSize());
         resources.add(juce::var(object.release()));
@@ -329,6 +348,13 @@ bool writeReport(const ProjectCollectionReport& report,
             "\n");
 }
 }
+
+#if STUDIO_DUO_TESTING
+void ProjectCollectionService::setResourceTestHookForTesting(ResourceTestHook hook)
+{
+    resourceTestHook() = std::move(hook);
+}
+#endif
 
 juce::var ProjectResourceIssue::toVar() const
 {
@@ -421,9 +447,10 @@ ProjectCollectionService::savePortableCopy(
         }
         snapshot.renderFile = resolved.getFullPathName();
     }
+    std::map<juce::File, juce::String> resourceHashes;
     forEachResource(
         portable,
-        [&report, &mediaDirectory](
+        [&report, &mediaDirectory, &resourceHashes](
             const juce::String& objectPath,
             juce::File& file,
             juce::String& hash)
@@ -439,8 +466,16 @@ ProjectCollectionService::savePortableCopy(
                     "Resource is missing.");
                 return;
             }
-            const auto actualHash =
-                juce::SHA256(file).toHexString();
+            auto cached = resourceHashes.find(file);
+            if (cached == resourceHashes.end())
+            {
+#if STUDIO_DUO_TESTING
+                if (const auto& hook = resourceTestHook(); hook)
+                    hook(ProjectCollectionService::ResourceTestPhase::sourceHash, file);
+#endif
+                cached = resourceHashes.emplace(file, juce::SHA256(file).toHexString()).first;
+            }
+            const auto& actualHash = cached->second;
             if (hash.isNotEmpty() && hash != actualHash)
             {
                 ++report.invalidResources;
@@ -597,10 +632,11 @@ ProjectCollectionService::validatePortableCopy(
         });
     }
     std::map<juce::String, juce::String> expectedResources;
+    std::set<juce::String> byteHashedResources;
     auto loadedCopy = *loadedProject;
     forEachResource(
         loadedCopy,
-        [&expectedResources, &package, &report](
+        [&expectedResources, &byteHashedResources, &package, &report](
             const juce::String& objectPath,
             juce::File& file,
             juce::String& hash)
@@ -616,10 +652,10 @@ ProjectCollectionService::validatePortableCopy(
                     "Portable project still references external media.");
                 return;
             }
-            expectedResources[
-                objectPath + "|"
-                    + file.getRelativePathFrom(package)
-                          .replaceCharacter('\\', '/')] = hash;
+            const auto identity = objectPath + "|"
+                + file.getRelativePathFrom(package).replaceCharacter('\\', '/');
+            expectedResources[identity] = hash;
+            byteHashedResources.insert(identity);
         });
     forEachPluginState(
         *loadedProject,
@@ -632,6 +668,7 @@ ProjectCollectionService::validatePortableCopy(
                 stateHash;
         });
     std::map<juce::String, juce::String> declaredResources;
+    std::map<juce::File, juce::String> resourceHashes;
     for (const auto& resourceValue :
          *object->getProperty("resources").getArray())
     {
@@ -667,13 +704,26 @@ ProjectCollectionService::validatePortableCopy(
             && !relative.contains("..")
             && !juce::File::isAbsolutePath(relative)
             && file.isAChildOf(package);
-        if (!validPath
-            || !file.existsAsFile()
-            || file.getSize()
-                != static_cast<juce::int64>(
-                    resource->getProperty("size"))
-            || juce::SHA256(file).toHexString()
-                != expectedHash)
+        const auto validFile = validPath
+            && file.existsAsFile()
+            && file.getSize() == static_cast<juce::int64>(resource->getProperty("size"));
+        juce::String actualHash;
+        if (validFile)
+        {
+            auto cached = resourceHashes.find(file);
+            if (cached == resourceHashes.end())
+            {
+#if STUDIO_DUO_TESTING
+                if (const auto& hook = resourceTestHook(); hook)
+                    hook(ProjectCollectionService::ResourceTestPhase::validationHash, file);
+#endif
+                cached = resourceHashes.emplace(file, juce::SHA256(file).toHexString()).first;
+            }
+            actualHash = cached->second;
+        }
+        if (!validFile || actualHash != expectedHash
+            || (byteHashedResources.contains(identity)
+                && referenceHash.isNotEmpty() && actualHash != referenceHash))
         {
             ++report.invalidResources;
             addIssue(

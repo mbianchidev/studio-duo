@@ -1,12 +1,16 @@
 # Studio Duo development
 
-Studio Duo is a C++20 desktop application built with JUCE 9.0.2. The default CMake
+Studio Duo is a C++20 desktop application built with JUCE 9.0.3. The default CMake
 configuration fetches the pinned JUCE source when a compatible package is not
-already installed. It also fetches the MIT-licensed Signalsmith Stretch 1.1.0
-headers used for pitch-preserving elastic audio, CLAP 1.2.10 and clap-helpers
-for CLAP hosting, and the Apache-2.0 ARA SDK 2.3.0 for ARA compatibility mode.
-MP3 export statically links the LGPL-2.0-or-later LAME 3.100 encoder from a
-SHA-256-pinned upstream archive. It builds without the command-line frontend,
+already installed. It also fetches the MIT-licensed Signalsmith Stretch 1.4.0
+and Signalsmith Linear 0.6.5 headers used for pitch-preserving elastic audio,
+CLAP 1.2.10 and clap-helpers for CLAP hosting, and the Apache-2.0 ARA SDK 2.3.0
+for ARA compatibility mode.
+MP3 export statically links the LGPL-2.0-or-later LAME 4.0 encoder from a
+SHA-256-pinned upstream archive. An idempotent, checked patch fixes its signed
+bit-mask shifts, array-null check, and integer-to-`fabs` argument warnings without
+disabling diagnostics. The bundled library source and notice include these
+modifications. It builds without the command-line frontend,
 mpglib decoder, or architecture-specific assembly. No runtime encoder
 installation or network access is required. The upstream license, scalar build
 configuration, complete library/application source archives, and relinking
@@ -16,14 +20,37 @@ application so they include the source used for that build, rather than relying
 solely on an upstream download URL. To rebuild against a modified encoder,
 extract both archives and set `FETCHCONTENT_SOURCE_DIR_STUDIO_DUO_LAME` to the
 extracted LAME directory.
+Stretch and Linear are linked through their CMake interface targets, including
+the platform FFT backend and the existing system-header treatment for vendor
+templates; their MIT notices ship in the application's
+`licenses/` directory. Linear is pinned explicitly rather than using Stretch's
+older transitive pin.
+Configuration requires Git to apply/verify the versioned dependency patches.
+The pinned libsamplerate 0.2.2 source is also patched before its CMake project
+is added, correcting its policy-version range and selecting modern MSVC runtime
+handling. The patches apply on clean sources and verify already-patched cached
+sources; a mismatched custom dependency source fails with an actionable error.
+For a customized LAME source override, retain/apply the portability fixes too.
 Phase 4 MIDI/editor workflows and bundled drum/guitar/bass devices are
 implemented. The dedicated DAWproject 1.0 translation, schema-validation, ZIP,
 scene, and compatibility-report layer is also implemented without runtime
 network access.
 
+The dependency inventory was checked against upstream releases on 2026-10-10.
+JUCE 9.0.3, LAME 4.0, Signalsmith Stretch 1.4.0, Linear 0.6.5, and the
+clap-helpers revision `29389e43489b1af44b654ef5a7b4ee0af4bbc13b` are the updated
+pins. CLAP 1.2.10, libsamplerate 0.2.2, ARA SDK 2.3.0, DAWproject 1.0, and
+Inno Setup 7.1.0 remain the latest stable releases for their respective
+dependencies. Windows packages download the current signed Visual C++ runtime
+from Microsoft's release channel and verify its signature and version.
+GitHub Actions are pinned to exact release commits for checkout 7.0.1, cache
+6.1.0, upload-artifact 7.0.2, download-artifact 8.0.2, and sccache-action
+0.0.11; Dependabot maintains those pins.
+
 ## Prerequisites
 
 - CMake 3.25 or newer
+- Git
 - A C++20 compiler
 - macOS with Xcode command-line tools, or Windows with Visual Studio 2022
 
@@ -419,6 +446,17 @@ the upstream XML example, complete supported round trips, source immutability,
 external and embedded media, plug-in state, scenes, invalid archives, semantic
 validation, compatibility reports, deterministic output, and native migration.
 See [dawproject.md](dawproject.md).
+
+Studio One native import lives in `studio_one_io/`. `ProjectImportService`
+provides one source classifier/dispatcher for the startup action, Open chooser,
+command-line startup, and drag/drop. `ProjectArchiveReader` shares bounded
+ZIP/CRC handling with DAWproject; native input additionally bounds XML depth and
+element count before parsing. `ProjectCollectionService` collects/hash-validates
+audio and publishes the portable native package. Private native data requires
+explicit partial-import confirmation, while unsupported tempo/meter maps and
+invalid input cannot publish. `studioOneProjectTests` uses synthetic fixtures
+for both source paths and startup keyboard/layout coverage. See
+[studio-one.md](studio-one.md).
 
 Routing snapshots compile main outputs, arbitrary pre/post-fader sends,
 per-insert sidechains, parallel paths, hardware maps, folders, VCAs, solo-safe

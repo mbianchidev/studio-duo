@@ -116,6 +116,10 @@ package does not preserve machine-specific absolute paths.
 path, byte size, and SHA-256 hash. The copy also contains
 `analysis/portable-copy-report.json`. Validation rejects unsafe paths, missing
 files, size mismatches, and hash mismatches.
+Repeated references share per-operation digest caches, but every manifest entry
+is checked separately. Collection, manifest creation, and validation each hash
+unique files independently. Collected media bytes must also match the project's
+source digest; plug-in state retains its separate payload/envelope hash semantics.
 
 **REPAIR FILES** scans the selected folder recursively. A missing resource with
 a saved hash is repaired only from matching content. Legacy resources without

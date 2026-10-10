@@ -24,6 +24,7 @@
 #include "plugin_host/PluginBrowserComponent.h"
 #include "plugin_host/PluginCatalog.h"
 #include "project_io/ProjectFile.h"
+#include "project_io/ProjectImportService.h"
 #include "render/RenderEngine.h"
 #include "update/StudioPreferences.h"
 #include "update/UpdateService.h"
@@ -31,12 +32,14 @@
 #include <juce_audio_utils/juce_audio_utils.h>
 
 #include <memory>
+#include <functional>
 #include <optional>
 #include <vector>
 
 namespace studio
 {
 class MainComponent final : public juce::Component,
+                            public juce::FileDragAndDropTarget,
                             private juce::Timer,
                             private juce::KeyListener,
                             private UpdateService::Listener
@@ -51,6 +54,8 @@ public:
     bool prepareForShutdown();
     void paint(juce::Graphics& graphics) override;
     void resized() override;
+    bool isInterestedInFileDrag(const juce::StringArray& files) override;
+    void filesDropped(const juce::StringArray& files, int x, int y) override;
 
 private:
     class LogoButton final : public juce::Button
@@ -120,6 +125,12 @@ private:
         Project replacement,
         const juce::String& statusMessage);
     void beginOpenProject();
+    bool projectReplacementAvailable();
+    void confirmProjectReplacement(std::function<void()> continuation);
+    void openProjectSource(const juce::File& source);
+    void beginImportStudioOne();
+    void chooseProjectImportSource(const juce::String& title,
+                                   const juce::String& patterns);
     void beginSaveProject();
     void beginImportAudio();
     void beginExportMix();
@@ -130,10 +141,11 @@ private:
     void setMasteringWorkspaceVisible(bool visible);
     void showExportMenu();
     void beginImportDawProject();
-    void chooseDawProjectImportDestination(
+    void chooseProjectImportDestination(
         const juce::File& sourceArchive);
-    void importDawProjectTo(const juce::File& sourceArchive,
-                            const juce::File& destinationPackage);
+    void importProjectTo(const juce::File& sourceArchive,
+                         const juce::File& destinationPackage,
+                         bool allowPartialImport = false);
     void beginExportDawProject();
     void exportDawProjectTo(const juce::File& destinationArchive);
     void showLatestCompatibilityReport();
@@ -361,6 +373,7 @@ private:
     bool exportInProgress = false;
     bool shutdownRequestedDuringExport = false;
     bool returnToStartupHubAfterSave = false;
+    std::function<void()> actionAfterSuccessfulSave;
     MixExportSettings lastMixExportSettings;
     ExportInputBlocker exportInputBlocker;
     bool statusIsError = false;
@@ -394,7 +407,7 @@ private:
     StudioIconButton exportButton {
         StudioIcon::exportFile,
         "Export",
-        "Export audio, open mastering and release tools, or use DAWproject interchange"
+        "Import from Studio One, export audio, or use mastering and DAWproject tools"
     };
     StudioIconButton settingsButton {
         StudioIcon::settings,

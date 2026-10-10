@@ -22,16 +22,22 @@ option(STUDIO_DUO_AUDIO_EXPORT_TESTS_ONLY "Build only the headless audio export 
 set(STUDIO_DUO_BUNDLE_ID "dev.mbianchi.studioduo")
 
 include(FetchContent)
+include(cmake/StudioDuoDependencyPatches.cmake)
 
-# Official LAME 3.100 source (LGPL-2.0-or-later); no executable or decoder is built.
-# The archive hash is also published by Buildroot's package/lame/lame.hash.
+# Official LAME 4.0 source (LGPL-2.0-or-later); no executable or decoder is built.
 FetchContent_Declare(
     studio_duo_lame
-    URL https://downloads.sourceforge.net/project/lame/lame/3.100/lame-3.100.tar.gz
-    URL_HASH SHA256=ddfe36cab873794038ae2c1210557ad34857a4b6bdc515785d1da9e175b1da1e
+    URL https://downloads.sourceforge.net/project/lame/lame/4.0/lame-4.0.tar.gz
+    URL_HASH SHA256=3df5124d5ad3a98312ffd7ba6a9b36230e4f8a3e66d3ce0f425e336c32d216eb
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE
 )
 FetchContent_MakeAvailable(studio_duo_lame)
+foreach(STUDIO_DUO_LAME_PATCH IN ITEMS 4.0-portability.patch 4.0-preset-portability.patch)
+    studio_duo_apply_dependency_patch(
+        "${studio_duo_lame_SOURCE_DIR}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/third_party/lame/${STUDIO_DUO_LAME_PATCH}"
+    )
+endforeach()
 
 # A scalar, encoder-only build avoids platform assembly and mpglib entirely.
 # Do not use configMS.h: it enables x86 intrinsics even for universal builds.
@@ -76,13 +82,13 @@ else()
     target_link_libraries(StudioDuoMp3Encoder PRIVATE m)
 endif()
 
-find_package(JUCE CONFIG QUIET)
+find_package(JUCE 9.0.3 CONFIG QUIET)
 
 if(NOT TARGET juce::juce_gui_extra)
     FetchContent_Declare(
         JUCE
         GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
-        GIT_TAG 9.0.2
+        GIT_TAG 9.0.3
         GIT_SHALLOW TRUE
     )
     FetchContent_MakeAvailable(JUCE)
@@ -121,10 +127,22 @@ if(STUDIO_DUO_AUDIO_EXPORT_TESTS_ONLY)
 endif()
 
 FetchContent_Declare(
-    signalsmith_stretch
-    GIT_REPOSITORY https://github.com/Signalsmith-Audio/signalsmith-stretch.git
-    GIT_TAG 1.1.0
+    signalsmith_linear
+    SYSTEM
+    GIT_REPOSITORY https://github.com/Signalsmith-Audio/linear.git
+    GIT_TAG 0.6.5
     GIT_SHALLOW TRUE
+    GIT_SUBMODULES ""
+)
+FetchContent_MakeAvailable(signalsmith_linear)
+
+FetchContent_Declare(
+    signalsmith_stretch
+    SYSTEM
+    GIT_REPOSITORY https://github.com/Signalsmith-Audio/signalsmith-stretch.git
+    GIT_TAG 1.4.0
+    GIT_SHALLOW TRUE
+    GIT_SUBMODULES ""
 )
 FetchContent_MakeAvailable(signalsmith_stretch)
 
@@ -132,14 +150,20 @@ set(LIBSAMPLERATE_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(LIBSAMPLERATE_INSTALL OFF CACHE BOOL "" FORCE)
 unset(LIBSAMPLERATE_TESTS CACHE)
 set(BUILD_TESTING OFF CACHE BOOL "Disable dependency test targets" FORCE)
-set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
 FetchContent_Declare(
     libsamplerate
     GIT_REPOSITORY https://github.com/libsndfile/libsamplerate.git
     GIT_TAG 0.2.2
     GIT_SHALLOW TRUE
+    # Apply the versioned patch before evaluating upstream CMake.
+    SOURCE_SUBDIR studio-duo-patched
 )
 FetchContent_MakeAvailable(libsamplerate)
+studio_duo_apply_dependency_patch(
+    "${libsamplerate_SOURCE_DIR}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/libsamplerate/0.2.2-cmake.patch"
+)
+add_subdirectory("${libsamplerate_SOURCE_DIR}" "${libsamplerate_BINARY_DIR}" EXCLUDE_FROM_ALL)
 
 set(CLAP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(
@@ -155,7 +179,7 @@ set(CLAP_HELPERS_DOWNLOAD_DEPENDENCIES OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(
     clap_helpers
     GIT_REPOSITORY https://github.com/free-audio/clap-helpers.git
-    GIT_TAG c35dd4906bd8efbb900cb2b89e680fed463cc8b1
+    GIT_TAG 29389e43489b1af44b654ef5a7b4ee0af4bbc13b
 )
 FetchContent_MakeAvailable(clap_helpers)
 
@@ -248,6 +272,15 @@ set(STUDIO_DUO_MODEL_SOURCES
     src/project_io/ProjectCollectionService.h
     src/project_io/ProjectMigration.cpp
     src/project_io/ProjectMigration.h
+    src/project_io/ProjectImportResult.h
+    src/project_io/ProjectImportService.cpp
+    src/project_io/ProjectImportService.h
+    src/project_io/ProjectArchiveReader.cpp
+    src/project_io/ProjectArchiveReader.h
+    src/project_io/ZipUtilities.h
+    src/util/NumberParsing.h
+    src/studio_one_io/StudioOneProjectIO.cpp
+    src/studio_one_io/StudioOneProjectIO.h
     src/reamp/ReampSnapshotService.cpp
     src/reamp/ReampSnapshotService.h
     src/render/AudioExport.cpp
@@ -319,20 +352,20 @@ configure_file(
 get_filename_component(STUDIO_DUO_LAME_SOURCE_PARENT "${studio_duo_lame_SOURCE_DIR}" DIRECTORY)
 get_filename_component(STUDIO_DUO_LAME_SOURCE_NAME "${studio_duo_lame_SOURCE_DIR}" NAME)
 set(STUDIO_DUO_SOURCE_ARCHIVES
-    "${STUDIO_DUO_LAME_CONFIG_DIR}/lame-3.100-source.tar.gz"
+    "${STUDIO_DUO_LAME_CONFIG_DIR}/lame-4.0-source.tar.gz"
     "${STUDIO_DUO_LAME_CONFIG_DIR}/studio-duo-source.tar.gz"
 )
 add_custom_target(
     StudioDuoSourceMaterials
     COMMAND "${CMAKE_COMMAND}" -E chdir "${STUDIO_DUO_LAME_SOURCE_PARENT}"
         "${CMAKE_COMMAND}" -E tar czf
-        "${STUDIO_DUO_LAME_CONFIG_DIR}/lame-3.100-source.tar.gz"
+        "${STUDIO_DUO_LAME_CONFIG_DIR}/lame-4.0-source.tar.gz"
         "${STUDIO_DUO_LAME_SOURCE_NAME}"
     COMMAND "${CMAKE_COMMAND}" -E chdir "${CMAKE_CURRENT_SOURCE_DIR}"
         "${CMAKE_COMMAND}" -E tar czf
         "${STUDIO_DUO_LAME_CONFIG_DIR}/studio-duo-source.tar.gz"
         CMakeLists.txt VERSION LICENSE README.md
-        src assets third_party docs packaging scripts tests
+        src assets third_party docs packaging scripts tests cmake
     BYPRODUCTS ${STUDIO_DUO_SOURCE_ARCHIVES}
     COMMENT "Packaging MP3 library and application source for rebuilding and relinking"
     VERBATIM
@@ -340,25 +373,42 @@ add_custom_target(
 add_dependencies(StudioDuo StudioDuoSourceMaterials)
 set_source_files_properties(${STUDIO_DUO_SOURCE_ARCHIVES} PROPERTIES GENERATED TRUE)
 file(CONFIGURE OUTPUT "${STUDIO_DUO_LAME_CONFIG_DIR}/lame-NOTICE.txt" CONTENT [=[
-Studio Duo includes the LAME 3.100 MP3 encoder, licensed under LGPL-2.0-or-later.
+Studio Duo includes the LAME 4.0 MP3 encoder, licensed under LGPL-2.0-or-later.
 Project: https://lame.sourceforge.io/
-Unmodified upstream source: https://downloads.sourceforge.net/project/lame/lame/3.100/lame-3.100.tar.gz
-SHA-256: ddfe36cab873794038ae2c1210557ad34857a4b6bdc515785d1da9e175b1da1e
+Unmodified upstream source: https://downloads.sourceforge.net/project/lame/lame/4.0/lame-4.0.tar.gz
+SHA-256: 3df5124d5ad3a98312ffd7ba6a9b36230e4f8a3e66d3ce0f425e336c32d216eb
+Studio Duo modifies libmp3lame/VbrTag.c, VbrTag.h, machine.h, and presets.c on 2026-10-10
+to fix undefined signed bit-mask shifts, an impossible array-null check, and
+implicit integer arguments to fabs. These fixes do not change encoder options.
+The modifications are recorded in third_party/lame/4.0-portability.patch and
+third_party/lame/4.0-preset-portability.patch.
 The bundled decoder (mpglib), executables, and assembly routines are not built.
-The accompanying lame-3.100-source.tar.gz contains the complete library source,
+The accompanying lame-4.0-source.tar.gz contains the complete modified library source,
 and lame-config.h records the scalar encoder build configuration.
 The accompanying studio-duo-source.tar.gz contains the application source,
-build scripts, assets, tests, and documentation needed to rebuild and relink.
+build scripts, dependency patches, assets, tests, and documentation needed to rebuild and relink.
 Extract the application archive into an empty directory and follow README.md
 or docs/development.md. Set FETCHCONTENT_SOURCE_DIR_STUDIO_DUO_LAME to the
 extracted library directory to rebuild with a modified encoder.
 The application source is also published at https://github.com/mbianchidev/studio-duo.
 See lame-COPYING.txt for the complete library license.
 ]=] @ONLY)
+configure_file(
+    "${signalsmith_stretch_SOURCE_DIR}/LICENSE.txt"
+    "${STUDIO_DUO_LAME_CONFIG_DIR}/signalsmith-stretch-LICENSE.txt"
+    COPYONLY
+)
+configure_file(
+    "${signalsmith_linear_SOURCE_DIR}/LICENSE.txt"
+    "${STUDIO_DUO_LAME_CONFIG_DIR}/signalsmith-linear-LICENSE.txt"
+    COPYONLY
+)
 set(STUDIO_DUO_LAME_LICENSE_FILES
     "${STUDIO_DUO_LAME_CONFIG_DIR}/lame-COPYING.txt"
     "${STUDIO_DUO_LAME_CONFIG_DIR}/lame-NOTICE.txt"
     "${STUDIO_DUO_LAME_CONFIG_DIR}/lame-config.h"
+    "${STUDIO_DUO_LAME_CONFIG_DIR}/signalsmith-stretch-LICENSE.txt"
+    "${STUDIO_DUO_LAME_CONFIG_DIR}/signalsmith-linear-LICENSE.txt"
     ${STUDIO_DUO_SOURCE_ARCHIVES}
 )
 if(APPLE)
@@ -480,7 +530,6 @@ target_include_directories(
     PRIVATE
         src
 )
-target_include_directories(StudioDuo SYSTEM PRIVATE ${signalsmith_stretch_SOURCE_DIR})
 
 target_compile_definitions(
     StudioDuo
@@ -535,6 +584,7 @@ target_link_libraries(
         clap
         clap-helpers
         SampleRate::samplerate
+        signalsmith-stretch
         StudioDuoBrandData
         StudioDuoDocumentationData
         StudioDuoDawProjectSchemaData
@@ -853,6 +903,7 @@ if(STUDIO_DUO_BUILD_TESTS)
             tests/InfoPanelTests.cpp
             tests/ReentrancySafeTimerTests.cpp
             tests/DawProjectTests.cpp
+            tests/StudioOneProjectTests.cpp
             src/ui/TransportSettingsComponent.cpp
             src/ui/TransportSettingsComponent.h
             src/ui/NumericInput.h
@@ -877,6 +928,8 @@ if(STUDIO_DUO_BUILD_TESTS)
             src/ui/MidiEditorComponent.h
             src/ui/DrumPerformanceComponent.cpp
             src/ui/DrumPerformanceComponent.h
+            src/ui/StartupHubComponent.cpp
+            src/ui/StartupHubComponent.h
             src/audio/StudioAudioDeviceManager.cpp
             src/audio/StudioAudioDeviceManager.h
             src/audio/AudioDeviceProbe.cpp
@@ -924,7 +977,6 @@ if(STUDIO_DUO_BUILD_TESTS)
     )
 
     target_include_directories(StudioDuoTests PRIVATE src)
-    target_include_directories(StudioDuoTests SYSTEM PRIVATE ${signalsmith_stretch_SOURCE_DIR})
 
     target_compile_definitions(
         StudioDuoTests
@@ -998,6 +1050,7 @@ if(STUDIO_DUO_BUILD_TESTS)
             clap
             clap-helpers
             SampleRate::samplerate
+            signalsmith-stretch
             StudioDuoDawProjectSchemaData
             StudioDuoMp3Encoder
         PUBLIC

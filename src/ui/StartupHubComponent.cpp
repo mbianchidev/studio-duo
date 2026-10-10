@@ -157,7 +157,7 @@ StartupHubComponent::StartupHubComponent(
 
     addAndMakeVisible(subtitle);
     subtitle.setText(
-        "Create a song, start from a curated template, "
+        "Create a song, import from Studio One, "
         "or continue a recent project.",
         juce::dontSendNotification);
     subtitle.setColour(
@@ -178,11 +178,21 @@ StartupHubComponent::StartupHubComponent(
 
     addAndMakeVisible(openExistingButton);
     openExistingButton.setTooltip(
-        "Choose an existing .studioduo project");
+        "Open a .studioduo project, Studio One .song, or .dawproject export");
     openExistingButton.onClick = [this]
     {
         if (onOpenExisting)
             onOpenExisting();
+    };
+
+    addAndMakeVisible(studioOneImportButton);
+    studioOneImportButton.setWantsKeyboardFocus(true);
+    studioOneImportButton.setTooltip(
+        "Import a Studio One .song directly or use its DAWproject export");
+    studioOneImportButton.onClick = [this]
+    {
+        if (onImportStudioOne)
+            onImportStudioOne();
     };
 
     addAndMakeVisible(templateTitle);
@@ -381,17 +391,27 @@ void StartupHubComponent::resized()
     bounds.removeFromTop(14);
     auto actions =
         bounds.removeFromTop(42);
-    const auto actionWidth =
-        juce::jmax(
-            160,
-            (actions.getWidth() - 12) / 2);
+    const auto singleRow = actions.getWidth() >= 520;
+    const auto actionWidth = singleRow
+        ? (actions.getWidth() - 24) / 3
+        : (actions.getWidth() - 12) / 2;
     newSongButton.setBounds(
         actions.removeFromLeft(
             actionWidth)
             .reduced(2));
     actions.removeFromLeft(12);
     openExistingButton.setBounds(
-        actions.reduced(2));
+        actions.removeFromLeft(actionWidth).reduced(2));
+    if (singleRow)
+    {
+        actions.removeFromLeft(12);
+        studioOneImportButton.setBounds(actions.reduced(2));
+    }
+    else
+    {
+        bounds.removeFromTop(8);
+        studioOneImportButton.setBounds(bounds.removeFromTop(42).reduced(2));
+    }
     bounds.removeFromTop(18);
     templateTitle.setBounds(
         bounds.removeFromTop(22));

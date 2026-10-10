@@ -9,7 +9,7 @@
 #include "plugin_host/ClapPluginInstance.h"
 #include "devices/DeviceRegistry.h"
 
-#include "signalsmith-stretch.h"
+#include <signalsmith-stretch/signalsmith-stretch.h>
 
 #include <algorithm>
 #include <cmath>
