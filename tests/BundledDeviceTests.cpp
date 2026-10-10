@@ -1335,6 +1335,8 @@ void liveDrumPadAudio()
     expect(engine.enqueueMidiInput(
                track.id, juce::MidiMessage::noteOn(1, 36, juce::uint8(112))).wasOk(),
            "A visual drum-pad hit reaches the bundled instrument.");
+    expect(engine.enqueueMidiInput(track.id, juce::MidiMessage::noteOff(1, 36)).wasOk(),
+           "A tuning tap can enqueue its note-on and release together without swallowing the one-shot.");
     juce::ignoreUnused(engine.renderActiveBlockForTesting(512));
     const auto hit = engine.renderActiveBlockForTesting(2048);
     expect(magnitude(hit, 0) > 0.001f && magnitude(hit, 1) > 0.001f,
