@@ -122,11 +122,13 @@ or MIDI. See [startup troubleshooting and logs](docs/user-guide.md#logs-and-diag
 Studio Duo is licensed under the
 [GNU Affero General Public License v3.0 only](LICENSE). JUCE 9 uses its AGPLv3
 option. On Windows, Studio Duo uses JUCE's dual-licensed Steinberg ASIO SDK
-headers under their GPLv3 option. Signalsmith Stretch 1.1.0, CLAP 1.2.10, and
-clap-helpers are MIT licensed. libsamplerate 0.2.2 is BSD-2-Clause licensed.
+headers under their GPLv3 option. Signalsmith Stretch 1.4.0, Signalsmith Linear
+0.6.5, CLAP 1.2.10, and clap-helpers are MIT licensed.
+libsamplerate 0.2.2 is BSD-2-Clause licensed.
 ARA SDK 2.3.0 is Apache-2.0 licensed.
-The bundled, encoder-only LAME 3.100 library is LGPL-2.0-or-later licensed and
+The bundled, encoder-only LAME 4.0 library is LGPL-2.0-or-later licensed and
 includes documented portability fixes;
 its license, library and application source archives, scalar build configuration,
 and rebuilding/relinking notice ship with the application.
+The Signalsmith Stretch and Linear MIT license notices also ship with the application.
 The vendored DAWproject 1.0 schemas and upstream XML example are MIT licensed.

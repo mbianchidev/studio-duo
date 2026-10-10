@@ -268,7 +268,7 @@ juce::Result writeMp3(const juce::AudioBuffer<float>& audio,
                       const AudioExportSettings& settings,
                       const juce::StringPairArray& metadata)
 {
-    // LAME 3.100 rewrites shared quantization tables in every encoder's
+    // LAME rewrites shared quantization tables in every encoder's
     // iteration_init; initialization must not race another active encoder.
     static std::mutex encoderMutex;
     const std::lock_guard lock(encoderMutex);

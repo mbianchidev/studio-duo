@@ -50,7 +50,9 @@ foreach ($requiredFile in @(
     (Join-Path $licenseDirectory 'lame-COPYING.txt'),
     (Join-Path $licenseDirectory 'lame-NOTICE.txt'),
     (Join-Path $licenseDirectory 'lame-config.h'),
-    (Join-Path $licenseDirectory 'lame-3.100-source.tar.gz'),
+    (Join-Path $licenseDirectory 'lame-4.0-source.tar.gz'),
+    (Join-Path $licenseDirectory 'signalsmith-stretch-LICENSE.txt'),
+    (Join-Path $licenseDirectory 'signalsmith-linear-LICENSE.txt'),
     (Join-Path $licenseDirectory 'studio-duo-source.tar.gz'),
     (Join-Path $repositoryRootPath 'assets\branding\StudioDuo.ico')
 )) {
