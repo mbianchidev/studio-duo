@@ -1,11 +1,13 @@
 #include "MainComponent.h"
 
 #include "AudioExportOptionsComponent.h"
+#include "DrumKitTuningComponent.h"
 #include "NumericInput.h"
 #include "ReentrancySafeTimer.h"
 #include "TransportSettingsComponent.h"
 #include "automation/AutomationRecorder.h"
 #include "audio/AudioDeviceProbe.h"
+#include "devices/DrumDeviceProcessor.h"
 #include "logging/StudioLogger.h"
 #include "update/UpdateSettingsComponent.h"
 #include "plugin_host/PluginStateStore.h"
@@ -32,6 +34,53 @@ namespace
 {
 constexpr int mainHeaderHeight = 64;
 constexpr int transportFooterHeight = 44;
+
+struct DrumPresetTarget
+{
+    juce::String insertId;
+    PluginParameterDescriptor parameter;
+};
+
+const StudioAudioEngine::PluginRuntimeStatus* findDrumRuntime(
+    const Track* track,
+    const std::vector<StudioAudioEngine::PluginRuntimeStatus>& statuses,
+    const juce::String& insertId = {})
+{
+    if (track == nullptr)
+        return nullptr;
+    for (const auto& insert : track->inserts)
+    {
+        if (!insert.bundledDevice || insert.bypassed || insert.recoveryDisabled
+            || insert.pluginIdentifier != "studio.device.drum-composer"
+            || (insertId.isNotEmpty() && insert.id != insertId))
+            continue;
+        const auto status = std::find_if(
+            statuses.cbegin(), statuses.cend(),
+            [track, &insert](const auto& candidate)
+            {
+                return candidate.trackId == track->id && candidate.insertId == insert.id
+                    && candidate.state == StudioAudioEngine::PluginRuntimeStatus::State::ready;
+            });
+        if (status != statuses.cend())
+            return &*status;
+    }
+    return nullptr;
+}
+
+std::optional<DrumPresetTarget> findDrumPresetTarget(
+    const Track* track,
+    const std::vector<StudioAudioEngine::PluginRuntimeStatus>& statuses)
+{
+    const auto* status = findDrumRuntime(track, statuses);
+    if (status == nullptr)
+        return std::nullopt;
+    const auto parameter = std::find_if(
+        status->parameters.cbegin(), status->parameters.cend(),
+        [](const auto& candidate) { return candidate.id == "kitPreset"; });
+    if (parameter != status->parameters.cend())
+        return DrumPresetTarget { status->insertId, *parameter };
+    return std::nullopt;
+}
 
 #if JUCE_WINDOWS
 class ScopedWindowsCrashContext final
@@ -1724,6 +1773,14 @@ MainComponent::MainComponent(
     };
     midiEditor.onClose = [this] { selectTrack(selectedTrackId); };
     auto& drumPads = midiEditor.drumPerformance();
+    drumPads.onSoundPresetChanged = [this](const auto& trackId, int preset)
+    {
+        return changeDrumSoundPreset(trackId, preset);
+    };
+    drumPads.onTuneKitRequested = [this](const auto& trackId, int note)
+    {
+        showDrumKitTuning(trackId, note);
+    };
     drumPads.onMidiMessage = [this](const auto& trackId, const auto& message)
     {
         if (currentAudioDevice() == nullptr)
@@ -2811,6 +2868,13 @@ void MainComponent::timerCallback()
     mixer->setPeaks(audioEngine.leftPeak(), audioEngine.rightPeak());
     mixer->setMeters(audioEngine.trackMeterSnapshots());
     auto runtimeStatuses = audioEngine.pluginRuntimeStatuses();
+    const auto drumPreset = findDrumPresetTarget(
+        project.findTrack(selectedTrackId), runtimeStatuses);
+    midiEditor.drumPerformance().setSoundPresetContext(
+        drumPreset.has_value()
+            ? juce::roundToInt(drumPreset->parameter.value
+                              * static_cast<float>(DrumDeviceProcessor::soundPresetNames().size() - 1))
+            : -1);
     auto runtimeMetadataChanged = false;
     for (const auto& status : runtimeStatuses)
     {
@@ -6201,6 +6265,136 @@ void MainComponent::changePluginMode(const juce::String& trackId,
                     PluginBridgeMode::araCompatibility));
             }),
         true);
+}
+
+juce::Result MainComponent::changeDrumSoundPreset(
+    const juce::String& trackId, int presetIndex)
+{
+    const auto& names = DrumDeviceProcessor::soundPresetNames();
+    if (!juce::isPositiveAndBelow(presetIndex, names.size()))
+        return juce::Result::fail("Choose a valid drum kit sound preset.");
+    const auto* track = project.findTrack(trackId);
+    const auto preset = findDrumPresetTarget(track, audioEngine.pluginRuntimeStatuses());
+    if (!preset.has_value())
+        return juce::Result::fail(
+            "An active Metal Drum Composer must be ready on this track before changing its kit sound.");
+    const auto normalized = static_cast<float>(presetIndex)
+        / static_cast<float>(names.size() - 1);
+    juce::String error;
+    if (!audioEngine.setPluginParameter(
+            preset->insertId, preset->parameter.index, normalized, error))
+        return juce::Result::fail(error);
+
+    AutomationTarget target;
+    target.type = AutomationTargetType::deviceParameter;
+    target.trackId = trackId;
+    target.insertId = preset->insertId;
+    target.parameterId = preset->parameter.id;
+    target.parameterIndex = preset->parameter.index;
+    const auto preview = track->automationArmed
+        && track->automationMode == AutomationMode::preview;
+    const auto laneName = "Metal Drum Composer / Kit sound preset";
+    beginAutomationGesture(target, laneName, preset->parameter.value);
+    endAutomationGesture(target, laneName, normalized);
+    if (!preview)
+    {
+        dirty = true;
+        projectLabel.setText(project.name + " *", juce::dontSendNotification);
+        setStatus("Drum kit sound: " + names[presetIndex] + ".");
+    }
+    return juce::Result::ok();
+}
+
+void MainComponent::showDrumKitTuning(const juce::String& trackId, int note)
+{
+    const auto statuses = audioEngine.pluginRuntimeStatuses();
+    const auto* status = findDrumRuntime(project.findTrack(trackId), statuses);
+    if (status == nullptr)
+    {
+        setStatus("An active Metal Drum Composer must be ready before tuning its kit.", true);
+        return;
+    }
+    const auto insertId = status->insertId;
+    const auto drum = DrumDeviceProcessor::tunableDrumForNote(note);
+    auto panel = std::make_unique<DrumKitTuningComponent>(status->parameters, drum >= 0 ? drum : 0);
+    const juce::Component::SafePointer<MainComponent> safe(this);
+    const auto targetFor = [trackId, insertId](const PluginParameterDescriptor& parameter)
+    {
+        AutomationTarget target;
+        target.type = AutomationTargetType::deviceParameter;
+        target.trackId = trackId;
+        target.insertId = insertId;
+        target.parameterId = parameter.id;
+        target.parameterIndex = parameter.index;
+        return target;
+    };
+    panel->onRefreshParameters = [safe, trackId, insertId]
+    {
+        if (safe == nullptr)
+            return std::vector<PluginParameterDescriptor> {};
+        const auto current = safe->audioEngine.pluginRuntimeStatuses();
+        const auto* runtime = findDrumRuntime(safe->project.findTrack(trackId), current, insertId);
+        return runtime != nullptr ? runtime->parameters : std::vector<PluginParameterDescriptor> {};
+    };
+    panel->onValueChanged = [safe, trackId, insertId](const PluginParameterDescriptor& parameter, float value)
+    {
+        if (safe == nullptr)
+            return juce::Result::fail("The project window is no longer available.");
+        const auto current = safe->audioEngine.pluginRuntimeStatuses();
+        const auto* track = safe->project.findTrack(trackId);
+        const auto* runtime = findDrumRuntime(track, current, insertId);
+        if (runtime == nullptr
+            || std::none_of(runtime->parameters.cbegin(), runtime->parameters.cend(),
+                [&parameter](const auto& candidate)
+                { return candidate.id == parameter.id && candidate.index == parameter.index; }))
+            return juce::Result::fail("The drum instrument's tuning control is unavailable.");
+        if (!std::isfinite(value) || value < 0.0f || value > 1.0f)
+            return juce::Result::fail("The drum tuning value is out of range.");
+        juce::String error;
+        if (!safe->audioEngine.setPluginParameter(insertId, parameter.index, value, error))
+            return juce::Result::fail(error);
+        if (!(track->automationArmed && track->automationMode == AutomationMode::preview))
+        {
+            safe->dirty = true;
+            safe->projectLabel.setText(safe->project.name + " *", juce::dontSendNotification);
+        }
+        return juce::Result::ok();
+    };
+    panel->onGestureStarted = [safe, targetFor](const auto& parameter, float value)
+    {
+        if (safe != nullptr)
+            safe->beginAutomationGesture(targetFor(parameter), "Metal Drum Composer / " + parameter.name, value);
+    };
+    panel->onGestureEnded = [safe, targetFor](const auto& parameter, float value)
+    {
+        if (safe != nullptr)
+            safe->endAutomationGesture(targetFor(parameter), "Metal Drum Composer / " + parameter.name, value);
+    };
+    panel->onGestureCancelled = [safe, targetFor](const auto& parameter)
+    {
+        if (safe != nullptr && safe->activeAutomationGesture.has_value()
+            && sameAutomationTarget(safe->activeAutomationGesture->target, targetFor(parameter)))
+            safe->activeAutomationGesture.reset();
+    };
+    panel->onAudition = [safe, trackId, insertId](int drumNote)
+    {
+        if (safe == nullptr || safe->currentAudioDevice() == nullptr)
+            return juce::Result::fail("Enable an audio output in Settings > Audio / MIDI to tap the drum.");
+        const auto current = safe->audioEngine.pluginRuntimeStatuses();
+        if (findDrumRuntime(safe->project.findTrack(trackId), current, insertId) == nullptr)
+            return juce::Result::fail("The drum instrument is no longer available for audition.");
+        if (const auto result = safe->audioEngine.enqueueMidiInput(
+                trackId, juce::MidiMessage::noteOn(1, drumNote, juce::uint8(110))); result.failed())
+            return result;
+        return safe->audioEngine.enqueueMidiInput(trackId, juce::MidiMessage::noteOff(1, drumNote));
+    };
+    panel->onStatus = [safe](const auto& message, bool error)
+    {
+        if (safe != nullptr)
+            safe->setStatus(message, error);
+    };
+    juce::CallOutBox::launchAsynchronously(
+        std::move(panel), midiEditor.drumPerformance().getScreenBounds(), nullptr);
 }
 
 void MainComponent::showPluginParameters(const juce::String& trackId,

@@ -21,6 +21,7 @@ public:
     void setContext(const juce::String& trackId,
                     const MidiClip* clip,
                     const DrumMap* map);
+    void setSoundPresetContext(int presetIndex);
     void setKeyboardEnabled(bool enabled);
     [[nodiscard]] bool isKeyboardEnabled() const noexcept;
     juce::Result assignSound(std::size_t pad, int noteNumber);
@@ -35,6 +36,8 @@ public:
     std::function<juce::Result(const juce::String&, const juce::MidiMessage&)>
         onMidiMessage;
     std::function<bool(const std::vector<DrumPadBinding>&)> onBindingsEdited;
+    std::function<juce::Result(const juce::String&, int)> onSoundPresetChanged;
+    std::function<void(const juce::String&, int)> onTuneKitRequested;
     std::function<void(const juce::String&, bool)> onStatus;
     std::function<void(bool)> onAuditionChanged;
     std::function<void()> onPlay;
@@ -82,15 +85,19 @@ private:
     std::array<bool, drumPadCount> heldMouse {};
     std::array<int, drumPadCount> soundingChannels {};
     std::size_t selectedPad = 8;
+    int soundPresetIndex = -1;
     bool keyboardEnabled = false;
     bool learningKey = false;
     bool auditionActive = false;
 
     juce::TextButton keyboardButton { "KEYBOARD OFF" };
+    juce::TextButton tuneKitButton { "TUNE KIT" };
     juce::TextButton playButton { "PLAY" };
     juce::TextButton recordButton { "RECORD" };
     juce::TextButton clickButton { "CLICK" };
     juce::Label transportLabel;
+    juce::Label soundPresetLabel;
+    juce::ComboBox soundPresetSelector;
     juce::Label selectedPadLabel;
     juce::Label soundLabel;
     juce::ComboBox soundSelector;
