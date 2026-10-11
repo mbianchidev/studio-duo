@@ -6,8 +6,179 @@
 #include "model/ProjectCommands.h"
 #include "audio/StudioAudioEngine.h"
 
+#include <algorithm>
+#include <cmath>
+#include <limits>
+
+namespace
+{
+void automationPreviewBatches()
+{
+    auto project = studio::Project::createDefault();
+    const auto trackId = project.tracks.front().id;
+    studio::PluginInsert drums;
+    drums.name = "Preview drums";
+    drums.pluginIdentifier = "studio.device.drum-composer";
+    drums.bundledDevice = true;
+    project.tracks.front().inserts.push_back(drums);
+    studio::Track otherTrack;
+    otherTrack.name = "Other drums";
+    otherTrack.type = studio::TrackType::instrument;
+    studio::PluginInsert otherDrums = drums;
+    otherDrums.id = juce::Uuid().toString();
+    otherTrack.inserts.push_back(otherDrums);
+    project.tracks.insert(project.tracks.end() - 1, otherTrack);
+    const auto targetFor = [&](const juce::String& id, int index)
+    {
+        studio::AutomationTarget target;
+        target.type = studio::AutomationTargetType::deviceParameter;
+        target.trackId = trackId;
+        target.insertId = drums.id;
+        target.parameterId = id;
+        target.parameterIndex = index;
+        return target;
+    };
+    std::vector<studio::AutomationPreviewTarget> reset {
+        { targetFor("snareBatter", 12), "Snare batter", 0.5, 0.5, 0.75, 0.5 },
+        { targetFor("snareResonant", 13), "Snare resonant", 0.5, 0.5, 0.25, 0.5 },
+        { targetFor("snareDamping", 14), "Snare damping", 0.5, 0.5, 0.8, 0.0 },
+        { targetFor("snareWires", 24), "Snare wires", 0.5, 0.5, 0.9, 0.5 }
+    };
+    studio::AutomationLane resonant;
+    resonant.name = "Existing resonant head";
+    resonant.target = reset[1].target;
+    resonant.timebase = studio::AutomationTimebase::beats;
+    resonant.points = { { juce::Uuid().toString(), 0.0, 0.25 },
+                        { juce::Uuid().toString(), 4.0, 0.75 } };
+    studio::AutomationLane kick;
+    kick.target = targetFor("kickBatter", 9);
+    kick.points = { { juce::Uuid().toString(), 0.0, 0.8 } };
+    studio::AutomationLane otherSnare = resonant;
+    otherSnare.id = juce::Uuid().toString();
+    otherSnare.target.trackId = otherTrack.id;
+    otherSnare.target.insertId = otherDrums.id;
+    project.automationLanes = { resonant, kick, otherSnare };
+    const auto state = [](const studio::Project& value)
+    {
+        return juce::JSON::toString(value.toVar(), false);
+    };
+    const auto before = state(project);
+    studio::CommandStack history;
+    studio::AutomationPreview preview;
+    expect(preview.stageReset(reset).wasOk() && state(project) == before && !history.canUndo(),
+           "Staging a multi-control reset does not alter the project or undo history.");
+    const auto committed = preview.commit(project, history);
+    expect(committed.wasOk() && preview.empty(),
+           "An atomic reset preview clears only after a successful commit.");
+    for (const auto& change : reset)
+    {
+        const auto lane = std::find_if(
+            project.automationLanes.cbegin(), project.automationLanes.cend(),
+            [&change](const auto& candidate) { return candidate.target == change.target; });
+        expect(lane != project.automationLanes.cend()
+                   && std::any_of(lane->points.cbegin(), lane->points.cend(),
+                       [&](const auto& point)
+                       {
+                           const auto position = lane->timebase == studio::AutomationTimebase::beats
+                               ? project.beatsAt(change.endSeconds) : change.endSeconds;
+                           return std::abs(point.position - position) < 0.000001
+                               && std::abs(point.value - change.endValue) < 0.000001;
+                       }),
+               "Committing a reset retains each head, damping, and wire value in its lane timebase.");
+    }
+    expect(project.automationLanes.size() == 6
+               && juce::JSON::toString(project.automationLanes[1].toVar(), false)
+                   == juce::JSON::toString(kick.toVar(), false)
+               && juce::JSON::toString(project.automationLanes[2].toVar(), false)
+                   == juce::JSON::toString(otherSnare.toVar(), false),
+           "Reset preview commits leave another shell and another track's automation unchanged.");
+    const auto after = state(project);
+    expect(history.undo(project) && !history.canUndo() && state(project) == before,
+           "All reset preview lanes undo together in one operation.");
+    juce::String error;
+    expect(history.redo(project, error) && state(project) == after,
+           "One redo restores every committed reset value.");
+
+    auto singleProject = studio::Project::createDefault();
+    studio::AutomationTarget volume;
+    volume.trackId = singleProject.tracks.front().id;
+    auto pan = volume;
+    pan.type = studio::AutomationTargetType::trackPan;
+    studio::AutomationPreview singlePreview;
+    expect(singlePreview.stage({ { volume, "Volume", 1.0, 2.0, 0.2, 0.8 } }).wasOk()
+               && singlePreview.stageReset({ { pan, "No-op reset", 1.0, 1.0, 0.5, 0.5 } }).wasOk()
+               && singlePreview.targets().size() == 1
+               && singlePreview.targets().front().target == volume,
+           "A no-op reset leaves the existing single-target preview available.");
+    expect(singlePreview.stage({ { volume, "Volume", 1.0, 2.0, 0.2, 0.8 },
+                                 { volume, "Duplicate", 1.0, 2.0, 0.2, 0.4 } }).failed()
+               && singlePreview.targets().size() == 1
+               && std::abs(singlePreview.targets().front().endValue - 0.8) < 0.000000001,
+           "Invalid duplicate preview targets cannot replace a valid pending preview.");
+    expect(singlePreview.stage({ { pan, "Pan", 1.0, 2.0, 0.2,
+                                   std::numeric_limits<double>::quiet_NaN() } }).failed()
+               && singlePreview.targets().size() == 1
+               && singlePreview.targets().front().target == volume,
+           "An invalid preview value leaves the previous pending preview intact.");
+    expect(singlePreview.stageReset({ { volume, "Reset volume", 2.0, 2.0, 0.5, 0.5 } }).wasOk()
+               && singlePreview.targets().size() == 1
+               && singlePreview.targets().front().target == volume
+               && std::abs(singlePreview.targets().front().endValue - 0.5) < 0.000000001,
+           "Reset replaces an earlier pending offset even when the reverted live control is already neutral.");
+    studio::CommandStack singleHistory;
+    expect(singlePreview.stage({ { pan, "Pan", 3.0, 4.0, 0.6, 0.3 } }).wasOk()
+               && singlePreview.commit(singleProject, singleHistory).wasOk()
+               && singlePreview.empty() && singleProject.automationLanes.size() == 1
+               && singleProject.automationLanes.front().target == pan
+               && !singleProject.automationLanes.front().points.empty()
+               && std::abs(singleProject.automationLanes.front().points.front().position - 3.0) < 0.000000001
+               && std::abs(singleProject.automationLanes.front().points.back().value - 0.3) < 0.000000001
+               && singleHistory.undoName() == "Add automation lane",
+           "Independent single-target gestures still replace, rather than accumulate, the pending preview.");
+
+    auto failedProject = studio::Project::createDefault();
+    failedProject.tracks.front().inserts.push_back(drums);
+    auto failedReset = reset;
+    for (auto& change : failedReset)
+        change.target.trackId = failedProject.tracks.front().id;
+    auto existing = resonant;
+    existing.target = failedReset.front().target;
+    existing.timebase = studio::AutomationTimebase::seconds;
+    failedProject.automationLanes.push_back(existing);
+    failedReset.back().target.insertId = "unavailable-preview-insert";
+    const auto beforeFailure = state(failedProject);
+    studio::CommandStack failedHistory;
+    studio::AutomationPreview failedPreview;
+    expect(failedPreview.stageReset(failedReset).wasOk(), "A reset preview can be captured before commit.");
+    const auto failedCommit = failedPreview.commit(failedProject, failedHistory);
+    expect(failedCommit.failed() && failedCommit.getErrorMessage().containsIgnoreCase("unavailable")
+               && state(failedProject) == beforeFailure && !failedHistory.canUndo()
+               && failedPreview.targets().size() == failedReset.size()
+               && std::equal(failedPreview.targets().cbegin(), failedPreview.targets().cend(),
+                   failedReset.cbegin(), [](const auto& left, const auto& right)
+                   {
+                       return left.target == right.target
+                           && std::abs(left.startSeconds - right.startSeconds) < 0.000000001
+                           && std::abs(left.endSeconds - right.endSeconds) < 0.000000001
+                           && std::abs(left.startValue - right.startValue) < 0.000000001
+                           && std::abs(left.endValue - right.endValue) < 0.000000001;
+                   }),
+           "An unavailable target rolls back both changed and added lanes, retaining the whole preview for retry.");
+    auto restoredDrums = drums;
+    restoredDrums.id = failedReset.back().target.insertId;
+    failedProject.tracks.front().inserts.push_back(restoredDrums);
+    const auto beforeRetry = state(failedProject);
+    expect(failedPreview.commit(failedProject, failedHistory).wasOk() && failedPreview.empty()
+               && failedProject.automationLanes.size() == 4
+               && failedHistory.undo(failedProject) && !failedHistory.canUndo()
+               && state(failedProject) == beforeRetry,
+           "Retrying a failed reset preview commits every target with a single undo.");
+}
+}
+
 void automationTests()
 {
+    automationPreviewBatches();
     auto project = studio::Project::createDefault();
     project.tempoChanges = {
         { 0.0, 120.0, true },

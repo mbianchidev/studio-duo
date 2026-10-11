@@ -6360,6 +6360,46 @@ void MainComponent::showDrumKitTuning(const juce::String& trackId, int note)
         }
         return juce::Result::ok();
     };
+    panel->onResetRequested = [safe, trackId, insertId, targetFor](
+        const std::vector<DrumKitTuningComponent::ResetValue>& changes)
+        -> std::optional<juce::Result>
+    {
+        if (safe == nullptr)
+            return juce::Result::fail("The project window is no longer available.");
+        const auto* track = safe->project.findTrack(trackId);
+        if (track == nullptr)
+            return juce::Result::fail("The drum instrument's tuning control is unavailable.");
+        if (!(track->automationArmed && track->automationMode == AutomationMode::preview))
+            return std::nullopt;
+        const auto current = safe->audioEngine.pluginRuntimeStatuses();
+        const auto* runtime = findDrumRuntime(track, current, insertId);
+        if (runtime == nullptr)
+            return juce::Result::fail("The drum instrument's tuning control is unavailable.");
+        std::vector<AutomationPreviewTarget> targets;
+        const auto seconds = safe->audioEngine.positionSeconds();
+        for (const auto& change : changes)
+        {
+            const auto parameter = std::find_if(
+                runtime->parameters.cbegin(), runtime->parameters.cend(),
+                [&change](const auto& candidate)
+                {
+                    return candidate.id == change.parameter.id
+                        && candidate.index == change.parameter.index && candidate.automatable
+                        && std::isfinite(candidate.value)
+                        && candidate.value >= 0.0f && candidate.value <= 1.0f;
+                });
+            if (parameter == runtime->parameters.cend())
+                return juce::Result::fail("The drum instrument's tuning control is unavailable.");
+            if (!std::isfinite(change.value) || change.value < 0.0f || change.value > 1.0f)
+                return juce::Result::fail("The drum tuning value is out of range.");
+            targets.push_back({ targetFor(*parameter), "Metal Drum Composer / " + parameter->name,
+                                seconds, seconds, parameter->value, change.value });
+        }
+        const auto result = safe->pendingAutomationPreview.stageReset(std::move(targets));
+        if (result.wasOk() && !safe->pendingAutomationPreview.empty())
+            safe->setStatus("Automation preview ready to commit.");
+        return result;
+    };
     panel->onGestureStarted = [safe, targetFor](const auto& parameter, float value)
     {
         if (safe != nullptr)
@@ -10600,26 +10640,50 @@ void MainComponent::endAutomationGesture(
 
 void MainComponent::commitAutomationPreview()
 {
-    if (!pendingAutomationPreview.has_value())
+    if (pendingAutomationPreview.empty())
     {
         setStatus("No automation preview is ready.", true);
         return;
     }
-    const auto preview = *pendingAutomationPreview;
-    pendingAutomationPreview.reset();
-    if (project.findTrack(preview.target.trackId) == nullptr)
+    const auto statuses = audioEngine.pluginRuntimeStatuses();
+    for (const auto& preview : pendingAutomationPreview.targets())
     {
-        setStatus("The preview automation target is unavailable.", true);
+        if (project.findTrack(preview.target.trackId) == nullptr)
+        {
+            setStatus("The preview automation target is unavailable.", true);
+            return;
+        }
+        if (preview.target.type != AutomationTargetType::pluginParameter
+            && preview.target.type != AutomationTargetType::deviceParameter)
+            continue;
+        const auto runtime = std::find_if(
+            statuses.cbegin(), statuses.cend(), [&preview](const auto& candidate)
+            {
+                return candidate.trackId == preview.target.trackId
+                    && candidate.insertId == preview.target.insertId
+                    && candidate.state == StudioAudioEngine::PluginRuntimeStatus::State::ready;
+            });
+        if (runtime == statuses.cend()
+            || std::none_of(runtime->parameters.cbegin(), runtime->parameters.cend(),
+                [&preview](const auto& parameter)
+                {
+                    return parameter.index == preview.target.parameterIndex
+                        && parameter.automatable
+                        && (preview.target.parameterId.isEmpty()
+                            || parameter.id == preview.target.parameterId);
+                }))
+        {
+            setStatus("The preview automation target is unavailable.", true);
+            return;
+        }
+    }
+    const auto result = pendingAutomationPreview.commit(project, commandStack);
+    if (result.failed())
+    {
+        setStatus(result.getErrorMessage(), true);
         return;
     }
-    recordAutomationGesture(
-        preview.target,
-        preview.laneName,
-        preview.startSeconds,
-        preview.endSeconds,
-        preview.startValue,
-        preview.endValue,
-        AutomationMode::write);
+    projectChanged();
     setStatus("Automation preview committed.");
 }
 
@@ -10644,15 +10708,16 @@ void MainComponent::recordAutomationGesture(
         return;
     if (mode == AutomationMode::preview)
     {
-        pendingAutomationPreview = AutomationPreview {
+        const auto result = pendingAutomationPreview.stage({ {
             target,
             std::move(laneName),
             startSeconds,
             endSeconds,
             juce::jlimit(0.0, 1.0, startValue),
             juce::jlimit(0.0, 1.0, endValue)
-        };
-        setStatus("Automation preview ready to commit.");
+        } });
+        setStatus(result.failed() ? result.getErrorMessage() : "Automation preview ready to commit.",
+                  result.failed());
         return;
     }
 

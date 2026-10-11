@@ -487,8 +487,9 @@ piece balance, and room sound.
 | Deathcore | Deeper kick and toms, sharp attack, aggressive snare, very dry room |
 
 Changing presets keeps your existing mix controls, MIDI notes, articulations,
-pad assignments, and routing. Already-sounding voices finish naturally; new
-hits use the chosen sound. The selection is saved with the instrument and used
+pad assignments, and routing. Already-sounding voices and their room tails keep
+their original preset character; new hits use the chosen sound, even while
+older tails are still ringing. The selection is saved with the instrument and used
 for live playing, song playback, mix export, and drum stems. It is also available
 as **Kit sound preset** in the instrument editor and as a discrete automatable
 parameter. The bundled VST3, Audio Unit, and CLAP versions use the same presets.
@@ -512,6 +513,12 @@ also follow the song's normal recording/capture behavior. **RESET THIS DRUM**
 restores only that shell's neutral head, damping, and wire settings. It does
 not change another drum, your mix, or the genre preset. Double-click a control
 to restore its neutral value, use arrow keys, or type an exact value.
+
+On a track armed for **Preview** automation, **RESET THIS DRUM** stages all
+changed head, damping, and wire controls together without changing live tuning.
+Use **COMMIT PREVIEW** to apply the reset as one undoable operation. If a target
+is unavailable, nothing is committed and the entire preview remains available
+for retry. Normal non-Preview resets keep their per-control gestures.
 
 Custom tuning stays in place when switching presets, saves with the instrument,
 and is used in playback, mix export, and stems. Existing projects reopen with

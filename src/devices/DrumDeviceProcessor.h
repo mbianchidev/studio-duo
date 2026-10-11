@@ -108,6 +108,7 @@ private:
         int midiNote = 0;
         int chokeGroup = 0;
         int outputBus = kickOutput;
+        int roomPreset = 0;
         float phase = 0.0f;
         float phaseTwo = 0.0f;
         float frequency = 60.0f;
@@ -174,6 +175,7 @@ private:
     static constexpr int maximumVoices = 64;
     std::array<Voice, maximumVoices> voices;
     std::array<std::uint32_t, 8> roundRobinCounters {};
+    // Stereo feedback histories stay independent after each preset's voices expire.
     juce::AudioBuffer<float> roomDelay;
     int roomWritePosition = 0;
     double currentSampleRate = 48000.0;

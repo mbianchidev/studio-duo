@@ -59,6 +59,7 @@ DrumKitTuningComponent::DrumKitTuningComponent(
     hint.setColour(juce::Label::textColourId, juce::Colour(StudioColours::secondaryText));
     addAndMakeVisible(hint);
     status.setFont(juce::Font(juce::FontOptions(12.0f)));
+    status.setComponentID("kit-tuning-status");
     addAndMakeVisible(status);
     tapButton.setComponentID("kit-tap");
     tapButton.setTooltip("Tap this drum through the existing track, instrument, and routing.");
@@ -70,7 +71,9 @@ DrumKitTuningComponent::DrumKitTuningComponent(
     };
     addAndMakeVisible(tapButton);
     resetButton.setComponentID("kit-reset");
-    resetButton.setTooltip("Restore only this drum's head, damping, and wire offsets. Keep other drums and the preset.");
+    resetButton.setTooltip(
+        "Restore only this drum's head, damping, and wire offsets. Keep other drums and the preset. "
+        "On an armed Preview track, stage the changes together without altering live tuning.");
     resetButton.onClick = [this] { resetSelectedDrum(); };
     addAndMakeVisible(resetButton);
     refreshControls();
@@ -250,6 +253,37 @@ juce::Result DrumKitTuningComponent::changeValue(int control, double value)
 void DrumKitTuningComponent::resetSelectedDrum()
 {
     finishGesture(false);
+    if (onRefreshParameters)
+        setParameters(onRefreshParameters());
+    std::vector<ResetValue> changes;
+    for (int index = 0; index < static_cast<int>(sliders.size()); ++index)
+    {
+        const auto* setting = definition(index);
+        if (setting == nullptr)
+            continue;
+        const auto* current = parameter(index);
+        if (current == nullptr)
+        {
+            report(juce::Result::fail("This drum's tuning control is unavailable."));
+            return;
+        }
+        const auto normalized = static_cast<float>(
+            (setting->defaultValue - setting->minimum) / (setting->maximum - setting->minimum));
+        changes.push_back({ *current, normalized });
+    }
+    if (onResetRequested)
+        if (const auto result = onResetRequested(changes))
+        {
+            if (onRefreshParameters)
+                setParameters(onRefreshParameters());
+            else
+                refreshControls();
+            report(*result);
+            if (result->wasOk())
+                status.setText("Preview: live tuning unchanged. Use COMMIT PREVIEW.",
+                               juce::dontSendNotification);
+            return;
+        }
     for (int index = 0; index < static_cast<int>(sliders.size()); ++index)
     {
         const auto* setting = definition(index);

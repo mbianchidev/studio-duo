@@ -207,7 +207,7 @@ void DrumDeviceProcessor::prepareToPlay(double sampleRate,
     juce::ignoreUnused(maximumBlockSize);
     currentSampleRate = std::max(1.0, sampleRate);
     roomDelay.setSize(
-        2,
+        static_cast<int>(soundPresets.size()) * 2,
         static_cast<int>(std::ceil(currentSampleRate * 0.079))
             + 1,
         false,
@@ -465,6 +465,7 @@ void DrumDeviceProcessor::startVoice(int note, float velocity) noexcept
     voice.midiNote = note;
     voice.chokeGroup = hit.chokeGroup;
     voice.outputBus = hit.outputBus;
+    voice.roomPreset = kitPreset->getIndex();
     const auto velocityValue = std::pow(
         juce::jlimit(0.0f, 1.0f, velocity),
         parameter(ParameterSlot::velocityCurve));
@@ -473,7 +474,7 @@ void DrumDeviceProcessor::startVoice(int note, float velocity) noexcept
         2.0f,
         parameter(ParameterSlot::tuning) / 12.0f);
     const auto& preset = soundPresets[
-        static_cast<std::size_t>(kitPreset->getIndex())];
+        static_cast<std::size_t>(voice.roomPreset)];
     const auto& tone = preset.tones[static_cast<std::size_t>(hit.kind)];
     const auto drum = tunableDrumForNote(note);
     const auto batter = drum >= 0 ? drumTuning(drum, 0) : 0.0f;
@@ -567,10 +568,10 @@ void DrumDeviceProcessor::renderSamples(
     };
     const auto mainGain = juce::Decibels::decibelsToGain(
         parameter(ParameterSlot::mainLevel));
-    const auto& preset = soundPresets[
-        static_cast<std::size_t>(kitPreset->getIndex())];
-    const auto roomAmount = std::min(
-        1.0f, parameter(ParameterSlot::room) * preset.roomScale);
+    const auto room = parameter(ParameterSlot::room);
+    std::array<float, soundPresets.size()> roomAmounts {};
+    for (std::size_t preset = 0; preset < soundPresets.size(); ++preset)
+        roomAmounts[preset] = std::min(1.0f, room * soundPresets[preset].roomScale);
     std::array<juce::AudioBuffer<float>*, outputBusCount> outputs {
         &main,
         &kick,
@@ -583,6 +584,8 @@ void DrumDeviceProcessor::renderSamples(
     {
         std::array<float, outputBusCount> left {};
         std::array<float, outputBusCount> right {};
+        std::array<std::array<float, outputBusCount>, soundPresets.size()> presetLeft {};
+        std::array<std::array<float, outputBusCount>, soundPresets.size()> presetRight {};
         for (auto& voice : voices)
         {
             if (!voice.active)
@@ -670,6 +673,9 @@ void DrumDeviceProcessor::renderSamples(
             const auto bus = static_cast<std::size_t>(voice.outputBus);
             left[bus] += value * leftPan;
             right[bus] += value * rightPan;
+            const auto preset = static_cast<std::size_t>(voice.roomPreset);
+            presetLeft[preset][bus] += value * leftPan;
+            presetRight[preset][bus] += value * rightPan;
         }
 
         auto dryLeft = 0.0f;
@@ -692,16 +698,31 @@ void DrumDeviceProcessor::renderSamples(
         auto roomRight = 0.0f;
         if (roomDelay.getNumSamples() > 0)
         {
-            roomLeft = roomDelay.getSample(0, roomWritePosition);
-            roomRight = roomDelay.getSample(1, roomWritePosition);
-            roomDelay.setSample(
-                0,
-                roomWritePosition,
-                dryLeft + roomRight * (0.18f + roomAmount * 0.28f));
-            roomDelay.setSample(
-                1,
-                roomWritePosition,
-                dryRight + roomLeft * (0.18f + roomAmount * 0.28f));
+            for (std::size_t preset = 0; preset < soundPresets.size(); ++preset)
+            {
+                auto presetDryLeft = 0.0f;
+                auto presetDryRight = 0.0f;
+                for (int bus = kickOutput; bus < outputBusCount; ++bus)
+                {
+                    const auto index = static_cast<std::size_t>(bus);
+                    presetDryLeft += presetLeft[preset][index] * groupGains[index];
+                    presetDryRight += presetRight[preset][index] * groupGains[index];
+                }
+                const auto channel = static_cast<int>(preset) * 2;
+                const auto delayedLeft = roomDelay.getSample(channel, roomWritePosition);
+                const auto delayedRight = roomDelay.getSample(channel + 1, roomWritePosition);
+                const auto roomAmount = roomAmounts[preset];
+                roomDelay.setSample(
+                    channel,
+                    roomWritePosition,
+                    presetDryLeft + delayedRight * (0.18f + roomAmount * 0.28f));
+                roomDelay.setSample(
+                    channel + 1,
+                    roomWritePosition,
+                    presetDryRight + delayedLeft * (0.18f + roomAmount * 0.28f));
+                roomLeft += delayedLeft * roomAmount * 0.32f;
+                roomRight += delayedRight * roomAmount * 0.32f;
+            }
             roomWritePosition =
                 (roomWritePosition + 1) % roomDelay.getNumSamples();
         }
@@ -709,13 +730,13 @@ void DrumDeviceProcessor::renderSamples(
             main.setSample(
                 0,
                 sample,
-                (dryLeft + roomLeft * roomAmount * 0.32f)
+                (dryLeft + roomLeft)
                     * mainGain);
         if (main.getNumChannels() > 1)
             main.setSample(
                 1,
                 sample,
-                (dryRight + roomRight * roomAmount * 0.32f)
+                (dryRight + roomRight)
                     * mainGain);
     }
 }

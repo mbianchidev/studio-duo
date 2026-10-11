@@ -115,6 +115,73 @@ int outputChannel(const juce::AudioProcessor& processor,
         channel);
 }
 
+struct DrumRoomReference
+{
+    explicit DrumRoomReference(double sampleRate)
+        : delay(static_cast<int>(roomScales.size()) * 2,
+                static_cast<int>(std::ceil(sampleRate * 0.079)) + 1)
+    {
+        delay.clear();
+    }
+
+    float maximumError(const studio::DrumDeviceProcessor& drum,
+                       const juce::AudioBuffer<float>& audio,
+                       const std::array<int, 4>& stemPresets,
+                       float room,
+                       float mainGain = 1.0f)
+    {
+        auto error = 0.0f;
+        for (int sample = 0; sample < audio.getNumSamples(); ++sample)
+        {
+            std::array<float, roomScales.size()> dryLeft {};
+            std::array<float, roomScales.size()> dryRight {};
+            auto mainLeft = 0.0f;
+            auto mainRight = 0.0f;
+            for (int bus = studio::DrumDeviceProcessor::kickOutput;
+                 bus < studio::DrumDeviceProcessor::outputBusCount; ++bus)
+            {
+                const auto preset = static_cast<std::size_t>(
+                    stemPresets[static_cast<std::size_t>(bus - 1)]);
+                const auto left = audio.getSample(outputChannel(drum, bus, 0), sample);
+                const auto right = audio.getSample(outputChannel(drum, bus, 1), sample);
+                dryLeft[preset] += left;
+                dryRight[preset] += right;
+                mainLeft += left;
+                mainRight += right;
+            }
+            auto wetLeft = 0.0f;
+            auto wetRight = 0.0f;
+            for (std::size_t preset = 0; preset < roomScales.size(); ++preset)
+            {
+                const auto channel = static_cast<int>(preset) * 2;
+                const auto amount = std::min(1.0f, room * roomScales[preset]);
+                const auto left = delay.getSample(channel, position);
+                const auto right = delay.getSample(channel + 1, position);
+                delay.setSample(channel, position, dryLeft[preset] + right * (0.18f + amount * 0.28f));
+                delay.setSample(channel + 1, position, dryRight[preset] + left * (0.18f + amount * 0.28f));
+                wetLeft += left * amount * 0.32f;
+                wetRight += right * amount * 0.32f;
+            }
+            position = (position + 1) % delay.getNumSamples();
+            for (int channel = 0; channel < 2; ++channel)
+            {
+                const auto expected = (channel == 0 ? mainLeft + wetLeft : mainRight + wetRight) * mainGain;
+                const auto residual = std::abs(
+                    audio.getSample(outputChannel(drum, studio::DrumDeviceProcessor::mainOutput, channel), sample)
+                    - expected);
+                if (!std::isfinite(residual))
+                    return std::numeric_limits<float>::infinity();
+                error = std::max(error, residual);
+            }
+        }
+        return error;
+    }
+
+    static constexpr std::array roomScales { 1.0f, 1.55f, 0.75f, 0.42f, 0.70f, 0.28f };
+    juce::AudioBuffer<float> delay;
+    int position = 0;
+};
+
 bool waitForRuntime(studio::StudioAudioEngine& engine)
 {
     for (int attempt = 0;
@@ -872,25 +939,184 @@ void drumSoundPresetTails()
     original.prepareToPlay(48000.0, 512);
     drum.prepareToPlay(48000.0, 512);
     drum.setCurrentProgram(0);
-    setParameter(drum, "room", 0.0f);
-    setParameter(original, "room", 0.0f);
+    setParameter(drum, "room", 1.0f);
+    setParameter(original, "room", 1.0f);
     juce::AudioBuffer<float> changedAudio(drum.getTotalNumOutputChannels(), 512);
     juce::AudioBuffer<float> originalAudio(original.getTotalNumOutputChannels(), 512);
     juce::MidiBuffer kick;
     kick.addEvent(juce::MidiMessage::noteOn(1, 36, juce::uint8(110)), 0);
     drum.processBlock(changedAudio, kick);
     original.processBlock(originalAudio, kick);
-    drum.setCurrentProgram(5);
     juce::MidiBuffer empty;
-    drum.processBlock(changedAudio, empty);
-    original.processBlock(originalAudio, empty);
+    for (int block = 0; block < 7; ++block)
+    {
+        drum.processBlock(changedAudio, empty);
+        original.processBlock(originalAudio, empty);
+    }
+    drum.setCurrentProgram(5);
+    auto difference = 0.0f;
+    for (int block = 0; block < 8; ++block)
+    {
+        drum.processBlock(changedAudio, empty);
+        original.processBlock(originalAudio, empty);
+        difference = std::max(difference, maximumDifference(changedAudio, originalAudio));
+    }
     expect(drum.activeVoiceCountForTesting() == 1
-               && maximumDifference(changedAudio, originalAudio) < 0.000001f,
-           "Changing kit presets leaves already-sounding drum voices intact.");
+               && difference < 0.000001f,
+           "Changing kit presets leaves already-sounding drum voices and their nonzero room intact.");
     drum.processBlock(changedAudio, kick);
     original.processBlock(originalAudio, kick);
     expect(maximumDifference(changedAudio, originalAudio) > 0.01f,
            "New hits adopt the new preset while earlier hits finish naturally.");
+}
+
+void drumSoundPresetRoomCompatibility()
+{
+    constexpr auto sampleRate = 8000.0;
+    constexpr auto blockSamples = 256;
+    studio::DrumDeviceProcessor drum;
+    drum.prepareToPlay(sampleRate, blockSamples);
+    setParameter(drum, "main", 0.75f);
+    setParameter(drum, "kick", 0.5f);
+    setParameter(drum, "snare", 0.75f);
+    setParameter(drum, "toms", 0.6f);
+    setParameter(drum, "cymbals", 0.4f);
+    juce::AudioBuffer<float> audio(drum.getTotalNumOutputChannels(), blockSamples);
+    constexpr std::array roomValues { 0.0f, 0.37f, 1.0f, 0.21f };
+    for (int preset = 0; preset < drum.getNumPrograms(); ++preset)
+    {
+        drum.setCurrentProgram(preset);
+        drum.reset();
+        DrumRoomReference reference(sampleRate);
+        auto error = 0.0f;
+        for (int block = 0; block < 24; ++block)
+        {
+            const auto room = roomValues[static_cast<std::size_t>(block / 6)];
+            setParameter(drum, "room", room);
+            juce::MidiBuffer events;
+            if (block == 0)
+            {
+                auto offset = 0;
+                for (const auto note : { 36, 38, 41, 42, 49 })
+                {
+                    events.addEvent(juce::MidiMessage::noteOn(1, note, juce::uint8(110)), offset);
+                    offset += 40;
+                }
+            }
+            if (block == 10)
+                events.addEvent(juce::MidiMessage::noteOn(1, 36, juce::uint8(105)), 117);
+            drum.processBlock(audio, events);
+            error = std::max(error, reference.maximumError(
+                drum, audio, { preset, preset, preset, preset }, room,
+                juce::Decibels::decibelsToGain(-6.0f)));
+        }
+        expect(error < 0.000001f,
+               "An unchanged preset retains its original stereo room feedback, wet gain, mix levels, and live Room automation.");
+    }
+}
+
+void drumSoundPresetRoomAfterVoicesExpire()
+{
+    constexpr auto sampleRate = 8000.0;
+    constexpr auto blockSamples = 256;
+    for (int preset = 0; preset < 6; ++preset)
+    {
+        studio::DrumDeviceProcessor drum;
+        studio::DrumDeviceProcessor original;
+        drum.prepareToPlay(sampleRate, blockSamples);
+        original.prepareToPlay(sampleRate, blockSamples);
+        drum.setCurrentProgram(preset);
+        original.setCurrentProgram(preset);
+        setParameter(drum, "room", 0.7f);
+        setParameter(original, "room", 0.7f);
+        juce::AudioBuffer<float> audio(drum.getTotalNumOutputChannels(), blockSamples);
+        juce::AudioBuffer<float> unchanged(original.getTotalNumOutputChannels(), blockSamples);
+        juce::MidiBuffer hit;
+        hit.addEvent(juce::MidiMessage::noteOn(1, 42, juce::uint8(110)), 0);
+        drum.processBlock(audio, hit);
+        original.processBlock(unchanged, hit);
+        juce::MidiBuffer empty;
+        drum.processBlock(audio, empty);
+        original.processBlock(unchanged, empty);
+        expect(drum.activeVoiceCountForTesting() == 0
+                   && original.activeVoiceCountForTesting() == 0,
+               "The short closed hat expires before its queued room reflections finish.");
+        auto error = 0.0f;
+        auto roomPeak = 0.0f;
+        auto dryPeak = 0.0f;
+        for (int block = 0; block < 12; ++block)
+        {
+            drum.setCurrentProgram((preset + block + 1) % drum.getNumPrograms());
+            drum.processBlock(audio, empty);
+            original.processBlock(unchanged, empty);
+            error = std::max(error, maximumDifference(audio, unchanged));
+            roomPeak = std::max(roomPeak, magnitude(audio, 0));
+            dryPeak = std::max(dryPeak, magnitude(
+                audio, outputChannel(drum, studio::DrumDeviceProcessor::cymbalsOutput, 0)));
+        }
+        expect(error < 0.000001f && roomPeak > 0.001f && sameFloatBits(dryPeak, 0.0f),
+               "Repeated preset switches preserve audible queued room tails even when no voices remain.");
+    }
+}
+
+void drumSoundPresetRoomOverlapAndReset()
+{
+    constexpr auto sampleRate = 8000.0;
+    constexpr auto blockSamples = 256;
+    constexpr auto room = 0.55f;
+    studio::DrumDeviceProcessor drum;
+    drum.prepareToPlay(sampleRate, blockSamples);
+    setParameter(drum, "room", room);
+    juce::AudioBuffer<float> audio(drum.getTotalNumOutputChannels(), blockSamples);
+    const auto render = [&](int blocks)
+    {
+        DrumRoomReference reference(sampleRate);
+        auto error = 0.0f;
+        for (int block = 0; block < blocks; ++block)
+        {
+            juce::MidiBuffer events;
+            auto preset = (block + 2) % drum.getNumPrograms();
+            auto note = 0;
+            auto offset = 0;
+            switch (block)
+            {
+                case 0: preset = 1; note = 36; offset = 31; break;
+                case 4: preset = 5; note = 38; offset = 85; break;
+                case 8: preset = 1; note = 41; offset = 117; break;
+                case 12: preset = 0; note = 51; break;
+                default: break;
+            }
+            drum.setCurrentProgram(preset);
+            if (note != 0)
+                events.addEvent(juce::MidiMessage::noteOn(1, note, juce::uint8(110)), offset);
+            drum.processBlock(audio, events);
+            if (block == 4)
+                expect(drum.activeVoiceCountForTesting() == 2,
+                       "Old and new preset voices overlap while their room histories ring independently.");
+            error = std::max(error, reference.maximumError(drum, audio, { 1, 5, 1, 0 }, room));
+        }
+        return error;
+    };
+    auto error = render(20);
+    expect(magnitude(audio, 0) > 0.001f,
+           "The reset fixture contains active voices and room histories from multiple presets.");
+    const auto selectedPreset = drum.getCurrentProgram();
+    drum.reset();
+    juce::MidiBuffer empty;
+    drum.processBlock(audio, empty);
+    auto peakAfterReset = 0.0f;
+    for (int channel = 0; channel < audio.getNumChannels(); ++channel)
+        peakAfterReset = std::max(peakAfterReset, magnitude(audio, channel));
+    expect(sameFloatBits(peakAfterReset, 0.0f) && drum.activeVoiceCountForTesting() == 0
+               && drum.getCurrentProgram() == selectedPreset,
+           "Reset clears every preset's voices and room history without changing the selected program.");
+    const auto tailBlocks = static_cast<int>(
+        std::ceil(drum.getTailLengthSeconds() * sampleRate / blockSamples));
+    error = std::max(error, render(12 + tailBlocks));
+    expect(error < 0.000001f,
+           "Overlapping hits retain their captured preset room scale, including new hits and returning to an earlier preset after reset.");
+    expect(drum.activeVoiceCountForTesting() == 0 && magnitude(audio, 0) < 0.0001f,
+           "Independent preset room histories remain bounded by the unchanged declared tail.");
 }
 
 void drumSoundPresetEngine()
@@ -1862,6 +2088,9 @@ void bundledDeviceTests()
     drumSoundPresetState();
     drumSoundPresetClap();
     drumSoundPresetTails();
+    drumSoundPresetRoomCompatibility();
+    drumSoundPresetRoomAfterVoicesExpire();
+    drumSoundPresetRoomOverlapAndReset();
     drumSoundPresetEngine();
     drumProcessor();
     drumTailAndVoiceReuse();

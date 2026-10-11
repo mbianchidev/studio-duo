@@ -23,8 +23,16 @@ public:
     void setParameters(std::vector<PluginParameterDescriptor> parameters);
     void setSelectedDrum(int drum);
 
+    struct ResetValue
+    {
+        PluginParameterDescriptor parameter;
+        float value = 0.0f;
+    };
+
     using GestureCallback = std::function<void(const PluginParameterDescriptor&, float)>;
     std::function<juce::Result(const PluginParameterDescriptor&, float)> onValueChanged;
+    // Return nullopt to keep the usual per-control gestures outside Preview.
+    std::function<std::optional<juce::Result>(const std::vector<ResetValue>&)> onResetRequested;
     GestureCallback onGestureStarted;
     GestureCallback onGestureEnded;
     std::function<void(const PluginParameterDescriptor&)> onGestureCancelled;

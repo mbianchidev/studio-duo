@@ -579,8 +579,11 @@ the normal send/PDC/render graph.
 The original Basic Metal Kit remains program zero. Punk, Hardcore Punk,
 Death Metal, Modern Metal, and Deathcore profiles vary per-piece pitch, decay,
 brightness, saturation, gain, and room scaling. New voices snapshot their tone
-profile; program changes do not reset existing voices, and all preset decays
-remain bounded by the reported tail. The appended `kitPreset` choice parameter
+profile and room-preset routing. Preallocated stereo feedback histories for
+each preset preserve existing reflections while new hits use the new preset;
+the Room parameter remains live and automatable. Reset clears every room
+history, and all preset decays remain bounded by the reported tail.
+The appended `kitPreset` choice parameter
 preserves the original eight parameter indices and shares the JUCE program,
 native editor, drum-pad, automation, and offline-render paths. Schema-3 drum
 state stores a stable preset ID, normalized mix controls, and per-shell head,
@@ -603,6 +606,12 @@ controls on the synthesized kit, not a sampled kit or a full physical simulation
 popup with audition and per-drum reset. It uses the existing engine parameter
 and automation gesture paths, reflects host changes without feedback, preserves
 active numeric edits during polling, and reports/rolls back failed edits.
+An armed Preview reset submits its changed shell controls as one
+`AutomationPreview` batch instead of ending independent parameter gestures.
+Staging leaves live parameters and project lanes untouched; commit prepares all
+lanes, uses the existing rollback-capable `BatchProjectCommand`, and clears the
+pending batch only on success. Single-control Preview gestures still replace
+the previous preview, and non-Preview resets retain their usual gestures.
 
 `AmpDeviceProcessor` shares nonlinear preamp, tone, bass-blend, cabinet, and
 state code between the in-app device and plugin targets. Cabinet decoding,

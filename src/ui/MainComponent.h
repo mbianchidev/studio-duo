@@ -16,6 +16,7 @@
 #include "UserGuideComponent.h"
 #include "audio/StudioAudioDeviceManager.h"
 #include "audio/StudioAudioEngine.h"
+#include "automation/AutomationRecorder.h"
 #include "dawproject_io/DawProjectIO.h"
 #include "model/LinkedEditModel.h"
 #include "model/ProjectCommands.h"
@@ -98,16 +99,6 @@ private:
         juce::String laneName;
         double startSeconds = 0.0;
         double startValue = 0.0;
-    };
-
-    struct AutomationPreview
-    {
-        AutomationTarget target;
-        juce::String laneName;
-        double startSeconds = 0.0;
-        double endSeconds = 0.0;
-        double startValue = 0.0;
-        double endValue = 0.0;
     };
 
     void timerCallback() override;
@@ -362,7 +353,7 @@ private:
     std::vector<ActiveRecordingTarget> activeRecordingTargets;
     std::vector<juce::String> activeMidiRecordingTrackIds;
     std::optional<ActiveAutomationGesture> activeAutomationGesture;
-    std::optional<AutomationPreview> pendingAutomationPreview;
+    AutomationPreview pendingAutomationPreview;
     RecordingPlan activeRecordingPlan;
     double recordingStartSeconds = 0.0;
     juce::String selectedTrackId;

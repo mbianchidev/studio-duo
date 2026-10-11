@@ -2,6 +2,7 @@
 #include "TestSuites.h"
 
 #include "audio/StudioAudioEngine.h"
+#include "automation/AutomationRecorder.h"
 #include "devices/DrumDeviceProcessor.h"
 #include "midi/MidiCaptureBuffer.h"
 #include "midi/MidiEditing.h"
@@ -629,6 +630,174 @@ void drumKitTuningEditor()
     tuner.setParameters({});
     expect(!batter->isEnabled() && !wires->isEnabled() && !tap->isEnabled() && !reset->isEnabled(),
            "Removed or unavailable instruments disable tuning instead of applying silent defaults.");
+}
+
+void drumKitTuningPreviewReset()
+{
+    studio::DrumDeviceProcessor drums;
+    std::vector<studio::PluginParameterDescriptor> original;
+    for (int index = 0; index < drums.getParameters().size(); ++index)
+    {
+        const auto* parameter = dynamic_cast<const juce::RangedAudioParameter*>(
+            drums.getParameters()[index]);
+        expect(parameter != nullptr, "Preview reset fixtures use identified drum parameters.");
+        if (parameter == nullptr)
+            return;
+        original.push_back({ index, parameter->paramID, parameter->getName(128),
+                             parameter->getValue(), parameter->isAutomatable() });
+    }
+    for (int scenario = 0; scenario <= studio::DrumDeviceProcessor::tunableDrumCount; ++scenario)
+    {
+        const auto neutralResonant = scenario == studio::DrumDeviceProcessor::tunableDrumCount;
+        const auto selectedDrum = neutralResonant ? 1 : scenario;
+        auto parameters = original;
+        for (auto& parameter : parameters)
+        {
+            if (parameter.id == "kitPreset")
+                parameter.value = 0.6f;
+            for (const auto& setting : studio::DrumDeviceProcessor::kitTuningParameters())
+                if (setting.drum == selectedDrum && parameter.id == setting.id
+                    && !(neutralResonant && parameter.id == "snareResonant"))
+                    parameter.value = 0.8f;
+        }
+        const auto beforeParameters = parameters;
+        const auto valuesUnchanged = [&]
+        {
+            return parameters.size() == beforeParameters.size()
+                && std::equal(parameters.cbegin(), parameters.cend(), beforeParameters.cbegin(),
+                [](const auto& left, const auto& right)
+                {
+                    return left.id == right.id && left.index == right.index
+                        && std::abs(left.value - right.value) < 0.0000001f;
+                });
+        };
+        auto project = studio::Project::createDefault();
+        const auto trackId = project.tracks.front().id;
+        studio::PluginInsert insert;
+        insert.name = "Preview drums";
+        insert.pluginIdentifier = "studio.device.drum-composer";
+        insert.bundledDevice = true;
+        project.tracks.front().inserts.push_back(insert);
+        const auto beforeProject = juce::JSON::toString(project.toVar(), false);
+        studio::CommandStack history;
+        studio::AutomationPreview preview;
+        studio::DrumKitTuningComponent tuner(parameters, selectedDrum);
+        auto* reset = dynamic_cast<juce::TextButton*>(tuner.findChildWithID("kit-reset"));
+        auto* status = dynamic_cast<juce::Label*>(tuner.findChildWithID("kit-tuning-status"));
+        expect(reset != nullptr && reset->isEnabled() && status != nullptr,
+               "Every tunable shell has an available reset and a visible Preview status.");
+        if (reset == nullptr || status == nullptr)
+            return;
+        auto writes = 0;
+        auto starts = 0;
+        auto ends = 0;
+        auto cancellations = 0;
+        auto resetRequests = 0;
+        auto available = true;
+        auto previewEnabled = true;
+        auto rejectReset = true;
+        juce::String failure;
+        tuner.onRefreshParameters = [&]
+        {
+            return available ? parameters : std::vector<studio::PluginParameterDescriptor> {};
+        };
+        tuner.onValueChanged = [&](const auto& parameter, float value)
+        {
+            ++writes;
+            parameters[static_cast<std::size_t>(parameter.index)].value = value;
+            return juce::Result::ok();
+        };
+        tuner.onGestureStarted = [&](const auto&, float) { ++starts; };
+        tuner.onGestureEnded = [&](const auto&, float) { ++ends; };
+        tuner.onGestureCancelled = [&](const auto&) { ++cancellations; };
+        tuner.onStatus = [&](const auto& message, bool error) { if (error) failure = message; };
+        tuner.onResetRequested = [&](const std::vector<studio::DrumKitTuningComponent::ResetValue>& changes)
+            -> std::optional<juce::Result>
+        {
+            ++resetRequests;
+            if (!previewEnabled)
+                return std::nullopt;
+            if (rejectReset)
+                return juce::Result::fail("Synthetic preview reset failure");
+            std::vector<studio::AutomationPreviewTarget> targets;
+            for (const auto& change : changes)
+            {
+                studio::AutomationTarget target;
+                target.type = studio::AutomationTargetType::deviceParameter;
+                target.trackId = trackId;
+                target.insertId = insert.id;
+                target.parameterId = change.parameter.id;
+                target.parameterIndex = change.parameter.index;
+                targets.push_back({ target, change.parameter.name, 1.25, 1.25,
+                                    change.parameter.value, change.value });
+            }
+            return preview.stageReset(std::move(targets));
+        };
+        reset->onClick();
+        expect(preview.empty() && valuesUnchanged() && writes == 0 && starts == 0 && ends == 0
+                   && failure == "Synthetic preview reset failure",
+               "A failed Preview reset reports its error without changing live controls or recording gestures.");
+        rejectReset = false;
+        reset->onClick();
+        const auto expectedChanges = (selectedDrum == 1 ? 4 : 3) - (neutralResonant ? 1 : 0);
+        expect(static_cast<int>(preview.targets().size()) == expectedChanges && valuesUnchanged()
+                   && writes == 0 && starts == 0 && ends == 0 && cancellations == 0
+                   && status->getText().contains("COMMIT PREVIEW")
+                   && juce::JSON::toString(project.toVar(), false) == beforeProject,
+               "Preview reset captures all changed controls on the selected shell without touching live sound or project state.");
+        expect(preview.commit(project, history).wasOk()
+                   && static_cast<int>(project.automationLanes.size()) == expectedChanges,
+               "The reset button's actual Preview batch commits every changed shell control.");
+        for (const auto& setting : studio::DrumDeviceProcessor::kitTuningParameters())
+        {
+            if (setting.drum != selectedDrum)
+                continue;
+            const auto lane = std::find_if(
+                project.automationLanes.cbegin(), project.automationLanes.cend(),
+                [&](const auto& candidate)
+                {
+                    return candidate.target.trackId == trackId && candidate.target.insertId == insert.id
+                        && candidate.target.parameterId == setting.id;
+                });
+            const auto normalized = static_cast<float>(
+                (setting.defaultValue - setting.minimum) / (setting.maximum - setting.minimum));
+            if (neutralResonant && juce::String(setting.id) == "snareResonant")
+                expect(lane == project.automationLanes.cend(),
+                       "A shell control already at its default is not added to the reset preview.");
+            else
+                expect(lane != project.automationLanes.cend()
+                           && !lane->points.empty()
+                           && std::abs(lane->points.back().value - normalized) < 0.000001,
+                       "Each changed head, damping, and snare-wire control commits its neutral value.");
+        }
+        expect(history.undo(project) && !history.canUndo()
+                   && juce::JSON::toString(project.toVar(), false) == beforeProject,
+               "Every shell's reset preview is one undo operation.");
+        previewEnabled = false;
+        reset->onClick();
+        expect(writes == expectedChanges && starts == expectedChanges && ends == expectedChanges
+                   && cancellations == 0 && preview.empty(),
+               "Outside Preview, reset preserves the existing true per-control edit gestures.");
+        for (const auto& parameter : parameters)
+        {
+            const auto setting = std::find_if(
+                studio::DrumDeviceProcessor::kitTuningParameters().cbegin(),
+                studio::DrumDeviceProcessor::kitTuningParameters().cend(),
+                [&](const auto& candidate)
+                { return candidate.drum == selectedDrum && parameter.id == candidate.id; });
+            const auto expected = setting == studio::DrumDeviceProcessor::kitTuningParameters().cend()
+                ? beforeParameters[static_cast<std::size_t>(parameter.index)].value
+                : (setting->defaultValue - setting->minimum) / (setting->maximum - setting->minimum);
+            expect(std::abs(parameter.value - expected) < 0.000001,
+                   "Normal reset restores the selected shell while retaining the genre preset and every other drum.");
+        }
+        available = false;
+        const auto beforeUnavailable = resetRequests;
+        reset->onClick();
+        expect(!reset->isEnabled() && resetRequests == beforeUnavailable
+                   && writes == expectedChanges && failure.containsIgnoreCase("unavailable"),
+               "A runtime removed before reset disables the controls and refuses the whole operation.");
+    }
 }
 
 void targetedSoftwareMidi()
@@ -1972,6 +2141,7 @@ void midiTests()
     drumPerformanceKeyboard();
     drumSoundPresetControl();
     drumKitTuningEditor();
+    drumKitTuningPreviewReset();
     targetedSoftwareMidi();
     alternateDrumEditor();
     drumCaptureFidelity();
