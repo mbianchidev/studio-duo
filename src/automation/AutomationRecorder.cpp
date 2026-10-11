@@ -1,5 +1,7 @@
 #include "AutomationRecorder.h"
 
+#include "model/ProjectCommands.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -149,5 +151,105 @@ std::optional<AutomationLane> AutomationRecorder::writeGesture(
         gesture.startValue
     });
     return applyGesture(created, mode, gesture);
+}
+
+juce::Result AutomationPreview::stage(std::vector<AutomationPreviewTarget> targetsToStage)
+{
+    return stageTargets(std::move(targetsToStage), false);
+}
+
+juce::Result AutomationPreview::stageReset(std::vector<AutomationPreviewTarget> targetsToStage)
+{
+    return stageTargets(std::move(targetsToStage), true);
+}
+
+juce::Result AutomationPreview::stageTargets(
+    std::vector<AutomationPreviewTarget> targetsToStage, bool changedOnly)
+{
+    if (targetsToStage.empty())
+        return juce::Result::ok();
+    for (auto iterator = targetsToStage.begin(); iterator != targetsToStage.end(); ++iterator)
+    {
+        if (!std::isfinite(iterator->startSeconds) || iterator->startSeconds < 0.0
+            || !std::isfinite(iterator->endSeconds) || iterator->endSeconds < 0.0
+            || !std::isfinite(iterator->startValue) || !std::isfinite(iterator->endValue))
+            return juce::Result::fail("The automation preview contains an invalid gesture.");
+        if (std::any_of(targetsToStage.begin(), iterator, [&iterator](const auto& candidate)
+            { return candidate.target == iterator->target; }))
+            return juce::Result::fail("The automation preview contains a duplicate target.");
+        iterator->startValue = juce::jlimit(0.0, 1.0, iterator->startValue);
+        iterator->endValue = juce::jlimit(0.0, 1.0, iterator->endValue);
+    }
+    if (changedOnly)
+        targetsToStage.erase(
+            std::remove_if(targetsToStage.begin(), targetsToStage.end(), [this](const auto& target)
+                {
+                    // Live parameters are reverted in Preview; reset also replaces pending offsets.
+                    return std::abs(target.startValue - target.endValue) < 0.000001
+                        && std::none_of(pendingTargets.cbegin(), pendingTargets.cend(),
+                            [&target](const auto& pending)
+                            {
+                                return pending.target == target.target
+                                    && std::abs(pending.endValue - target.endValue) >= 0.000001;
+                            });
+                }),
+            targetsToStage.end());
+    if (targetsToStage.empty())
+        return juce::Result::ok();
+    pendingTargets = std::move(targetsToStage);
+    return juce::Result::ok();
+}
+
+juce::Result AutomationPreview::commit(Project& project, CommandStack& history)
+{
+    if (empty())
+        return juce::Result::fail("No automation preview is ready.");
+    std::vector<std::unique_ptr<ProjectCommand>> commands;
+    for (const auto& preview : pendingTargets)
+    {
+        const auto lane = std::find_if(
+            project.automationLanes.cbegin(), project.automationLanes.cend(),
+            [&preview](const auto& candidate) { return candidate.target == preview.target; });
+        const auto timebase = lane != project.automationLanes.cend()
+            ? lane->timebase : AutomationTimebase::seconds;
+        const auto positionFor = [&project, timebase](double seconds)
+        {
+            return timebase == AutomationTimebase::beats ? project.beatsAt(seconds) : seconds;
+        };
+        const auto written = AutomationRecorder::writeGesture(
+            lane != project.automationLanes.cend() ? &*lane : nullptr,
+            preview.target, preview.laneName, AutomationMode::write,
+            { positionFor(preview.startSeconds), positionFor(preview.endSeconds),
+              preview.startValue, preview.endValue });
+        if (!written.has_value())
+            return juce::Result::fail("The automation preview could not be prepared.");
+        if (lane == project.automationLanes.cend())
+            commands.push_back(std::make_unique<AddAutomationLaneCommand>(*written));
+        else
+            commands.push_back(std::make_unique<SetAutomationLaneCommand>(*lane, *written));
+    }
+    auto command = commands.size() == 1
+        ? std::move(commands.front())
+        : std::make_unique<BatchProjectCommand>("Commit automation preview", std::move(commands));
+    juce::String error;
+    if (!history.perform(std::move(command), project, error))
+        return juce::Result::fail(error);
+    reset();
+    return juce::Result::ok();
+}
+
+void AutomationPreview::reset()
+{
+    pendingTargets.clear();
+}
+
+bool AutomationPreview::empty() const noexcept
+{
+    return pendingTargets.empty();
+}
+
+const std::vector<AutomationPreviewTarget>& AutomationPreview::targets() const noexcept
+{
+    return pendingTargets;
 }
 }

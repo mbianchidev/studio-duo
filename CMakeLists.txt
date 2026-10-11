@@ -477,6 +477,8 @@ target_sources(
         src/ui/MidiEditorComponent.h
         src/ui/DrumPerformanceComponent.cpp
         src/ui/DrumPerformanceComponent.h
+        src/ui/DrumKitTuningComponent.cpp
+        src/ui/DrumKitTuningComponent.h
         src/ui/AutomationPanel.cpp
         src/ui/AutomationPanel.h
         src/ui/MixerPanel.cpp
@@ -733,6 +735,9 @@ set_target_properties(
     PROPERTIES
         PREFIX ""
         OUTPUT_NAME "StudioDuoBundledDevices"
+        C_VISIBILITY_PRESET hidden
+        CXX_VISIBILITY_PRESET hidden
+        VISIBILITY_INLINES_HIDDEN TRUE
 )
 if(APPLE)
     set_target_properties(
@@ -928,6 +933,8 @@ if(STUDIO_DUO_BUILD_TESTS)
             src/ui/MidiEditorComponent.h
             src/ui/DrumPerformanceComponent.cpp
             src/ui/DrumPerformanceComponent.h
+            src/ui/DrumKitTuningComponent.cpp
+            src/ui/DrumKitTuningComponent.h
             src/ui/StartupHubComponent.cpp
             src/ui/StartupHubComponent.h
             src/audio/StudioAudioDeviceManager.cpp
@@ -1002,6 +1009,11 @@ if(STUDIO_DUO_BUILD_TESTS)
         )
     endif()
     if(APPLE)
+        set_property(
+            SOURCE tests/BundledDeviceTests.cpp
+            APPEND PROPERTY COMPILE_DEFINITIONS
+                STUDIO_DUO_BUNDLED_CLAP_PATH="$<TARGET_BUNDLE_DIR:StudioDuoBundledDevicesClap>"
+        )
         target_compile_definitions(
             StudioDuoTests
             PRIVATE
@@ -1012,6 +1024,11 @@ if(STUDIO_DUO_BUILD_TESTS)
                 STUDIO_DUO_BRIDGE_WORKER_PATH="$<TARGET_FILE:StudioDuo>"
         )
     else()
+        set_property(
+            SOURCE tests/BundledDeviceTests.cpp
+            APPEND PROPERTY COMPILE_DEFINITIONS
+                STUDIO_DUO_BUNDLED_CLAP_PATH="$<TARGET_FILE:StudioDuoBundledDevicesClap>"
+        )
         target_compile_definitions(
             StudioDuoTests
             PRIVATE
@@ -1028,6 +1045,7 @@ if(STUDIO_DUO_BUILD_TESTS)
         StudioDuoDdpEncoderFixture
         StudioDuoAraFixture_VST3
         StudioDuoClapFixture
+        StudioDuoBundledDevicesClap
         StudioDuoRoutingFixture_VST3
     )
     if(APPLE)
