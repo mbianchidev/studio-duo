@@ -122,7 +122,8 @@ void rackRenderAndMidiTests()
     gainProcessor->getParameters()[0]->setValue(0.625f);
     juce::MemoryBlock gainState;
     gainProcessor->getStateInformation(gainState);
-    studio::StudioAudioEngine engine;
+    const auto engineStorage = std::make_unique<studio::StudioAudioEngine>();
+    auto& engine = *engineStorage;
     juce::AudioBuffer<float> rendered;
     const studio::StudioAudioEngine::RenderRange range { 0.0, 2048.0 / 48000.0, 0.0 };
     const auto result = engine.renderRangeToBuffer(project, rendered, 48000.0, range,
@@ -162,7 +163,8 @@ void rackRenderAndMidiTests()
     auto drum = device("studio.device.drum-composer", {});
     instrument.inserts = { drum };
     midiProject.tracks.insert(midiProject.tracks.end() - 1, instrument);
-    studio::StudioAudioEngine referenceEngine;
+    const auto referenceStorage = std::make_unique<studio::StudioAudioEngine>();
+    auto& referenceEngine = *referenceStorage;
     expect(referenceEngine.updateProject(midiProject, requestsFor(midiProject)).wasOk()
                && waitForRuntime(referenceEngine), "The reference bundled instrument is ready.");
     juce::MidiBuffer midi;
@@ -174,7 +176,8 @@ void rackRenderAndMidiTests()
     drum.containerId = branchA.id;
     secondDrum.containerId = branchB.id;
     midiProject.findTrack(instrument.id)->inserts = { outer, splitter, branchA, drum, branchB, secondDrum };
-    studio::StudioAudioEngine layeredEngine;
+    const auto layeredStorage = std::make_unique<studio::StudioAudioEngine>();
+    auto& layeredEngine = *layeredStorage;
     expect(layeredEngine.updateProject(midiProject, requestsFor(midiProject)).wasOk()
                && waitForRuntime(layeredEngine), "Nested parallel instrument branches are ready.");
     const auto layered = layeredEngine.renderActiveBlockWithMidiForTesting(midi, 1024);
@@ -201,7 +204,8 @@ void rackRenderAndMidiTests()
     midiRoute.sourceTrackId = source.id;
     midiRoute.destination.trackId = instrument.id;
     midiProject.routingConnections.push_back(midiRoute);
-    studio::StudioAudioEngine midiEngine;
+    const auto midiStorage = std::make_unique<studio::StudioAudioEngine>();
+    auto& midiEngine = *midiStorage;
     expect(midiEngine.updateProject(midiProject, requestsFor(midiProject)).wasOk()
                && waitForRuntime(midiEngine), "A parallel MIDI rack routes to a downstream instrument.");
     juce::ignoreUnused(midiEngine.renderActiveBlockWithMidiForTesting(midi, 1024));
@@ -235,7 +239,8 @@ void rackRenderAndMidiTests()
             parameter->setValue(0.0f);
     juce::MemoryBlock stemState;
     stemProcessor->getStateInformation(stemState);
-    studio::StudioAudioEngine plainStemEngine;
+    const auto plainStemStorage = std::make_unique<studio::StudioAudioEngine>();
+    auto& plainStemEngine = *plainStemStorage;
     expect(plainStemEngine.updateProject(stemProject, requestsFor(stemProject, { { drum.id, stemState } })).wasOk()
                && waitForRuntime(plainStemEngine), "The mock bundled auxiliary output is ready.");
     const auto plainStem = plainStemEngine.renderActiveBlockWithMidiForTesting(midi, 1024);
@@ -243,7 +248,8 @@ void rackRenderAndMidiTests()
     outer.gainDecibels = -6.0206f;
     drum.containerId = outer.id;
     stemProject.findTrack(instrument.id)->inserts = { outer, drum };
-    studio::StudioAudioEngine nestedStemEngine;
+    const auto nestedStemStorage = std::make_unique<studio::StudioAudioEngine>();
+    auto& nestedStemEngine = *nestedStemStorage;
     expect(nestedStemEngine.updateProject(stemProject, requestsFor(stemProject, { { drum.id, stemState } })).wasOk()
                && waitForRuntime(nestedStemEngine), "The serial-rack auxiliary output is ready.");
     const auto nestedStem = nestedStemEngine.renderActiveBlockWithMidiForTesting(midi, 1024);
@@ -278,7 +284,8 @@ void pluginRackEngineTests()
     invert->getParameters()[0]->setValue(1.0f);
     juce::MemoryBlock invertState;
     invert->getStateInformation(invertState);
-    studio::StudioAudioEngine engine;
+    const auto engineStorage = std::make_unique<studio::StudioAudioEngine>();
+    auto& engine = *engineStorage;
     expect(engine.updateProject(project, requestsFor(project, { { polarity.id, invertState } })).wasOk()
                && waitForRuntime(engine),
            "Parallel branches prepare their ordinary plugin runtimes.");
@@ -363,7 +370,8 @@ void pluginRackEngineTests()
     externalRequest.name = "Dynamic rack fixture";
     externalRequest.description = *descriptions[0];
     externalRequest.bridgeMode = studio::PluginBridgeMode::trustedInProcess;
-    studio::StudioAudioEngine dynamicEngine;
+    const auto dynamicStorage = std::make_unique<studio::StudioAudioEngine>();
+    auto& dynamicEngine = *dynamicStorage;
     expect(dynamicEngine.updateProject(dynamicProject, { externalRequest }).wasOk()
                && waitForRuntime(dynamicEngine)
                && dynamicEngine.parallelBranchDelaysForTesting() == std::vector<int> { 0, 0 },

@@ -89,6 +89,10 @@ Use the configuration subdirectory with multi-configuration generators or
 when an explicit `CMAKE_BUILD_TYPE` adds it to the JUCE artefact path.
 Unknown suite names fail instead of silently running nothing.
 
+Multi-engine test fixtures keep `StudioAudioEngine` instances on the heap:
+their fixed MIDI trace arrays can exceed Windows's default 1 MiB stack when
+several engines share a test frame.
+
 Plugin fixture paths, including `STUDIO_DUO_BUNDLED_CLAP_PATH`, must remain
 target-level compile definitions. Xcode cannot resolve configuration-dependent
 source-file definitions and substitutes `NO-PER-CONFIG-SUPPORT-IN-XCODE` instead
