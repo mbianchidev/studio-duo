@@ -43,6 +43,9 @@ hardening remains before the complete DAW described in the
 - A ready-to-play drum-track preset and twelve visual performance pads with
   saved sound/key assignments, velocity accents, track-isolated live recording,
   and the existing song transport, click, and MIDI editing workflow
+- An alternate drum geometry view with colored rhythm rings, connected hit
+  patterns, velocity-sized dots, a named voice legend, and a tempo-aware playback
+  sweep over the same editable MIDI clip
 - A deterministic bundled metal drum instrument with velocity, round robin,
   cymbal chokes/foot control, synthesized Punk, Hardcore Punk, Death Metal,
   Modern Metal, and Deathcore sound presets, individual batter/resonant head

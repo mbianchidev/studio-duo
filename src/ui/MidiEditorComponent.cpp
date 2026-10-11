@@ -44,6 +44,9 @@ MidiEditorComponent::MidiEditorComponent()
     };
     addButton(modeButton, "Switch between piano roll and metal drum editor");
     addButton(padsButton, "Open visual drum pads and keyboard performance without replacing the MIDI grid");
+    addButton(geometryButton, "Visualize this clip as circular drum rhythms without changing its notes");
+    geometryButton.setComponentID("midi-geometry-view");
+    geometryButton.setTitle("Drum geometry view");
     addButton(captureButton, "Capture recent MIDI input (Command/Ctrl+Shift+M)");
     addButton(humanizeButton, "Apply deterministic seeded timing and velocity humanization");
     addButton(importMapButton, "Import a Studio Duo drum-map JSON file");
@@ -105,14 +108,16 @@ MidiEditorComponent::MidiEditorComponent()
         const auto* clip = currentClip();
         if (clip == nullptr)
             return;
-        showingPads = false;
+        view = View::grid;
         changeEditorMode(clip->editorMode == MidiEditorMode::drums
             ? MidiEditorMode::pianoRoll
             : MidiEditorMode::drums);
         refreshControls();
     };
-    padsButton.onClick = [this] { showDrumPads(!showingPads); };
+    padsButton.onClick = [this] { showDrumPads(!isShowingDrumPads()); };
+    geometryButton.onClick = [this] { showDrumGeometry(!isShowingDrumGeometry()); };
     addChildComponent(drumPerformancePanel);
+    addChildComponent(drumGeometryPanel);
     drumPerformancePanel.onBindingsEdited = [this](const auto& bindings)
     {
         const auto* clip = currentClip();
@@ -197,7 +202,7 @@ void MidiEditorComponent::setSelection(juce::String trackId,
                                        juce::String clipId)
 {
     if (trackId != selectedTrackId)
-        showingPads = false;
+        view = View::grid;
     const auto changedClip = clipId != selectedClipId;
     if (changedClip)
     {
@@ -210,8 +215,8 @@ void MidiEditorComponent::setSelection(juce::String trackId,
     selectedTrackId = std::move(trackId);
     selectedClipId = std::move(clipId);
     if (const auto* clip = currentClip();
-        clip == nullptr || clip->editorMode != MidiEditorMode::drums)
-        showingPads = false;
+        clip == nullptr || (isShowingDrumPads() && clip->editorMode != MidiEditorMode::drums))
+        view = View::grid;
     if (const auto* clip = currentClip(); clip != nullptr && !clip->notes.empty())
     {
         cursorPitch = clip->notes.front().pitch;
@@ -276,8 +281,8 @@ void MidiEditorComponent::changeEditorMode(MidiEditorMode mode)
 void MidiEditorComponent::showDrumPads(bool show)
 {
     const auto* clip = currentClip();
-    showingPads = show && clip != nullptr;
-    if (showingPads
+    view = show && clip != nullptr ? View::pads : View::grid;
+    if (isShowingDrumPads()
         && (clip->editorMode != MidiEditorMode::drums || clip->drumMapId.isEmpty()))
         changeEditorMode(MidiEditorMode::drums);
     refreshControls();
@@ -286,7 +291,30 @@ void MidiEditorComponent::showDrumPads(bool show)
 
 bool MidiEditorComponent::isShowingDrumPads() const noexcept
 {
-    return showingPads;
+    return view == View::pads;
+}
+
+void MidiEditorComponent::showDrumGeometry(bool show)
+{
+    view = show && currentClip() != nullptr ? View::geometry : View::grid;
+    dragBefore.reset();
+    dragPreview.reset();
+    dragMode = DragMode::none;
+    refreshControls();
+    repaint();
+}
+
+bool MidiEditorComponent::isShowingDrumGeometry() const noexcept
+{
+    return view == View::geometry;
+}
+
+void MidiEditorComponent::setTransportPosition(double positionSeconds, bool playing)
+{
+    transportSeconds = positionSeconds;
+    transportPlaying = playing;
+    drumGeometryPanel.setTransportPosition(
+        project != nullptr ? project->beatsAt(positionSeconds) : 0.0, playing);
 }
 
 DrumPerformanceComponent& MidiEditorComponent::drumPerformance() noexcept
@@ -298,13 +326,13 @@ void MidiEditorComponent::paint(juce::Graphics& graphics)
 {
     graphics.fillAll(juce::Colour(StudioColours::window));
     graphics.setColour(juce::Colour(StudioColours::panel));
-    graphics.fillRect(0, 0, getWidth(), toolbarHeight);
+    graphics.fillRect(0, 0, getWidth(), toolbarHeight());
     graphics.setColour(juce::Colour(StudioColours::border));
     graphics.drawHorizontalLine(
-        toolbarHeight - 1,
+        toolbarHeight() - 1,
         0.0f,
         static_cast<float>(getWidth()));
-    if (showingPads)
+    if (view != View::grid)
         return;
 
     const auto* clipPointer = currentClip();
@@ -314,7 +342,7 @@ void MidiEditorComponent::paint(juce::Graphics& graphics)
         graphics.setFont(14.0f);
         graphics.drawText(
             "Select a MIDI clip to edit.",
-            getLocalBounds().withTrimmedTop(toolbarHeight),
+            getLocalBounds().withTrimmedTop(toolbarHeight()),
             juce::Justification::centred);
         return;
     }
@@ -596,43 +624,57 @@ void MidiEditorComponent::paint(juce::Graphics& graphics)
 
 void MidiEditorComponent::resized()
 {
-    auto toolbar = getLocalBounds().removeFromTop(toolbarHeight).reduced(6, 4);
+    auto toolbar = getLocalBounds().removeFromTop(toolbarHeight()).reduced(6, 4);
     auto first = toolbar.removeFromTop(28);
     toolbar.removeFromTop(4);
     auto second = toolbar.removeFromTop(28);
+    toolbar.removeFromTop(4);
+    auto third = toolbar.removeFromTop(28);
+    toolbar.removeFromTop(4);
+    auto fourth = toolbar.removeFromTop(28);
     closeButton.setBounds(first.removeFromRight(36).reduced(2));
     modeButton.setBounds(first.removeFromLeft(72).reduced(2));
     padsButton.setBounds(first.removeFromLeft(94).reduced(2));
-    if (showingPads)
+    geometryButton.setBounds(first.removeFromLeft(98).reduced(2));
+    if (view != View::grid)
     {
         captureButton.setBounds(first.removeFromLeft(78).reduced(2));
         importMapButton.setBounds(first.removeFromLeft(36).reduced(2));
-        drumPerformancePanel.setBounds(getLocalBounds().withTrimmedTop(36));
+        const auto content = getLocalBounds().withTrimmedTop(toolbarHeight());
+        drumPerformancePanel.setBounds(content);
+        drumGeometryPanel.setBounds(content);
         return;
     }
-    laneSelector.setBounds(first.removeFromLeft(112).reduced(2));
-    expressionSelector.setBounds(first.removeFromLeft(
+    const auto narrow = getWidth() < 700;
+    const auto compact = getWidth() < 900;
+    auto& propertyRow = narrow ? second : first;
+    laneSelector.setBounds(propertyRow.removeFromLeft(112).reduced(2));
+    expressionSelector.setBounds(propertyRow.removeFromLeft(
         expressionSelector.isVisible() ? 104 : 0).reduced(2));
-    gridSelector.setBounds(first.removeFromLeft(76).reduced(2));
-    captureButton.setBounds(first.removeFromLeft(78).reduced(2));
-    humanizeButton.setBounds(first.removeFromLeft(92).reduced(2));
+    gridSelector.setBounds(propertyRow.removeFromLeft(76).reduced(2));
+    auto& utilityRow = narrow ? first : compact ? second : first;
+    captureButton.setBounds(utilityRow.removeFromLeft(78).reduced(2));
+    humanizeButton.setBounds(utilityRow.removeFromLeft(92).reduced(2));
     importMapButton.setBounds(first.removeFromLeft(36).reduced(2));
     editMapButton.setBounds(first.removeFromLeft(36).reduced(2));
 
-    flamButton.setBounds(second.removeFromLeft(66).reduced(2));
-    rollButton.setBounds(second.removeFromLeft(66).reduced(2));
-    gravityButton.setBounds(second.removeFromLeft(78).reduced(2));
-    blastButton.setBounds(second.removeFromLeft(66).reduced(2));
-    doubleKickButton.setBounds(second.removeFromLeft(100).reduced(2));
-    patternSelector.setBounds(second.removeFromLeft(142).reduced(2));
-    expandPatternButton.setBounds(second.removeFromLeft(36).reduced(2));
-    routingTemplateSelector.setBounds(second.removeFromLeft(154).reduced(2));
-    applyRoutingButton.setBounds(second.removeFromLeft(112).reduced(2));
+    auto& toolsRow = narrow ? third : second;
+    flamButton.setBounds(toolsRow.removeFromLeft(66).reduced(2));
+    rollButton.setBounds(toolsRow.removeFromLeft(66).reduced(2));
+    gravityButton.setBounds(toolsRow.removeFromLeft(78).reduced(2));
+    blastButton.setBounds(toolsRow.removeFromLeft(66).reduced(2));
+    doubleKickButton.setBounds(toolsRow.removeFromLeft(100).reduced(2));
+    auto& patternRow = narrow ? second : compact ? third : second;
+    patternSelector.setBounds(patternRow.removeFromLeft(142).reduced(2));
+    expandPatternButton.setBounds(patternRow.removeFromLeft(36).reduced(2));
+    auto& routingRow = narrow ? fourth : patternRow;
+    routingTemplateSelector.setBounds(routingRow.removeFromLeft(154).reduced(2));
+    applyRoutingButton.setBounds(routingRow.removeFromLeft(112).reduced(2));
 }
 
 void MidiEditorComponent::mouseDown(const juce::MouseEvent& event)
 {
-    if (currentClip() == nullptr)
+    if (view != View::grid || currentClip() == nullptr)
         return;
     grabKeyboardFocus();
     if (laneArea().contains(event.getPosition()))
@@ -760,7 +802,7 @@ void MidiEditorComponent::mouseWheelMove(
     const juce::MouseEvent& event,
     const juce::MouseWheelDetails& wheel)
 {
-    if (noteArea().contains(event.getPosition())
+    if (view == View::grid && noteArea().contains(event.getPosition())
         && std::abs(wheel.deltaY) > 0.0001f)
     {
         const auto direction = wheel.deltaY > 0.0f ? -1 : 1;
@@ -776,8 +818,10 @@ void MidiEditorComponent::mouseWheelMove(
 
 bool MidiEditorComponent::keyPressed(const juce::KeyPress& key)
 {
-    if (showingPads)
+    if (isShowingDrumPads())
         return drumPerformancePanel.keyPressed(key);
+    if (isShowingDrumGeometry())
+        return drumGeometryPanel.keyPressed(key);
     const auto command = key.getModifiers().isCommandDown();
     const auto shift = key.getModifiers().isShiftDown();
     if (command && shift && key.getKeyCode() == 'M')
@@ -1026,9 +1070,18 @@ const DrumMap* MidiEditorComponent::currentDrumMap() const
     return project->findDrumMap(clip->drumMapId);
 }
 
+int MidiEditorComponent::toolbarHeight() const noexcept
+{
+    if (view != View::grid)
+        return 36;
+    if (getWidth() < 700)
+        return 138;
+    return getWidth() < 900 ? 104 : 70;
+}
+
 juce::Rectangle<int> MidiEditorComponent::noteArea() const
 {
-    auto area = getLocalBounds().withTrimmedTop(toolbarHeight);
+    auto area = getLocalBounds().withTrimmedTop(toolbarHeight());
     return area.withTrimmedBottom(
         std::min(laneHeight, std::max(48, area.getHeight() / 3)));
 }
@@ -1249,6 +1302,9 @@ void MidiEditorComponent::refreshControls()
 {
     const auto* clip = currentClip();
     const auto enabled = clip != nullptr;
+    if (!enabled)
+        view = View::grid;
+    const auto showingGrid = view == View::grid;
     const std::array<juce::Component*, 17> controls {
         &modeButton,
         &laneSelector,
@@ -1271,18 +1327,20 @@ void MidiEditorComponent::refreshControls()
     for (auto* component : controls)
     {
         component->setEnabled(enabled);
-        component->setVisible(!showingPads);
+        component->setVisible(showingGrid);
     }
     modeButton.setVisible(true);
     padsButton.setEnabled(enabled);
-    padsButton.setToggleState(showingPads, juce::dontSendNotification);
+    padsButton.setToggleState(isShowingDrumPads(), juce::dontSendNotification);
+    geometryButton.setEnabled(enabled);
+    geometryButton.setToggleState(isShowingDrumGeometry(), juce::dontSendNotification);
     captureButton.setVisible(true);
     modeButton.setButtonText(
         clip != nullptr && clip->editorMode == MidiEditorMode::drums
             ? "DRUMS"
             : "PIANO");
     editMapButton.setVisible(
-        !showingPads && clip != nullptr && clip->editorMode == MidiEditorMode::drums);
+        showingGrid && clip != nullptr && clip->editorMode == MidiEditorMode::drums);
     importMapButton.setVisible(
         clip != nullptr && clip->editorMode == MidiEditorMode::drums);
     for (auto* button : {
@@ -1292,11 +1350,19 @@ void MidiEditorComponent::refreshControls()
              &blastButton,
              &doubleKickButton })
         button->setVisible(
-            !showingPads && clip != nullptr && clip->editorMode == MidiEditorMode::drums);
+            showingGrid && clip != nullptr && clip->editorMode == MidiEditorMode::drums);
     expressionSelector.setVisible(
-        !showingPads && selectedLane() == MidiEditorLane::expression);
+        showingGrid && selectedLane() == MidiEditorLane::expression);
     drumPerformancePanel.setContext(selectedTrackId, clip, currentDrumMap());
-    drumPerformancePanel.setVisible(showingPads && enabled);
+    drumPerformancePanel.setVisible(isShowingDrumPads() && enabled);
+    const auto* geometryMap = clip != nullptr && project != nullptr
+        ? project->findDrumMap(clip->drumMapId) : nullptr;
+    const auto meter = clip != nullptr && project != nullptr
+        ? project->meterAt(project->secondsAtBeat(clip->startBeats)) : MeterChange {};
+    drumGeometryPanel.setContext(
+        clip, geometryMap, static_cast<double>(meter.numerator) * 4.0 / meter.denominator);
+    setTransportPosition(transportSeconds, transportPlaying);
+    drumGeometryPanel.setVisible(isShowingDrumGeometry() && enabled);
 
     patternSelector.clear(juce::dontSendNotification);
     routingTemplateSelector.clear(juce::dontSendNotification);

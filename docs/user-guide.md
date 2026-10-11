@@ -557,6 +557,30 @@ duration remain ordinary notes editable in either grid. Pad assignments are a
 Studio Duo editing preference; DAWproject exchange carries the resulting
 musical notes, not the keyboard layout.
 
+### Drum geometry
+
+Select a MIDI clip and choose **GEOMETRY** for a circular visualization instead
+of the note grid or **DRUM PADS**. One clockwise turn represents the whole clip,
+starting at the top. Each used drum voice has a colored ring; connecting its
+hits reveals the rhythm's shape. Larger dots are stronger hits, and dimmer dots
+have lower playback probability. Timing offsets stay visible as played rather
+than being snapped to a new grid.
+
+The voice list names each ring, its articulation, and its hit count. Click a
+voice or use `Up/Down` to highlight it; `Escape` shows all voices again. Named
+round-robin pitches share their mapped drum's ring without changing their
+played pitches. Unmapped sounds remain visible as numbered MIDI voices.
+
+During playback the sweep follows the selected clip's musical position and
+lights recently reached hits. Pausing keeps the current position; playback
+outside the selected clip hides the sweep. Song tempo changes, seeking, and
+looping use the existing transport.
+
+Geometry is read-only: it does not generate notes, alter the kit, change pad
+bindings, or add a new project format. Choose **GEOMETRY** again to return to the
+grid, or **DRUM PADS** to play the kit. Use the ordinary grid to edit the same
+notes. An empty clip explains how to add or record its first hits.
+
 ### Drum grid tools
 
 The **FLAM**, **ROLL**, **GRAVITY**, **BLAST**, and **DOUBLE KICK** tools insert

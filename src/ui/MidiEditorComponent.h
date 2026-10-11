@@ -2,6 +2,7 @@
 
 #include "StudioIconButton.h"
 #include "DrumPerformanceComponent.h"
+#include "DrumGeometryComponent.h"
 #include "midi/MidiEditing.h"
 #include "model/ProjectModel.h"
 
@@ -37,6 +38,9 @@ public:
     void setSelection(juce::String trackId, juce::String clipId);
     void showDrumPads(bool show = true);
     [[nodiscard]] bool isShowingDrumPads() const noexcept;
+    void showDrumGeometry(bool show = true);
+    [[nodiscard]] bool isShowingDrumGeometry() const noexcept;
+    void setTransportPosition(double positionSeconds, bool playing);
     [[nodiscard]] DrumPerformanceComponent& drumPerformance() noexcept;
 
     std::function<void(const juce::String&,
@@ -63,6 +67,13 @@ public:
     void focusLost(FocusChangeType cause) override;
 
 private:
+    enum class View
+    {
+        grid,
+        pads,
+        geometry
+    };
+
     enum class DragMode
     {
         none,
@@ -74,6 +85,7 @@ private:
     [[nodiscard]] const MidiClip* currentClip() const;
     [[nodiscard]] const MidiClip& displayedClip() const;
     [[nodiscard]] const DrumMap* currentDrumMap() const;
+    [[nodiscard]] int toolbarHeight() const noexcept;
     [[nodiscard]] juce::Rectangle<int> noteArea() const;
     [[nodiscard]] juce::Rectangle<int> laneArea() const;
     [[nodiscard]] int labelWidth() const noexcept;
@@ -116,11 +128,15 @@ private:
     double cursorBeat = 0.0;
     int cursorPitch = 60;
     int rowOffset = 0;
-    bool showingPads = false;
+    View view = View::grid;
+    double transportSeconds = 0.0;
+    bool transportPlaying = false;
 
     juce::TextButton modeButton { "PIANO" };
     juce::TextButton padsButton { "DRUM PADS" };
+    juce::TextButton geometryButton { "GEOMETRY" };
     DrumPerformanceComponent drumPerformancePanel;
+    DrumGeometryComponent drumGeometryPanel;
     juce::ComboBox laneSelector;
     juce::ComboBox expressionSelector;
     juce::ComboBox gridSelector;
@@ -155,7 +171,6 @@ private:
     juce::ComboBox routingTemplateSelector;
     juce::TextButton applyRoutingButton { "APPLY ROUTING" };
 
-    static constexpr int toolbarHeight = 70;
     static constexpr int laneHeight = 92;
     static constexpr int pianoRows = 24;
     static constexpr float minimumDrumRowHeight = 18.0f;

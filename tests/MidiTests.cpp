@@ -10,6 +10,7 @@
 #include "project_io/ProjectFile.h"
 #include "ui/MidiEditorComponent.h"
 #include "ui/DrumPerformanceComponent.h"
+#include "ui/DrumGeometryComponent.h"
 #include "ui/DrumKitTuningComponent.h"
 
 #include <algorithm>
@@ -870,6 +871,256 @@ void targetedSoftwareMidi()
     expect(engine.enqueueMidiInput(
                "missing-track", juce::MidiMessage::noteOff(1, 36)).failed(),
            "Software input to a missing track reports an error.");
+}
+
+void drumGeometryProjection()
+{
+    auto map = studio::createDefaultMetalDrumMap();
+    studio::MidiClip clip;
+    clip.durationBeats = 8.0;
+    const auto add = [&](int pitch, double beat, double offset, int velocity, double probability)
+    {
+        studio::MidiNote note;
+        note.pitch = pitch;
+        note.startBeats = beat;
+        note.timingOffsetBeats = offset;
+        note.durationBeats = 0.125;
+        note.velocity = velocity;
+        note.probability = probability;
+        clip.notes.push_back(note);
+    };
+    add(40, 6.0, 0.125, 64, 0.5);
+    add(35, 0.0, 0.0, 127, 1.0);
+    add(99, 4.0, 0.0, 96, 0.75);
+    add(38, 2.0, 0.25, 110, 1.0);
+    const auto before = juce::JSON::toString(clip.toVar(), false);
+    studio::DrumGeometryComponent geometry;
+    geometry.setSize(760, 294);
+    geometry.setContext(&clip, &map, 4.0);
+    const auto& rings = geometry.rings();
+    expect(rings.size() == 3,
+           "Geometry creates one ring per used drum-map voice, including unmapped MIDI notes.");
+    if (rings.size() != 3)
+        return;
+    expect(rings[0].pitch == 36 && rings[0].name == "Kick L"
+               && rings[0].hits.size() == 1 && rings[0].hits[0].pitch == 35
+               && rings[1].pitch == 38 && rings[1].name == "Snare"
+               && rings[1].hits.size() == 2
+               && rings[2].pitch == 99 && rings[2].name.contains("99"),
+           "Round-robin pitches share their named drum ring while custom pitches remain visible.");
+    expect(rings[0].hits[0].phase == 0.0
+               && std::abs(rings[1].hits[0].phase - 0.28125) < 0.0000001
+               && std::abs(rings[1].hits[1].phase - 0.765625) < 0.0000001
+               && rings[2].hits[0].phase == 0.5
+               && rings[1].hits[0].beat == 2.25
+               && rings[1].hits[1].noteId == clip.notes[0].id,
+           "Clockwise hit phases use actual performed timing and remain chronologically ordered.");
+    expect(rings[1].hits[1].velocity == 64
+               && rings[1].hits[1].probability == 0.5
+               && juce::JSON::toString(clip.toVar(), false) == before,
+           "Geometry retains velocity, probability, and stable note identity without editing the source.");
+
+    auto* legend = dynamic_cast<juce::ListBox*>(geometry.findChildWithID("geometry-legend"));
+    expect(legend != nullptr && legend->getListBoxModel() != nullptr
+               && legend->getListBoxModel()->getNumRows() == 3
+               && legend->getWantsKeyboardFocus(),
+           "Named rhythm rings are navigable with the native keyboard-accessible legend.");
+    if (legend != nullptr)
+    {
+        geometry.keyPressed(juce::KeyPress(juce::KeyPress::downKey));
+        expect(legend->getSelectedRow() == 0,
+               "Down selects the first rhythm voice from the geometry surface.");
+        geometry.keyPressed(juce::KeyPress(juce::KeyPress::downKey));
+        expect(legend->getSelectedRow() == 1,
+               "Arrow navigation reaches the next rhythm voice without a mouse.");
+        geometry.keyPressed(juce::KeyPress(juce::KeyPress::escapeKey));
+        expect(legend->getSelectedRow() < 0,
+               "Escape clears voice highlighting without leaving a keyboard trap.");
+    }
+    const auto image = geometry.createComponentSnapshot(geometry.getLocalBounds());
+    auto accentPixels = 0;
+    for (int y = 0; y < image.getHeight(); ++y)
+        for (int x = image.getWidth() / 3; x < image.getWidth(); ++x)
+        {
+            const auto colour = image.getPixelAt(x, y);
+            if (colour.getRed() > colour.getBlue() + 30
+                && colour.getRed() > colour.getGreen() + 20)
+                ++accentPixels;
+        }
+    expect(accentPixels > 50,
+           "The native geometry canvas renders colored drum rings and hit dots, not an empty surface.");
+
+    geometry.setContext(&clip, nullptr, 3.5);
+    expect(geometry.rings().size() == 4,
+           "A clip without a drum map still visualizes every played MIDI pitch.");
+    geometry.setContext(nullptr, &map, 4.0);
+    expect(geometry.rings().empty()
+               && geometry.getDescription().containsIgnoreCase("select a MIDI clip"),
+           "An absent clip clears geometry and gives an accessible selection hint.");
+}
+
+void drumGeometryTransport()
+{
+    auto map = studio::createDefaultMetalDrumMap();
+    studio::MidiClip clip;
+    clip.startBeats = 12.0;
+    clip.durationBeats = 8.0;
+    studio::DrumGeometryComponent geometry;
+    geometry.setContext(&clip, &map, 4.0);
+    const auto before = juce::JSON::toString(clip.toVar(), false);
+    geometry.setTransportPosition(14.0, true);
+    expect(geometry.playheadPhase().has_value()
+               && std::abs(*geometry.playheadPhase() - 0.25) < 0.0000001,
+           "Geometry playback is clip-relative and starts at the top of the rhythm wheel.");
+    geometry.setTransportPosition(16.0, false);
+    expect(geometry.playheadPhase().has_value()
+               && std::abs(*geometry.playheadPhase() - 0.5) < 0.0000001,
+           "Pausing or seeking retains the correct musical position in geometry.");
+    geometry.setTransportPosition(11.5, true);
+    expect(!geometry.playheadPhase().has_value(),
+           "Playback before the selected clip does not wrap into a false drum cycle.");
+    geometry.setTransportPosition(20.0, true);
+    expect(!geometry.playheadPhase().has_value(),
+           "The selected clip's exclusive end has no active geometry playhead.");
+    geometry.setTransportPosition(12.0, true);
+    expect(geometry.playheadPhase().has_value() && *geometry.playheadPhase() == 0.0
+               && juce::JSON::toString(clip.toVar(), false) == before,
+           "Looping back to the clip start resets only the visualization, not the MIDI performance.");
+    geometry.setTransportPosition(std::numeric_limits<double>::quiet_NaN(), true);
+    expect(!geometry.playheadPhase().has_value(),
+           "Invalid transport positions never produce non-finite drawing coordinates.");
+    geometry.setContext(nullptr, nullptr, 4.0);
+    expect(!geometry.playheadPhase().has_value(),
+           "Clearing the selection clears the geometry playhead.");
+
+    auto project = studio::Project::createDefault();
+    project.tempo = 60.0;
+    project.tempoChanges = { { 0.0, 60.0, false }, { 1.0, 120.0, false } };
+    const auto track = makeMidiTrack(project);
+    clip.startBeats = 2.0;
+    project.findTrack(track.id)->midiClips.push_back(clip);
+    studio::MidiEditorComponent editor;
+    editor.setProject(&project);
+    editor.setSelection(track.id, clip.id);
+    editor.showDrumGeometry();
+    editor.setTransportPosition(2.0, true);
+    const auto* panel = dynamic_cast<studio::DrumGeometryComponent*>(
+        editor.findChildWithID("drum-geometry"));
+    expect(panel != nullptr && panel->playheadPhase().has_value()
+               && std::abs(*panel->playheadPhase() - 0.125) < 0.0000001,
+           "The editor maps transport seconds through the song's tempo changes before drawing geometry.");
+    project.tempoChanges = { { 0.0, 120.0, false } };
+    editor.setProject(&project);
+    expect(panel != nullptr && panel->playheadPhase().has_value()
+               && std::abs(*panel->playheadPhase() - 0.25) < 0.0000001,
+           "Editing the tempo map refreshes the geometry cursor without waiting for a new seek.");
+
+    auto invalidClip = clip;
+    invalidClip.startBeats = std::numeric_limits<double>::quiet_NaN();
+    geometry.setContext(&invalidClip, &map, 4.0);
+    geometry.setTransportPosition(14.0, true);
+    expect(!geometry.playheadPhase().has_value()
+               && geometry.rings().empty()
+               && geometry.getDescription().containsIgnoreCase("invalid"),
+           "Invalid clip timing reports a geometry error instead of returning non-finite phases.");
+}
+
+void drumGeometryView()
+{
+    auto project = studio::Project::createDefault();
+    const auto track = makeMidiTrack(project);
+    const auto clip = makeMidiClip(project);
+    project.findTrack(track.id)->midiClips.push_back(clip);
+    std::vector<juce::MidiMessage> messages;
+    studio::MidiEditorComponent editor;
+    auto edits = 0;
+    editor.onClipEdited = [&](const auto&, const auto&, const auto& after, const auto&)
+    {
+        ++edits;
+        *project.findMidiClip(clip.id) = after;
+        editor.setProject(&project);
+    };
+    editor.setProject(&project);
+    editor.setSelection(track.id, clip.id);
+    editor.setSize(760, 330);
+    auto* geometryButton = dynamic_cast<juce::TextButton*>(
+        editor.findChildWithID("midi-geometry-view"));
+    expect(geometryButton != nullptr && geometryButton->isEnabled()
+               && geometryButton->getWidth() >= 80,
+           "Geometry is available as a third, keyboard-accessible drum view.");
+    if (geometryButton == nullptr)
+        return;
+
+    editor.showDrumPads();
+    editor.drumPerformance().onMidiMessage = [&](const auto&, const auto& message)
+    {
+        messages.push_back(message);
+        return juce::Result::ok();
+    };
+    editor.drumPerformance().setKeyboardEnabled(true);
+    editor.keyPressed(juce::KeyPress('Z'));
+    const auto before = juce::JSON::toString(project.toVar(), false);
+    geometryButton->onClick();
+    const auto* geometry = editor.findChildWithID("drum-geometry");
+    expect(geometry != nullptr && geometry->isVisible()
+               && !editor.isShowingDrumPads()
+               && !editor.drumPerformance().isVisible()
+               && edits == 0
+               && juce::JSON::toString(project.toVar(), false) == before,
+           "Geometry replaces the pad surface without changing MIDI notes, mappings, or instrument state.");
+    expect(messages.size() == 2 && messages.front().isNoteOn()
+               && messages.back().isNoteOff()
+               && !editor.drumPerformance().isKeyboardEnabled(),
+           "Switching from drum pads to Geometry releases held MIDI notes and disables performance capture.");
+
+    editor.keyPressed(juce::KeyPress(juce::KeyPress::returnKey));
+    editor.keyPressed(juce::KeyPress(juce::KeyPress::deleteKey));
+    editor.keyPressed(juce::KeyPress(juce::KeyPress::rightKey));
+    expect(edits == 0 && juce::JSON::toString(project.toVar(), false) == before,
+           "Geometry-view keys cannot edit the hidden MIDI grid.");
+
+    geometryButton->onClick();
+    expect(geometry != nullptr && !geometry->isVisible()
+               && !editor.isShowingDrumPads(),
+           "Choosing Geometry again returns to the ordinary note editor.");
+    editor.keyPressed(juce::KeyPress(juce::KeyPress::returnKey));
+    expect(edits == 1 && project.findMidiClip(clip.id)->notes.size() == 2,
+           "Returning from Geometry preserves the grid's Enter-to-create workflow.");
+    for (auto* child : editor.getChildren())
+        if (auto* box = dynamic_cast<juce::ComboBox*>(child);
+            box != nullptr && box->getText() == "Velocity")
+            box->setSelectedId(5, juce::sendNotificationSync);
+    for (const auto width : { 560, 760, 1120 })
+    {
+        editor.setSize(width, 330);
+        for (const auto* child : editor.getChildren())
+            if (child->isVisible())
+                expect(child->getWidth() >= 20 && child->getHeight() >= 20
+                           && editor.getLocalBounds().contains(child->getBounds()),
+                       "Compact and wide note editors retain usable controls after adding the Geometry switch.");
+    }
+
+    studio::MidiClip piano;
+    studio::MidiNote pianoNote;
+    pianoNote.pitch = 99;
+    piano.notes.push_back(pianoNote);
+    project.findTrack(track.id)->midiClips.push_back(piano);
+    editor.setSelection(track.id, piano.id);
+    const auto beforePiano = juce::JSON::toString(project.toVar(), false);
+    editor.showDrumGeometry();
+    const auto* pianoGeometry = dynamic_cast<studio::DrumGeometryComponent*>(
+        editor.findChildWithID("drum-geometry"));
+    expect(editor.isShowingDrumGeometry()
+               && project.findMidiClip(piano.id)->editorMode == studio::MidiEditorMode::pianoRoll
+               && pianoGeometry != nullptr && pianoGeometry->rings().size() == 1
+               && pianoGeometry->rings().front().name == "MIDI 99"
+               && juce::JSON::toString(project.toVar(), false) == beforePiano,
+           "Geometry can visualize an existing piano-roll clip without assigning a drum map or changing its mode.");
+
+    editor.setSelection(track.id, "missing-clip");
+    expect(!geometryButton->isEnabled()
+               && geometry != nullptr && !geometry->isVisible(),
+           "Geometry is disabled when there is no MIDI clip to visualize.");
 }
 
 void alternateDrumEditor()
@@ -2143,6 +2394,9 @@ void midiTests()
     drumKitTuningEditor();
     drumKitTuningPreviewReset();
     targetedSoftwareMidi();
+    drumGeometryProjection();
+    drumGeometryTransport();
+    drumGeometryView();
     alternateDrumEditor();
     drumCaptureFidelity();
     softwareMidiCancellationAndOverflow();
