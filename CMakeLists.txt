@@ -1009,14 +1009,10 @@ if(STUDIO_DUO_BUILD_TESTS)
         )
     endif()
     if(APPLE)
-        set_property(
-            SOURCE tests/BundledDeviceTests.cpp
-            APPEND PROPERTY COMPILE_DEFINITIONS
-                STUDIO_DUO_BUNDLED_CLAP_PATH="$<TARGET_BUNDLE_DIR:StudioDuoBundledDevicesClap>"
-        )
         target_compile_definitions(
             StudioDuoTests
             PRIVATE
+                STUDIO_DUO_BUNDLED_CLAP_PATH="$<TARGET_BUNDLE_DIR:StudioDuoBundledDevicesClap>"
                 STUDIO_DUO_ARA_FIXTURE_PATH="$<TARGET_BUNDLE_DIR:StudioDuoAraFixture_VST3>"
                 STUDIO_DUO_CLAP_FIXTURE_PATH="$<TARGET_BUNDLE_DIR:StudioDuoClapFixture>"
                 STUDIO_DUO_DDP_FIXTURE_PATH="$<TARGET_FILE:StudioDuoDdpEncoderFixture>"
@@ -1024,14 +1020,10 @@ if(STUDIO_DUO_BUILD_TESTS)
                 STUDIO_DUO_BRIDGE_WORKER_PATH="$<TARGET_FILE:StudioDuo>"
         )
     else()
-        set_property(
-            SOURCE tests/BundledDeviceTests.cpp
-            APPEND PROPERTY COMPILE_DEFINITIONS
-                STUDIO_DUO_BUNDLED_CLAP_PATH="$<TARGET_FILE:StudioDuoBundledDevicesClap>"
-        )
         target_compile_definitions(
             StudioDuoTests
             PRIVATE
+                STUDIO_DUO_BUNDLED_CLAP_PATH="$<TARGET_FILE:StudioDuoBundledDevicesClap>"
                 STUDIO_DUO_ARA_FIXTURE_PATH="$<TARGET_FILE:StudioDuoAraFixture_VST3>"
                 STUDIO_DUO_CLAP_FIXTURE_PATH="$<TARGET_FILE:StudioDuoClapFixture>"
                 STUDIO_DUO_DDP_FIXTURE_PATH="$<TARGET_FILE:StudioDuoDdpEncoderFixture>"
