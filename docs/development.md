@@ -89,6 +89,11 @@ Use the configuration subdirectory with multi-configuration generators or
 when an explicit `CMAKE_BUILD_TYPE` adds it to the JUCE artefact path.
 Unknown suite names fail instead of silently running nothing.
 
+Plugin fixture paths, including `STUDIO_DUO_BUNDLED_CLAP_PATH`, must remain
+target-level compile definitions. Xcode cannot resolve configuration-dependent
+source-file definitions and substitutes `NO-PER-CONFIG-SUPPORT-IN-XCODE` instead
+of the selected configuration's plugin directory.
+
 Codec-only work can avoid the application and plugin fixtures:
 
 ```sh
