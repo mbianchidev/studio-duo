@@ -54,6 +54,9 @@ hardening remains before the complete DAW described in the
 - Transactional DAWproject 1.0 import/export with official embedded schema
   validation, deterministic ZIP output, media and plug-in state transfer,
   preserved scenes, and object-specific compatibility reports
+- Guided Studio One migration through direct native `.song` audio/mixer import
+  or its broader DAWproject export, with Open/drag-and-drop access and explicit
+  confirmation before any partial native transfer
 - Dedicated multi-song mastering with alternate source mixes, gaps, overlaps,
   fades, metadata, BS.1770/R128 loudness analysis, true peak, configurable audio
   export, deterministic TPDF dither, signed reports, and external licensed DDP
@@ -73,7 +76,7 @@ hardening remains before the complete DAW described in the
 
 ## Build
 
-Requirements: CMake 3.25+, a C++20 compiler, and either macOS with Xcode
+Requirements: CMake 3.25+, Git, a C++20 compiler, and either macOS with Xcode
 command-line tools or Windows with Visual Studio 2022.
 
 ```sh
@@ -112,6 +115,7 @@ or MIDI. See [startup troubleshooting and logs](docs/user-guide.md#logs-and-diag
 - [Bundled devices](docs/devices.md)
 - [Mastering and release](docs/mastering.md)
 - [DAWproject interchange](docs/dawproject.md)
+- [Studio One import](docs/studio-one.md)
 - [Contributing](docs/contributing.md)
 - [Releasing](docs/releasing.md)
 
@@ -120,10 +124,13 @@ or MIDI. See [startup troubleshooting and logs](docs/user-guide.md#logs-and-diag
 Studio Duo is licensed under the
 [GNU Affero General Public License v3.0 only](LICENSE). JUCE 9 uses its AGPLv3
 option. On Windows, Studio Duo uses JUCE's dual-licensed Steinberg ASIO SDK
-headers under their GPLv3 option. Signalsmith Stretch 1.1.0, CLAP 1.2.10, and
-clap-helpers are MIT licensed. libsamplerate 0.2.2 is BSD-2-Clause licensed.
+headers under their GPLv3 option. Signalsmith Stretch 1.4.0, Signalsmith Linear
+0.6.5, CLAP 1.2.10, and clap-helpers are MIT licensed.
+libsamplerate 0.2.2 is BSD-2-Clause licensed.
 ARA SDK 2.3.0 is Apache-2.0 licensed.
-The bundled, encoder-only LAME 3.100 library is LGPL-2.0-or-later licensed;
+The bundled, encoder-only LAME 4.0 library is LGPL-2.0-or-later licensed and
+includes documented portability fixes;
 its license, library and application source archives, scalar build configuration,
 and rebuilding/relinking notice ship with the application.
+The Signalsmith Stretch and Linear MIT license notices also ship with the application.
 The vendored DAWproject 1.0 schemas and upstream XML example are MIT licensed.

@@ -2,6 +2,10 @@
 
 #include "model/ProjectModel.h"
 
+#if STUDIO_DUO_TESTING
+#include <functional>
+#endif
+
 namespace studio
 {
 struct ProjectResourceIssue
@@ -28,6 +32,18 @@ struct ProjectCollectionReport
 class ProjectCollectionService
 {
 public:
+#if STUDIO_DUO_TESTING
+    enum class ResourceTestPhase
+    {
+        sourceHash,
+        manifestHash,
+        validationHash
+    };
+    using ResourceTestHook =
+        std::function<void(ResourceTestPhase, const juce::File&)>;
+    static void setResourceTestHookForTesting(ResourceTestHook hook);
+#endif
+
     static std::optional<ProjectCollectionReport> savePortableCopy(
         const Project& project,
         const juce::File& sourcePackage,

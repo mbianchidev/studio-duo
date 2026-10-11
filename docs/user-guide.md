@@ -96,19 +96,23 @@ track list vertically. On macOS, pinch gestures continue to zoom the timeline.
 
 ## Start a session
 
-When Studio Duo opens without a `.studioduo` project path, the startup hub
-offers three immediate choices:
+When Studio Duo opens without a project path, the startup hub offers:
 
 - **New Song** creates a blank song with a master track.
 - **Create From Template** starts from the bundled Metal Tracking, Songwriting,
   or Mix Session layouts.
-- **Open Existing Project** opens the project chooser.
+- **Open Existing Project** opens a `.studioduo` package or imports a Studio One
+  `.song` or `.dawproject` export.
+- **Import From Studio One** explains direct native import and Studio One's
+  DAWproject export workflow.
 
 The hub also lists up to 12 recent projects, newest edit first. Opening,
 saving, or editing a saved project moves it to the top. Missing or inaccessible
 entries are labeled clearly and include a **Remove** action; use **Open Existing
 Project** if the package moved. Passing a `.studioduo` path to the application
-opens it directly instead of showing the hub.
+opens it directly instead of showing the hub. A `.song` or `.dawproject` path
+starts its import workflow instead. Open (`Command/Ctrl+O`) and dropping one
+project onto the window accept the same formats.
 
 Click the Studio Duo logo in the top-left corner to leave the current project
 and return to the startup hub. Unsaved or never-saved projects prompt for
@@ -811,6 +815,22 @@ end instead of including the next section. Completed files replace their
 destination only after successful encoding; a failed export preserves the
 previous file.
 
+### Import from Studio One
+
+Use **Import From Studio One** on the startup hub or
+**Export > Import from Studio One...**. Choose a native `.song` with its Media
+folder nearby, or export the song from **Studio One 6.5 Professional or later**
+using **File > Convert To > DAWproject File...**, then choose that export.
+Choose a new `.studioduo` destination; original files are never changed.
+
+Direct native import covers verified audio, track/folder, constant transport,
+marker, and mixer/routing data. Private MIDI, automation, processor state, and
+other unsupported content require explicit confirmation before importing only
+the supported subset. Tempo/meter changes and unsafe or invalid input stop the
+native import rather than risking incorrect timing. DAWproject is recommended
+for the broader editable session transfer. Review the report after import.
+See [Studio One import](studio-one.md) for exact coverage and media relocation.
+
 ### DAWproject interchange
 
 Use **Export > DAWproject 1.0** to:
@@ -819,6 +839,10 @@ Use **Export > DAWproject 1.0** to:
 - Export the open project as a deterministic `.dawproject` archive
 - View the latest structured compatibility report
 - Save the report as JSON
+
+Open and drag/drop also accept `.dawproject` files. Opening/importing another
+project prompts to save current unsaved work; recordings must be stopped first.
+Compatibility report actions include native Studio One imports as well.
 
 Import validates `project.xml` and `metadata.xml` against the embedded official
 DAWproject 1.0 schemas before creating a staging project. The open project is

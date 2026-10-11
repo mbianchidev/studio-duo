@@ -479,11 +479,11 @@ MainComponent::MainComponent(
     };
 
     configureButton(newButton, "Create a new project");
-    configureButton(openButton, "Open a .studioduo project");
+    configureButton(openButton, "Open a .studioduo project, Studio One .song, or .dawproject export");
     configureButton(saveButton, "Save project (Command/Ctrl+S)");
     configureButton(
         exportButton,
-        "Export audio, open mastering and release tools, or use DAWproject interchange");
+        "Import from Studio One, export audio, or use mastering and DAWproject tools");
     configureButton(
         settingsButton,
         "Configure audio, MIDI, and automatic updates");
@@ -639,6 +639,10 @@ MainComponent::MainComponent(
     startupHub.onOpenExisting = [this]
     {
         beginOpenProject();
+    };
+    startupHub.onImportStudioOne = [this]
+    {
+        beginImportStudioOne();
     };
     startupHub.onCreateFromTemplate =
         [this](const auto& templateId)
@@ -2152,21 +2156,15 @@ MainComponent::MainComponent(
         });
     if (startupProject != juce::File())
     {
-        startupHub.setVisible(false);
+        showStartupHub();
         juce::MessageManager::callAsync(
             [safe = juce::Component::SafePointer<
                  MainComponent>(this),
              projectToOpen =
                  std::move(startupProject)]
             {
-                if (safe != nullptr
-                    && !safe->openProjectFrom(
-                        projectToOpen))
-                {
-                    safe->showStartupHub(
-                        "The requested startup project could not be opened.",
-                        true);
-                }
+                if (safe != nullptr)
+                    safe->openProjectSource(projectToOpen);
             });
     }
     else
@@ -3265,11 +3263,13 @@ void MainComponent::replaceWithUnsavedProject(
 
 void MainComponent::beginOpenProject()
 {
+    if (!projectReplacementAvailable())
+        return;
     fileChooser = std::make_unique<juce::FileChooser>(
-        "Open Studio Duo project",
+        "Open or import a project",
         projectPackage.exists() ? projectPackage.getParentDirectory()
                                 : juce::File::getSpecialLocation(juce::File::userDocumentsDirectory),
-        "*.studioduo",
+        ProjectImportService::openFilePatterns,
         true,
         true,
         this);
@@ -3283,10 +3283,134 @@ void MainComponent::beginOpenProject()
             return;
 
         const auto result = chooser.getResult();
-        if (result.exists())
-            safe->openProjectFrom(result);
         safe->fileChooser.reset();
+        if (result.exists())
+            safe->openProjectSource(result);
     });
+}
+
+bool MainComponent::projectReplacementAvailable()
+{
+    if (hasActiveRecordingTargets() || audioEngine.isRecording()
+        || recordingFinalizationInProgress)
+    {
+        showError("Project unavailable",
+                  "Stop and finalize recording before opening or importing a project.");
+        return false;
+    }
+    if (exportInProgress || fileChooser != nullptr)
+    {
+        setStatus("Another save, import, export, or file selection is already in progress.", true);
+        return false;
+    }
+    return true;
+}
+
+void MainComponent::confirmProjectReplacement(std::function<void()> continuation)
+{
+    if (!projectReplacementAvailable())
+        return;
+    if (startupHub.isVisible() || (!dirty && projectPackage.exists()))
+    {
+        continuation();
+        return;
+    }
+    juce::AlertWindow::showAsync(
+        juce::MessageBoxOptions()
+            .withIconType(juce::MessageBoxIconType::QuestionIcon)
+            .withTitle("Save the current project?")
+            .withMessage("Save the current project before opening or importing another, "
+                         "continue without saving, or cancel.")
+            .withButton("Save and Continue")
+            .withButton("Continue Without Saving")
+            .withButton("Cancel")
+            .withAssociatedComponent(this),
+        [safe = juce::Component::SafePointer<MainComponent>(this),
+         projectId = project.id,
+         onConfirmed = std::move(continuation)](int choice)
+        {
+            if (safe == nullptr || safe->project.id != projectId)
+                return;
+            if (choice == 1)
+            {
+                safe->returnToStartupHubAfterSave = false;
+                safe->actionAfterSuccessfulSave = onConfirmed;
+                safe->beginSaveProject();
+            }
+            else if (choice == 2)
+                onConfirmed();
+        });
+}
+
+void MainComponent::openProjectSource(const juce::File& source)
+{
+    if (!source.exists())
+    {
+        showError("Project unavailable", "The selected project does not exist: " + source.getFullPathName());
+        if (startupHub.isVisible())
+            startupHub.setStatus("The selected project is missing or inaccessible.", true);
+        return;
+    }
+    if (!ProjectImportService::supportsProjectSource(source))
+    {
+        showError("Unsupported project",
+                  "Open a .studioduo package, Studio One .song, or .dawproject export. "
+                  "Studio One .project files are mastering albums, not songs.");
+        return;
+    }
+    confirmProjectReplacement(
+        [safe = juce::Component::SafePointer<MainComponent>(this), source]
+        {
+            if (safe == nullptr)
+                return;
+            if (ProjectImportService::sourceFormat(source) == ProjectSourceFormat::studioDuo)
+                safe->openProjectFrom(source);
+            else
+                safe->chooseProjectImportDestination(source);
+        });
+}
+
+bool MainComponent::isInterestedInFileDrag(const juce::StringArray& files)
+{
+    return files.size() == 1
+        && ProjectImportService::supportsProjectSource(juce::File(files[0]));
+}
+
+void MainComponent::filesDropped(const juce::StringArray& files, int x, int y)
+{
+    juce::ignoreUnused(x, y);
+    if (files.size() != 1)
+    {
+        showError("Project import", "Drop one project at a time.");
+        return;
+    }
+    openProjectSource(juce::File(files[0]));
+}
+
+void MainComponent::beginImportStudioOne()
+{
+    if (!projectReplacementAvailable())
+        return;
+    juce::AlertWindow::showAsync(
+        juce::MessageBoxOptions()
+            .withIconType(juce::MessageBoxIconType::InfoIcon)
+            .withTitle("Import from Studio One")
+            .withMessage(
+                "Open a native .song directly for supported audio, tracks and mixer routing. "
+                "Keep the original Media folder beside the song.\n\n"
+                "For broader transfer of MIDI, automation, tempo/meter changes and plug-in data, "
+                "use Studio One 6.5 Professional or later: File > Convert To > DAWproject File...\n\n"
+                "Choose the .song or .dawproject below. Unsupported native content requires "
+                "confirmation; your original files are never changed.")
+            .withButton("Choose Project...")
+            .withButton("Cancel")
+            .withAssociatedComponent(this),
+        [safe = juce::Component::SafePointer<MainComponent>(this)](int choice)
+        {
+            if (safe != nullptr && choice == 1)
+                safe->chooseProjectImportSource(
+                    "Import from Studio One", ProjectImportService::importFilePatterns);
+        });
 }
 
 void MainComponent::beginSaveProject()
@@ -3313,12 +3437,15 @@ void MainComponent::beginSaveProject()
             return;
 
         const auto result = chooser.getResult();
+        safe->fileChooser.reset();
         if (result != juce::File())
             safe->saveProjectTo(result);
         else
+        {
             safe->returnToStartupHubAfterSave =
                 false;
-        safe->fileChooser.reset();
+            safe->actionAfterSuccessfulSave = {};
+        }
     });
 }
 
@@ -3453,6 +3580,11 @@ void MainComponent::showExportMenu()
                 !masteringWorkspaceVisible);
         });
     menu.addSeparator();
+    menu.addItem(
+        "Import from Studio One...",
+        !exportInProgress,
+        false,
+        [this] { beginImportStudioOne(); });
 
     juce::PopupMenu dawProjectMenu;
     dawProjectMenu.addItem(
@@ -3487,32 +3619,34 @@ void MainComponent::showExportMenu()
 
 void MainComponent::beginImportDawProject()
 {
-    if (hasActiveRecordingTargets() || recordingFinalizationInProgress)
-    {
-        setStatus(
-            "Stop and finalize recording before importing a DAWproject.",
-            true);
+    chooseProjectImportSource("Import DAWproject 1.0", "*.dawproject");
+}
+
+void MainComponent::chooseProjectImportSource(
+    const juce::String& title,
+    const juce::String& patterns)
+{
+    if (!projectReplacementAvailable())
         return;
-    }
-    if (exportInProgress)
-    {
-        setStatus(
-            "Another save, import, or export is already in progress.",
-            true);
-        return;
-    }
+    auto directory = juce::File::getSpecialLocation(juce::File::userMusicDirectory);
+    const auto documents = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory);
+    for (const auto* folder : { "Studio One/Songs", "Studio Pro/Songs" })
+        if (const auto candidate = documents.getChildFile(folder); candidate.isDirectory())
+        {
+            directory = candidate;
+            break;
+        }
     fileChooser = std::make_unique<juce::FileChooser>(
-        "Import DAWproject 1.0",
-        juce::File::getSpecialLocation(
-            juce::File::userMusicDirectory),
-        "*.dawproject",
+        title,
+        directory,
+        patterns,
         true,
         false,
         this);
-    const auto flags = juce::FileBrowserComponent::openMode
+    const auto chooserFlags = juce::FileBrowserComponent::openMode
         | juce::FileBrowserComponent::canSelectFiles;
     fileChooser->launchAsync(
-        flags,
+        chooserFlags,
         [safe = juce::Component::SafePointer<MainComponent>(this)](
             const auto& chooser)
         {
@@ -3521,66 +3655,138 @@ void MainComponent::beginImportDawProject()
             const auto source = chooser.getResult();
             safe->fileChooser.reset();
             if (source.existsAsFile())
-                safe->chooseDawProjectImportDestination(source);
+                safe->openProjectSource(source);
         });
 }
 
-void MainComponent::chooseDawProjectImportDestination(
+void MainComponent::chooseProjectImportDestination(
     const juce::File& sourceArchive)
 {
+    if (!projectReplacementAvailable())
+        return;
     const auto initial = sourceArchive.getSiblingFile(
         sourceArchive.getFileNameWithoutExtension()
         + ".studioduo");
     fileChooser = std::make_unique<juce::FileChooser>(
-        "Create Studio Duo project from DAWproject",
+        ProjectImportService::sourceFormat(sourceArchive) == ProjectSourceFormat::studioOneSong
+            ? "Create Studio Duo project from Studio One song"
+            : "Create Studio Duo project from DAWproject",
         initial,
         "*.studioduo",
         true,
         true,
         this);
-    const auto flags = juce::FileBrowserComponent::saveMode
+    const auto chooserFlags = juce::FileBrowserComponent::saveMode
         | juce::FileBrowserComponent::canSelectFiles;
     fileChooser->launchAsync(
-        flags,
+        chooserFlags,
         [safe = juce::Component::SafePointer<MainComponent>(this),
-         sourceArchive](const auto& chooser)
+         sourceArchive,
+         projectId = project.id](const auto& chooser)
         {
             if (safe == nullptr)
                 return;
             const auto destination = chooser.getResult();
             safe->fileChooser.reset();
-            if (destination != juce::File())
-                safe->importDawProjectTo(
-                    sourceArchive,
-                    destination);
+            if (destination == juce::File())
+                return;
+            if (safe->project.id != projectId)
+            {
+                safe->showError("Import cancelled", "The current project changed while choosing an import destination.");
+                return;
+            }
+            safe->importProjectTo(sourceArchive, destination);
         });
 }
 
-void MainComponent::importDawProjectTo(
+void MainComponent::importProjectTo(
     const juce::File& sourceArchive,
-    const juce::File& destinationPackage)
+    const juce::File& destinationPackage,
+    bool allowPartialImport)
 {
+    if (!projectReplacementAvailable())
+        return;
+    const auto projectId = project.id;
+    const auto resumePlayback = audioEngine.isPlaying();
+    if (resumePlayback)
+        audioEngine.pause();
     exportInProgress = true;
     shutdownRequestedDuringExport = false;
     stopTimer();
     exportInputBlocker.setVisible(true);
     exportInputBlocker.toFront(false);
     exportInputBlocker.grabKeyboardFocus();
-    const auto result = DawProjectIO::importProject(
+    const auto result = ProjectImportService::importProject(
         sourceArchive,
-        destinationPackage);
+        destinationPackage,
+        allowPartialImport);
     exportInputBlocker.setVisible(false);
     startTimerHz(30);
     exportInProgress = false;
+    grabKeyboardFocus();
     transientCompatibilityReport = result.report;
     if (!result.succeeded())
     {
+        if (resumePlayback)
+            audioEngine.play();
         setStatus(result.result.getErrorMessage(), true);
-        showLatestCompatibilityReport();
+        if (startupHub.isVisible())
+            startupHub.setStatus(result.result.getErrorMessage(), true);
+        if (result.requiresCompatibilityConfirmation)
+        {
+            juce::AlertWindow::showAsync(
+                juce::MessageBoxOptions()
+                    .withIconType(juce::MessageBoxIconType::WarningIcon)
+                    .withTitle("Review native Studio One compatibility")
+                    .withMessage(
+                        "This song cannot be transferred completely through the native format. "
+                        "Use DAWproject, import only the supported content listed below, or cancel.\n\n"
+                        + result.report.toText())
+                    .withButton("Use DAWproject...")
+                    .withButton("Import Supported Content")
+                    .withButton("Cancel")
+                    .withAssociatedComponent(this),
+                [safe = juce::Component::SafePointer<MainComponent>(this),
+                 sourceArchive, destinationPackage, projectId](int choice)
+                {
+                    if (safe == nullptr || safe->project.id != projectId)
+                        return;
+                    if (choice == 1)
+                        safe->beginImportDawProject();
+                    else if (choice == 2)
+                        safe->importProjectTo(sourceArchive, destinationPackage, true);
+                });
+        }
+        else if (ProjectImportService::sourceFormat(sourceArchive) == ProjectSourceFormat::studioOneSong)
+        {
+            juce::AlertWindow::showAsync(
+                juce::MessageBoxOptions()
+                    .withIconType(juce::MessageBoxIconType::WarningIcon)
+                    .withTitle("Studio One import failed")
+                    .withMessage(result.result.getErrorMessage()
+                                 + "\n\nThe current project and original files were not replaced. "
+                                   "A Studio One DAWproject export is the recommended alternative.")
+                    .withButton("Choose DAWproject...")
+                    .withButton("View Report")
+                    .withButton("Cancel")
+                    .withAssociatedComponent(this),
+                [safe = juce::Component::SafePointer<MainComponent>(this)](int choice)
+                {
+                    if (safe == nullptr)
+                        return;
+                    if (choice == 1)
+                        safe->beginImportDawProject();
+                    else if (choice == 2)
+                        safe->showLatestCompatibilityReport();
+                });
+        }
+        else
+            showLatestCompatibilityReport();
         return;
     }
 
-    openProjectFrom(result.package);
+    if (!openProjectFrom(result.package))
+        return;
     transientCompatibilityReport = result.report;
     const auto notices =
         static_cast<int>(result.report.issues.size());
@@ -3595,6 +3801,8 @@ void MainComponent::importDawProjectTo(
                        + (notices == 1 ? "." : "s.")
                    : juce::String(".")),
         result.report.hasErrors());
+    if (notices > 0)
+        showLatestCompatibilityReport();
 }
 
 void MainComponent::beginExportDawProject()
@@ -3627,10 +3835,10 @@ void MainComponent::beginExportDawProject()
         true,
         false,
         this);
-    const auto flags = juce::FileBrowserComponent::saveMode
+    const auto chooserFlags = juce::FileBrowserComponent::saveMode
         | juce::FileBrowserComponent::canSelectFiles;
     fileChooser->launchAsync(
-        flags,
+        chooserFlags,
         [safe = juce::Component::SafePointer<MainComponent>(this)](
             const auto& chooser)
         {
@@ -3858,14 +4066,14 @@ void MainComponent::showLatestCompatibilityReport()
     const auto* report = latestCompatibilityReport();
     if (report == nullptr)
     {
-        setStatus("No DAWproject compatibility report is available.", true);
+        setStatus("No project compatibility report is available.", true);
         return;
     }
     juce::AlertWindow::showMessageBoxAsync(
         report->hasErrors()
             ? juce::MessageBoxIconType::WarningIcon
             : juce::MessageBoxIconType::InfoIcon,
-        "DAWproject compatibility report",
+        report->format + " compatibility report",
         report->toText());
 }
 
@@ -3874,7 +4082,7 @@ void MainComponent::beginSaveCompatibilityReport()
     const auto* report = latestCompatibilityReport();
     if (report == nullptr)
     {
-        setStatus("No DAWproject compatibility report is available.", true);
+        setStatus("No project compatibility report is available.", true);
         return;
     }
     const auto reportCopy = *report;
@@ -3883,17 +4091,17 @@ void MainComponent::beginSaveCompatibilityReport()
         : juce::File::getSpecialLocation(
               juce::File::userDocumentsDirectory);
     fileChooser = std::make_unique<juce::FileChooser>(
-        "Save DAWproject compatibility report",
+        "Save project compatibility report",
         directory.getChildFile(
-            project.name + "-dawproject-report.json"),
+            project.name + "-compatibility-report.json"),
         "*.json",
         true,
         false,
         this);
-    const auto flags = juce::FileBrowserComponent::saveMode
+    const auto chooserFlags = juce::FileBrowserComponent::saveMode
         | juce::FileBrowserComponent::canSelectFiles;
     fileChooser->launchAsync(
-        flags,
+        chooserFlags,
         [safe = juce::Component::SafePointer<MainComponent>(this),
          reportCopy](const auto& chooser)
         {
@@ -4311,6 +4519,8 @@ void MainComponent::maybePromptForUpdate()
 
 void MainComponent::saveProjectTo(const juce::File& package)
 {
+    auto afterSave = std::move(actionAfterSuccessfulSave);
+    actionAfterSuccessfulSave = {};
     const auto returnToHubOnSuccess =
         returnToStartupHubAfterSave;
     returnToStartupHubAfterSave = false;
@@ -4485,6 +4695,8 @@ void MainComponent::saveProjectTo(const juce::File& package)
         recentWarning.isNotEmpty());
     if (returnToHubOnSuccess)
         leaveProjectForStartupHub();
+    else if (afterSave)
+        afterSave();
 }
 
 bool MainComponent::captureCurrentPluginStates(

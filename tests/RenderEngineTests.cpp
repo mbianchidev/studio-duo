@@ -5,11 +5,94 @@
 #include "render/RenderEngine.h"
 #include "reamp/ReampSnapshotService.h"
 
+#include <algorithm>
+#include <cmath>
 #include <thread>
 #include <limits>
 
+namespace
+{
+void elasticRenderPreservesPitchAndDuration()
+{
+    constexpr auto sampleRate = 48000.0;
+    constexpr auto frequency = 440.0;
+    constexpr auto sourceDuration = 2.0;
+    constexpr auto maximumPhaseError = 0.0001f; // Float FFT roundoff stays below -80 dBFS.
+    juce::TemporaryFile source(".wav");
+    {
+        juce::WavAudioFormat format;
+        std::unique_ptr<juce::OutputStream> stream = source.getFile().createOutputStream();
+        auto writer = format.createWriterFor(
+            stream,
+            juce::AudioFormatWriterOptions {}
+                .withSampleRate(sampleRate)
+                .withNumChannels(2)
+                .withBitsPerSample(24));
+        juce::AudioBuffer<float> audio(2, static_cast<int>(sourceDuration * sampleRate));
+        for (auto sample = 0; sample < audio.getNumSamples(); ++sample)
+        {
+            const auto value = static_cast<float>(
+                0.2 * std::sin(juce::MathConstants<double>::twoPi
+                               * frequency * static_cast<double>(sample) / sampleRate));
+            audio.setSample(0, sample, value);
+            audio.setSample(1, sample, -value);
+        }
+        expect(writer != nullptr && writer->writeFromAudioSampleBuffer(audio, 0, audio.getNumSamples()),
+               "Synthetic stereo elastic-audio fixture can be written.");
+        if (writer == nullptr)
+            return;
+    }
+    for (const auto mode : { studio::StretchMode::polyphonic, studio::StretchMode::drums })
+        for (const auto rate : { 0.75, 1.5 })
+        {
+            auto project = studio::Project::createDefault();
+            project.metronomeEnabled = false;
+            studio::AudioClip clip;
+            clip.sourceFile = source.getFile();
+            clip.sourceLengthSeconds = sourceDuration;
+            clip.sourceRangeEndSeconds = sourceDuration;
+            clip.playbackRate = rate;
+            clip.durationSeconds = sourceDuration / rate;
+            clip.stretchMode = mode;
+            project.tracks[0].clips = { clip };
+            studio::StudioAudioEngine engine;
+            juce::AudioBuffer<float> rendered;
+            const auto result = engine.renderRangeToBuffer(
+                project, rendered, sampleRate, { 0.0, clip.durationSeconds, 0.0 });
+            expect(result.wasOk() && rendered.getNumChannels() == 2
+                       && rendered.getNumSamples() == static_cast<int>(std::llround(clip.durationSeconds * sampleRate)),
+                   "Elastic audio preserves exact requested stereo duration for slower and faster playback.");
+            if (result.failed() || rendered.getNumSamples() < 48000 || rendered.getNumChannels() != 2)
+                continue;
+            const auto start = rendered.getNumSamples() / 4;
+            const auto count = rendered.getNumSamples() / 2;
+            auto crossings = 0;
+            auto phaseError = 0.0f;
+            auto finite = true;
+            for (auto sample = start; sample < start + count; ++sample)
+            {
+                const auto left = rendered.getSample(0, sample);
+                const auto right = rendered.getSample(1, sample);
+                finite = finite && std::isfinite(left) && std::isfinite(right);
+                phaseError = std::max(phaseError, std::abs(left + right));
+                if (sample > start && rendered.getSample(0, sample - 1) <= 0.0f && left > 0.0f)
+                    ++crossings;
+            }
+            const auto measuredFrequency = static_cast<double>(crossings) * sampleRate / static_cast<double>(count);
+            expect(finite && std::abs(measuredFrequency - frequency) < 5.0
+                       && rendered.getRMSLevel(0, start, count) > 0.05f
+                       && phaseError < maximumPhaseError,
+                   ("Elastic audio retains pitch, audible level and stereo phase at rate "
+                    + juce::String(rate) + " (measured " + juce::String(measuredFrequency)
+                    + " Hz, RMS " + juce::String(rendered.getRMSLevel(0, start, count), 6)
+                    + ", phase error " + juce::String(phaseError, 8) + ").").toRawUTF8());
+        }
+}
+}
+
 void renderEngineTests()
 {
+    elasticRenderPreservesPitchAndDuration();
     juce::AudioBuffer<float> reference(2, 128);
     juce::AudioBuffer<float> candidate(2, 128);
     reference.clear();

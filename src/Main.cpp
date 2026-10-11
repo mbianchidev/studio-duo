@@ -26,10 +26,13 @@ juce::File startupProjectFromArguments(
 {
     for (const auto& argument : arguments)
     {
-        if (!argument.startsWith("-")
-            && argument.endsWithIgnoreCase(
-                ".studioduo"))
-            return juce::File(argument);
+        if (argument.startsWith("-"))
+            continue;
+        const auto source = juce::File::isAbsolutePath(argument)
+            ? juce::File(argument)
+            : juce::File::getCurrentWorkingDirectory().getChildFile(argument);
+        if (ProjectImportService::supportsProjectSource(source))
+            return source;
     }
     return {};
 }

@@ -11,6 +11,10 @@ Open **Export > DAWproject 1.0**.
 
 - **Import DAWproject 1.0...** selects a `.dawproject` ZIP and a destination
   `.studioduo` package. A successful import opens that new project.
+- **Open** (`Command/Ctrl+O`), a project file dropped onto the window, and a
+  command-line `.dawproject` path reach the same importer. The startup hub's
+  **Import From Studio One** action explains Studio One's export command and
+  accepts either its `.dawproject` export or a native `.song`.
 - **Export DAWproject 1.0...** captures current plug-in state into a temporary
   export-only package, then writes a `.dawproject` archive.
 - **View latest compatibility report** displays the report from the most recent
@@ -20,6 +24,8 @@ Open **Export > DAWproject 1.0**.
 Import never edits the source archive or external media. Export never edits
 referenced source media or rewrites native media/processor state. Its
 compatibility report follows the normal project dirty/recovery lifecycle.
+Native Studio One import shares this report workflow; see
+[Studio One import](studio-one.md) for its narrower native compatibility boundary.
 
 ## Container and validation
 
@@ -53,6 +59,9 @@ including:
 
 ZIP import rejects duplicate/unsafe paths, symlinks, excessive entry counts,
 oversized XML, and excessive total expansion before extraction.
+`project_io/ProjectArchiveReader` owns these shared checks and CRC-verified
+streaming reads; DAWproject schema/semantic validation remains in
+`dawproject_io/`.
 
 ## Transactions and reproducibility
 

@@ -22,6 +22,20 @@ Keep changes narrow, use typed project commands for user-visible edits, and add
 tests for model, persistence, or engine behavior. Audio fixtures must be
 generated or redistributable and must not contain customer or personal data.
 
+## Dependency updates
+
+Repository settings enable Dependabot alerts and automated security-fix pull
+requests. `.github/dependabot.yml` schedules grouped weekly GitHub Actions
+version updates once the configuration reaches the default branch. Review
+these updates through the normal macOS/Windows CI and human review workflow;
+updates are not automatically merged.
+
+Dependabot does not manage the native `FetchContent` pins in `CMakeLists.txt`.
+Review those dependencies manually, including compatibility, versioned source
+patches, licenses, and redistributed rebuilding materials when changing a pin.
+Alerts only cover dependencies that GitHub can recognize in its dependency
+graph; enabling alerts does not imply complete native C++ dependency coverage.
+
 ## Pull requests
 
 - Explain the user-facing behavior and architectural impact.
