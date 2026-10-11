@@ -2843,6 +2843,7 @@ void MainComponent::timerCallback()
                 musicalPosition.meter.denominator),
         juce::dontSendNotification);
     const auto playing = audioEngine.isPlaying();
+    midiEditor.setTransportPosition(position, playing);
     playButton.setIcon(playing ? StudioIcon::pause : StudioIcon::play);
     playButton.setAccessibleLabel(playing ? "Pause" : "Play");
     playButton.setTooltip(

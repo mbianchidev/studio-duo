@@ -477,6 +477,8 @@ target_sources(
         src/ui/MidiEditorComponent.h
         src/ui/DrumPerformanceComponent.cpp
         src/ui/DrumPerformanceComponent.h
+        src/ui/DrumGeometryComponent.cpp
+        src/ui/DrumGeometryComponent.h
         src/ui/DrumKitTuningComponent.cpp
         src/ui/DrumKitTuningComponent.h
         src/ui/AutomationPanel.cpp
@@ -933,6 +935,8 @@ if(STUDIO_DUO_BUILD_TESTS)
             src/ui/MidiEditorComponent.h
             src/ui/DrumPerformanceComponent.cpp
             src/ui/DrumPerformanceComponent.h
+            src/ui/DrumGeometryComponent.cpp
+            src/ui/DrumGeometryComponent.h
             src/ui/DrumKitTuningComponent.cpp
             src/ui/DrumKitTuningComponent.h
             src/ui/StartupHubComponent.cpp

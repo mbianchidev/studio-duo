@@ -551,6 +551,18 @@ Key-up, focus/visibility changes, and clip changes release held notes to their
 original track. `ProjectTemplates::createDrumPerformanceTrack` supplies the
 bundled-instrument quick-start without replacing an existing instrument.
 
+`DrumGeometryComponent` is a third, read-only MIDI editor surface. It caches
+chronologically ordered hits per used drum-map voice, resolves round robins
+through `DrumMap::entryForPitch`, and retains unmapped pitches as separate MIDI
+voices. A complete clip is one clockwise turn; note phases use
+`actualStartBeats()`, dot size uses velocity, and opacity uses probability.
+Its native list provides keyboard-accessible voice highlighting. The main
+transport timer forwards seconds through `Project::beatsAt()` to update the
+clip-relative sweep; geometry has no audio callback, extra polling timer, MIDI
+generation, or persisted editor-mode/schema change. Switching surfaces releases
+pad notes and prevents hidden-grid editing. Compact toolbars wrap their utility
+and pattern controls onto up to four rows to keep all view switches accessible.
+
 Automation lanes use seconds or musical beats and compile off-thread to integer
 sample positions. Track and route controls evaluate per sample. External plugin
 events travel in the same bridge record as their audio block. Linear automation
