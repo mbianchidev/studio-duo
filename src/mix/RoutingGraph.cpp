@@ -1,6 +1,7 @@
 #include "RoutingGraph.h"
 
 #include "model/ProjectModel.h"
+#include "model/PluginRack.h"
 
 #include <algorithm>
 #include <cmath>
@@ -43,6 +44,8 @@ bool validateTrackRoles(const Project& project, juce::String& error)
     auto controlRoomCount = 0;
     for (const auto& track : project.tracks)
     {
+        if (!PluginRack::validate(track.inserts, error))
+            return false;
         if (track.id.isEmpty()
             || std::find(ids.cbegin(), ids.cend(), track.id) != ids.cend())
         {

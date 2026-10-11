@@ -223,6 +223,13 @@ struct ReampRoute
                                              juce::String& error);
 };
 
+enum class PluginInsertKind
+{
+    plugin,
+    serialRack,
+    parallelSplitter
+};
+
 struct PluginInsert
 {
     juce::String id { juce::Uuid().toString() };
@@ -244,6 +251,14 @@ struct PluginInsert
     bool bundledDevice = false;
     bool araCapable = false;
     bool recoveryDisabled = false;
+    PluginInsertKind kind = PluginInsertKind::plugin;
+    juce::String containerId;
+    float gainDecibels = 0.0f;
+
+    [[nodiscard]] bool isContainer() const noexcept
+    {
+        return kind != PluginInsertKind::plugin;
+    }
 
     [[nodiscard]] juce::var toVar() const;
     static std::optional<PluginInsert> fromVar(const juce::var& value, juce::String& error);
@@ -501,7 +516,7 @@ struct RenderReport
 class Project
 {
 public:
-    static constexpr int currentFormatVersion = 11;
+    static constexpr int currentFormatVersion = 12;
 
     juce::String id { juce::Uuid().toString() };
     juce::String name { "Untitled" };

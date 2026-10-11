@@ -264,6 +264,8 @@ set(STUDIO_DUO_MODEL_SOURCES
     src/model/TransportEditing.h
     src/model/ProjectModel.cpp
     src/model/ProjectModel.h
+    src/model/PluginRack.cpp
+    src/model/PluginRack.h
     src/model/ProjectTemplates.cpp
     src/model/ProjectTemplates.h
     src/project_io/ProjectFile.cpp
@@ -882,6 +884,7 @@ if(STUDIO_DUO_BUILD_TESTS)
             tests/PluginFormatTests.cpp
             tests/PluginSearchPathTests.cpp
             tests/PluginRecoveryTests.cpp
+            tests/PluginRackTests.cpp
             tests/AutomationTests.cpp
             tests/DeviceTests.cpp
             tests/BundledDeviceTests.cpp

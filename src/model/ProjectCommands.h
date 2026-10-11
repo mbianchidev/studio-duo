@@ -773,6 +773,24 @@ private:
     bool capturedOriginal = false;
 };
 
+class SetPluginChainCommand final : public ProjectCommand
+{
+public:
+    SetPluginChainCommand(juce::String trackId, std::vector<PluginInsert> inserts,
+                          juce::String description);
+
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    juce::String trackId;
+    juce::String description;
+    std::vector<PluginInsert> oldInserts;
+    std::vector<PluginInsert> newInserts;
+    bool capturedOriginal = false;
+};
+
 class AddPluginInsertCommand final : public ProjectCommand
 {
 public:
@@ -801,12 +819,11 @@ public:
 private:
     juce::String trackId;
     juce::String insertId;
-    PluginInsert removedInsert;
+    std::vector<std::pair<std::size_t, PluginInsert>> removedInserts;
     std::vector<std::pair<std::size_t, AutomationLane>>
         removedAutomationLanes;
     std::vector<std::pair<std::size_t, RoutingConnection>>
         removedRoutingConnections;
-    std::size_t removalIndex = 0;
     bool capturedOriginal = false;
 };
 

@@ -1,4 +1,5 @@
 #include "ProjectCommands.h"
+#include "PluginRack.h"
 
 #include "midi/MidiEditing.h"
 #include "reamp/ReampSnapshotService.h"
@@ -3045,6 +3046,55 @@ void RemoveRoutingConnectionCommand::undo(Project& project)
     }
 }
 
+SetPluginChainCommand::SetPluginChainCommand(
+    juce::String destinationTrackId, std::vector<PluginInsert> inserts,
+    juce::String commandDescription)
+    : trackId(std::move(destinationTrackId)),
+      description(std::move(commandDescription)),
+      newInserts(std::move(inserts))
+{
+}
+
+juce::String SetPluginChainCommand::name() const
+{
+    return description;
+}
+
+bool SetPluginChainCommand::perform(Project& project, juce::String& error)
+{
+    auto* track = project.findTrack(trackId);
+    if (track == nullptr)
+    {
+        error = "The rack's track no longer exists.";
+        return false;
+    }
+    for (const auto& insert : track->inserts)
+    {
+        if (PluginRack::find(newInserts, insert.id) == nullptr)
+        {
+            error = "Use Remove to delete an insert together with its routing and automation.";
+            return false;
+        }
+    }
+    auto candidate = project;
+    candidate.findTrack(trackId)->inserts = newInserts;
+    if (!candidate.validateRoutingGraph(error))
+        return false;
+    if (!capturedOriginal)
+    {
+        oldInserts = track->inserts;
+        capturedOriginal = true;
+    }
+    track->inserts = newInserts;
+    return true;
+}
+
+void SetPluginChainCommand::undo(Project& project)
+{
+    if (auto* track = project.findTrack(trackId))
+        track->inserts = oldInserts;
+}
+
 AddPluginInsertCommand::AddPluginInsertCommand(juce::String destinationTrackId,
                                                PluginInsert insertToAdd)
     : trackId(std::move(destinationTrackId)),
@@ -3075,19 +3125,15 @@ bool AddPluginInsertCommand::perform(Project& project, juce::String& error)
         error = "A plugin insert with the same ID already exists.";
         return false;
     }
-    if (std::any_of(
-            project.routingConnections.cbegin(),
-            project.routingConnections.cend(),
-            [this](const auto& connection)
-            {
-                return connection.sourceTrackId == trackId
-                    && connection.sourceInsertId.isNotEmpty();
-            }))
-    {
-        error =
-            "Remove processor-output routes before adding an insert after their source.";
+    auto candidate = project;
+    candidate.findTrack(trackId)->inserts.insert(
+        candidate.findTrack(trackId)->inserts.begin()
+            + static_cast<std::ptrdiff_t>(
+                capturedIndex ? std::min(insertionIndex, track->inserts.size())
+                              : track->inserts.size()),
+        insert);
+    if (!candidate.validateRoutingGraph(error))
         return false;
-    }
 
     if (!capturedIndex)
     {
@@ -3139,15 +3185,53 @@ bool RemovePluginInsertCommand::perform(Project& project, juce::String& error)
         return false;
     }
 
+    std::vector<juce::String> removedIds;
+    for (const auto& insert : track->inserts)
+        if (PluginRack::contains(track->inserts, insertId, insert))
+            removedIds.push_back(insert.id);
+    const auto removesId = [&removedIds](const juce::String& id)
+    {
+        return std::find(removedIds.cbegin(), removedIds.cend(), id) != removedIds.cend();
+    };
+    const auto removesRoute = [&removesId](const RoutingConnection& connection)
+    {
+        return removesId(connection.sourceInsertId) || removesId(connection.destination.insertId);
+    };
+    std::vector<juce::String> removedRouteIds;
+    for (const auto& connection : project.routingConnections)
+        if (removesRoute(connection))
+            removedRouteIds.push_back(connection.id);
+    const auto removesLane = [&removesId, &removedRouteIds](const AutomationLane& lane)
+    {
+        return removesId(lane.target.insertId)
+            || std::find(removedRouteIds.cbegin(), removedRouteIds.cend(), lane.target.routeId)
+                != removedRouteIds.cend();
+    };
+    auto candidate = project;
+    auto& candidateInserts = candidate.findTrack(trackId)->inserts;
+    candidateInserts.erase(
+        std::remove_if(candidateInserts.begin(), candidateInserts.end(),
+                       [&removesId](const auto& insert) { return removesId(insert.id); }),
+        candidateInserts.end());
+    candidate.routingConnections.erase(
+        std::remove_if(candidate.routingConnections.begin(), candidate.routingConnections.end(), removesRoute),
+        candidate.routingConnections.end());
+    candidate.automationLanes.erase(
+        std::remove_if(candidate.automationLanes.begin(), candidate.automationLanes.end(), removesLane),
+        candidate.automationLanes.end());
+    if (!candidate.validateRoutingGraph(error))
+        return false;
+
     if (!capturedOriginal)
     {
-        removedInsert = *iterator;
-        removalIndex = static_cast<std::size_t>(std::distance(track->inserts.begin(), iterator));
+        for (std::size_t index = 0; index < track->inserts.size(); ++index)
+            if (removesId(track->inserts[index].id))
+                removedInserts.emplace_back(index, track->inserts[index]);
         for (std::size_t index = 0;
              index < project.automationLanes.size();
              ++index)
         {
-            if (project.automationLanes[index].target.insertId == insertId)
+            if (removesLane(project.automationLanes[index]))
                 removedAutomationLanes.emplace_back(
                     index,
                     project.automationLanes[index]);
@@ -3158,8 +3242,7 @@ bool RemovePluginInsertCommand::perform(Project& project, juce::String& error)
         {
             const auto& connection =
                 project.routingConnections[index];
-            if (connection.sourceInsertId == insertId
-                || connection.destination.insertId == insertId)
+            if (removesRoute(connection))
             {
                 removedRoutingConnections.emplace_back(
                     index,
@@ -3168,26 +3251,9 @@ bool RemovePluginInsertCommand::perform(Project& project, juce::String& error)
         }
         capturedOriginal = true;
     }
-    track->inserts.erase(iterator);
-    project.automationLanes.erase(
-        std::remove_if(
-            project.automationLanes.begin(),
-            project.automationLanes.end(),
-            [this](const auto& lane)
-            {
-                return lane.target.insertId == insertId;
-            }),
-        project.automationLanes.end());
-    project.routingConnections.erase(
-        std::remove_if(
-            project.routingConnections.begin(),
-            project.routingConnections.end(),
-            [this](const auto& connection)
-            {
-                return connection.sourceInsertId == insertId
-                    || connection.destination.insertId == insertId;
-            }),
-        project.routingConnections.end());
+    track->inserts = std::move(candidateInserts);
+    project.automationLanes = std::move(candidate.automationLanes);
+    project.routingConnections = std::move(candidate.routingConnections);
     return true;
 }
 
@@ -3195,8 +3261,11 @@ void RemovePluginInsertCommand::undo(Project& project)
 {
     if (auto* track = project.findTrack(trackId))
     {
-        const auto index = std::min(removalIndex, track->inserts.size());
-        track->inserts.insert(track->inserts.begin() + static_cast<std::ptrdiff_t>(index), removedInsert);
+        for (const auto& [originalIndex, insert] : removedInserts)
+        {
+            const auto index = std::min(originalIndex, track->inserts.size());
+            track->inserts.insert(track->inserts.begin() + static_cast<std::ptrdiff_t>(index), insert);
+        }
     }
     for (const auto& [originalIndex, lane] : removedAutomationLanes)
     {
