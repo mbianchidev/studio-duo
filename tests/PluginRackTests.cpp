@@ -4,8 +4,13 @@
 #include "model/ProjectModel.h"
 #include "model/ProjectCommands.h"
 #include "model/PluginRack.h"
+#include "dawproject_io/DawProjectIO.h"
+#include "project_io/ProjectFile.h"
+#include "plugin_host/PluginStateStore.h"
 
 #include <map>
+#include <cmath>
+#include <array>
 
 void pluginRackTests()
 {
@@ -28,7 +33,7 @@ void pluginRackTests()
         const auto roundTrip = restored->toVar();
         expect(roundTrip["kind"].toString() == "serialRack"
                    && roundTrip["containerId"].toString() == "parent-rack"
-                   && static_cast<double>(roundTrip["gainDecibels"]) == -6.0,
+                   && std::abs(static_cast<double>(roundTrip["gainDecibels"]) + 6.0) < 0.000001,
                "Rack kind, parent and output level survive serialization.");
     }
 
@@ -165,4 +170,61 @@ void pluginRackTests()
     expect(nested.has_value()
                && nested->tracks.front().inserts[6].containerId == branchB.id,
            "Nested serial/parallel rack hierarchy survives a format-12 project round-trip.");
+
+    studio::DuplicateTrackCommand duplicate(project.tracks.front().id);
+    error.clear();
+    expect(duplicate.perform(project, error), error.toRawUTF8());
+    const auto* copied = project.findTrack(duplicate.duplicatedTrackId());
+    expect(copied != nullptr && copied->inserts.size() == 8
+               && copied->inserts[1].containerId == copied->inserts.front().id
+               && copied->inserts[6].containerId == copied->inserts[5].id
+               && copied->inserts[6].id != effectB.id,
+           "Duplicating a track regenerates rack IDs and every nested parent reference.");
+
+    sidechain.destination.insertId = firstRack.id;
+    project.routingConnections.push_back(sidechain);
+    error.clear();
+    expect(!project.validateRoutingGraph(error),
+           "Sidechains target contained processors, never a native rack header.");
+    project.routingConnections.pop_back();
+    const auto archive = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("studio-duo-rack-export", ".dawproject");
+    expect(archive.replaceWithText("previous export"), "The synthetic export destination is writable.");
+    const auto exported = studio::DawProjectIO::exportProject(project, {}, archive);
+    expect(exported.result.failed() && archive.loadFileAsString() == "previous export"
+               && std::any_of(exported.report.issues.cbegin(), exported.report.issues.cend(),
+                   [](const auto& issue) { return issue.code == "unsupported.plugin-rack"; }),
+           "DAWproject export reports unrepresentable rack topology explicitly and never silently serializes parallel effects.");
+    expect(archive.deleteFile(), "The synthetic rack export fixture is removed.");
+
+    const auto package = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("studio-duo-rack-package", ".studioduo");
+    expect(package.createDirectory().wasOk(), "A disposable native rack package is created.");
+    const std::array<std::uint8_t, 4> stateBytes { 1, 2, 3, 4 };
+    const juce::MemoryBlock state(stateBytes.data(), stateBytes.size());
+    const auto reference = studio::PluginStateStore::store(package, state, error);
+    expect(reference.has_value(), "Synthetic contained plugin state is stored content-addressably.");
+    if (reference.has_value())
+    {
+        auto& child = project.tracks.front().inserts[4];
+        child.stateFile = reference->relativePath;
+        child.stateHash = reference->hash;
+        expect(studio::ProjectFile::save(project, package).wasOk(), "The native rack project saves transactionally.");
+        const auto reopened = studio::ProjectFile::load(package, error);
+        juce::MemoryBlock restoredState;
+        expect(reopened.has_value()
+                   && reopened->tracks.front().inserts[4].containerId == branchA.id
+                   && studio::PluginStateStore::load(package,
+                        { reopened->tracks.front().inserts[4].stateFile,
+                          reopened->tracks.front().inserts[4].stateHash }, restoredState, error)
+                   && restoredState == state,
+               "Native package reopening preserves nested plugin placement and its exact state bytes.");
+        const auto manifest = juce::JSON::parse(package.getChildFile("manifest.json").loadFileAsString());
+        const auto capabilities = manifest["requiredCapabilities"];
+        expect(capabilities.isArray()
+                   && std::any_of(capabilities.getArray()->begin(), capabilities.getArray()->end(),
+                       [](const auto& capability) { return capability.toString() == "pluginRacksV1"; }),
+               "Native packages declare their nested rack capability to other readers.");
+    }
+    expect(package.deleteRecursively(), "The disposable native rack package is removed.");
 }

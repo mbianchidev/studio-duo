@@ -654,6 +654,43 @@ crashed, and late-block states. Click a failed insert to reload that runtime.
 Click a missing insert, then choose a catalog processor to replace it while
 preserving the insert ID, routing, automation, and prior state reference.
 
+### Plugin racks and parallel effects
+
+In the inspector's **INSERTS** tree, use **+** to create a **serial rack** or a
+**parallel splitter**. A serial rack processes its children in order. A splitter
+starts with two serial branches at equal half-levels (about -6 dB each); both
+receive the same audio and MIDI, and their outputs are added after automatic
+latency alignment. Empty branches pass dry audio, so one can be used for
+dry/wet processing. Branch levels are independent; they are not automatically
+normalized when you add another branch.
+
+Select a rack or branch and use **+ > Add plugin here**. Racks can contain
+instruments, effects, and further racks/splitters. Select a splitter and use
+**+ > Add serial branch** for additional parallel paths. These are native
+containers: contained external plugins retain their individual sandbox,
+trusted, or ARA hosting mode.
+
+Right-click a row, or use its actions button, to **Wrap in serial rack**,
+**Move into**, **Move earlier/later**, **Rename**, or set an **Output level**
+between -60 and +12 dB. Power and remove buttons act on the selected row.
+Bypassing an entire rack passes its input through without processing its
+children. Removing a rack removes its children and their automation/sidechains;
+undo restores the complete group. A splitter must retain at least two branches.
+Rack edits preserve unsaved plugin settings and native project saves retain
+the hierarchy, levels, plugin IDs, and state.
+
+For parallel send effects, create/select an aux return, route a pre/post-fader
+send to it, and create a splitter in that aux's **INSERTS** tree. The same rack
+controls work on audio/instrument tracks, buses, the master, and control-room
+inserts. Stop recording before changing rack topology.
+
+The native tree supports Tab focus, arrow navigation/expansion, Enter to open a
+plugin or expand a rack, Space to bypass, Delete to remove, and Shift+F10 for
+the actions menu. Live latency changes refresh branch compensation without
+recreating the plugins; offline audio export uses the same processing tree.
+DAWproject 1.0 export cannot represent this topology and reports an error
+rather than flattening parallel effects into a different-sounding serial chain.
+
 ## Use bundled amps and cabinets
 
 **Guitar Amp** provides preamp gain, bass, mid, treble, presence, saturation,
@@ -760,15 +797,16 @@ Studio Duo projects are versioned `.studioduo` directory packages. A save writes
 a new session generation before atomically replacing `manifest.json`; the latest
 complete state is also copied to `recovery/latest.json`.
 
-Project format version 11 stores the typed routing graph, separate automation
+Project format version 12 stores the typed routing graph, separate automation
 generations, content-addressed plugin state, compatibility policy, tone and
 mixer snapshots, render reports, ordinary MIDI clips and expressions, drum
 maps, pattern aliases, humanization state, MIDI routing templates, project
 metadata, scenes, persisted interchange reports, and channel-scoped MIDI
 pressure automation. It also stores the mastering album, source hashes,
 references, sequencing, release metadata, final measurements, independent
-marker flags, section-owned tempo/meter points and per-section click patterns.
-Versions 1-10 migrate on load.
+marker flags, section-owned tempo/meter points, per-section click patterns,
+and nested serial/parallel plugin racks. Versions 1-11 migrate on load without
+adding racks or changing their existing serial insert processing.
 See [project-format.md](project-format.md).
 
 ### Audio export

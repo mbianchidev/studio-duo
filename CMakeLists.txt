@@ -885,6 +885,8 @@ if(STUDIO_DUO_BUILD_TESTS)
             tests/PluginSearchPathTests.cpp
             tests/PluginRecoveryTests.cpp
             tests/PluginRackTests.cpp
+            tests/PluginRackEngineTests.cpp
+            tests/PluginRackUiTests.cpp
             tests/AutomationTests.cpp
             tests/DeviceTests.cpp
             tests/BundledDeviceTests.cpp
@@ -926,6 +928,8 @@ if(STUDIO_DUO_BUILD_TESTS)
             src/ui/TimelineComponent.h
             src/ui/MixerPanel.cpp
             src/ui/MixerPanel.h
+            src/ui/PluginInsertPanel.cpp
+            src/ui/PluginInsertPanel.h
             src/ui/InfoPanelComponent.cpp
             src/ui/InfoPanelComponent.h
             src/ui/MainWindowSizing.cpp

@@ -117,12 +117,15 @@ std::vector<MixerPanel::Item> MixerPanel::itemsForTrack(
         return result;
     for (const auto& insert : track.inserts)
     {
+        if (insert.containerId.isNotEmpty())
+            continue;
         result.push_back({
             Item::Type::plugin,
             track.id,
             insert.id,
             insert.name,
-            insert.format,
+            insert.kind == PluginInsertKind::parallelSplitter ? juce::String("PARALLEL")
+                : insert.isContainer() ? juce::String("RACK") : insert.format,
             !insert.bypassed
         });
     }

@@ -1626,6 +1626,8 @@ int main(int argc, char* argv[])
     RUN_SUITE(pluginSearchPathTests);
     RUN_SUITE(pluginRecoveryTests);
     RUN_SUITE(pluginRackTests);
+    RUN_SUITE(pluginRackEngineTests);
+    RUN_SUITE(pluginRackUiTests);
     RUN_SUITE(automationTests);
     RUN_SUITE(deviceTests);
     RUN_SUITE(bundledDeviceTests);

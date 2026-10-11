@@ -1,6 +1,6 @@
 # Studio Duo native project format
 
-Studio Duo format version 11 is a directory package with immutable generation
+Studio Duo format version 12 is a directory package with immutable generation
 files and content-addressed processor state.
 
 ```text
@@ -43,7 +43,7 @@ The prior manifest and generation remain valid until step 5 succeeds.
 Current manifests include `midiCompositionV1`,
 `midiChannelPressureV1`, `bundledCompositionDevicesV1`, `scenesV1`,
 `compatibilityReportsV1`, `renderReportsV2`, `dawprojectV1`, and
-`masteringAlbumV1`, `sectionTransportV1`, and `timelineMarkersV1`. Readers must reject a manifest
+`masteringAlbumV1`, `sectionTransportV1`, `timelineMarkersV1`, and `pluginRacksV1`. Readers must reject a manifest
 version newer than they support rather than silently dropping MIDI, bundled
 output/cabinet state, scenes, or interchange diagnostics.
 
@@ -95,6 +95,22 @@ ARA capability, missing state, recovery-disabled state, and `stateFormat`.
 State format distinguishes Studio Duo host-opaque bytes from preserved generic,
 VST2, VST3, CLAP, and Audio Unit preset containers so interchange never
 mislabels one encoding as another.
+
+### Plugin racks
+
+Track, tone-snapshot, and mixer-snapshot `inserts` remain flat ordered arrays.
+Each record adds `kind` (`plugin`, `serialRack`, or `parallelSplitter`),
+`containerId` (empty for track-level inserts), and finite `gainDecibels`
+(-60 through +12). Containers have no external plugin identifier or state blob;
+ordinary child plugins keep their existing IDs and content-addressed state.
+Sibling processing order is array order, independently of descendant placement.
+
+Parents must be native containers on the same track. IDs are unique within
+the chain; cycles and nesting beyond 32 levels are rejected. A splitter has
+at least two serial-rack branches. Serial children process in sequence;
+parallel branches receive identical input and sum with per-branch latency
+compensation. Container bypass applies to descendants. Rack removal includes
+their automation and sidechain references; undo restores the complete group.
 
 Bundled guitar and bass amp state includes normalized automatable parameters
 and either the documented embedded cabinet identity or validated mono/stereo
@@ -272,7 +288,10 @@ disabled until explicit reload. Clean shutdown removes the marker.
   overrides. Existing maps, loop bounds and project meter remain unchanged.
 - Versions 1-10 migrate to version 11 by preserving existing song sections and
   copying their former marker identity into standalone draggable markers.
+- Versions 1-11 migrate to version 12 with `kind: "plugin"`, empty
+  `containerId`, and neutral `gainDecibels: 0`. No racks or parallel processing
+  are introduced into existing projects.
 - The manifest and referenced session format versions must agree.
 
-[`schema/project-v11.schema.json`](schema/project-v11.schema.json) documents the
+[`schema/project-v12.schema.json`](schema/project-v12.schema.json) documents the
 current public session envelope; older schema files remain historical.

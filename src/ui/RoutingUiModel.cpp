@@ -90,6 +90,8 @@ std::vector<RoutingDestinationItem> RoutingUiModel::sidechainDestinations(
             continue;
         for (const auto& insert : track.inserts)
         {
+            if (insert.isContainer())
+                continue;
             RoutingConnection candidate;
             candidate.name = "Sidechain";
             candidate.kind = RouteKind::sidechain;

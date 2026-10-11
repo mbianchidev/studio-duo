@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://studioduo.dev/schema/project-v12.schema.json",
+  "title": "Studio Duo session format v12",
+  "type": "object",
+  "required": [
+    "formatVersion", "id", "name", "metadata", "mastering", "tracks",
+    "routingConnections", "drumMaps", "midiPatterns", "midiRoutingTemplates",
+    "scenes", "compatibilityReports", "toneSnapshots", "mixerSnapshots",
+    "renderReports", "markers", "sections", "tempoChanges", "meterChanges",
+    "loopEnabled", "loopStartSeconds", "loopEndSeconds"
+  ],
+  "properties": {
+    "formatVersion": { "const": 12 },
+    "id": { "$ref": "project-v11.schema.json#/properties/id" },
+    "name": { "$ref": "project-v11.schema.json#/properties/name" },
+    "metadata": { "$ref": "project-v11.schema.json#/properties/metadata" },
+    "mastering": { "$ref": "project-v11.schema.json#/properties/mastering" },
+    "tracks": {
+      "allOf": [
+        { "$ref": "project-v11.schema.json#/properties/tracks" },
+        {
+          "type": "array",
+          "items": { "properties": { "inserts": { "$ref": "#/$defs/inserts" } } }
+        }
+      ]
+    },
+    "routingConnections": { "$ref": "project-v11.schema.json#/properties/routingConnections" },
+    "drumMaps": { "$ref": "project-v11.schema.json#/properties/drumMaps" },
+    "midiPatterns": { "$ref": "project-v11.schema.json#/properties/midiPatterns" },
+    "midiRoutingTemplates": { "$ref": "project-v11.schema.json#/properties/midiRoutingTemplates" },
+    "scenes": { "$ref": "project-v11.schema.json#/properties/scenes" },
+    "compatibilityReports": { "$ref": "project-v11.schema.json#/properties/compatibilityReports" },
+    "toneSnapshots": {
+      "type": "array",
+      "items": { "type": "object", "properties": { "inserts": { "$ref": "#/$defs/inserts" } } }
+    },
+    "mixerSnapshots": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "tracks": {
+            "type": "array",
+            "items": { "type": "object", "properties": { "inserts": { "$ref": "#/$defs/inserts" } } }
+          }
+        }
+      }
+    },
+    "renderReports": { "$ref": "project-v11.schema.json#/properties/renderReports" },
+    "tempo": { "$ref": "project-v11.schema.json#/properties/tempo" },
+    "timeSignatureNumerator": { "$ref": "project-v11.schema.json#/properties/timeSignatureNumerator" },
+    "timeSignatureDenominator": { "$ref": "project-v11.schema.json#/properties/timeSignatureDenominator" },
+    "loopEnabled": { "$ref": "project-v11.schema.json#/properties/loopEnabled" },
+    "loopStartSeconds": { "$ref": "project-v11.schema.json#/properties/loopStartSeconds" },
+    "loopEndSeconds": { "$ref": "project-v11.schema.json#/properties/loopEndSeconds" },
+    "markers": { "$ref": "project-v11.schema.json#/properties/markers" },
+    "sections": { "$ref": "project-v11.schema.json#/properties/sections" },
+    "tempoChanges": { "$ref": "project-v11.schema.json#/properties/tempoChanges" },
+    "meterChanges": { "$ref": "project-v11.schema.json#/properties/meterChanges" }
+  },
+  "$defs": {
+    "inserts": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/insert" }
+    },
+    "insert": {
+      "type": "object",
+      "required": ["id", "name", "kind", "containerId", "gainDecibels"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1 },
+        "kind": { "enum": ["plugin", "serialRack", "parallelSplitter"] },
+        "containerId": { "type": "string" },
+        "gainDecibels": { "type": "number", "minimum": -60, "maximum": 12 },
+        "bypassed": { "type": "boolean", "default": false },
+        "pluginIdentifier": { "type": "string" },
+        "stateFile": { "type": "string" },
+        "stateHash": { "type": "string" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "plugin" } } },
+          "then": {
+            "required": ["pluginIdentifier"],
+            "properties": { "pluginIdentifier": { "type": "string", "minLength": 1 } }
+          }
+        }
+      ],
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

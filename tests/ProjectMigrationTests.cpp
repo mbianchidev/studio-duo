@@ -174,7 +174,8 @@ void projectMigrationTests()
                && loadedNine->tempoChanges == legacyNineProject.tempoChanges
                && loadedNine->loopStartSeconds == 1.25
                && loadedNine->loopEndSeconds == 6.75
-               && static_cast<int>(loadedNine->toVar()["formatVersion"]) == 11,
+               && static_cast<int>(loadedNine->toVar()["formatVersion"])
+                      == studio::Project::currentFormatVersion,
            "Version 9 projects retain sections while migrating their former marker behavior to standalone flags.");
 
     auto legacyTenProject = studio::Project::createDefault();

@@ -29,6 +29,7 @@ public:
         const PluginInsert& insert);
     [[nodiscard]] static Timing measure(
         const std::vector<PluginInsert>& inserts, const TimingLookup& lookup = {},
-        std::map<juce::String, std::int64_t>* inputLatencies = nullptr);
+        std::map<juce::String, std::int64_t>* inputLatencies = nullptr,
+        const juce::String& containerId = {});
 };
 }

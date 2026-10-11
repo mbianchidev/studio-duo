@@ -3314,7 +3314,8 @@ bool ReplacePluginInsertCommand::perform(Project& project,
         error = "The plugin insert to replace no longer exists.";
         return false;
     }
-    if (newInsert.pluginIdentifier.isEmpty()
+    if (insert->isContainer() || newInsert.isContainer()
+        || newInsert.pluginIdentifier.isEmpty()
         || newInsert.name.trim().isEmpty())
     {
         error = "The replacement plugin is invalid.";
@@ -3341,6 +3342,8 @@ bool ReplacePluginInsertCommand::perform(Project& project,
         newInsert.stateFile = oldInsert.stateFile;
         newInsert.stateHash = oldInsert.stateHash;
         newInsert.bypassed = oldInsert.bypassed;
+        newInsert.containerId = oldInsert.containerId;
+        newInsert.gainDecibels = oldInsert.gainDecibels;
         newInsert.bridgeMode = oldInsert.bridgeMode;
         newInsert.recoveryDisabled = false;
         newInsert.missing = false;
@@ -3444,6 +3447,11 @@ bool SetPluginBridgeModeCommand::perform(Project& project,
     if (insert == nullptr)
     {
         error = "The plugin insert no longer exists.";
+        return false;
+    }
+    if (insert->isContainer())
+    {
+        error = "Native racks do not use plugin isolation modes.";
         return false;
     }
     if (newMode == PluginBridgeMode::araCompatibility
@@ -4081,6 +4089,9 @@ bool DuplicateTrackCommand::perform(Project& project, juce::String& error)
                 });
             return mapping != insertIdMap.cend() ? mapping->second : originalId;
         };
+        for (auto& track : duplicatedTracks)
+            for (auto& insert : track.inserts)
+                insert.containerId = mappedInsertId(insert.containerId);
         for (const auto& connection : project.routingConnections)
         {
             if (mappedId(connection.sourceTrackId) == connection.sourceTrackId)
@@ -4149,6 +4160,11 @@ bool DuplicateTrackCommand::perform(Project& project, juce::String& error)
             duplicate.frozenTrackId.clear();
             duplicate.renderFile.clear();
             duplicate.renderHash.clear();
+            for (auto& insert : duplicate.inserts)
+            {
+                insert.id = mappedInsertId(insert.id);
+                insert.containerId = mappedInsertId(insert.containerId);
+            }
             duplicatedToneSnapshots.push_back(std::move(duplicate));
         }
         createdDuplicate = true;

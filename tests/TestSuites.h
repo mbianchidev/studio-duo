@@ -17,6 +17,8 @@ void pluginFormatTests();
 void pluginSearchPathTests();
 void pluginRecoveryTests();
 void pluginRackTests();
+void pluginRackEngineTests();
+void pluginRackUiTests();
 void automationTests();
 void deviceTests();
 void bundledDeviceTests();

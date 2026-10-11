@@ -33,6 +33,8 @@ hardening remains before the complete DAW described in the
 - Cycle-safe sends, per-insert sidechains, auxes, nested buses, folders, VCAs,
   control room, graph-routed input monitoring, flexible hardware outputs,
   solo-safe behavior, and plugin delay compensation
+- Nested instrument/effect racks and adjustable, latency-aligned parallel
+  splitters on track, aux/send-return, bus, and master inserts
 - Live, recorded, and retrospective MIDI with ordinary beat-based clips,
   stable note/expression IDs, cycle-safe channel-filtered routing, and exact
   sample scheduling through in-process and sandboxed processors

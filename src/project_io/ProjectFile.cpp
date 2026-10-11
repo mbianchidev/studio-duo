@@ -333,7 +333,8 @@ juce::Result ProjectFile::save(const Project& project, const juce::File& request
             "dawprojectV1",
             "masteringAlbumV1",
             "sectionTransportV1",
-            "timelineMarkersV1"
+            "timelineMarkersV1",
+            "pluginRacksV1"
         }));
     manifest->setProperty("savedAt", juce::Time::getCurrentTime().toISO8601(true));
 

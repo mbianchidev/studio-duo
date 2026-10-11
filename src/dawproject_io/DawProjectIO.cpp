@@ -297,6 +297,11 @@ public:
         DawProjectExportResult output;
         output.archive = destinationArchive;
         reportUnsupportedProjectData();
+        if (fatal)
+        {
+            output.result = juce::Result::fail(firstError);
+            return finishRun(std::move(output));
+        }
         auto metadata = buildMetadata();
         auto projectDocument = buildProject();
         if (fatal)
@@ -1978,6 +1983,13 @@ private:
             for (const auto& insert : track.inserts)
             {
                 const auto insertPath = devicePath(track, insert);
+                if (insert.isContainer())
+                {
+                    fail("unsupported.plugin-rack", insertPath,
+                         "DAWproject 1.0 cannot preserve native plugin racks or parallel splitters. "
+                         "Render/freeze the rack to audio, or move its plugins to track level before exporting.");
+                    continue;
+                }
                 if (insert.missing)
                     warn(
                         "unsupported.device-missing",

@@ -1,5 +1,6 @@
 #include "StudioAudioEngine.h"
 #include "model/TransportEditing.h"
+#include "model/PluginRack.h"
 
 #include "logging/StudioLogger.h"
 #include "mix/RoutingGraph.h"
@@ -39,6 +40,47 @@ std::int64_t wrapLoopPosition(std::int64_t position,
     if (loopLength <= 0 || position < loopEnd)
         return position;
     return loopStart + (position - loopStart) % loopLength;
+}
+
+std::vector<PluginInsert> runtimeRackInserts(
+    const std::vector<StudioAudioEngine::PluginRuntimeRequest>& requests,
+    const juce::String& trackId, int processingQuantum)
+{
+    std::vector<PluginInsert> inserts;
+    for (const auto& request : requests)
+    {
+        if (request.trackId != trackId)
+            continue;
+        PluginInsert insert;
+        insert.id = request.insertId;
+        insert.name = request.name;
+        insert.kind = request.kind;
+        insert.containerId = request.containerId;
+        insert.bypassed = request.bypassed;
+        insert.missing = request.missing;
+        insert.gainDecibels = request.gainDecibels;
+        if (!insert.isContainer() && !request.bypassed && !request.missing
+            && (request.description.has_value() || request.deviceIdentifier.isNotEmpty()))
+        {
+            insert.latencySamples = std::max(0, request.latencySamples)
+                + (request.bridgeMode == PluginBridgeMode::sandboxed ? processingQuantum : 0);
+            insert.tailSeconds = std::max(0.0, request.tailSeconds);
+        }
+        inserts.push_back(std::move(insert));
+    }
+    return inserts;
+}
+
+std::uint64_t pluginStateHash(const juce::MemoryBlock& state)
+{
+    auto hash = std::uint64_t { 1469598103934665603ULL };
+    const auto* bytes = static_cast<const std::uint8_t*>(state.getData());
+    for (std::size_t index = 0; index < state.getSize(); ++index)
+    {
+        hash ^= bytes[index];
+        hash *= 1099511628211ULL;
+    }
+    return hash;
 }
 
 juce::Result validateRecordingPlan(const RecordingPlan& plan)
@@ -597,6 +639,7 @@ void StudioAudioEngine::shutdown()
         const juce::ScopedLock lock(pluginRequestLock);
         pendingPluginRequests.clear();
         activePluginRequests.clear();
+        activePluginStateOrigins.clear();
         pendingPluginSnapshot.reset();
         pendingPluginFingerprint.clear();
         buildingPluginFingerprint.clear();
@@ -642,6 +685,7 @@ juce::Result StudioAudioEngine::updateProjectInternal(
         return juce::Result::fail(
             "Wait for the active render to finish.");
     juce::String error;
+    prepareRackRequests(project, pluginRequests);
     auto snapshot = buildSnapshot(project,
                                   currentSampleRate(),
                                   pluginRequests,
@@ -829,10 +873,23 @@ bool StudioAudioEngine::resetPluginProcessing()
                     insert.inProcess->reset();
                 resetDelay(insert.failureDelay);
             }
+            const auto resetRack = [](const auto& self, RackRuntimeNode& node) -> void
+            {
+                node.branchBuffer.clear();
+                node.mixBuffer.clear();
+                node.branchMidi.clear();
+                node.mixMidi.clear();
+                for (auto& child : node.children)
+                    self(self, child);
+            };
+            for (auto& root : track.roots)
+                resetRack(resetRack, root);
         }
     }
     for (auto& snapshot : snapshots)
     {
+        for (auto& delay : snapshot.rackDelays)
+            resetDelay(delay.compensation);
         for (auto& track : snapshot.tracks)
         {
             for (auto& source : track.sources)
@@ -1834,7 +1891,31 @@ StudioAudioEngine::preserveLiveAraStates(
             return request.bridgeMode
                 == PluginBridgeMode::araCompatibility;
         });
-    if (!hasAraRequest)
+    std::vector<PluginRuntimeRequest> previousRequests;
+    std::map<juce::String, std::uint64_t> previousOrigins;
+    {
+        const juce::ScopedLock lock(pluginRequestLock);
+        previousRequests = activePluginRequests;
+        previousOrigins = activePluginStateOrigins;
+    }
+    const auto rackSignature = [](const std::vector<PluginRuntimeRequest>& value)
+    {
+        juce::String signature;
+        for (const auto& request : value)
+            signature << request.trackId << ":" << request.insertId << ":"
+                      << static_cast<int>(request.kind) << ":" << request.containerId << ":"
+                      << (request.bypassed ? "b" : "e") << ":"
+                      << juce::String(request.gainDecibels, 6) << ";";
+        return signature;
+    };
+    const auto hasRack = [](const auto& value)
+    {
+        return std::any_of(value.cbegin(), value.cend(),
+                          [](const auto& request) { return request.kind != PluginInsertKind::plugin; });
+    };
+    const auto rackChanged = (hasRack(requests) || hasRack(previousRequests))
+        && rackSignature(requests) != rackSignature(previousRequests);
+    if (!hasAraRequest && !rackChanged)
         return {};
     auto expectedOperation = 0;
     if (!exclusiveAudioOperation.compare_exchange_strong(
@@ -1847,7 +1928,7 @@ StudioAudioEngine::preserveLiveAraStates(
                 ? AraPreservationResult::Status::recordingBlocked
                 : AraPreservationResult::Status::failed,
             expectedOperation == 1
-                ? "Stop and finalize recording before rebuilding ARA processors."
+                ? "Stop and finalize recording before rebuilding racks or ARA processors."
                 : "Another plugin state operation is already running."
         };
     }
@@ -1866,7 +1947,7 @@ StudioAudioEngine::preserveLiveAraStates(
     {
         return {
             AraPreservationResult::Status::recordingBlocked,
-            "Stop and finalize recording before rebuilding ARA processors."
+            "Stop and finalize recording before rebuilding racks or ARA processors."
         };
     }
 
@@ -1893,11 +1974,23 @@ StudioAudioEngine::preserveLiveAraStates(
         activePluginRuntime.load(std::memory_order_acquire))];
     for (auto& request : requests)
     {
-        if (request.bridgeMode
-            != PluginBridgeMode::araCompatibility)
-        {
+        if (request.kind != PluginInsertKind::plugin)
             continue;
-        }
+        const auto previous = std::find_if(previousRequests.cbegin(), previousRequests.cend(),
+            [&request](const auto& candidate) { return candidate.insertId == request.insertId; });
+        const auto origin = previousOrigins.find(request.insertId);
+        const auto preserveRackState = rackChanged && previous != previousRequests.cend()
+            && origin != previousOrigins.cend() && origin->second == pluginStateHash(request.state)
+            && previous->bridgeMode == request.bridgeMode
+            && previous->deviceIdentifier == request.deviceIdentifier
+            && previous->description.has_value() == request.description.has_value()
+            && (!request.description.has_value()
+                || previous->description->createIdentifierString()
+                    == request.description->createIdentifierString());
+        if (request.bridgeMode != PluginBridgeMode::araCompatibility && !preserveRackState)
+            continue;
+        if (preserveRackState)
+            request.state = previous->state;
         for (auto& track : graph.tracks)
         {
             const auto insert = std::find_if(
@@ -1907,15 +2000,40 @@ StudioAudioEngine::preserveLiveAraStates(
                 {
                     return candidate.insertId == request.insertId;
                 });
-            if (insert == track.inserts.end()
-                || insert->inProcess == nullptr
-                || insert->araDocument == nullptr)
+            if (insert == track.inserts.end())
             {
                 continue;
             }
 
             juce::MemoryBlock processorState;
-            insert->inProcess->getStateInformation(processorState);
+            if (insert->bridge != nullptr)
+            {
+                const auto result = insert->bridge->requestState(
+                    processorState, std::chrono::milliseconds(2000));
+                if (result.failed())
+                    return { AraPreservationResult::Status::failed,
+                             insert->name + ": could not preserve rack plugin state: "
+                                 + result.getErrorMessage() };
+                request.state = std::move(processorState);
+                break;
+            }
+            if (insert->inProcess == nullptr)
+                continue;
+            if (auto* validated = dynamic_cast<ValidatedPluginStateTarget*>(insert->inProcess.get()))
+            {
+                const auto result = validated->saveValidatedState(processorState);
+                if (result.failed())
+                    return { AraPreservationResult::Status::failed,
+                             insert->name + ": could not preserve rack plugin state: "
+                                 + result.getErrorMessage() };
+            }
+            else
+                insert->inProcess->getStateInformation(processorState);
+            if (insert->araDocument == nullptr)
+            {
+                request.state = std::move(processorState);
+                break;
+            }
             juce::MemoryBlock araState;
             if (const auto result =
                     insert->araDocument->archive(araState);
@@ -2261,6 +2379,11 @@ StudioAudioEngine::pluginAutomationEventDropCount() const noexcept
 {
     return pluginAutomationEventsDropped.load(
         std::memory_order_relaxed);
+}
+
+std::uint64_t StudioAudioEngine::pluginRackMidiEventDropCount() const noexcept
+{
+    return pluginRackMidiEventsDropped.load(std::memory_order_relaxed);
 }
 
 bool StudioAudioEngine::pluginRuntimeTransitionPending() const
@@ -3043,6 +3166,7 @@ juce::Result StudioAudioEngine::renderToBufferInternal(
         return juce::Result::fail(
             "Buffer rendering cannot omit active plugins.");
 
+    prepareRackRequests(project, pluginRequests);
     if (!pluginRequests.empty())
     {
         if (isRecording()
@@ -4583,65 +4707,63 @@ void StudioAudioEngine::configureRuntimeTiming(
     const std::vector<PluginRuntimeRequest>& pluginRequests,
     int transitionProgressSlot) const
 {
-    const auto requestLatency =
-        [&snapshot](const PluginRuntimeRequest& request)
+    std::map<std::uint64_t, PluginRack::Timing> timing;
+    std::map<std::uint64_t, std::map<juce::String, std::int64_t>> inputLatency;
+    std::vector<RenderSnapshot::RackDelay> rackDelays;
+    for (const auto& request : pluginRequests)
     {
-        if (request.bypassed
-            || request.missing
-            || (!request.description.has_value()
-                && request.deviceIdentifier.isEmpty()))
-            return 0;
-        return (request.bridgeMode == PluginBridgeMode::sandboxed
-                    ? snapshot.processingQuantum
-                    : 0)
-            + std::max(0, request.latencySamples);
-    };
-    const auto latencyForKey =
-        [&pluginRequests, &requestLatency](std::uint64_t key)
-    {
-        return std::accumulate(pluginRequests.cbegin(),
-                               pluginRequests.cend(),
-                               0,
-                               [key, &requestLatency](
-                                   int total,
-                                   const auto& request)
+        const auto key = runtimeKey(request.trackId);
+        if (timing.contains(key))
+            continue;
+        const auto inserts = runtimeRackInserts(pluginRequests, request.trackId, snapshot.processingQuantum);
+        timing[key] = PluginRack::measure(inserts, {}, &inputLatency[key]);
+        for (const auto& insert : inserts)
         {
-            if (runtimeKey(request.trackId) != key)
-                return total;
-            return total + requestLatency(request);
-        });
+            if (insert.kind != PluginInsertKind::parallelSplitter)
+                continue;
+            const auto maximumLatency = PluginRack::measure(inserts, {}, nullptr, insert.id).latencySamples;
+            for (const auto& branch : inserts)
+            {
+                if (branch.containerId != insert.id)
+                    continue;
+                const auto previous = std::find_if(snapshot.rackDelays.cbegin(), snapshot.rackDelays.cend(),
+                    [key, &branch](const auto& delay)
+                    { return delay.runtimeKey == key && delay.insertId == branch.id; });
+                RenderSnapshot::RackDelay delay;
+                delay.runtimeKey = key;
+                delay.insertId = branch.id;
+                if (previous != snapshot.rackDelays.cend())
+                    delay.compensation = previous->compensation;
+                const auto branchLatency = PluginRack::measure(inserts, {}, nullptr, branch.id).latencySamples;
+                configureDelayCompensator(delay.compensation,
+                    static_cast<int>(maximumLatency - branchLatency), snapshot.processingQuantum,
+                    transitionProgressSlot);
+                rackDelays.push_back(std::move(delay));
+            }
+        }
+    }
+    snapshot.rackDelays = std::move(rackDelays);
+    const auto latencyForKey =
+        [&timing](std::uint64_t key)
+    {
+        const auto found = timing.find(key);
+        return found == timing.cend() ? 0 : static_cast<int>(found->second.latencySamples);
     };
     const auto latencyBeforeInsert =
-        [&pluginRequests, &requestLatency](
+        [&inputLatency](
             std::uint64_t key,
             const juce::String& insertId)
     {
-        auto latency = 0;
-        for (const auto& request : pluginRequests)
-        {
-            if (runtimeKey(request.trackId) != key)
-                continue;
-            if (request.insertId == insertId)
-                break;
-            latency += requestLatency(request);
-        }
-        return latency;
+        const auto track = inputLatency.find(key);
+        if (track == inputLatency.cend())
+            return 0;
+        const auto insert = track->second.find(insertId);
+        return insert == track->second.cend() ? 0 : static_cast<int>(insert->second);
     };
-    const auto tailForKey = [&pluginRequests](std::uint64_t key)
+    const auto tailForKey = [&timing](std::uint64_t key)
     {
-        return std::accumulate(pluginRequests.cbegin(),
-                               pluginRequests.cend(),
-                               0.0,
-                               [key](double total, const auto& request)
-        {
-            if (runtimeKey(request.trackId) != key
-                || request.bypassed
-                || request.missing
-                || (!request.description.has_value()
-                    && request.deviceIdentifier.isEmpty()))
-                return total;
-            return total + std::max(0.0, request.tailSeconds);
-        });
+        const auto found = timing.find(key);
+        return found == timing.cend() ? 0.0 : found->second.tailSeconds;
     };
     std::vector<int> inputLatencies(snapshot.tracks.size(), 0);
     std::vector<double> inputTails(snapshot.tracks.size(), 0.0);
@@ -5530,6 +5652,8 @@ void StudioAudioEngine::mergeSnapshotTransitionHandoffs(
             merge(route.compensation);
     }
     merge(snapshot.clickCompensation);
+    for (auto& delay : snapshot.rackDelays)
+        merge(delay.compensation);
 }
 
 void StudioAudioEngine::applyDelayCompensation(
@@ -5656,6 +5780,16 @@ void StudioAudioEngine::applyDelayCompensation(
 }
 
 #if defined(STUDIO_DUO_TESTING)
+std::vector<int> StudioAudioEngine::parallelBranchDelaysForTesting() const
+{
+    const juce::ScopedLock lock(pluginRequestLock);
+    std::vector<int> delays;
+    for (const auto& delay : snapshots[static_cast<std::size_t>(
+             activeSnapshot.load(std::memory_order_acquire))].rackDelays)
+        delays.push_back(delay.compensation.delaySamples);
+    return delays;
+}
+
 void StudioAudioEngine::recordMidiEventsForTesting(
     std::uint64_t key,
     const juce::MidiBuffer& midi) noexcept
@@ -5712,10 +5846,22 @@ void StudioAudioEngine::processRuntimeChain(std::uint64_t key,
     {
         return candidate.key == key;
     });
+    const auto readingSnapshotIndex = readingSnapshot.load(std::memory_order_acquire);
+    const auto snapshotIndex = readingSnapshotIndex >= 0
+        ? readingSnapshotIndex : activeSnapshot.load(std::memory_order_acquire);
+    auto& rackDelays = snapshots[static_cast<std::size_t>(snapshotIndex)].rackDelays;
     if (track != graph.tracks.end())
-    {
-        for (auto& insert : track->inserts)
-        {
+        for (auto& node : track->roots)
+            processRackNode(node, *track, buffer, midi, sidechains, automation,
+                            timelineSample, outputRoutes, rackDelays);
+}
+
+void StudioAudioEngine::processRuntimeInsert(
+    InsertRuntime& insert, juce::AudioBuffer<float>& buffer, juce::MidiBuffer* midi,
+    const std::vector<RenderTrack::SidechainInput>* sidechains,
+    const std::vector<RenderSource::PluginAutomation>* automation,
+    std::int64_t timelineSample, std::vector<RenderTrack::Route>* outputRoutes) noexcept
+{
             auto& runtimeMidi = midi != nullptr
                 ? *midi
                 : insert.midi;
@@ -5877,7 +6023,7 @@ void StudioAudioEngine::processRuntimeChain(std::uint64_t key,
                         {},
                         outputRoutes,
                         0);
-                    continue;
+                    return;
                 }
                 const auto events =
                     std::span<const PluginBridgeParameterEvent>(
@@ -5894,7 +6040,7 @@ void StudioAudioEngine::processRuntimeChain(std::uint64_t key,
                         outputRoutes,
                         0))
                 {
-                    continue;
+                    return;
                 }
 
                 auto& boundaries = insert.automationBoundaries;
@@ -6040,9 +6186,91 @@ void StudioAudioEngine::processRuntimeChain(std::uint64_t key,
                                        buffer.getNumSamples(),
                                        insert.failureDelay);
             }
+}
+
+void StudioAudioEngine::mergeRackMidi(juce::MidiBuffer& destination,
+                                      const juce::MidiBuffer& source) noexcept
+{
+    for (const auto event : source)
+    {
+        const auto duplicate = std::any_of(
+            destination.cbegin(), destination.cend(),
+            [&event](const auto& existing)
+            {
+                return existing.samplePosition == event.samplePosition
+                    && existing.numBytes == event.numBytes
+                    && std::equal(event.data, event.data + event.numBytes, existing.data);
+            });
+        if (duplicate)
+            continue;
+        if (destination.data.size() + event.numBytes + 8
+            > PluginBridgeSharedState::maxMidiBytes)
+        {
+            pluginRackMidiEventsDropped.fetch_add(1, std::memory_order_relaxed);
+            continue;
+        }
+        if (!destination.addEvent(event.data, event.numBytes, event.samplePosition))
+            pluginRackMidiEventsDropped.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+void StudioAudioEngine::processRackNode(
+    RackRuntimeNode& node, TrackRuntime& track, juce::AudioBuffer<float>& buffer,
+    juce::MidiBuffer* midi, const std::vector<RenderTrack::SidechainInput>* sidechains,
+    const std::vector<RenderSource::PluginAutomation>* automation,
+    std::int64_t timelineSample, std::vector<RenderTrack::Route>* outputRoutes,
+    std::vector<RenderSnapshot::RackDelay>& rackDelays) noexcept
+{
+    if (node.bypassed)
+        return;
+    if (node.kind == PluginInsertKind::plugin)
+    {
+        if (node.insertIndex >= 0)
+            processRuntimeInsert(track.inserts[static_cast<std::size_t>(node.insertIndex)],
+                                 buffer, midi, sidechains, automation, timelineSample, outputRoutes);
+    }
+    else if (node.kind == PluginInsertKind::serialRack)
+    {
+        for (auto& child : node.children)
+            processRackNode(child, track, buffer, midi, sidechains, automation,
+                            timelineSample, outputRoutes, rackDelays);
+    }
+    else
+    {
+        const auto samples = buffer.getNumSamples();
+        node.mixBuffer.clear(0, samples);
+        node.mixMidi.clear();
+        for (auto& branch : node.children)
+        {
+            for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
+                branch.branchBuffer.copyFrom(channel, 0, buffer, channel, 0, samples);
+            juce::AudioBuffer<float> branchView(
+                branch.branchBuffer.getArrayOfWritePointers(), buffer.getNumChannels(), samples);
+            branch.branchMidi.clear();
+            if (midi != nullptr)
+                mergeRackMidi(branch.branchMidi, *midi);
+            processRackNode(branch, track, branchView,
+                            midi != nullptr ? &branch.branchMidi : nullptr,
+                            sidechains, automation, timelineSample, outputRoutes, rackDelays);
+            const auto delay = std::find_if(rackDelays.begin(), rackDelays.end(),
+                [&track, &branch](const auto& candidate)
+                { return candidate.runtimeKey == track.key && candidate.insertId == branch.insertId; });
+            if (delay != rackDelays.end())
+                applyDelayCompensation(branchView, samples, delay->compensation);
+            for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
+                node.mixBuffer.addFrom(channel, 0, branchView, channel, 0, samples);
+            if (midi != nullptr)
+                mergeRackMidi(node.mixMidi, branch.branchMidi);
+        }
+        for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
+            buffer.copyFrom(channel, 0, node.mixBuffer, channel, 0, samples);
+        if (midi != nullptr)
+        {
+            midi->clear();
+            mergeRackMidi(*midi, node.mixMidi);
         }
     }
-
+    buffer.applyGain(node.gain);
 }
 
 bool StudioAudioEngine::processInProcessRuntime(
@@ -6517,6 +6745,109 @@ bool StudioAudioEngine::beginPluginControlOperation() noexcept
     return false;
 }
 
+void StudioAudioEngine::prepareRackRequests(
+    const Project& project, std::vector<PluginRuntimeRequest>& requests)
+{
+    std::vector<PluginRuntimeRequest> ordered;
+    std::vector<bool> consumed(requests.size(), false);
+    for (const auto& track : project.tracks)
+    {
+        const auto hasRack = std::any_of(track.inserts.cbegin(), track.inserts.cend(),
+                                        [](const auto& insert) { return insert.isContainer(); });
+        for (const auto& insert : track.inserts)
+        {
+            const auto found = std::find_if(requests.begin(), requests.end(),
+                [&track, &insert](const auto& request)
+                { return request.trackId == track.id && request.insertId == insert.id; });
+            if (found == requests.end() && !hasRack)
+                continue;
+            PluginRuntimeRequest request;
+            if (found != requests.end())
+            {
+                const auto index = static_cast<std::size_t>(std::distance(requests.begin(), found));
+                consumed[index] = true;
+                request = std::move(*found);
+            }
+            else
+            {
+                request.trackId = track.id;
+                request.insertId = insert.id;
+                request.name = insert.name;
+                request.deviceIdentifier = insert.bundledDevice ? insert.pluginIdentifier : juce::String();
+                request.bridgeMode = insert.bridgeMode;
+                request.latencySamples = insert.latencySamples;
+                request.tailSeconds = insert.tailSeconds;
+                request.missing = !insert.isContainer() && !insert.bundledDevice;
+            }
+            request.kind = insert.kind;
+            request.containerId = insert.containerId;
+            request.gainDecibels = insert.gainDecibels;
+            request.bypassed = request.bypassed || PluginRack::isBypassed(track.inserts, insert);
+            ordered.push_back(std::move(request));
+        }
+    }
+    for (std::size_t index = 0; index < requests.size(); ++index)
+        if (!consumed[index])
+            ordered.push_back(std::move(requests[index]));
+    requests = std::move(ordered);
+}
+
+void StudioAudioEngine::buildRackRuntime(
+    PluginRuntimeGraph& graph, const std::vector<PluginRuntimeRequest>& requests,
+    int processingQuantum)
+{
+    for (const auto& request : requests)
+    {
+        if (std::none_of(graph.tracks.cbegin(), graph.tracks.cend(),
+                        [&request](const auto& track) { return track.trackId == request.trackId; }))
+        {
+            TrackRuntime track;
+            track.key = runtimeKey(request.trackId);
+            track.trackId = request.trackId;
+            graph.tracks.push_back(std::move(track));
+        }
+    }
+    for (auto& track : graph.tracks)
+    {
+        const auto inserts = runtimeRackInserts(requests, track.trackId, processingQuantum);
+        const auto chain = [&](const auto& self, const juce::String& parentId)
+            -> std::vector<RackRuntimeNode>
+        {
+            std::vector<RackRuntimeNode> nodes;
+            for (const auto& insert : inserts)
+            {
+                if (insert.containerId != parentId)
+                    continue;
+                RackRuntimeNode node;
+                node.insertId = insert.id;
+                node.kind = insert.kind;
+                node.bypassed = insert.bypassed;
+                node.gain = juce::Decibels::decibelsToGain(insert.gainDecibels);
+                const auto processor = std::find_if(track.inserts.cbegin(), track.inserts.cend(),
+                    [&insert](const auto& runtime) { return runtime.insertId == insert.id; });
+                if (processor != track.inserts.cend())
+                    node.insertIndex = static_cast<int>(std::distance(track.inserts.cbegin(), processor));
+                if (insert.isContainer())
+                    node.children = self(self, insert.id);
+                if (insert.kind == PluginInsertKind::parallelSplitter)
+                {
+                    node.mixBuffer.setSize(2, PluginBridgeSharedState::maxBlockSize);
+                    node.mixMidi.ensureSize(PluginBridgeSharedState::maxMidiBytes);
+                    for (std::size_t index = 0; index < node.children.size(); ++index)
+                    {
+                        auto& branch = node.children[index];
+                        branch.branchBuffer.setSize(2, PluginBridgeSharedState::maxBlockSize);
+                        branch.branchMidi.ensureSize(PluginBridgeSharedState::maxMidiBytes);
+                    }
+                }
+                nodes.push_back(std::move(node));
+            }
+            return nodes;
+        };
+        track.roots = chain(chain, {});
+    }
+}
+
 void StudioAudioEngine::requestPluginRuntime(
     std::vector<PluginRuntimeRequest> requests,
     RenderSnapshot snapshot,
@@ -6669,12 +7000,15 @@ void StudioAudioEngine::runPluginRuntimeBuilder()
             return;
         }
 
+        std::map<juce::String, std::uint64_t> stateOrigins;
+        for (const auto& request : requests)
+            stateOrigins[request.insertId] = pluginStateHash(request.state);
         const auto preserved = preserveLiveAraStates(requests);
         if (preserved.status
             != AraPreservationResult::Status::success)
         {
             logError(
-                "plugin.ara.preserve",
+                "plugin.state.preserve",
                 preserved.error);
             const juce::ScopedLock lock(pluginRequestLock);
             if (generation == desiredPluginGeneration)
@@ -6717,6 +7051,8 @@ void StudioAudioEngine::runPluginRuntimeBuilder()
         {
             if (shuttingDown.load(std::memory_order_acquire))
                 return;
+            if (request.kind != PluginInsertKind::plugin)
+                continue;
 
             PluginRuntimeStatus status;
             status.trackId = request.trackId;
@@ -6982,6 +7318,7 @@ void StudioAudioEngine::runPluginRuntimeBuilder()
                     graph.tracks.push_back({
                         runtimeKey(request.trackId),
                         request.trackId,
+                        {},
                         {}
                     });
                     track = std::prev(graph.tracks.end());
@@ -7079,6 +7416,7 @@ void StudioAudioEngine::runPluginRuntimeBuilder()
                     graph.tracks.push_back({
                         runtimeKey(request.trackId),
                         request.trackId,
+                        {},
                         {}
                     });
                     track = std::prev(graph.tracks.end());
@@ -7119,6 +7457,7 @@ void StudioAudioEngine::runPluginRuntimeBuilder()
                 graph.tracks.push_back({
                     runtimeKey(request.trackId),
                     request.trackId,
+                    {},
                     {}
                 });
                 track = std::prev(graph.tracks.end());
@@ -7153,6 +7492,10 @@ void StudioAudioEngine::runPluginRuntimeBuilder()
             statuses.push_back(std::move(status));
         }
 
+        buildRackRuntime(
+            graph, requests,
+            juce::jlimit(1, PluginBridgeSharedState::maxBlockSize,
+                         deviceBlockSize.load(std::memory_order_acquire)));
         {
             const juce::ScopedLock lock(pluginRequestLock);
             if (generation != desiredPluginGeneration)
@@ -7172,6 +7515,7 @@ void StudioAudioEngine::runPluginRuntimeBuilder()
                 statuses);
             const auto runtimeDestination = chooseWritableRuntime();
             const auto snapshotDestination = chooseWritableSnapshot();
+            pendingPluginSnapshot->rackDelays.clear();
             configureRuntimeTiming(
                 *pendingPluginSnapshot,
                 requests,
@@ -7205,6 +7549,7 @@ void StudioAudioEngine::runPluginRuntimeBuilder()
             activePluginFingerprint = fingerprint;
             activePluginGeneration = generation;
             activePluginRequests = requests;
+            activePluginStateOrigins = std::move(stateOrigins);
             buildingPluginFingerprint.clear();
         }
         pluginLateBlocks.store(0, std::memory_order_relaxed);
@@ -7220,17 +7565,17 @@ juce::String StudioAudioEngine::pluginRuntimeFingerprint(
         + "|";
     for (const auto& request : requests)
     {
-        auto stateHash = std::uint64_t { 1469598103934665603ULL };
-        const auto* bytes = static_cast<const std::uint8_t*>(request.state.getData());
-        for (std::size_t index = 0; index < request.state.getSize(); ++index)
-        {
-            stateHash ^= bytes[index];
-            stateHash *= 1099511628211ULL;
-        }
+        const auto stateHash = pluginStateHash(request.state);
 
         fingerprint << request.trackId
                     << ":"
                     << request.insertId
+                    << ":"
+                    << static_cast<int>(request.kind)
+                    << ":"
+                    << request.containerId
+                    << ":"
+                    << juce::String(request.gainDecibels, 6)
                     << ":"
                     << (request.bypassed ? "b" : "e")
                     << ":"

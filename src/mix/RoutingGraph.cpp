@@ -33,7 +33,7 @@ bool hasInsert(const Track& track, const juce::String& insertId)
         track.inserts.cend(),
         [&insertId](const auto& insert)
         {
-            return insert.id == insertId;
+            return insert.id == insertId && !insert.isContainer();
         });
 }
 

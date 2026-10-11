@@ -46,7 +46,8 @@ bool PluginRack::contains(const std::vector<PluginInsert>& inserts,
 
 PluginRack::Timing PluginRack::measure(
     const std::vector<PluginInsert>& inserts, const TimingLookup& lookup,
-    std::map<juce::String, std::int64_t>* inputLatencies)
+    std::map<juce::String, std::int64_t>* inputLatencies,
+    const juce::String& containerId)
 {
     if (inputLatencies != nullptr)
         inputLatencies->clear();
@@ -83,7 +84,11 @@ PluginRack::Timing PluginRack::measure(
         }
         return total;
     };
-    return chain(chain, {}, false, 0);
+    const auto* container = find(inserts, containerId);
+    if (container != nullptr && isBypassed(inserts, *container))
+        return {};
+    return chain(chain, containerId,
+                 container != nullptr && container->kind == PluginInsertKind::parallelSplitter, 0);
 }
 
 bool PluginRack::validate(const std::vector<PluginInsert>& inserts,
