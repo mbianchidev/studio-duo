@@ -227,4 +227,34 @@ void pluginRackTests()
                "Native packages declare their nested rack capability to other readers.");
     }
     expect(package.deleteRecursively(), "The disposable native rack package is removed.");
+
+    auto stemProject = studio::Project::createDefault();
+    studio::Track stem;
+    stem.name = "Mock stem";
+    stem.type = studio::TrackType::aux;
+    stemProject.tracks.insert(stemProject.tracks.end() - 1, stem);
+    auto stemRack = firstRack;
+    stemRack.containerId.clear();
+    auto stemPlugin = plugin;
+    stemPlugin.bundledDevice = true;
+    stemPlugin.containerId = stemRack.id;
+    stemProject.tracks.front().inserts = { stemRack, stemPlugin };
+    studio::RoutingConnection outputRoute;
+    outputRoute.name = "Nested processor output";
+    outputRoute.kind = studio::RouteKind::send;
+    outputRoute.tap = studio::RouteTap::preFader;
+    outputRoute.sourceTrackId = stemProject.tracks.front().id;
+    outputRoute.sourceInsertId = stemPlugin.id;
+    outputRoute.sourceBusIndex = 1;
+    outputRoute.destination.trackId = stem.id;
+    stemProject.routingConnections.push_back(outputRoute);
+    error.clear();
+    expect(stemProject.validateRoutingGraph(error), "Final bundled processor outputs remain routable inside serial racks.");
+    stemRack.kind = studio::PluginInsertKind::parallelSplitter;
+    branchA.containerId = branchB.containerId = stemRack.id;
+    stemPlugin.containerId = branchA.id;
+    stemProject.tracks.front().inserts = { stemRack, branchA, branchB, stemPlugin };
+    error.clear();
+    expect(!stemProject.validateRoutingGraph(error),
+           "Per-processor auxiliary output taps cannot bypass a parallel rack's branch summing and compensation.");
 }

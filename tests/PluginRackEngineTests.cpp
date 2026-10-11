@@ -3,6 +3,7 @@
 
 #include "audio/StudioAudioEngine.h"
 #include "devices/DeviceRegistry.h"
+#include "devices/DrumDeviceProcessor.h"
 #include "plugin_host/ClapPluginFormat.h"
 
 #include <algorithm>
@@ -210,6 +211,49 @@ void rackRenderAndMidiTests()
         { return event.runtimeKey == destinationKey && event.size == 3
               && (event.data[0] & 0xf0) == 0x90 && event.data[1] == 36 && event.samplePosition == 17; }) == 1,
            "Parallel MIDI passthrough is merged without duplicating notes at downstream instruments.");
+
+    auto stemProject = studio::Project::createDefault();
+    stemProject.metronomeEnabled = false;
+    instrument.inserts = { drum };
+    instrument.armed = true;
+    stemProject.tracks.insert(stemProject.tracks.end() - 1, instrument);
+    studio::Track stem;
+    stem.name = "Mock nested kick stem";
+    stem.type = studio::TrackType::aux;
+    stemProject.tracks.insert(stemProject.tracks.end() - 1, stem);
+    studio::RoutingConnection stemRoute;
+    stemRoute.sourceTrackId = instrument.id;
+    stemRoute.sourceInsertId = drum.id;
+    stemRoute.sourceBusIndex = studio::DrumDeviceProcessor::kickOutput;
+    stemRoute.tap = studio::RouteTap::preFader;
+    stemRoute.destination.trackId = stem.id;
+    stemProject.routingConnections.push_back(stemRoute);
+    auto stemProcessor = studio::DeviceRegistry::create(drum.pluginIdentifier);
+    for (auto* parameter : stemProcessor->getParameters())
+        if (const auto* named = dynamic_cast<const juce::AudioProcessorParameterWithID*>(parameter);
+            named != nullptr && (named->paramID == "main" || named->paramID == "room"))
+            parameter->setValue(0.0f);
+    juce::MemoryBlock stemState;
+    stemProcessor->getStateInformation(stemState);
+    studio::StudioAudioEngine plainStemEngine;
+    expect(plainStemEngine.updateProject(stemProject, requestsFor(stemProject, { { drum.id, stemState } })).wasOk()
+               && waitForRuntime(plainStemEngine), "The mock bundled auxiliary output is ready.");
+    const auto plainStem = plainStemEngine.renderActiveBlockWithMidiForTesting(midi, 1024);
+    outer.containerId.clear();
+    outer.gainDecibels = -6.0206f;
+    drum.containerId = outer.id;
+    stemProject.findTrack(instrument.id)->inserts = { outer, drum };
+    studio::StudioAudioEngine nestedStemEngine;
+    expect(nestedStemEngine.updateProject(stemProject, requestsFor(stemProject, { { drum.id, stemState } })).wasOk()
+               && waitForRuntime(nestedStemEngine), "The serial-rack auxiliary output is ready.");
+    const auto nestedStem = nestedStemEngine.renderActiveBlockWithMidiForTesting(midi, 1024);
+    difference = 0.0f;
+    for (int channel = 0; channel < 2; ++channel)
+        for (int sample = 0; sample < 1024; ++sample)
+            difference = std::max(difference,
+                std::abs(plainStem.getSample(channel, sample) * 0.5f - nestedStem.getSample(channel, sample)));
+    expect(plainStem.getMagnitude(0, 0, 1024) > 0.001f && difference < 0.000002f,
+           "A serial rack's output level applies to routed auxiliary outputs as well as its main bus.");
 }
 }
 
@@ -263,6 +307,15 @@ void pluginRackEngineTests()
     const auto reset = engine.renderActiveBlockWithInputForTesting(input);
     expect(reset.getMagnitude(0, 0, reset.getNumSamples()) < 0.000001f,
            "Reset clears parallel delay histories along with the leaf processors.");
+    for (int channel = 0; channel < 2; ++channel)
+        for (int sample = 0; sample < input.getNumSamples(); ++sample)
+            input.setSample(channel, sample, 0.25f);
+    juce::ignoreUnused(engine.renderActiveBlockWithInputForTesting(input));
+    expect(engine.updateProject(project, requestsFor(project, { { polarity.id, invertState } })).wasOk()
+               && waitForRuntime(engine), "Rack snapshots can refresh without replacing their processors.");
+    const auto afterSnapshot = engine.renderActiveBlockWithInputForTesting(input);
+    expect(afterSnapshot.getMagnitude(0, 0, afterSnapshot.getNumSamples()) < 0.000001f,
+           "Snapshot-only edits retain existing parallel delay history instead of producing startup silence or phase jumps.");
 
     juce::String error;
     expect(engine.setPluginParameter(gain.id, 0, 0.625f, error), error.toRawUTF8());
@@ -276,6 +329,20 @@ void pluginRackEngineTests()
     expect(gainStatus != statuses.cend() && !gainStatus->parameters.empty()
                && std::abs(gainStatus->parameters.front().value - 0.625f) < 0.000001f,
            "Rack placement and branch-level edits preserve unsaved settings of existing plugins.");
+    project.tracks.front().inserts.front().bypassed = true;
+    expect(engine.updateProject(project, requestsFor(project, { { polarity.id, invertState } })).wasOk()
+               && waitForRuntime(engine), "A splitter bypasses all of its child runtimes.");
+    expect(engine.updateProject(project, requestsFor(project, { { polarity.id, invertState } })).wasOk()
+               && waitForRuntime(engine), "A snapshot-only update can occur while a rack is bypassed.");
+    project.tracks.front().inserts.front().bypassed = false;
+    expect(engine.updateProject(project, requestsFor(project, { { polarity.id, invertState } })).wasOk()
+               && waitForRuntime(engine), "The bypassed rack can be re-enabled.");
+    const auto reenabledStatuses = engine.pluginRuntimeStatuses();
+    const auto reenabledGain = std::find_if(reenabledStatuses.cbegin(), reenabledStatuses.cend(),
+        [&gain](const auto& status) { return status.insertId == gain.id; });
+    expect(reenabledGain != reenabledStatuses.cend() && !reenabledGain->parameters.empty()
+               && std::abs(reenabledGain->parameters.front().value - 0.625f) < 0.000001f,
+           "Bypass, snapshot refresh, and re-enable retain unsaved child-plugin settings.");
 
     studio::ClapPluginFormat clapFormat;
     juce::OwnedArray<juce::PluginDescription> descriptions;

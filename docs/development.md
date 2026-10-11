@@ -342,6 +342,9 @@ mutate active graphs or allocate on the callback. Seeking resets those histories
 Rack edits preserve live processor state outside the callback, including
 bypassed children and validated external state, while explicit changed state
 payloads and plugin replacement remain authoritative.
+Bundled auxiliary-output taps remain limited to the final processor on a
+serial-only path, and include its enclosing rack output gains. Parallel-branch
+taps are rejected rather than bypassing branch summing or delay compensation.
 
 `PluginInsertPanel` uses the native accessible JUCE tree and icon buttons,
 retains expansion/selection on refresh, and routes nested additions through a

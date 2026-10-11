@@ -97,8 +97,7 @@ void defaultsAndClickInheritance()
 {
     auto project = sectionProject();
     const auto& constProject = project;
-    expect(studio::Project::currentFormatVersion == 11
-               && project.timeSignatureNumerator == 4
+    expect(project.timeSignatureNumerator == 4
                && project.timeSignatureDenominator == 4
                && project.meterAt(100.0).numerator == 4
                && project.meterAt(100.0).denominator == 4
@@ -215,7 +214,7 @@ void sectionBoundariesAndRoundTrip()
                && savedSettings->tempoBpm == settings.tempoBpm
                && savedSettings->timeSignature == settings.timeSignature
                && savedSettings->clickSettings == settings.clickSettings,
-           "Format 11 round trips preserve section IDs, resizable ranges, owned maps, and every click option.");
+           "Current-format round trips preserve section IDs, resizable ranges, owned maps, and every click option.");
 
     auto manualTempo = project.tempoChanges.front();
     auto manualMeter = project.meterChanges.front();

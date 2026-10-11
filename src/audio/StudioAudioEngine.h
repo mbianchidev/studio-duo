@@ -587,6 +587,7 @@ private:
         juce::String insertId;
         juce::String name;
         std::shared_ptr<PluginBridgeClient> bridge;
+        float routedOutputGain = 1.0f;
         std::shared_ptr<juce::AudioProcessor> inProcess;
         std::unique_ptr<AraDocumentHost> araDocument;
         juce::AudioBuffer<float> inProcessBuffer;

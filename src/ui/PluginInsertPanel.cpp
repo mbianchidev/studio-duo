@@ -69,6 +69,8 @@ public:
         auto colour = juce::Colour(StudioColours::secondaryText);
         if (value->isContainer())
             detail << " | " << formatDecibels(value->gainDecibels);
+        else if (value->format.isNotEmpty())
+            detail << " | " << value->format;
         const auto status = std::find_if(owner.runtimeStatuses.cbegin(), owner.runtimeStatuses.cend(),
             [this](const auto& candidate) { return candidate.insertId == id; });
         if (bypassed)

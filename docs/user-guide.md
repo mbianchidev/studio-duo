@@ -573,7 +573,10 @@ channel-filtered routes. Applying it is one undoable command. Add **Metal Drum
 Composer** to an instrument track for the bundled basic kit. Its Main output is
 a complete stereo mix; its Kick, Snare, Toms, and Cymbals buses can be sent to
 aux or bus tracks from **ROUTING** > **ADD** > **Processor output**. The
-multi-output insert must remain last on its source track. Lower its automatable
+multi-output insert must remain last on its source track's serial-only path,
+including any enclosing serial racks. Rack output levels also apply to these
+auxiliary outputs. Processor-output taps inside parallel branches are rejected;
+use the splitter's combined track output instead. Lower its automatable
 Main level when using stems alone to avoid summing the full mix twice.
 
 **TRACK** in the routing panel changes mono/stereo layout, polarity, solo-safe
@@ -650,8 +653,9 @@ Processor and ARA document state are archived together, including unsaved ARA
 edits preserved across clip, tempo, and meter graph rebuilds.
 
 The inspector reports loading, ready, missing, bypassed, recovery-disabled,
-crashed, and late-block states. Click a failed insert to reload that runtime.
-Click a missing insert, then choose a catalog processor to replace it while
+crashed, and late-block states. Select a failed insert and choose **Reload plugin**
+from its actions menu. Select a missing insert, choose **Replace plugin**, then
+choose a catalog processor to replace it while
 preserving the insert ID, routing, automation, and prior state reference.
 
 ### Plugin racks and parallel effects

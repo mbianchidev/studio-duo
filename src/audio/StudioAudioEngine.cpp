@@ -6401,6 +6401,7 @@ bool StudioAudioEngine::processInProcessRuntime(
                     0,
                     buffer.getNumSamples());
             }
+            route.processingBuffer.applyGain(outputSampleOffset, buffer.getNumSamples(), insert.routedOutputGain);
         }
     }
     for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
@@ -6826,7 +6827,18 @@ void StudioAudioEngine::buildRackRuntime(
                 const auto processor = std::find_if(track.inserts.cbegin(), track.inserts.cend(),
                     [&insert](const auto& runtime) { return runtime.insertId == insert.id; });
                 if (processor != track.inserts.cend())
+                {
                     node.insertIndex = static_cast<int>(std::distance(track.inserts.cbegin(), processor));
+                    auto gainDecibels = insert.gainDecibels;
+                    auto* parent = PluginRack::find(inserts, insert.containerId);
+                    for (int depth = 0; parent != nullptr && depth < PluginRack::maximumDepth; ++depth)
+                    {
+                        gainDecibels += parent->gainDecibels;
+                        parent = PluginRack::find(inserts, parent->containerId);
+                    }
+                    track.inserts[static_cast<std::size_t>(node.insertIndex)].routedOutputGain =
+                        juce::Decibels::decibelsToGain(gainDecibels);
+                }
                 if (insert.isContainer())
                     node.children = self(self, insert.id);
                 if (insert.kind == PluginInsertKind::parallelSplitter)
@@ -6876,6 +6888,7 @@ void StudioAudioEngine::requestPluginRuntime(
                 activePluginRuntime.load(std::memory_order_acquire);
             if (activeSnapshotTemplate != nullptr)
             {
+                snapshot.rackDelays = activeSnapshotTemplate->rackDelays;
                 for (auto& midiTrack : snapshot.midiTracks)
                 {
                     const auto activeTrack = std::find_if(
@@ -6924,6 +6937,17 @@ void StudioAudioEngine::requestPluginRuntime(
             requestMidiNoteTermination();
             activePluginFingerprint = fingerprint;
             desiredPluginFingerprint = fingerprint;
+            for (auto& request : requests)
+            {
+                const auto origin = activePluginStateOrigins.find(request.insertId);
+                if (origin == activePluginStateOrigins.cend()
+                    || origin->second != pluginStateHash(request.state))
+                    continue;
+                const auto previous = std::find_if(activePluginRequests.cbegin(), activePluginRequests.cend(),
+                    [&request](const auto& candidate) { return candidate.insertId == request.insertId; });
+                if (previous != activePluginRequests.cend())
+                    request.state = previous->state;
+            }
             activePluginRequests = std::move(requests);
             return;
         }
