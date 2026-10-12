@@ -1,0 +1,23 @@
+<!--
+THESIS: Studio Duo is precision audio work reduced to one unmistakable signal; the mark refuses initials, guitars, skulls, and play buttons.
+OWN-WORLD: Near-black studio hardware, intense signal red, strict rounded geometry, and generous optical space.
+STORY: One continuous waveform moves from calm input through a sharp engineered peak and back to controlled output.
+FIRST VIEWPORT: One bold symbol fills the square with generous optical padding and survives at 16 pixels.
+FORM: Distilled waveform mark following the selected precision direction and the user's removal of the enclosure.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">Studio Duo app icon</title>
+  <desc id="desc">A precise intense-red waveform on a dark studio surface.</desc>
+  <rect width="1024" height="1024" rx="224" fill="#101214"/>
+  <rect x="88" y="88" width="848" height="848" rx="176" fill="#171a1d" stroke="#30353a" stroke-width="16"/>
+  <path
+    d="M164 526H276L350 392L442 526L526 282L632 526H716L770 444H860"
+    fill="none"
+    stroke="#ff2525"
+    stroke-width="58"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+  <circle cx="164" cy="526" r="24" fill="#ff2525"/>
+  <circle cx="860" cy="444" r="24" fill="#ff2525"/>
+</svg>

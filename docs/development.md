@@ -93,6 +93,20 @@ Multi-engine test fixtures keep `StudioAudioEngine` instances on the heap:
 their fixed MIDI trace arrays can exceed Windows's default 1 MiB stack when
 several engines share a test frame.
 
+The sandbox crash fixture uses monotonic deadlines and dispatches JUCE messages
+while waiting for startup, crash detection, and reload. Startup/reload allow both
+five-second bridge startup stages plus graph publication, without changing the
+production bridge timeouts. The fixture requires the exact insert to reach
+`ready`, confirms worker termination, and observes `failed` before checking dry
+fallback; a startup failure cannot pass as crash recovery. Failures include the
+runtime diagnostic, and scoped engine ownership cleans up early exits.
+
+Bridge transports use UUID-qualified shared-memory filenames: concurrent
+clients must not select the same unused numbered filename before either creates
+it. A deterministic regression synchronizes two clients after filename selection
+inside an isolated temporary directory, verifies independent mapped counters and
+audio data, and checks that stopping one client leaves the other transport intact.
+
 Plugin fixture paths, including `STUDIO_DUO_BUNDLED_CLAP_PATH`, must remain
 target-level compile definitions. Xcode cannot resolve configuration-dependent
 source-file definitions and substitutes `NO-PER-CONFIG-SUPPORT-IN-XCODE` instead

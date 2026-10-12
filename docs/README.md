@@ -19,6 +19,8 @@
 - [Native project format](project-format.md): version 12 package layout,
   generations, schemas, state hashes, recovery, and migrations
 - [Contributing](contributing.md): coding expectations and pull-request workflow
+- [Website](website.md): static product site, screenshots, browser checks, and
+  GitHub Pages deployment
 
 The README at the repository root is intentionally limited to orientation and
 quick-start instructions. Detailed behavior belongs in this directory.

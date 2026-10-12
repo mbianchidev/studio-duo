@@ -4,9 +4,18 @@
 
 [![CI](https://github.com/mbianchidev/studio-duo/actions/workflows/ci.yml/badge.svg)](https://github.com/mbianchidev/studio-duo/actions/workflows/ci.yml)
 
+[Website](https://mbianchidev.github.io/studio-duo/) ·
+[Download](https://github.com/mbianchidev/studio-duo/releases/latest) ·
+[User guide](docs/user-guide.md)
+
 Studio Duo is an open-source native desktop DAW for recording, editing, mixing,
 and mastering music. It follows familiar professional workflows while making
 modern metal production faster.
+
+**Windows support is best effort only.** This is a one-person development team
+without a Windows testing device, and limited development time restricts
+hands-on Windows testing. Automated Windows CI does not replace physical
+audio-interface and MIDI-device testing.
 
 <img width="1707" height="1107" alt="image" src="https://github.com/user-attachments/assets/21b07b83-1ca7-4809-9e0d-e17088a1581e" />
 
@@ -79,6 +88,21 @@ hardening remains before the complete DAW described in the
 - Four accessible dark themes, persisted custom surface/accent colors, and an
   indexed, offline, version-matched in-app user guide
 
+## Platform support and requirements
+
+| Platform | Requirements |
+| --- | --- |
+| macOS | macOS 12 Monterey or later; Apple silicon (ARM64) or Intel (x86_64); CoreAudio-compatible interface or built-in audio |
+| Windows (best effort) | Windows 10/11 64-bit target platforms; x64-compatible system; Microsoft Visual C++ x64 Runtime (included by the installer); native ASIO driver or Windows Audio fallback |
+
+Audio-interface testing is on **macOS ARM with a Focusrite Scarlett Duo**,
+using CoreAudio. ASIO-compatible interfaces are supported on Windows; ASIO is
+not the macOS audio backend. RAM, storage, and CPU needs depend on project media,
+track count, and plug-ins; fixed performance minima have not been validated.
+
+**Linux is unsupported.** Covering audio-driver integrations and different
+distributions is beyond the available time of the one-person development team.
+
 ## Build
 
 Requirements: CMake 3.25+, Git, a C++20 compiler, and either macOS with Xcode
@@ -114,6 +138,7 @@ or MIDI. See [startup troubleshooting and logs](docs/user-guide.md#logs-and-diag
 ## Documentation
 
 - [Documentation index](docs/README.md)
+- [Website development and GitHub Pages](docs/website.md)
 - [User guide](docs/user-guide.md)
 - [Product, roadmap, and technical design](docs/design.md)
 - [Development and architecture](docs/development.md)
@@ -123,6 +148,16 @@ or MIDI. See [startup troubleshooting and logs](docs/user-guide.md#logs-and-diag
 - [Studio One import](docs/studio-one.md)
 - [Contributing](docs/contributing.md)
 - [Releasing](docs/releasing.md)
+
+## Website
+
+The static product website lives in `website/`, separate from the native app.
+With Node.js 24 LTS, run `cd website && npm ci && npm run dev` and open the
+printed URL at `/studio-duo/`. `npm run build` produces `website/dist/`.
+Website changes are checked on pull requests and deployed to GitHub Pages
+only from `main`; select **GitHub Actions** in the repository's Pages settings.
+See [website development](docs/website.md) for browser checks, screenshots,
+and deployment details.
 
 ## License
 

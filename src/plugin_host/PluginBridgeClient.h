@@ -58,6 +58,7 @@ public:
     void terminateWorkerForTesting();
     static bool recoversLateFirstOutputForTesting();
     static bool resetsProcessingTimelineForTesting();
+    static bool isolatesConcurrentTransportsForTesting();
 #endif
 
 private:
@@ -135,6 +136,8 @@ private:
     juce::String responseMessage;
 #if STUDIO_DUO_TESTING
     std::function<void()> beforeSecondFetchForTesting;
+    std::function<juce::Result()> beforeSharedFileCreateForTesting;
+    juce::File sharedDirectoryForTesting;
 #endif
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PluginBridgeClient)
