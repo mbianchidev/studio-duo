@@ -193,8 +193,9 @@ private:
     void deleteSelectedTrack();
     void showPluginPickerForTrack(
         const juce::String& trackId,
-        juce::Rectangle<int> targetArea);
-    void addPluginToSelectedTrack(const PluginCatalogEntry& entry);
+        juce::Rectangle<int> targetArea, const juce::String& containerId = {});
+    void addPluginToSelectedTrack(const PluginCatalogEntry& entry,
+                                  const juce::String& containerId = {});
     void openPluginEditor(const juce::String& trackId,
                           const juce::String& insertId);
     void validatePlugin(const PluginCatalogEntry& entry);
@@ -383,6 +384,7 @@ private:
     int inputConfigurationPollTicks = 29;
     juce::String calibratingReampRouteId;
     std::uint64_t lastRuntimeCatalogRevision = 0;
+    std::uint64_t lastRackMidiDropCount = 0;
     juce::String reducedIsolationMarkerSignature;
     std::optional<CompatibilityReport> transientCompatibilityReport;
     juce::ThreadPool compatibilityValidator { 1 };

@@ -11,6 +11,7 @@
 #include "logging/StudioLogger.h"
 #include "update/UpdateSettingsComponent.h"
 #include "plugin_host/PluginStateStore.h"
+#include "model/PluginRack.h"
 #if JUCE_WINDOWS
 #include "platform/WindowsCrashHandler.h"
 #endif
@@ -50,7 +51,7 @@ const StudioAudioEngine::PluginRuntimeStatus* findDrumRuntime(
         return nullptr;
     for (const auto& insert : track->inserts)
     {
-        if (!insert.bundledDevice || insert.bypassed || insert.recoveryDisabled
+        if (!insert.bundledDevice || PluginRack::isBypassed(track->inserts, insert) || insert.recoveryDisabled
             || insert.pluginIdentifier != "studio.device.drum-composer"
             || (insertId.isNotEmpty() && insert.id != insertId))
             continue;
@@ -2008,6 +2009,19 @@ MainComponent::MainComponent(
 
     insertPanel = std::make_unique<PluginInsertPanel>();
     insertPanel->setProject(&project);
+    insertPanel->onAddPlugin = [this](const auto& trackId, const auto& containerId)
+    {
+        showPluginPickerForTrack(trackId, insertPanel->getScreenBounds(), containerId);
+    };
+    insertPanel->onSetChain = [this](const auto& trackId, auto inserts, const auto& description)
+    {
+        if (hasActiveRecordingTargets() || audioEngine.isRecording() || recordingFinalizationInProgress)
+        {
+            setStatus("Stop and finalize recording before editing plugin racks.", true);
+            return;
+        }
+        perform(std::make_unique<SetPluginChainCommand>(trackId, std::move(inserts), description));
+    };
     insertPanel->onBypass = [this](const auto& trackId, const auto& insertId, bool bypassed)
     {
         perform(std::make_unique<SetPluginBypassCommand>(trackId, insertId, bypassed));
@@ -2933,7 +2947,15 @@ void MainComponent::timerCallback()
         projectChanged();
 
     insertPanel->setRuntimeStatuses(std::move(runtimeStatuses),
-                                    audioEngine.pluginLateBlockCount());
+                                    audioEngine.pluginLateBlockCount(),
+                                    audioEngine.pluginRackMidiEventDropCount());
+    const auto rackMidiDrops = audioEngine.pluginRackMidiEventDropCount();
+    if (rackMidiDrops != lastRackMidiDropCount)
+    {
+        lastRackMidiDropCount = rackMidiDrops;
+        setStatus("Parallel rack MIDI capacity exceeded: " + juce::String(rackMidiDrops)
+            + " events dropped.", true);
+    }
     if (recording)
     {
         auto progress = audioEngine.recordingProgress();
@@ -4998,6 +5020,8 @@ void MainComponent::exportMixTo(const juce::File& destination,
     for (auto& track : exportProject.tracks)
         for (auto& insert : track.inserts)
         {
+            if (insert.isContainer())
+                continue;
             insert.missing = !insert.bundledDevice
                 && !pluginCatalog.descriptionForIdentifier(
                         insert.pluginIdentifier)
@@ -5911,7 +5935,7 @@ void MainComponent::deleteSelectedTrack()
 
 void MainComponent::showPluginPickerForTrack(
     const juce::String& trackId,
-    juce::Rectangle<int> targetArea)
+    juce::Rectangle<int> targetArea, const juce::String& containerId)
 {
     selectTrack(trackId);
     auto browser =
@@ -5923,13 +5947,14 @@ void MainComponent::showPluginPickerForTrack(
         [safe = juce::Component::SafePointer<
              MainComponent>(this),
          trackId,
+         containerId,
          browserPointer](
             const PluginCatalogEntry& entry)
     {
         if (safe != nullptr)
         {
             safe->selectTrack(trackId);
-            safe->addPluginToSelectedTrack(entry);
+            safe->addPluginToSelectedTrack(entry, containerId);
         }
         if (auto* callout =
                 browserPointer
@@ -5954,7 +5979,8 @@ void MainComponent::showPluginPickerForTrack(
         nullptr);
 }
 
-void MainComponent::addPluginToSelectedTrack(const PluginCatalogEntry& entry)
+void MainComponent::addPluginToSelectedTrack(const PluginCatalogEntry& entry,
+                                             const juce::String& containerId)
 {
     const auto* selectedTrack = project.findTrack(selectedTrackId);
     const auto* track = selectedTrack != nullptr
@@ -5987,6 +6013,7 @@ void MainComponent::addPluginToSelectedTrack(const PluginCatalogEntry& entry)
     }
 
     PluginInsert insert;
+    insert.containerId = containerId;
     insert.pluginIdentifier = entry.identifier;
     insert.name = entry.name;
     insert.manufacturer = entry.manufacturer;
@@ -6035,6 +6062,16 @@ void MainComponent::openPluginEditor(
     const juce::String& insertId)
 {
     selectTrack(trackId);
+    const auto* track = project.findTrack(trackId);
+    const auto* insert = track != nullptr ? PluginRack::find(track->inserts, insertId) : nullptr;
+    if (insert != nullptr && insert->isContainer())
+    {
+        setInspectorPanelVisible(true);
+        inspectorRibbonTabs.setCurrentTabIndex(0);
+        inspectorViewport.setViewPosition(0, juce::jmax(0, insertPanel->getY() - 16));
+        setStatus("Edit " + insert->name + " in the insert rack tree.");
+        return;
+    }
     if (const auto result = audioEngine.showPluginEditor(insertId);
         result.failed())
     {
@@ -10401,7 +10438,7 @@ void MainComponent::updateReducedIsolationMarker()
     std::vector<juce::String> insertIds;
     for (const auto& track : project.tracks)
         for (const auto& insert : track.inserts)
-            if (!insert.bundledDevice
+            if (!insert.isContainer() && !insert.bundledDevice
                 && insert.bridgeMode != PluginBridgeMode::sandboxed)
                 insertIds.push_back(insert.id);
     std::sort(insertIds.begin(), insertIds.end());
@@ -10437,11 +10474,13 @@ MainComponent::pluginRuntimeRequests(const Project& sourceProject) const
     {
         for (const auto& insert : track.inserts)
         {
+            if (insert.isContainer())
+                continue;
             StudioAudioEngine::PluginRuntimeRequest request;
             request.trackId = track.id;
             request.insertId = insert.id;
             request.name = insert.name;
-            request.bypassed = insert.bypassed;
+            request.bypassed = PluginRack::isBypassed(track.inserts, insert);
             request.missing = false;
             request.bridgeMode = insert.bridgeMode;
             request.recoveryDisabled = insert.recoveryDisabled;

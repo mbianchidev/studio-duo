@@ -1,6 +1,7 @@
 #include "RoutingGraph.h"
 
 #include "model/ProjectModel.h"
+#include "model/PluginRack.h"
 
 #include <algorithm>
 #include <cmath>
@@ -32,8 +33,29 @@ bool hasInsert(const Track& track, const juce::String& insertId)
         track.inserts.cend(),
         [&insertId](const auto& insert)
         {
-            return insert.id == insertId;
+            return insert.id == insertId && !insert.isContainer();
         });
+}
+
+bool hasFinalSerialInsert(const Track& track, const juce::String& insertId)
+{
+    auto* current = PluginRack::find(track.inserts, insertId);
+    if (current == nullptr || current->isContainer())
+        return false;
+    for (int depth = 0; depth <= PluginRack::maximumDepth; ++depth)
+    {
+        const auto index = current - track.inserts.data();
+        if (std::any_of(track.inserts.cbegin() + index + 1, track.inserts.cend(),
+                       [current](const auto& sibling)
+                       { return sibling.containerId == current->containerId; }))
+            return false;
+        if (current->containerId.isEmpty())
+            return true;
+        current = PluginRack::find(track.inserts, current->containerId);
+        if (current == nullptr || current->kind != PluginInsertKind::serialRack)
+            return false;
+    }
+    return false;
 }
 
 bool validateTrackRoles(const Project& project, juce::String& error)
@@ -43,6 +65,8 @@ bool validateTrackRoles(const Project& project, juce::String& error)
     auto controlRoomCount = 0;
     for (const auto& track : project.tracks)
     {
+        if (!PluginRack::validate(track.inserts, error))
+            return false;
         if (track.id.isEmpty()
             || std::find(ids.cbegin(), ids.cend(), track.id) != ids.cend())
         {
@@ -160,10 +184,10 @@ bool validateConnection(const Project& project,
             || connection.sourceBusIndex <= 0
             || insert == source->inserts.cend()
             || !insert->bundledDevice
-            || std::next(insert) != source->inserts.cend())
+            || !hasFinalSerialInsert(*source, connection.sourceInsertId))
         {
             error =
-                "Processor-output routes require an auxiliary bus from the final bundled insert.";
+                "Processor-output routes require an auxiliary bus from the final bundled insert on a serial-only path.";
             return false;
         }
     }

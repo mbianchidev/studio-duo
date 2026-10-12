@@ -1,4 +1,5 @@
 #include "ProjectModel.h"
+#include "PluginRack.h"
 
 #include "mix/RoutingGraph.h"
 #include "project_io/ProjectMigration.h"
@@ -575,6 +576,13 @@ juce::var PluginInsert::toVar() const
     object->setProperty("bundledDevice", bundledDevice);
     object->setProperty("araCapable", araCapable);
     object->setProperty("recoveryDisabled", recoveryDisabled);
+    object->setProperty("kind", kind == PluginInsertKind::serialRack
+                                    ? "serialRack"
+                                    : kind == PluginInsertKind::parallelSplitter
+                                        ? "parallelSplitter"
+                                        : "plugin");
+    object->setProperty("containerId", containerId);
+    object->setProperty("gainDecibels", gainDecibels);
     return juce::var(object.release());
 }
 
@@ -586,6 +594,34 @@ std::optional<PluginInsert> PluginInsert::fromVar(const juce::var& value, juce::
 
     PluginInsert insert;
     insert.id = object->getProperty("id").toString();
+    const auto kind = object->getProperty("kind");
+    if (kind.isVoid() || kind.toString() == "plugin")
+        insert.kind = PluginInsertKind::plugin;
+    else if (kind.toString() == "serialRack")
+        insert.kind = PluginInsertKind::serialRack;
+    else if (kind.toString() == "parallelSplitter")
+        insert.kind = PluginInsertKind::parallelSplitter;
+    else
+    {
+        error = "Plugin insert contains an unsupported rack kind.";
+        return std::nullopt;
+    }
+    insert.containerId = object->getProperty("containerId").toString();
+    const auto gain = object->getProperty("gainDecibels");
+    if (!gain.isVoid()
+        && (!gain.isInt() && !gain.isInt64() && !gain.isDouble()))
+    {
+        error = "Rack output level must be a number.";
+        return std::nullopt;
+    }
+    insert.gainDecibels = static_cast<float>(
+        numberProperty(*object, "gainDecibels", 0.0));
+    if (!std::isfinite(insert.gainDecibels)
+        || insert.gainDecibels < -60.0f || insert.gainDecibels > 12.0f)
+    {
+        error = "Rack output level must be between -60 and +12 dB.";
+        return std::nullopt;
+    }
     insert.pluginIdentifier = object->getProperty("pluginIdentifier").toString();
     insert.name = object->getProperty("name").toString();
     insert.manufacturer = object->getProperty("manufacturer").toString();
@@ -625,7 +661,9 @@ std::optional<PluginInsert> PluginInsert::fromVar(const juce::var& value, juce::
     }
     insert.bridgeMode = *bridgeMode;
 
-    if (insert.id.isEmpty() || insert.pluginIdentifier.isEmpty() || insert.name.isEmpty())
+    if (insert.id.isEmpty()
+        || (!insert.isContainer() && insert.pluginIdentifier.isEmpty())
+        || insert.name.trim().isEmpty())
     {
         error = "Plugin insert ID, plugin identifier, and name cannot be empty.";
         return std::nullopt;
@@ -2717,9 +2755,10 @@ bool Project::hasActivePluginInserts() const noexcept
 {
     return std::any_of(tracks.cbegin(), tracks.cend(), [](const auto& track)
     {
-        return std::any_of(track.inserts.cbegin(), track.inserts.cend(), [](const auto& insert)
+        return std::any_of(track.inserts.cbegin(), track.inserts.cend(), [&track](const auto& insert)
         {
-            return !insert.bypassed && !insert.missing;
+            return !insert.isContainer() && !insert.missing
+                && !PluginRack::isBypassed(track.inserts, insert);
         });
     });
 }

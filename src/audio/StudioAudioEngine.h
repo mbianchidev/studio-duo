@@ -85,6 +85,9 @@ public:
         bool bypassed = false;
         bool missing = false;
         bool recoveryDisabled = false;
+        PluginInsertKind kind = PluginInsertKind::plugin;
+        juce::String containerId;
+        float gainDecibels = 0.0f;
     };
 
     struct PluginRuntimeStatus
@@ -163,6 +166,7 @@ public:
 
     [[nodiscard]] int minimumRouteBufferCapacityForTesting() const noexcept;
     [[nodiscard]] double activeSnapshotSampleRateForTesting() const noexcept;
+    [[nodiscard]] std::vector<int> parallelBranchDelaysForTesting() const;
     [[nodiscard]] juce::AudioBuffer<float>
         renderActiveBlockForTesting(int samples, int outputChannels = 2);
     [[nodiscard]] juce::AudioBuffer<float>
@@ -218,6 +222,7 @@ public:
                                     int height);
     [[nodiscard]] std::uint64_t pluginLateBlockCount() const noexcept;
     [[nodiscard]] std::uint64_t pluginAutomationEventDropCount() const noexcept;
+    [[nodiscard]] std::uint64_t pluginRackMidiEventDropCount() const noexcept;
     [[nodiscard]] bool pluginRuntimeTransitionPending() const;
     juce::Result forcePluginRuntimeReload(
         const Project& project,
@@ -425,6 +430,12 @@ private:
 
     struct RenderSnapshot
     {
+        struct RackDelay
+        {
+            std::uint64_t runtimeKey = 0;
+            juce::String insertId;
+            RenderSource::DelayCompensator compensation;
+        };
         struct MidiTrack
         {
             struct ActiveScheduledState
@@ -545,6 +556,7 @@ private:
             controlRoomPluginAutomation;
         std::vector<HardwareSend> hardwareSends;
         std::vector<RenderTrack> tracks;
+        std::vector<RackDelay> rackDelays;
         std::vector<MidiTrack> midiTracks;
         juce::AudioBuffer<float> masterBuffer {
             2,
@@ -575,6 +587,7 @@ private:
         juce::String insertId;
         juce::String name;
         std::shared_ptr<PluginBridgeClient> bridge;
+        float routedOutputGain = 1.0f;
         std::shared_ptr<juce::AudioProcessor> inProcess;
         std::unique_ptr<AraDocumentHost> araDocument;
         juce::AudioBuffer<float> inProcessBuffer;
@@ -587,11 +600,26 @@ private:
         RenderSource::DelayCompensator failureDelay;
     };
 
+    struct RackRuntimeNode
+    {
+        juce::String insertId;
+        PluginInsertKind kind = PluginInsertKind::plugin;
+        int insertIndex = -1;
+        float gain = 1.0f;
+        bool bypassed = false;
+        std::vector<RackRuntimeNode> children;
+        juce::AudioBuffer<float> branchBuffer;
+        juce::AudioBuffer<float> mixBuffer;
+        juce::MidiBuffer branchMidi;
+        juce::MidiBuffer mixMidi;
+    };
+
     struct TrackRuntime
     {
         std::uint64_t key = 0;
         juce::String trackId;
         std::vector<InsertRuntime> inserts;
+        std::vector<RackRuntimeNode> roots;
     };
 
     struct PluginRuntimeGraph
@@ -745,6 +773,24 @@ private:
                              juce::MidiBuffer* midi = nullptr,
                              std::vector<RenderTrack::Route>*
                                  outputRoutes = nullptr) noexcept;
+    void processRackNode(
+        RackRuntimeNode& node, TrackRuntime& track, juce::AudioBuffer<float>& buffer,
+        juce::MidiBuffer* midi,
+        const std::vector<RenderTrack::SidechainInput>* sidechains,
+        const std::vector<RenderSource::PluginAutomation>* automation,
+        std::int64_t timelineSample, std::vector<RenderTrack::Route>* outputRoutes,
+        std::vector<RenderSnapshot::RackDelay>& rackDelays) noexcept;
+    void processRuntimeInsert(
+        InsertRuntime& insert, juce::AudioBuffer<float>& buffer, juce::MidiBuffer* midi,
+        const std::vector<RenderTrack::SidechainInput>* sidechains,
+        const std::vector<RenderSource::PluginAutomation>* automation,
+        std::int64_t timelineSample, std::vector<RenderTrack::Route>* outputRoutes) noexcept;
+    void mergeRackMidi(juce::MidiBuffer& destination, const juce::MidiBuffer& source) noexcept;
+    static void prepareRackRequests(
+        const Project& project, std::vector<PluginRuntimeRequest>& requests);
+    static void buildRackRuntime(
+        PluginRuntimeGraph& graph, const std::vector<PluginRuntimeRequest>& requests,
+        int processingQuantum);
     static bool processInProcessRuntime(
         InsertRuntime& insert,
         juce::AudioBuffer<float>& buffer,
@@ -886,6 +932,7 @@ private:
     mutable juce::CriticalSection pluginRequestLock;
     std::vector<PluginRuntimeRequest> pendingPluginRequests;
     std::vector<PluginRuntimeRequest> activePluginRequests;
+    std::map<juce::String, std::uint64_t> activePluginStateOrigins;
     std::optional<RenderSnapshot> pendingPluginSnapshot;
     std::uint64_t pendingSnapshotGeneration = 0;
     juce::String pendingPluginFingerprint;
@@ -913,6 +960,7 @@ private:
     std::vector<PluginRuntimeStatus> pluginStatuses;
     std::atomic<std::uint64_t> pluginLateBlocks { 0 };
     std::atomic<std::uint64_t> pluginAutomationEventsDropped { 0 };
+    std::atomic<std::uint64_t> pluginRackMidiEventsDropped { 0 };
     struct InProcessEditorSession
     {
         std::shared_ptr<juce::AudioProcessor> processor;

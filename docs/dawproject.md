@@ -155,6 +155,9 @@ Errors stop publication and remain visible in the workflow.
 
 The current reported compatibility boundary is:
 
+- Native plugin racks and parallel splitters block export with an
+  object-specific error. Render/freeze the affected rack to audio, or move its
+  plugins to track level; exporting these as serial devices would change sound.
 - Studio Duo input routing/monitoring, record arm, hardware-output selection,
   solo-safe, track/clip polarity, and control-room state
 - Take/version, active-playlist, comp-region, linked-edit, reamp, tone snapshot,

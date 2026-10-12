@@ -264,6 +264,8 @@ set(STUDIO_DUO_MODEL_SOURCES
     src/model/TransportEditing.h
     src/model/ProjectModel.cpp
     src/model/ProjectModel.h
+    src/model/PluginRack.cpp
+    src/model/PluginRack.h
     src/model/ProjectTemplates.cpp
     src/model/ProjectTemplates.h
     src/project_io/ProjectFile.cpp
@@ -884,6 +886,9 @@ if(STUDIO_DUO_BUILD_TESTS)
             tests/PluginFormatTests.cpp
             tests/PluginSearchPathTests.cpp
             tests/PluginRecoveryTests.cpp
+            tests/PluginRackTests.cpp
+            tests/PluginRackEngineTests.cpp
+            tests/PluginRackUiTests.cpp
             tests/AutomationTests.cpp
             tests/DeviceTests.cpp
             tests/BundledDeviceTests.cpp
@@ -925,6 +930,8 @@ if(STUDIO_DUO_BUILD_TESTS)
             src/ui/TimelineComponent.h
             src/ui/MixerPanel.cpp
             src/ui/MixerPanel.h
+            src/ui/PluginInsertPanel.cpp
+            src/ui/PluginInsertPanel.h
             src/ui/InfoPanelComponent.cpp
             src/ui/InfoPanelComponent.h
             src/ui/MainWindowSizing.cpp

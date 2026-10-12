@@ -89,6 +89,10 @@ Use the configuration subdirectory with multi-configuration generators or
 when an explicit `CMAKE_BUILD_TYPE` adds it to the JUCE artefact path.
 Unknown suite names fail instead of silently running nothing.
 
+Multi-engine test fixtures keep `StudioAudioEngine` instances on the heap:
+their fixed MIDI trace arrays can exceed Windows's default 1 MiB stack when
+several engines share a test frame.
+
 Plugin fixture paths, including `STUDIO_DUO_BUNDLED_CLAP_PATH`, must remain
 target-level compile definitions. Xcode cannot resolve configuration-dependent
 source-file definitions and substitutes `NO-PER-CONFIG-SUPPORT-IN-XCODE` instead
@@ -322,6 +326,38 @@ availability. Each record keeps the standard plugin identifier, format, vendor,
 version, source identifier, bridge mode, bypass state, reported latency, and
 relative opaque-state reference. This lets missing plugins survive project
 exchange and lets sandboxed, trusted, ARA, and bundled runtimes use one model.
+
+Format 12 adds `PluginInsertKind`, `containerId`, and `gainDecibels` to the same
+flat insert collection. Sibling order is collection order; stable parent IDs
+provide nesting without duplicating plugin records/state or parameter and
+sidechain references. `PluginRack` rejects missing/non-container parents,
+cycles, nesting beyond 32 levels, and splitters with fewer than two serial
+branches. Typed chain edits and recursive removal retain undo/redo semantics;
+track duplication remaps every nested parent ID.
+
+The runtime builder compiles that model into preallocated serial/parallel
+processing trees over the existing leaf runtimes. Splitters copy audio/MIDI to
+each branch, merge identical MIDI events once, and sum branch audio at its saved
+level. Bounded MIDI overflow is counted and reported in the inspector/status.
+Serial timing sums latency/tails; parallel timing uses the longest branch.
+Branch delay lines live in published render snapshots and use the existing
+delay-transition handoff machinery, so dynamic plugin latency refreshes do not
+mutate active graphs or allocate on the callback. Seeking resets those histories.
+Rack edits preserve live processor state outside the callback, including
+bypassed children and validated external state, while explicit changed state
+payloads and plugin replacement remain authoritative.
+Bundled auxiliary-output taps remain limited to the final processor on a
+serial-only path, and include its enclosing rack output gains. Parallel-branch
+taps are rejected rather than bypassing branch summing or delay compensation.
+
+`PluginInsertPanel` uses the native accessible JUCE tree and icon buttons,
+retains expansion/selection on refresh, and routes nested additions through a
+track/container-targeted plugin picker. Racks work on aux/send returns and all
+existing insert chains, including instrument/MIDI, bus, master, and control-room
+paths. Native package capability `pluginRacksV1` and the v12 public schema
+describe persistence; older projects default to ordinary serial plugin records.
+DAWproject 1.0 export reports an object-specific blocking compatibility error
+for native containers instead of serializing a different topology.
 
 The bridge transport maps a fixed-size file into the host and worker processes.
 Workers report ready only after their processing thread is running.
