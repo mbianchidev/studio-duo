@@ -208,63 +208,131 @@
 
       <section class="comparison wrap section-space" id="comparison" aria-labelledby="comparison-title">
         <p class="eyebrow">Choosing a DAW</p>
-        <h2 id="comparison-title">What each<br>DAW covers.</h2>
+        <h2 id="comparison-title">Compare the tools<br>feature by feature.</h2>
         <div class="comparison-intro">
           <p>Studio Duo can record and edit audio, write MIDI, mix, and sequence an album for mastering. It does less than the established full DAWs here. It has a smaller toolset, less production testing, and one developer.</p>
-          <p>This is a workflow comparison, not a speed or reliability benchmark. Fender Studio's free recording app is a different product from Fender Studio Pro. Features and license terms depend on the edition and version.</p>
+          <p>This compares Fender Studio Pro, formerly Studio One, Ableton Live 12 Suite, Pro Tools Studio, REAPER 7, and FL Studio Producer Edition. It is not a speed or reliability benchmark. Other editions have different tools and license terms.</p>
         </div>
         <p class="small-note" id="comparison-scroll-note">On a small screen, scroll the table sideways. Keyboard users can focus it and use the arrow keys.</p>
         <div class="comparison-scroll" role="region" aria-label="DAW comparison, scroll horizontally" aria-describedby="comparison-scroll-note" tabindex="0">
           <table>
-            <caption>Selected workflows and limitations. Official documentation links are in the software column. Sources checked 12 October 2026.</caption>
+            <caption>Selected features, not a claim of equal depth or reliability. Plug-in formats and built-in tools are examples, not exhaustive lists. AU is macOS-only; available formats vary by platform. Sources checked 12 October 2026.</caption>
             <thead>
               <tr>
-                <th scope="col">Software</th>
-                <th scope="col">What it covers</th>
-                <th scope="col">Where the difference matters</th>
-                <th scope="col">License and scope</th>
+                <th scope="col">Feature</th>
+                <th scope="col" class="studio-duo-column"><a href="https://github.com/mbianchidev/studio-duo/blob/main/docs/user-guide.md">Studio Duo</a></th>
+                <th scope="col"><a href="https://www.fender.com/products/fender-studio-pro">Fender Studio Pro</a> <span class="edition-label">Formerly Studio One</span></th>
+                <th scope="col"><a href="https://www.ableton.com/en/live/compare-editions/">Ableton Live 12</a> <span class="edition-label">Suite</span></th>
+                <th scope="col"><a href="https://www.avid.com/pro-tools/comparison">Pro Tools Studio</a></th>
+                <th scope="col"><a href="https://www.reaper.fm/">REAPER</a> <span class="edition-label">7</span></th>
+                <th scope="col"><a href="https://www.image-line.com/fl-studio/pricing">FL Studio</a> <span class="edition-label">Producer Edition</span></th>
               </tr>
             </thead>
             <tbody>
-              <tr class="studio-duo-row">
-                <th scope="row"><a href="https://github.com/mbianchidev/studio-duo/blob/main/docs/user-guide.md">Studio Duo</a></th>
-                <td>Audio and MIDI recording/editing, linked edits, live drum pads, routing and racks, VST3/AU/CLAP, reamping, and album mastering.</td>
-                <td>Actively developed with limited hardware and plug-in coverage. Windows is best effort and Linux is unsupported. No AAX hosting. DAWproject cannot represent every native project detail.</td>
-                <td>AGPLv3 open source core. No required account. Optional paid plug-ins/content are planned.</td>
+              <tr>
+                <th scope="row">License model</th>
+                <td>AGPLv3 open source core. No required account. Optional paid tools are planned.</td>
+                <td>Commercial, proprietary. Paid perpetual license and subscription options.</td>
+                <td>Commercial, proprietary. Paid perpetual license; Suite also has rent-to-own.</td>
+                <td>Commercial, proprietary. Paid subscription or perpetual license.</td>
+                <td>Commercial, proprietary. Paid license; 60-day full evaluation.</td>
+                <td>Commercial, proprietary. Paid license with Lifetime Free Updates to the owned edition. FL Cloud is separate.</td>
               </tr>
               <tr>
-                <th scope="row"><a href="https://support.presonus.com/hc/en-us/categories/46418271543565-Fender-Studio">Fender Studio</a><span class="edition-label">Free recording app</span></th>
-                <td>A free cross-platform recording app for capturing audio ideas.</td>
-                <td>A focused recording app, not the full Studio Pro DAW below. Do not treat the two products as interchangeable or assume Pro's features are included.</td>
-                <td>Free app. Check its current documentation for recording and platform limits.</td>
+                <th scope="row">Desktop platforms</th>
+                <td>macOS. Windows best effort. Linux unsupported.</td>
+                <td>macOS and Windows. Linux public beta, with specific system requirements.</td>
+                <td>macOS and Windows.</td>
+                <td>macOS and Windows.</td>
+                <td>macOS, Windows, and Linux.</td>
+                <td>macOS and Windows.</td>
               </tr>
               <tr>
-                <th scope="row"><a href="https://www.fender.com/pages/fender-studio-pro">Fender Studio Pro</a></th>
-                <td>A full recording, production, mixing, and mastering DAW, continuing the Studio One product line, with a broader collection of included instruments and effects.</td>
-                <td>More production workflows and included content than Studio Duo. Studio Duo does not claim to match its full arrangement, instrument, and session workflow.</td>
-                <td>Commercial, proprietary software. Check current purchase, subscription, and update terms.</td>
+                <th scope="row">Multitrack audio recording</th>
+                <td>Yes. Sample-aligned recording, punch, loop takes, and count-in. Limited physical-device testing.</td>
+                <td>Yes. Audio tracks, loop recording, and multiple takes.</td>
+                <td>Yes. Record audio into Arrangement or Session View.</td>
+                <td>Yes. Audio tracks, punch/loop recording, and playlists.</td>
+                <td>Yes. Multitrack recording with flexible input routing.</td>
+                <td>Yes in Producer Edition. Record external inputs into the Playlist or Edison.</td>
               </tr>
               <tr>
-                <th scope="row"><a href="https://www.ableton.com/en/live/compare-editions/">Ableton Live 12</a><span class="edition-label">Standard / Suite</span></th>
-                <td>Audio/MIDI production, Session View clip launching, arrangement, and included instruments/effects. Suite includes Max for Live.</td>
-                <td>Studio Duo has no equivalent to Live's Session View performance workflow or Max for Live environment, and a smaller included tool and sound collection.</td>
-                <td>Commercial, proprietary software. Standard and Suite differ; this row does not describe Intro.</td>
+                <th scope="row">MIDI recording and piano roll</th>
+                <td>Yes. Live and retrospective recording, piano roll, and per-note expression.</td>
+                <td>Yes. Instrument recording and note editing.</td>
+                <td>Yes. MIDI Note Editor, Capture MIDI, and MIDI tools.</td>
+                <td>Yes. MIDI recording, piano roll, and instrument tracks.</td>
+                <td>Yes. MIDI recording and MIDI editor.</td>
+                <td>Yes. MIDI controller recording, Piano roll, and note-property editing.</td>
               </tr>
               <tr>
-                <th scope="row"><a href="https://www.avid.com/pro-tools/comparison">Pro Tools Studio</a></th>
-                <td>Audio/MIDI production, detailed clip editing and automation, and the AAX effects/instrument ecosystem.</td>
-                <td>An established studio and session workflow. Studio Duo is not an AAX host or a replacement for specialised post-production workflows.</td>
-                <td>Commercial, proprietary software. This is the Studio edition; other Pro Tools editions have different limits.</td>
+                <th scope="row">Take comping</th>
+                <td>Take lanes, playlists, and linked multitrack comps.</td>
+                <td>Take layers and range-based comping.</td>
+                <td>Audio/MIDI take lanes and comping in Arrangement View.</td>
+                <td>Playlists for auditioning takes and building a comp.</td>
+                <td>Fixed lanes and swipe comping.</td>
+                <td>Loop takes with manual assembly of Audio Clips in the Playlist or Edison.</td>
               </tr>
               <tr>
-                <th scope="row"><a href="https://www.reaper.fm/">REAPER</a></th>
-                <td>Audio/MIDI recording, editing, mixing, and mastering; flexible routing; scripting/custom actions; broad plug-in and format support.</td>
-                <td>Supported Linux builds, scripting/extensions, and more workflow customisation and format coverage than Studio Duo currently provides.</td>
-                <td>Commercial, proprietary software. A full evaluation is available; ongoing use requires a license.</td>
+                <th scope="row">Drum programming and instruments</th>
+                <td>Drum grid, 12 live pads, rhythm geometry, and a synthesized metal kit with tuning.</td>
+                <td>Impact's sample pads, instrument parts, and drum kits.</td>
+                <td>Drum Rack, Drum Sampler, MIDI editing, and sound packs.</td>
+                <td>MIDI editing and drum instrument plug-ins.</td>
+                <td>MIDI editor, sampler/JSFX instruments, and third-party drum plug-ins.</td>
+                <td>Channel Rack step sequencer, Piano roll, and FPC drum pads.</td>
+              </tr>
+              <tr>
+                <th scope="row">Built-in EQ and effects</th>
+                <td>13 bundled devices, including parametric EQ, dynamics, reverb, delay, and guitar/bass amps. A smaller collection.</td>
+                <td>Native EQ/dynamics/effects and Fender guitar/bass amp plug-ins.</td>
+                <td>EQ Eight, dynamics/effects, synths/samplers, and Max for Live in Suite.</td>
+                <td>Included EQ, dynamics, effects, and instruments. Additional bundles depend on the plan.</td>
+                <td>ReaPlugs and JSFX audio/MIDI effects, including EQ and dynamics.</td>
+                <td>Native EQ, dynamics, effects, and instruments. Higher bundles add more licensed plug-ins.</td>
+              </tr>
+              <tr>
+                <th scope="row">Third-party plug-in formats</th>
+                <td>VST3, AU, and CLAP. No AAX hosting. Compatibility coverage is limited.</td>
+                <td>VST and VST3; AU on macOS.</td>
+                <td>VST2, VST3, and AU on macOS.</td>
+                <td>AAX. VST/AU require a separate hosting solution.</td>
+                <td>VST, VST3, AU, CLAP, LV2, and others, depending on platform.</td>
+                <td>VST, VST3, CLAP, and AU on macOS.</td>
+              </tr>
+              <tr>
+                <th scope="row">Mixing and automation</th>
+                <td>Sends, sidechains, buses, nested/parallel racks, latency compensation, and sample-accurate automation.</td>
+                <td>Console routing, buses, sends, and track/plug-in automation.</td>
+                <td>Returns, groups, device racks, and Arrangement/clip automation.</td>
+                <td>Buses, sends, routing, and track/plug-in automation.</td>
+                <td>Flexible routing, FX containers/parallel processing, automation, and scripting.</td>
+                <td>Mixer routing, sends, effects chains, and Automation Clips.</td>
+              </tr>
+              <tr>
+                <th scope="row">Mastering workflow</th>
+                <td>Dedicated album workspace, sequencing, loudness/true-peak analysis, metadata, and render reports. DDP needs an external licensed encoder.</td>
+                <td>Dedicated Mastering page with sequencing and publication formats, integrated with sessions.</td>
+                <td>Main-track effects and audio export within a Live Set.</td>
+                <td>Master processing, bounce, and export within a session.</td>
+                <td>Track/master processing, render presets, and loudness/render reports.</td>
+                <td>Master Mixer Track effects and project rendering.</td>
               </tr>
             </tbody>
           </table>
         </div>
+        <details class="comparison-sources">
+          <summary>Sources and edition details</summary>
+          <ul>
+            <li>Studio Duo: <a href="https://github.com/mbianchidev/studio-duo/blob/main/docs/user-guide.md">current capabilities</a>, <a href="https://github.com/mbianchidev/studio-duo/blob/main/LICENSE">license</a>.</li>
+            <li>Fender Studio Pro: <a href="https://fenderstudiopromanual.fender.com/en/Content/Editing_Topics/Comping.htm">comping</a>, <a href="https://fenderstudiopromanual.fender.com/en/Content/Setup_Topics/Managing_Your_Content.htm">plug-ins</a>, <a href="https://fenderstudiopromanual.fender.com/en/Content/Mastering_Topics/Chapter-Mastering.htm">mastering</a>, <a href="https://fenderstudiopromanual.fender.com/en/Content/Setup_Topics/System_Requirements.htm">platforms</a>, <a href="https://intl.fender.com/pages/fender-studio-pro-faqs">license options</a>.</li>
+            <li>Ableton Live 12 Suite: <a href="https://www.ableton.com/en/live/compare-editions/">edition chart</a>, <a href="https://www.ableton.com/en/manual/comping/">comping</a>, <a href="https://www.ableton.com/en/shop/live/">license options</a>.</li>
+            <li>Pro Tools Studio: <a href="https://www.avid.com/pro-tools/comparison">edition chart</a>, <a href="https://www.avid.com/pro-tools/user-guide/playlists">playlists</a>, <a href="https://developer.avid.com/aax/">AAX</a>.</li>
+            <li>REAPER 7: <a href="https://www.reaper.fm/">features</a>, <a href="https://www.reaper.fm/about.php">platforms/formats</a>, <a href="https://www.reaper.fm/purchase.php">license terms</a>.</li>
+            <li>FL Studio Producer Edition: <a href="https://www.image-line.com/fl-studio-learning/fl-studio-online-manual/html/app_feature.htm">edition boundaries</a>, <a href="https://www.image-line.com/fl-studio-learning/fl-studio-online-manual/html/recording_audio.htm">audio recording</a>, <a href="https://www.image-line.com/fl-studio-learning/fl-studio-online-manual/html/basics_externalplugins.htm">plug-in formats</a>, <a href="https://www.image-line.com/fl-studio/pricing">license and updates</a>.</li>
+          </ul>
+        </details>
         <p class="comparison-note">Test Studio Duo with your own interface and plug-ins before moving an important session. Keep the original project and backups.</p>
       </section>
 

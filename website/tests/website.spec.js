@@ -147,29 +147,81 @@ test('the headline preserves DAWn case, the tagline sits below it, and copyright
   await expect(page.locator('.copyright')).toHaveText('\u00a9 2026 SyncTune');
 });
 
-test('the comparison is edition-aware, states limitations, and scrolls by keyboard', async ({ page }) => {
-  await page.emulateMedia({ reducedMotion: 'reduce' });
+test('the feature matrix compares the requested DAWs, licenses, and capabilities side by side', async ({ page }) => {
   await page.goto('./');
   const comparison = page.locator('#comparison');
   await expect(comparison).toContainText('It does less than the established full DAWs here.');
   const table = comparison.getByRole('table');
-  await expect(table.getByRole('row')).toHaveCount(7);
-  await expect(table.getByRole('rowheader', { name: 'Fender Studio Free recording app' })).toBeVisible();
-  await expect(table.getByRole('rowheader', { name: 'Fender Studio Pro', exact: true })).toBeVisible();
-  await expect(table.getByRole('rowheader', { name: 'Ableton Live 12 Standard / Suite' })).toBeAttached();
-  await expect(table.getByRole('rowheader', { name: 'Pro Tools Studio' })).toBeAttached();
-  await expect(table.getByRole('rowheader', { name: 'REAPER' })).toBeAttached();
-  await expect(table.locator('.studio-duo-row')).toContainText('No AAX hosting');
-  await expect(table.locator('.studio-duo-row')).toContainText('Windows is best effort');
+  await expect(table.getByRole('columnheader')).toHaveText([
+    'Feature',
+    'Studio Duo',
+    'Fender Studio Pro Formerly Studio One',
+    'Ableton Live 12 Suite',
+    'Pro Tools Studio',
+    'REAPER 7',
+    'FL Studio Producer Edition',
+  ]);
+  await expect(table.getByRole('rowheader')).toHaveText([
+    'License model',
+    'Desktop platforms',
+    'Multitrack audio recording',
+    'MIDI recording and piano roll',
+    'Take comping',
+    'Drum programming and instruments',
+    'Built-in EQ and effects',
+    'Third-party plug-in formats',
+    'Mixing and automation',
+    'Mastering workflow',
+  ]);
+  for (const row of await table.locator('tbody tr').all()) {
+    await expect(row.getByRole('rowheader')).toHaveCount(1);
+    await expect(row.getByRole('cell')).toHaveCount(6);
+    for (const cell of await row.getByRole('cell').all()) {
+      await expect(cell).not.toBeEmpty();
+    }
+  }
+  const license = table.getByRole('row').filter({ has: page.getByRole('rowheader', { name: 'License model', exact: true }) });
+  await expect(license.getByRole('cell').nth(0)).toContainText('AGPLv3 open source core');
+  await expect(license.getByRole('cell').nth(5)).toContainText('Lifetime Free Updates');
+  const platforms = table.getByRole('row').filter({ has: page.getByRole('rowheader', { name: 'Desktop platforms', exact: true }) });
+  await expect(platforms.getByRole('cell').nth(0)).toContainText('Windows best effort');
+  await expect(platforms.getByRole('cell').nth(0)).toContainText('Linux unsupported');
+  await expect(platforms.getByRole('cell').nth(1)).toContainText('Linux public beta');
+  await expect(platforms.getByRole('cell').nth(4)).toContainText('Linux');
+  const plugins = table.getByRole('row').filter({ has: page.getByRole('rowheader', { name: 'Third-party plug-in formats', exact: true }) });
+  await expect(plugins.getByRole('cell').nth(0)).toContainText('No AAX hosting');
+  await expect(plugins.getByRole('cell').nth(5)).toContainText('CLAP');
   await expect(table.locator('caption')).toContainText('Sources checked 12 October 2026');
+  await expect(comparison).not.toContainText('Free recording app');
+  const sources = comparison.locator('details');
+  await sources.locator('summary').focus();
+  await page.keyboard.press('Enter');
+  await expect(sources).toHaveAttribute('open', '');
+  await expect(sources.getByRole('link', { name: 'edition boundaries' })).toBeVisible();
+  const violations = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa']).analyze();
+  expect(violations.violations).toEqual([]);
+});
+
+test('the wide feature matrix keeps row labels visible and scrolls by keyboard', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.goto('./');
+  const comparison = page.locator('#comparison');
+  const table = comparison.getByRole('table');
   const scrollRegion = comparison.getByRole('region', { name: 'DAW comparison, scroll horizontally' });
   await scrollRegion.focus();
   await expect(scrollRegion).toBeFocused();
+  const rowLabel = table.getByRole('rowheader', { name: 'License model', exact: true });
+  const originalLeft = (await rowLabel.boundingBox()).x;
   if (await scrollRegion.evaluate((element) => element.scrollWidth > element.clientWidth)) {
     await scrollRegion.press('ArrowRight');
     await expect.poll(() => scrollRegion.evaluate((element) => element.scrollLeft)).toBeGreaterThan(0);
+    await scrollRegion.evaluate((element) => { element.scrollLeft = element.scrollWidth; });
+    expect(Math.abs((await rowLabel.boundingBox()).x - originalLeft)).toBeLessThan(2);
   }
   await page.keyboard.press('Tab');
   await expect(table.getByRole('link', { name: 'Studio Duo', exact: true })).toBeFocused();
+  const lastSource = table.getByRole('link', { name: 'FL Studio', exact: true });
+  await lastSource.focus();
+  await expect(lastSource).toBeInViewport();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });

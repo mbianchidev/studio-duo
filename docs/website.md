@@ -105,26 +105,62 @@ changing typography. The screenshot viewer's image has no source while its
 dialog is closed; the script assigns the local image URL before showing it.
 This is deferred image loading, not a visible broken-image placeholder.
 
-The DAW comparison is a sourced workflow summary, not a performance benchmark
-or feature-parity claim. Keep Fender Studio's free recording app separate from
-Fender Studio Pro. Scope Ableton to the stated Standard/Suite editions and
-Pro Tools to Studio, not Ultimate. Do not invent track limits, pricing,
-certifications, or unavailable features from missing documentation.
-The table includes Studio Duo's limited test coverage, best-effort Windows,
-unsupported Linux, missing AAX hosting, and interchange limits.
+The DAW comparison is a feature-by-feature matrix, not a performance benchmark
+or feature-parity claim. Software occupies columns and each row evaluates the
+same capability, including license model, platforms, audio/MIDI recording,
+take comping, drums, built-in effects, plug-in formats, mixing/automation, and
+mastering. Each row has one feature header and six populated product cells.
+
+Compare only Studio Duo, Fender Studio Pro formerly Studio One, Ableton Live 12
+Suite, Pro Tools Studio, REAPER 7, and FL Studio Producer Edition. Do not add
+Fender Studio's free recording app or mix capabilities from other editions.
+Producer Edition includes audio recording, unlike Fruity Edition; higher FL
+Studio bundles add plug-ins, not a different core recording engine.
+FL Studio's Lifetime Free Updates apply to the owned edition and do not make
+all plug-ins or optional FL Cloud subscriptions free.
+
+Keep Fender Studio Pro's Linux support labeled **public beta**, rather than
+equating it to the macOS/Windows releases or to REAPER's Linux builds.
+Plug-in format lists and bundled tools are examples, not exhaustive catalogs;
+AU is macOS-only and available formats vary by platform.
+Describe each mastering workflow instead of implying that a DAW without a
+dedicated album workspace cannot master audio.
+
+Do not invent track limits, pricing, certifications, or unavailable features
+from missing documentation. Studio Duo's limited coverage, smaller bundled
+collection, best-effort Windows, unsupported Linux, lack of AAX hosting, and
+external DDP encoder requirement remain explicit.
+The table keeps native table semantics, sticky feature labels, and an isolated
+keyboard-scrollable region so phones do not acquire whole-page horizontal
+overflow. A native details disclosure holds per-product source links.
 
 Comparison sources checked on 2026-10-12:
 
-- [Fender Studio knowledge base](https://support.presonus.com/hc/en-us/categories/46418271543565-Fender-Studio)
-- [Fender Studio Pro overview](https://www.fender.com/pages/fender-studio-pro)
+- [Fender Studio Pro overview](https://www.fender.com/products/fender-studio-pro)
 - [Fender Studio Pro licensing FAQ](https://intl.fender.com/pages/fender-studio-pro-faqs)
+- [Fender Studio Pro recording](https://fenderstudiopromanual.fender.com/en/Content/Recording_Topics/Chapter-Recording.htm),
+  [comping](https://fenderstudiopromanual.fender.com/en/Content/Editing_Topics/Comping.htm),
+  [plug-ins](https://fenderstudiopromanual.fender.com/en/Content/Setup_Topics/Managing_Your_Content.htm),
+  [Impact](https://fenderstudiopromanual.fender.com/en/Content/Built-In_Instruments_Topics/Impact.htm),
+  [mastering](https://fenderstudiopromanual.fender.com/en/Content/Mastering_Topics/Chapter-Mastering.htm),
+  and [platform requirements](https://fenderstudiopromanual.fender.com/en/Content/Setup_Topics/System_Requirements.htm)
 - [Ableton edition comparison](https://www.ableton.com/en/live/compare-editions/)
+- [Ableton comping](https://www.ableton.com/en/manual/comping/) and
+  [license options](https://www.ableton.com/en/shop/live/)
 - [Pro Tools edition comparison](https://www.avid.com/pro-tools/comparison)
 - [Pro Tools MIDI workflows](https://www.avid.com/pro-tools/midi)
+- [Pro Tools playlist comping](https://www.avid.com/pro-tools/user-guide/playlists)
 - [Avid AAX documentation](https://developer.avid.com/aax/)
 - [REAPER overview](https://www.reaper.fm/) and
   [platform/format information](https://www.reaper.fm/about.php)
 - [REAPER license information](https://www.reaper.fm/purchase.php)
+- [FL Studio edition boundaries](https://www.image-line.com/fl-studio-learning/fl-studio-online-manual/html/app_feature.htm),
+  [audio recording](https://www.image-line.com/fl-studio-learning/fl-studio-online-manual/html/recording_audio.htm),
+  [MIDI editor](https://www.image-line.com/fl-studio-learning/fl-studio-online-manual/html/pianoroll.htm),
+  [FPC drum pads](https://www.image-line.com/fl-studio-learning/fl-studio-online-manual/html/plugins/FPC.htm),
+  [plug-ins](https://www.image-line.com/fl-studio-learning/fl-studio-online-manual/html/basics_externalplugins.htm),
+  [mixer/master processing](https://www.image-line.com/fl-studio-learning/fl-studio-online-manual/html/mixer.htm),
+  and [license/updates](https://www.image-line.com/fl-studio/pricing)
 
 The committed WebP screenshots are local assets, not runtime hotlinks:
 
