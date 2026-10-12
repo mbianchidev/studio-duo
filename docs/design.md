@@ -416,6 +416,16 @@ Proposed modules:
 | `devices` | Bundled DSP and instrument implementations |
 | `studio_ui` | Shared controls, panels, meters, accessibility, themes |
 
+The startup shell paints before loading preferences, cached plug-in metadata and
+recovery markers. A typed dependency graph is the shell's only readiness contract:
+required failures need explicit recovery, while optional scans continue without
+holding workspace entry. Audio/MIDI native ownership remains on JUCE's message
+thread after a bounded isolated preflight; this is not runtime driver isolation.
+Startup history is keyboard-accessible and retained after entry. Redacted exports
+contain stable result codes, timings and numeric summaries rather than project,
+device or plug-in names, paths, state or audio content. See
+[coordinator contracts and startup budgets](development.md#coordinated-startup).
+
 ### Real-time rules
 
 - No heap allocation on the audio callback

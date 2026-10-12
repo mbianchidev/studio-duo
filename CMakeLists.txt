@@ -17,6 +17,18 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+execute_process(
+    COMMAND git describe --always --dirty "--exclude=*"
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    OUTPUT_VARIABLE STUDIO_DUO_BUILD_REVISION
+    RESULT_VARIABLE STUDIO_DUO_BUILD_REVISION_RESULT
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+)
+if(NOT STUDIO_DUO_BUILD_REVISION_RESULT EQUAL 0)
+    set(STUDIO_DUO_BUILD_REVISION "source-archive")
+endif()
+
 option(STUDIO_DUO_BUILD_TESTS "Build Studio Duo tests" ON)
 option(STUDIO_DUO_AUDIO_EXPORT_TESTS_ONLY "Build only the headless audio export regression tests" OFF)
 set(STUDIO_DUO_BUNDLE_ID "dev.mbianchi.studioduo")
@@ -327,6 +339,15 @@ set(STUDIO_DUO_PLUGIN_SOURCES
     src/plugin_host/ScreamForgeValidation.h
 )
 
+set(STUDIO_DUO_STARTUP_SOURCES
+    src/startup/StartupCoordinator.cpp
+    src/startup/StartupCoordinator.h
+    src/startup/StartupDiagnostics.cpp
+    src/startup/StartupDiagnostics.h
+    src/startup/StartupRecovery.cpp
+    src/startup/StartupRecovery.h
+)
+
 juce_add_gui_app(
     StudioDuo
     PRODUCT_NAME "Studio Duo"
@@ -340,6 +361,9 @@ juce_add_gui_app(
 )
 
 juce_generate_juce_header(StudioDuo)
+target_compile_definitions(StudioDuo PRIVATE
+    STUDIO_DUO_BUILD_REVISION="${STUDIO_DUO_BUILD_REVISION}"
+    STUDIO_DUO_BUILD_CONFIG="$<CONFIG>")
 
 configure_file(
     "${studio_duo_lame_SOURCE_DIR}/COPYING"
@@ -461,6 +485,10 @@ target_sources(
         src/update/UpdateSettingsComponent.h
         src/ui/MainComponent.cpp
         src/ui/MainComponent.h
+        src/ui/StartupProgressComponent.cpp
+        src/ui/StartupProgressComponent.h
+        src/ui/StartupShellComponent.cpp
+        src/ui/StartupShellComponent.h
         src/ui/ReentrancySafeTimer.h
         src/ui/InfoPanelComponent.cpp
         src/ui/InfoPanelComponent.h
@@ -505,6 +533,7 @@ target_sources(
         src/ui/TimelineComponent.h
         ${STUDIO_DUO_MODEL_SOURCES}
         ${STUDIO_DUO_PLUGIN_SOURCES}
+        ${STUDIO_DUO_STARTUP_SOURCES}
 )
 
 if(APPLE)
@@ -874,6 +903,9 @@ if(STUDIO_DUO_BUILD_TESTS)
     endif()
 
     juce_add_console_app(StudioDuoTests PRODUCT_NAME "Studio Duo Tests")
+    target_compile_definitions(StudioDuoTests PRIVATE
+        STUDIO_DUO_BUILD_REVISION="${STUDIO_DUO_BUILD_REVISION}"
+        STUDIO_DUO_BUILD_CONFIG="$<CONFIG>")
 
     target_sources(
         StudioDuoTests
@@ -914,6 +946,12 @@ if(STUDIO_DUO_BUILD_TESTS)
             tests/MixerPanelTests.cpp
             tests/InfoPanelTests.cpp
             tests/ReentrancySafeTimerTests.cpp
+            tests/StartupTests.cpp
+            ${STUDIO_DUO_STARTUP_SOURCES}
+            src/ui/StartupProgressComponent.cpp
+            src/ui/StartupProgressComponent.h
+            src/plugin_host/PluginCatalog.cpp
+            src/plugin_host/PluginCatalog.h
             tests/DawProjectTests.cpp
             tests/StudioOneProjectTests.cpp
             src/ui/TransportSettingsComponent.cpp
@@ -1123,6 +1161,7 @@ if(STUDIO_DUO_BUILD_TESTS)
         STUDIO_DUO_HOST_SUITE
         IN ITEMS
             audioDeviceProbeTests
+            startupTests
             windowsCrashHandlerTests
             pluginFormatTests
             pluginCompatibilityTests
@@ -1141,7 +1180,7 @@ if(STUDIO_DUO_BUILD_TESTS)
             PROPERTIES RESOURCE_LOCK studio_duo_host
         )
     endif()
-    if(WIN32)
+    if(APPLE OR WIN32)
         add_test(NAME StudioDuoStartup COMMAND StudioDuo --startup-self-test)
         set_tests_properties(
             StudioDuoStartup
@@ -1149,5 +1188,12 @@ if(STUDIO_DUO_BUILD_TESTS)
                 RESOURCE_LOCK studio_duo_host
                 TIMEOUT 30
         )
+        foreach(STUDIO_DUO_STARTUP_SCENARIO IN ITEMS
+            slow-catalog warm-catalog large-catalog corrupt-catalog missing-audio missing-midi recovery plugin-timeout)
+            add_test(NAME "StudioDuoStartup.${STUDIO_DUO_STARTUP_SCENARIO}"
+                COMMAND StudioDuo --startup-self-test "--startup-scenario=${STUDIO_DUO_STARTUP_SCENARIO}")
+            set_tests_properties("StudioDuoStartup.${STUDIO_DUO_STARTUP_SCENARIO}"
+                PROPERTIES RESOURCE_LOCK studio_duo_host TIMEOUT 30)
+        endforeach()
     endif()
 endif()

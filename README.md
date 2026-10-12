@@ -84,7 +84,8 @@ hardening remains before the complete DAW described in the
 - Thirteen bundled devices plus plugin-backed reamp snapshots, freeze, print,
   level-matched comparison, batch rendering, and reports
 - Startup hub with blank songs, curated templates, ordered recent projects,
-  and stale-entry cleanup
+  and stale-entry cleanup; dependency-aware startup progress, step history,
+  safe-start recovery, and redacted diagnostic export
 - Four accessible dark themes, persisted custom surface/accent colors, and an
   indexed, offline, version-matched in-app user guide
 
@@ -131,9 +132,12 @@ Windows x64 ZIP, and SHA-256 checksums. Installed macOS and Windows builds
 check for releases at launch, download verified updates in the background by
 default, and install them only when the user chooses **Restart and Update**.
 
-Windows checks MIDI discovery and automatic ASIO startup in separate processes.
-If startup still fails, `--safe-audio` opens the app without initializing audio
-or MIDI. See [startup troubleshooting and logs](docs/user-guide.md#logs-and-diagnostics).
+Startup paints a lightweight window before loading settings/catalogs, checks
+devices in a separate process, and offers explicit recovery instead of reporting
+premature readiness. `--safe-audio` omits audio/MIDI; `--safe-start` also bypasses
+third-party runtimes. `--default-audio` bypasses the saved device configuration
+for this launch. **Help > Startup diagnostics** retains step history and exports
+a privacy-safe JSON report. See [startup troubleshooting and logs](docs/user-guide.md#logs-and-diagnostics).
 
 ## Documentation
 

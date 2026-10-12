@@ -120,10 +120,16 @@ cmake --build build-audio-export --config Release --parallel
 ctest --test-dir build-audio-export --build-config Release --output-on-failure
 ```
 
-Windows also runs `StudioDuoStartup`, which launches the actual application with
-`--startup-self-test`, creates its main window, services the event loop, and
-asserts that no audio manager was constructed. It exits without initializing
-hardware audio or MIDI. CI and releases then install the
+macOS and Windows also run `StudioDuoStartup`, which launches the actual application
+with `--startup-self-test`, paints its lightweight window, completes the coordinated
+startup graph, and asserts that no audio manager was constructed. Separate cases
+cover slow, warm, and 20,000-entry catalogs, corruption, unavailable audio/MIDI,
+plug-in-worker timeout, and unclean-session safe recovery. Tests use isolated
+temporary preferences/catalogs/markers and only synthetic data. Slow-catalog
+coverage requires timer callbacks while the worker is active, rather than merely
+checking that a window was eventually created. Each injection must appear in the
+typed result/history; the driver-free fallback alone cannot pass the case.
+CI and releases then install the
 signed Windows package into a temporary directory and run the same startup
 check against the installed executable. The installer smoke script refuses to
 run outside disposable GitHub-hosted runners, avoiding changes to a developer's
@@ -132,6 +138,74 @@ installed application. CI retains Windows test packages and startup failure logs
 Audio-probe tests use synthetic worker responses, abrupt exits, and timeouts;
 they never load an installed hardware driver. Windows additionally checks native
 exception reporting in a disposable child process.
+
+## Coordinated startup
+
+`StartupShellComponent` owns the lightweight surface, workers and
+`StartupCoordinator`. Initialization begins only after that surface's first
+paint. The welcome/storage task creates the shared application-data root before
+independent writers, avoiding competing recursive-directory creation on a clean
+install. Preferences/recent metadata, cached catalog/compatibility data, and recovery
+inspection run concurrently without constructing the full workspace or an audio
+manager. Workspace construction depends on those results; audio preflight depends
+on settings and the recovery decision. MIDI and requested-project dispatch wait
+for their actual services. Unsupported locale/control-surface/extension systems
+are not invented as startup tasks.
+
+The coordinator is message-thread-owned. Workers publish owned results through a
+mailbox; attempt tokens reject stale results after timeout, retry, or cancellation.
+Dependency cycles/unknown IDs fail before execution. Required progress is weighted;
+optional work does not hold the workspace at an incomplete percentage. A failed
+required task blocks readiness until an explicit retry or permitted safe bypass.
+Retries are bounded (three audio attempts). Warnings, audio-disabled entry and
+optional failures remain degraded, with the original failures retained in history.
+
+Startup categories are stable `startup.*` IDs. Reports serialize only enums,
+timestamps/timings and numeric summaries, not task names or free-form UI details.
+They retain 128 history events, at most ten 128 KiB files and fourteen days of
+history. JSON export does not bundle ordinary application logs or native dumps.
+Per-session UUID markers include a PID and timestamp, preserve other live sessions,
+and conservatively treat corrupt/stale markers as recovery candidates. Only clean
+shutdown clears the current marker; acknowledgment removes only inspected stale
+markers. Startup self-tests and worker modes use separate lifecycle paths.
+
+Folder discovery remains filesystem-only and sandboxed. Catalog metadata records
+schema, app version and architecture changes; ordinary scans reuse unchanged
+descriptions. Corrupt catalog/preferences/search-path/compatibility files are
+bounded and reported instead of being silently replaced. A startup rescan has a
+120-second overall coordinator deadline plus the existing per-worker deadline;
+it can be cancelled without preventing workspace entry. Scan crash, timeout,
+protocol/validation failure and cancellation are separate results.
+
+Native handles are not moved to arbitrary worker threads. The parent launches the
+device probe off-thread, enforces its deadline/cancellation, and activates only an
+accepted configuration on JUCE's message thread. Runtime drivers are not isolated:
+a second native activation can still misbehave after a successful probe. Recovery,
+shutdown and reentrant timers must not destroy a manager while its activation is
+on the stack; defer those actions until the native call returns.
+
+### Startup budgets
+
+These are release targets for supported macOS/Windows machines, not claims that
+every hardware driver has been measured. Human recovery decisions are excluded.
+CI enforces driver-free first paint within two seconds and completion within ten
+seconds; synthetic large-catalog cases contain 20,000 descriptors. The JSON
+self-test output records actual first-paint/total timings and responsive worker
+ticks for comparisons. Measure real clean/warm/device/recovery launches with the
+same build/configuration and selected hardware before release sign-off.
+
+| Scenario | Target |
+| --- | --- |
+| Clean preferences/catalog | First paint < 2 s; required services < 10 s |
+| Warm catalog | Workspace < 5 s, without mandatory deep validation |
+| Large cached catalog | Restore < 15 s; optional discovery never gates entry |
+| Missing audio hardware | Actionable failure within the 15 s audio-task deadline |
+| Recovery/safe-audio | Driver-free workspace < 5 s after the explicit decision |
+
+```sh
+ctest --test-dir build --build-config Release --output-on-failure \
+  -R 'StudioDuoStartup|StudioDuoTests.startupTests|StudioDuoTests.audioDeviceProbeTests'
+```
 
 ## Audio export
 
@@ -310,12 +384,13 @@ waiting to be reaped. A versioned compatibility database records scan crashes,
 runtime disconnects, timeouts, supported modes, and public-standard validation
 results.
 
-Windows MIDI discovery and automatic ASIO startup use the same executable in
+Startup device checks and Windows MIDI/ASIO discovery use the same executable in
 `--audio-device-probe <request.xml> <response.xml>` mode before any plugin-worker
 or main-window construction in that worker. The main app defers its audio
 manager, including JUCE's eager MIDI device-list subscription, until after the
 window is visible. A discovery-only request checks manager construction and MIDI
-enumeration first; ASIO requests then check the requested setup in disposable
+enumeration first; startup requests check the complete cached/default configuration
+on either supported platform, while explicit ASIO requests check the requested setup in disposable
 processes and publish results only after closing the driver. The parent
 requires both a clean process exit and a valid result, enforces a ten-second
 deadline, terminates a hung probe, and never opens a rejected setup itself.
@@ -923,8 +998,8 @@ folders. It never launches a child app, instantiates a plug-in, or touches audio
 and microphone initialization.
 `PluginSearchPaths` schema 2 stores custom folders and disabled defaults.
 The VST settings page can add/remove effective paths, restore defaults, and
-force a scan. `StudioPreferences::scanPluginsAtStartup` controls the delayed
-startup scan and defaults to enabled.
+force a scan. `StudioPreferences::scanPluginsAtStartup` controls the optional coordinated
+background scan and defaults to enabled.
 The same page exposes explicit per-plug-in advanced validation. It reuses the
 existing `--validate-plugin <stable identifier>` child-process path for the
 selected catalog entry only, keeping deep instantiation checks separate from

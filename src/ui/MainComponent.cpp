@@ -411,8 +411,17 @@ private:
 };
 
 MainComponent::MainComponent(
-    bool startAudioOnLaunch,
-    juce::File startupProject)
+    StudioPreferences restoredPreferences,
+    std::unique_ptr<PluginCatalog> restoredCatalog,
+    bool bypassThirdPartyPlugins,
+    bool preserveSavedAudioSetup,
+    bool checkUpdatesOnLaunch)
+    : preferences(std::move(restoredPreferences)),
+      pluginCatalogOwner(std::move(restoredCatalog)),
+      pluginCatalog(*pluginCatalogOwner),
+      safeStartPlugins(bypassThirdPartyPlugins),
+      preserveStartupAudioSetup(preserveSavedAudioSetup),
+      checkUpdatesAfterStartup(checkUpdatesOnLaunch)
 {
     setLookAndFeel(&theme);
     setOpaque(true);
@@ -2066,6 +2075,11 @@ MainComponent::MainComponent(
                 {
                     return candidate.id == insertId;
                 });
+            if (insert != track->inserts.cend() && safeStartPlugins && !insert->bundledDevice)
+            {
+                setStatus("Third-party runtimes are bypassed for this launch. Restart normally to enable them.", true);
+                return;
+            }
             if (insert != track->inserts.cend()
                 && insert->recoveryDisabled)
             {
@@ -2134,93 +2148,184 @@ MainComponent::MainComponent(
     selectTrack(selectedTrackId);
     refreshInputControls();
 
-    setStatus(startAudioOnLaunch
-        ? "Starting audio..."
-        : "Safe audio mode: automatic audio/MIDI startup is disabled. Open Settings to choose a device.");
+    setStatus("Preparing required startup services.");
     projectChanged(false);
     startTimerHz(30);
     setSize(1480, 900);
-    if (startAudioOnLaunch)
-    {
-        callAfterDelaySafely(
-            250,
-            [safe = juce::Component::SafePointer<MainComponent>(this)]
-            {
-                if (safe != nullptr)
-                    safe->initialiseAudio();
-            });
-    }
-    if (preferences.scanPluginsAtStartup())
-    {
-        callAfterDelaySafely(
-            500,
-            [safe = juce::Component::SafePointer<MainComponent>(this)]
-            {
-                if (safe != nullptr)
-                    safe->pluginCatalog.startScan(false);
-            });
-    }
-    callAfterDelaySafely(
-        1200,
-        [safe = juce::Component::SafePointer<MainComponent>(this)]
-        {
-            if (safe == nullptr)
-                return;
-            safe->updateService.checkForUpdates();
-        });
-    if (startupProject != juce::File())
-    {
-        showStartupHub();
-        juce::MessageManager::callAsync(
-            [safe = juce::Component::SafePointer<
-                 MainComponent>(this),
-             projectToOpen =
-                 std::move(startupProject)]
-            {
-                if (safe != nullptr)
-                    safe->openProjectSource(projectToOpen);
-            });
-    }
-    else
-    {
-        showStartupHub();
-    }
+    showStartupHub();
 }
 
-void MainComponent::initialiseAudio()
+juce::Result MainComponent::initialiseStartupAudio(const juce::XmlElement* savedSetup)
 {
 #if JUCE_WINDOWS
     const ScopedWindowsCrashContext crashContext(
         WindowsCrashContext::audioStartup);
 #endif
     if (appShutdownPrepared)
-        return;
+        return juce::Result::fail("The application is shutting down.");
     if (audioInitialiseInFlight)
     {
         logError(
             "audio.startup",
             "Ignored a re-entrant audio initialization request.");
-        return;
+        return juce::Result::fail("Audio initialization is already in progress.");
     }
     const juce::ScopedValueSetter<bool> initialiseGuard(
         audioInitialiseInFlight,
         true);
+    startupProbePassed = true;
     if (!ensureAudioDeviceManager())
-        return;
+        return juce::Result::fail(audioStartupError);
 
     if (currentAudioDevice() != nullptr)
     {
-        connectAudioEngine();
-        return;
+        return connectAudioEngine() ? juce::Result::ok()
+                                    : juce::Result::fail(audioStartupError);
     }
-    if (const auto result = deviceManager->initialiseStudioAudio();
+    if (const auto result = deviceManager->initialiseStudioAudio(savedSetup, false);
         result.failed())
     {
+        audioStartupError = result.getErrorMessage();
         setStatus(result.getErrorMessage(), true);
-        return;
+        return result;
     }
 
-    connectAudioEngine();
+    return connectAudioEngine() ? juce::Result::ok() : juce::Result::fail(audioStartupError);
+}
+
+StartupDeviceSummary MainComponent::startupDeviceSummary() const
+{
+    StartupDeviceSummary summary;
+    if (auto* device = currentAudioDevice())
+    {
+        summary.audioEnabled = audioEngineInitialised;
+        summary.sampleRate = device->getCurrentSampleRate();
+        summary.bufferSize = device->getCurrentBufferSizeSamples();
+        summary.audioInputs = device->getActiveInputChannels().countNumberOfSetBits();
+        summary.audioOutputs = device->getActiveOutputChannels().countNumberOfSetBits();
+    }
+    if (deviceManager != nullptr)
+    {
+        summary.midiAvailable = true;
+        summary.retrospectiveCapture = summary.audioEnabled;
+        for (const auto& input : juce::MidiInput::getAvailableDevices())
+            if (deviceManager->isMidiInputDeviceEnabled(input.identifier))
+                ++summary.enabledMidiInputs;
+        summary.enabledMidiOutputs = deviceManager->getDefaultMidiOutput() != nullptr ? 1 : 0;
+        summary.unavailableMidiDevices = startupUnavailableMidiDevices;
+    }
+    return summary;
+}
+
+juce::String MainComponent::startupAudioDescription() const { return statusPanel.latestMessage(); }
+
+bool MainComponent::startupAudioHasWarning() const noexcept { return startupAudioWarning; }
+
+void MainComponent::disableStartupAudio()
+{
+    audioEngine.shutdown();
+    audioEngineInitialised = false;
+    deviceManager.reset();
+    setStatus("Audio and hardware MIDI are explicitly disabled for this launch.");
+}
+
+StartupOutcome MainComponent::initialiseStartupMidi(const juce::XmlElement* savedSetup)
+{
+    if (deviceManager == nullptr)
+        return { StartupState::warning, StartupIssue::midiUnavailable,
+                 "MIDI is disabled because no device manager is available." };
+    const auto inputs = juce::MidiInput::getAvailableDevices();
+    const auto outputs = juce::MidiOutput::getAvailableDevices();
+    juce::StringArray enabledNames;
+    auto unavailable = 0;
+    for (const auto& input : inputs)
+        if (deviceManager->isMidiInputDeviceEnabled(input.identifier))
+            enabledNames.add(input.name);
+    if (savedSetup != nullptr)
+    {
+        for (const auto* input : savedSetup->getChildWithTagNameIterator("MIDIINPUT"))
+        {
+            const auto id = input->getStringAttribute("identifier");
+            const auto name = input->getStringAttribute("name");
+            const auto available = std::find_if(inputs.begin(), inputs.end(), [&](const auto& device)
+                { return id.isNotEmpty() ? device.identifier == id : device.name == name; });
+            if (available == inputs.end() || !deviceManager->isMidiInputDeviceEnabled(available->identifier))
+                ++unavailable;
+        }
+        const auto outputId = savedSetup->getStringAttribute("defaultMidiOutputDevice");
+        const auto outputName = savedSetup->getStringAttribute("defaultMidiOutput");
+        if ((outputId.isNotEmpty() || outputName.isNotEmpty())
+            && deviceManager->getDefaultMidiOutput() == nullptr)
+            ++unavailable;
+    }
+    auto detail = juce::String(enabledNames.size()) + " enabled MIDI input(s): "
+        + (enabledNames.isEmpty() ? juce::String("none") : enabledNames.joinIntoString(", "))
+        + ". Output: " + (deviceManager->getDefaultMidiOutput() != nullptr
+            ? deviceManager->getDefaultMidiOutput()->getName() : juce::String("none"))
+        + ". " + juce::String(unavailable) + " saved device(s) unavailable. "
+        + (audioEngineInitialised ? "Retrospective capture is available while audio processing is active."
+                                  : "Retrospective capture requires active audio processing.");
+    startupUnavailableMidiDevices = unavailable;
+    return { unavailable > 0 ? StartupState::warning : StartupState::succeeded,
+             unavailable > 0 ? StartupIssue::midiUnavailable : StartupIssue::none, detail };
+}
+
+PluginCatalog& MainComponent::startupCatalog() noexcept { return pluginCatalog; }
+
+StartupOutcome MainComponent::openStartupProject(const juce::File& source)
+{
+    if (!source.exists())
+    {
+        setStatus("The requested startup project is missing or inaccessible.", true);
+        return { StartupState::warning, StartupIssue::projectUnavailable,
+                 "The requested project is missing or inaccessible; the workspace remains available." };
+    }
+    if (ProjectImportService::sourceFormat(source) == ProjectSourceFormat::studioDuo)
+    {
+        if (!openProjectFrom(source))
+            return { StartupState::warning, StartupIssue::projectUnavailable,
+                     "The requested project could not be opened; the workspace remains available." };
+        auto missingPlugins = 0;
+        for (const auto& track : project.tracks)
+            for (const auto& insert : track.inserts)
+                if (!insert.isContainer() && !insert.bundledDevice
+                    && !pluginCatalog.descriptionForIdentifier(insert.pluginIdentifier).has_value())
+                    ++missingPlugins;
+        if (missingPlugins > 0 || statusIsError)
+            return { StartupState::warning, StartupIssue::projectUnavailable,
+                     "The project opened with recovery/compatibility warnings and "
+                        + juce::String(missingPlugins) + " missing plug-in(s). Review the project inspector." };
+        return { StartupState::succeeded, StartupIssue::none,
+                 "The requested project opened after its required services became available." };
+    }
+    openProjectSource(source);
+    return { StartupState::succeeded, StartupIssue::none,
+             "The requested interchange project was handed to the existing destination picker after service readiness." };
+}
+
+void MainComponent::setStartupAvailable(bool degraded)
+{
+    if (!startupServicesAvailable && checkUpdatesAfterStartup)
+        updateService.checkForUpdates();
+    startupServicesAvailable = true;
+    const auto message = degraded ? "Workspace available in degraded mode. Open Help > Startup diagnostics for details."
+                                 : "Ready. Required audio, MIDI and workspace services are available.";
+    setStatus(message, degraded);
+    if (startupHub.isVisible())
+        startupHub.setStatus(message, degraded);
+}
+
+void MainComponent::openStartupIo(bool discoveryProbePassed)
+{
+    if (discoveryProbePassed)
+        startupProbePassed = true;
+    showSettings();
+}
+
+void MainComponent::bypassStartupPlugins()
+{
+    safeStartPlugins = true;
+    projectChanged(false, false);
 }
 
 bool MainComponent::hasAudioDeviceManager() const noexcept
@@ -2238,16 +2343,18 @@ bool MainComponent::ensureAudioDeviceManager()
     if (deviceManager != nullptr)
         return true;
 #if JUCE_WINDOWS
-    juce::XmlElement discovery("DEVICESETUP");
-    discovery.setAttribute("deviceType", midiDeviceDiscoveryProbeType);
-    if (const auto result = probeAudioDeviceSetup(discovery); result.failed())
+    if (!startupProbePassed)
     {
-        audioStartupError =
-            "Audio/MIDI discovery failed: " + result.getErrorMessage()
-            + " Audio remains disabled. Check the logs and any crash report "
-              "before retrying Settings.";
-        setStatus(audioStartupError, true);
-        return false;
+        juce::XmlElement discovery("DEVICESETUP");
+        discovery.setAttribute("deviceType", midiDeviceDiscoveryProbeType);
+        if (const auto result = probeAudioDeviceSetup(discovery); result.failed())
+        {
+            audioStartupError =
+                "Audio/MIDI discovery failed: " + result.getErrorMessage()
+                + " Audio remains disabled. Check the logs and any crash report before retrying Settings.";
+            setStatus(audioStartupError, true);
+            return false;
+        }
     }
 #endif
     logInfo("audio.startup", "Creating the audio and MIDI device manager.");
@@ -2263,6 +2370,7 @@ bool MainComponent::connectAudioEngine()
         return true;
     if (deviceManager == nullptr)
     {
+        audioStartupError = "Audio is disabled. Open I/O to choose a device.";
         setStatus("Audio is disabled. Open Settings to choose a device.", true);
         return false;
     }
@@ -2272,6 +2380,7 @@ bool MainComponent::connectAudioEngine()
     if (const auto result = audioEngine.initialise(*deviceManager);
         result.failed())
     {
+        audioStartupError = result.getErrorMessage();
         setStatus(result.getErrorMessage(), true);
         return false;
     }
@@ -2282,22 +2391,24 @@ bool MainComponent::connectAudioEngine()
             pluginRuntimeRequests());
         result.failed())
     {
+        audioStartupError = result.getErrorMessage();
+        audioEngine.shutdown();
+        audioEngineInitialised = false;
         setStatus(result.getErrorMessage(), true);
         return false;
     }
 
-    const auto saveResult = deviceManager->saveCurrentSetup();
-    if (saveResult.failed())
-        logError(
-            "audio.settings",
-            saveResult.getErrorMessage());
+    if (!preserveStartupAudioSetup)
+        if (const auto saveResult = deviceManager->saveCurrentSetup(); saveResult.failed())
+            logError("audio.settings", saveResult.getErrorMessage());
 
     refreshInputControls();
-    if (const auto* device = currentAudioDevice())
+    if (auto* device = currentAudioDevice())
     {
         const auto startupNotice = deviceManager->takeStartupNotice();
+        startupAudioWarning = startupNotice.isNotEmpty();
         auto readyMessage =
-            juce::String("Ready. ")
+            juce::String("Audio active. ")
             + deviceManager->getCurrentAudioDeviceType()
             + ": "
             + device->getName()
@@ -2309,7 +2420,9 @@ bool MainComponent::connectAudioEngine()
             + juce::String(
                 device->getActiveOutputChannels()
                     .countNumberOfSetBits())
-            + " outputs).";
+            + " outputs, "
+            + juce::String(device->getCurrentSampleRate(), 0) + " Hz, "
+            + juce::String(device->getCurrentBufferSizeSamples()) + " samples).";
         if (startupNotice.isNotEmpty())
             readyMessage = startupNotice + " " + readyMessage;
         setStatus(readyMessage);
@@ -2806,6 +2919,8 @@ void MainComponent::resized()
 
 void MainComponent::timerCallback()
 {
+    if (audioInitialiseInFlight)
+        return;
     if (auto calibration = audioEngine.takeLatencyCalibrationResult();
         calibration.has_value())
     {
@@ -3033,39 +3148,7 @@ void MainComponent::timerCallback()
     {
         inputConfigurationPollTicks = 0;
         auto* device = currentAudioDevice();
-        juce::AudioDeviceManager::AudioDeviceSetup audioSetup;
-        deviceManager->getAudioDeviceSetup(audioSetup);
-        auto midiInputSignature = juce::String();
-        for (const auto& midiInput :
-             juce::MidiInput::getAvailableDevices())
-        {
-            if (deviceManager->isMidiInputDeviceEnabled(
-                    midiInput.identifier))
-            {
-                midiInputSignature
-                    << midiInput.identifier
-                    << ";";
-            }
-        }
-        const auto signature = device != nullptr
-            ? deviceManager->getCurrentAudioDeviceType()
-                + ":"
-                + audioSetup.inputDeviceName
-                + ":"
-                + audioSetup.outputDeviceName
-                + ":"
-                + device->getActiveInputChannels().toString(16)
-                + ":"
-                + device->getActiveOutputChannels().toString(16)
-                + ":"
-                + juce::String(device->getCurrentSampleRate(), 1)
-                + ":"
-                + juce::String(device->getCurrentBufferSizeSamples())
-                + ":"
-                + midiInputSignature
-                + ":"
-                + deviceManager->getDefaultMidiOutputIdentifier()
-            : juce::String();
+        const auto signature = audioDeviceConfigurationSignature(*deviceManager);
         if (signature != inputConfigurationSignature)
         {
             inputConfigurationSignature = signature;
@@ -3083,7 +3166,7 @@ void MainComponent::timerCallback()
                 {
                     setStatus(result.getErrorMessage(), true);
                 }
-                if (device != nullptr)
+                if (device != nullptr && !preserveStartupAudioSetup)
                 {
                     if (const auto result =
                             deviceManager->saveCurrentSetup();
@@ -3115,6 +3198,8 @@ bool MainComponent::keyPressed(const juce::KeyPress& key, juce::Component*)
 
 bool MainComponent::keyPressed(const juce::KeyPress& key)
 {
+    if (!startupServicesAvailable)
+        return false;
     const auto command = key.getModifiers().isCommandDown();
     const auto shift = key.getModifiers().isShiftDown();
 
@@ -3314,6 +3399,11 @@ void MainComponent::beginOpenProject()
 
 bool MainComponent::projectReplacementAvailable()
 {
+    if (!startupServicesAvailable)
+    {
+        setStatus("Wait for required startup services or use the startup recovery actions.", true);
+        return false;
+    }
     if (hasActiveRecordingTargets() || audioEngine.isRecording()
         || recordingFinalizationInProgress)
     {
@@ -4170,6 +4260,8 @@ void MainComponent::showSettings(bool showUpdates)
 
     if (!showUpdates && !ensureAudioDeviceManager())
         logError("audio.settings", audioStartupError);
+    const auto settingsAudioSignature = deviceManager != nullptr
+        ? audioDeviceConfigurationSignature(*deviceManager) : juce::String();
     auto settings = std::make_unique<SettingsComponent>(
         deviceManager.get(),
         updateService,
@@ -4209,11 +4301,21 @@ void MainComponent::showSettings(bool showUpdates)
     settingsWindow->enterModalState(
         true,
         juce::ModalCallbackFunction::create(
-            [safe = juce::Component::SafePointer<MainComponent>(this)](
+            [safe = juce::Component::SafePointer<MainComponent>(this), settingsAudioSignature](
                 int)
             {
                 if (safe != nullptr)
+                {
+                    if (safe->preserveStartupAudioSetup && safe->deviceManager != nullptr
+                        && safe->currentAudioDevice() != nullptr
+                        && audioDeviceConfigurationSignature(*safe->deviceManager) != settingsAudioSignature)
+                    {
+                        safe->preserveStartupAudioSetup = false;
+                        if (const auto saved = safe->deviceManager->saveCurrentSetup(); saved.failed())
+                            safe->setStatus(saved.getErrorMessage(), true);
+                    }
                     safe->settingsWindow.reset();
+                }
             }),
         false);
 }
@@ -4270,14 +4372,20 @@ void MainComponent::showHelpMenu()
 {
     juce::PopupMenu menu;
     menu.addItem(1, "User Guide");
+    menu.addItem(2, "Startup diagnostics");
     menu.showMenuAsync(
         juce::PopupMenu::Options()
             .withTargetComponent(helpButton),
         [safe = juce::Component::SafePointer<
              MainComponent>(this)](int result)
         {
-            if (safe != nullptr && result == 1)
-                safe->openUserGuide();
+            if (safe != nullptr)
+            {
+                if (result == 1)
+                    safe->openUserGuide();
+                else if (result == 2)
+                    juce::NullCheckedInvocation::invoke(safe->onShowStartupDiagnostics);
+            }
         });
 }
 
@@ -10483,11 +10591,12 @@ MainComponent::pluginRuntimeRequests(const Project& sourceProject) const
             request.bypassed = PluginRack::isBypassed(track.inserts, insert);
             request.missing = false;
             request.bridgeMode = insert.bridgeMode;
-            request.recoveryDisabled = insert.recoveryDisabled;
+            request.recoveryDisabled = insert.recoveryDisabled
+                || (safeStartPlugins && !insert.bundledDevice);
             request.deviceIdentifier = insert.bundledDevice
                 ? insert.pluginIdentifier
                 : juce::String();
-            if (insert.bridgeMode == PluginBridgeMode::araCompatibility)
+            if (!request.recoveryDisabled && insert.bridgeMode == PluginBridgeMode::araCompatibility)
             {
                 auto& document = araDocuments[track.id];
                 if (document == nullptr)
@@ -10519,7 +10628,7 @@ MainComponent::pluginRuntimeRequests(const Project& sourceProject) const
             if (!insert.bundledDevice && !request.description.has_value())
                 request.missing = true;
 
-            if (insert.stateFile.isNotEmpty())
+            if (!request.recoveryDisabled && insert.stateFile.isNotEmpty())
             {
                 juce::String stateError;
                 if (!projectPackage.exists()

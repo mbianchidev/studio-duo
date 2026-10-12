@@ -2,6 +2,7 @@
 
 #include "logging/StudioLogger.h"
 
+#include <chrono>
 #if JUCE_WINDOWS
 #include <windows.h>
 #include <cstdlib>
@@ -46,15 +47,27 @@ juce::Result probeAudioDeviceSetup(
     const juce::XmlElement& setup,
     const AudioDeviceProbeOptions& options)
 {
+    return probeAudioDeviceSetupDetailed(setup, options).result;
+}
+
+AudioDeviceProbeResult probeAudioDeviceSetupDetailed(
+    const juce::XmlElement& setup, const AudioDeviceProbeOptions& options)
+{
+    const auto fail = [](AudioDeviceProbeFailure failure, const juce::String& message)
+    {
+        return AudioDeviceProbeResult { juce::Result::fail(message), failure };
+    };
     if (options.timeoutMs <= 0 || !options.executable.existsAsFile())
-        return juce::Result::fail(
+        return fail(AudioDeviceProbeFailure::invalidRequest,
             "Audio startup check requires an executable and a positive timeout.");
     if (!setup.hasTagName("DEVICESETUP"))
-        return juce::Result::fail("The audio startup check received an invalid setup.");
+        return fail(AudioDeviceProbeFailure::invalidRequest, "The audio startup check received an invalid setup.");
+    if (options.cancelled != nullptr && options.cancelled->load(std::memory_order_acquire))
+        return fail(AudioDeviceProbeFailure::cancelled, "The audio startup check was cancelled before driver launch.");
 
     ProbeFiles files;
     if (!files.request.replaceWithText(setup.toString(), false, false, "\n"))
-        return juce::Result::fail("Could not write the audio startup check request.");
+        return fail(AudioDeviceProbeFailure::storage, "Could not write the audio startup check request.");
 
     const auto deviceName = audioDeviceSetupName(setup);
     logInfo(
@@ -72,21 +85,38 @@ juce::Result probeAudioDeviceSetup(
               files.response.getFullPathName() },
             0))
     {
-        return juce::Result::fail("Could not launch the audio startup check process.");
+        return fail(AudioDeviceProbeFailure::launch, "Could not launch the audio startup check process.");
     }
 
-    if (!worker.waitForProcessToFinish(options.timeoutMs))
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(options.timeoutMs);
+    auto cancelled = false;
+    // A second isRunning() can lose a reaped POSIX child's exit status.
+    auto finished = false;
+    while (std::chrono::steady_clock::now() < deadline)
+    {
+        cancelled = options.cancelled != nullptr && options.cancelled->load(std::memory_order_acquire);
+        if (cancelled)
+            break;
+        if (worker.waitForProcessToFinish(50))
+        {
+            finished = true;
+            break;
+        }
+    }
+    if (cancelled || !finished)
     {
         const auto stopped = (!worker.isRunning() || worker.kill())
             && worker.waitForProcessToFinish(2000);
         if (!stopped)
         {
             files.removeFiles = false;
-            return juce::Result::fail(
-                "The audio startup check timed out and its process could not be stopped. "
+            return fail(cancelled ? AudioDeviceProbeFailure::cancelled : AudioDeviceProbeFailure::timeout,
+                "The audio startup check could not stop its process. "
                 "Close the remaining Studio Duo worker before retrying.");
         }
-        return juce::Result::fail(
+        if (cancelled)
+            return fail(AudioDeviceProbeFailure::cancelled, "The audio startup check was cancelled; its process was stopped.");
+        return fail(AudioDeviceProbeFailure::timeout,
             "The audio startup check timed out after "
             + juce::String(options.timeoutMs)
             + " ms; the driver process was stopped.");
@@ -94,7 +124,7 @@ juce::Result probeAudioDeviceSetup(
 
     if (const auto exitCode = worker.getExitCode(); exitCode != 0)
     {
-        return juce::Result::fail(
+        return fail(AudioDeviceProbeFailure::crash,
             "The audio startup check process exited unexpectedly (code 0x"
             + juce::String::toHexString(static_cast<juce::int64>(exitCode))
             + "). The driver was not loaded into Studio Duo.");
@@ -102,14 +132,14 @@ juce::Result probeAudioDeviceSetup(
 
     const auto response = juce::parseXML(files.response);
     if (response == nullptr || !response->hasTagName("AUDIO_DEVICE_PROBE_RESULT"))
-        return juce::Result::fail("The audio startup check returned no valid response.");
+        return fail(AudioDeviceProbeFailure::protocol, "The audio startup check returned no valid response.");
     const auto status = response->getStringAttribute("status");
     if (status == "ok")
-        return juce::Result::ok();
+        return {};
     const auto error = response->getStringAttribute("error");
     if (status == "error" && error.isNotEmpty())
-        return juce::Result::fail(error);
-    return juce::Result::fail("The audio startup check returned an invalid result.");
+        return fail(AudioDeviceProbeFailure::deviceUnavailable, error);
+    return fail(AudioDeviceProbeFailure::protocol, "The audio startup check returned an invalid result.");
 }
 
 std::optional<int> runAudioDeviceProbeWorker(

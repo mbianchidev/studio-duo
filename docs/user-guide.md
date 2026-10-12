@@ -133,10 +133,13 @@ After choosing a project:
    media is written below its `media/` directory.
 
 Studio Duo restores the last working audio device shortly after its window
-appears. The audio manager and MIDI discovery are deferred until then, rather
-than running during window construction. On Windows, MIDI discovery is checked
-in a separate process before the main app creates its audio manager; a failed
-check leaves the window open with audio disabled and a diagnostic message.
+appears. A lightweight startup surface paints first, then shows real local
+settings, recovery, cached catalog, audio, MIDI, and workspace steps. Independent
+settings/catalog/recovery work runs in the background. The cached catalog is
+enough to enter the workspace: optional folder discovery never requires waiting
+for a full plug-in scan. The device configuration is checked in a separate
+process before the main app creates its audio manager; a failed check leaves
+the window responsive with **Retry**, **Open I/O**, and **Start without audio**.
 On macOS, the system may request microphone access at that point. Use
 **Settings** (gear icon) > **Audio / MIDI** to enable inputs or change the
 active device. On
@@ -989,6 +992,61 @@ standalone copy; install Studio Duo with Setup to enable in-app updates.
 
 ## Logs and diagnostics
 
+### Startup history and safe start
+
+Choose **Show step history** during startup, or **Help > Startup diagnostics**
+after entering the workspace. The history retains timestamped starts, results,
+warnings, failures, retries, cancellations, and durations. Required services
+must finish or be explicitly bypassed before the workspace reports Ready.
+Audio-disabled and warning states are reported as degraded, not Ready.
+**Cancel background scan** stops optional discovery without discarding the
+usable cached catalog.
+
+Tab and Shift+Tab reach the native controls; Return/Space activates buttons.
+Use arrow keys and Page Up/Page Down in the history. Escape returns to the
+workspace once its required services are available. Status changes are announced
+to assistive technology. Progress is determinate and has no animations or
+artificial startup delays.
+
+An unclean previous session offers **Safe start** before restoring devices or
+third-party runtimes. **Continue normally** is an explicit alternative. Safe
+start preserves saved project state and does not load third-party DSP or opaque
+plug-in state into the host. Bundled devices remain available. Relaunch normally
+to enable third-party runtimes again; a safe launch does not silently reload them.
+
+The launch-only switches work on both supported platforms:
+
+| Switch | Effect |
+| --- | --- |
+| `--safe-audio` | No automatic audio manager, hardware MIDI discovery, or device polling |
+| `--safe-start` | Safe audio plus bypassing all third-party runtime restoration, including ARA |
+| `--default-audio` | Ignore the previously saved device configuration and use the normal default-device selection |
+
+`--safe-audio` and `--safe-start` do not delete the saved audio setup. In
+default-audio mode the saved configuration is not automatically replaced.
+Use **Open I/O** or **Settings > Audio / MIDI** for explicit device changes;
+changed settings are saved when you close I/O.
+Opening **Updates** alone never initializes audio.
+
+### Redacted startup reports
+
+**Export diagnostics** saves a JSON report containing app version/build/platform,
+stable task categories, timings, result/issue codes, numeric audio/MIDI summaries,
+plug-in counts, and classified failure counts. Project and recent-project names,
+full paths, device names/identifiers, plug-in names/state, personal metadata,
+and audio content are deliberately omitted. The screen's detailed error text
+is not copied into the report.
+
+Automatic reports live below `Studio Duo/Startup/Reports` in the platform's
+application-data directory. Each report is limited to 128 KiB; at most ten reports
+are retained for fourteen days. The active-session markers are separate, contain
+only process/timestamp information, and are cleared only after clean shutdown.
+Worker probes and diagnostic self-tests do not change normal-session markers.
+Use the redacted export as the default support attachment; ordinary logs and
+native dumps are not silently bundled into it.
+
+### Application logs and native crash reports
+
 Studio Duo writes asynchronous, process-specific daily logs below
 `~/Library/Application Support/Studio Duo/Logs` on macOS and
 `%APPDATA%\Studio Duo\Logs` on Windows. Logs from the last 24 hours remain
@@ -1023,9 +1081,12 @@ with symbols from the exact Studio Duo build that crashed.
 MIDI discovery failures also leave **Updates** available without loading audio
 devices; fix the reported driver or system error before retrying audio Settings.
 
-The ASIO probe checks startup only: the selected driver still runs in the main
-process during recording and playback. Explicit device changes in Settings
-also run in the main process. This is not runtime driver isolation.
+The isolated device probe checks startup only: the selected driver still runs
+in the main process during activation, recording, and playback. JUCE's native
+device/MIDI objects remain on their required message thread. A driver that
+misbehaves after passing its check can still hang or crash the host; no startup
+timer can safely force-unload that native driver. Explicit device changes in
+Settings also run in the main process. This is not runtime driver isolation.
 
 Create `logging.json` beside the `Logs` directory to change retention or enable
 verbose debug logging, then restart Studio Duo:

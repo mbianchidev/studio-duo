@@ -29,6 +29,8 @@ preferredAsioDeviceSetup(const juce::String& deviceName);
 [[nodiscard]] int callbackChannelIndex(
     const juce::BigInteger& activeChannels,
     int physicalChannel) noexcept;
+[[nodiscard]] juce::String audioDeviceConfigurationSignature(
+    const juce::AudioDeviceManager& manager);
 [[nodiscard]] juce::Result probeNativeAudioDeviceSetup(
     const juce::XmlElement& setup);
 
@@ -38,6 +40,8 @@ public:
     StudioAudioDeviceManager();
 
     [[nodiscard]] juce::Result initialiseStudioAudio();
+    [[nodiscard]] juce::Result initialiseStudioAudio(
+        const juce::XmlElement* savedSetup, bool checkDrivers);
     [[nodiscard]] juce::Result saveCurrentSetup() const;
     [[nodiscard]] juce::String takeStartupNotice();
     void prepareDeviceTypesForSettings();
@@ -58,6 +62,7 @@ private:
     juce::File settingsFile;
     juce::String startupNotice;
     bool deviceTypesScanned = false;
+    bool performDriverChecks = true;
 #if JUCE_WINDOWS
     bool windowsFallbackDeviceTypesAdded = false;
 #endif

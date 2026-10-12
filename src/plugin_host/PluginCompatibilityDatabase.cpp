@@ -37,7 +37,8 @@ bool PluginCompatibilityDatabase::load(juce::String& error)
         entries.clear();
         return true;
     }
-    const auto value = juce::JSON::parse(file.loadFileAsString());
+    const auto value = file.getSize() <= 16 * 1024 * 1024
+        ? juce::JSON::parse(file.loadFileAsString()) : juce::var();
     const auto* root = value.getDynamicObject();
     if (root == nullptr
         || integerProperty(*root, "schemaVersion") != 1

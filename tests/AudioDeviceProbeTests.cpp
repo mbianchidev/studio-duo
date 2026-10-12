@@ -4,6 +4,7 @@
 #include "audio/AudioDeviceProbe.h"
 
 #include <cstdlib>
+#include <thread>
 
 std::optional<int> runAudioDeviceProbeFixture(
     const juce::StringArray& arguments)
@@ -79,35 +80,54 @@ void audioDeviceProbeTests()
          + ready.getErrorMessage()).toRawUTF8());
 
     setup.setAttribute("audioOutputDeviceName", "Fixture unavailable");
-    const auto unavailable = studio::probeAudioDeviceSetup(setup, options);
+    const auto unavailable = studio::probeAudioDeviceSetupDetailed(setup, options);
     expect(
-        unavailable.failed()
-            && unavailable.getErrorMessage().contains("disconnected"),
+        unavailable.result.failed()
+            && unavailable.failure == studio::AudioDeviceProbeFailure::deviceUnavailable
+            && unavailable.result.getErrorMessage().contains("disconnected"),
         "A driver error is returned to the host without opening it there.");
 
     setup.setAttribute("audioOutputDeviceName", "Fixture abrupt exit");
-    const auto crashed = studio::probeAudioDeviceSetup(setup, options);
+    const auto crashed = studio::probeAudioDeviceSetupDetailed(setup, options);
     expect(
-        crashed.failed()
-            && crashed.getErrorMessage().contains("0x2a"),
+        crashed.result.failed()
+            && crashed.failure == studio::AudioDeviceProbeFailure::crash
+            && crashed.result.getErrorMessage().contains("0x2a"),
         "An abrupt worker exit is contained and reports its native exit code.");
 
     setup.setAttribute("audioOutputDeviceName", "Fixture missing response");
     const auto missingResponse =
-        studio::probeAudioDeviceSetup(setup, options);
+        studio::probeAudioDeviceSetupDetailed(setup, options);
     expect(
-        missingResponse.failed(),
+        missingResponse.result.failed() && missingResponse.failure == studio::AudioDeviceProbeFailure::protocol,
         "Exit code zero without a completed probe response is not success.");
 
     setup.setAttribute("audioOutputDeviceName", "Fixture timeout");
     options.timeoutMs = 250;
     const auto started = juce::Time::getMillisecondCounterHiRes();
-    const auto timedOut = studio::probeAudioDeviceSetup(setup, options);
+    const auto timedOut = studio::probeAudioDeviceSetupDetailed(setup, options);
     expect(
-        timedOut.failed()
-            && timedOut.getErrorMessage().contains("timed out")
+        timedOut.result.failed()
+            && timedOut.failure == studio::AudioDeviceProbeFailure::timeout
+            && timedOut.result.getErrorMessage().contains("timed out")
             && juce::Time::getMillisecondCounterHiRes() - started < 5000.0,
         "A hung driver is terminated within the bounded startup deadline.");
+
+    options.timeoutMs = 10000;
+    options.cancelled = std::make_shared<std::atomic<bool>>(false);
+    {
+        const std::jthread cancellation([flag = options.cancelled]
+        {
+            juce::Thread::sleep(100);
+            flag->store(true, std::memory_order_release);
+        });
+        const auto cancelStarted = juce::Time::getMillisecondCounterHiRes();
+        const auto cancelled = studio::probeAudioDeviceSetupDetailed(setup, options);
+        expect(cancelled.result.failed() && cancelled.failure == studio::AudioDeviceProbeFailure::cancelled
+                   && juce::Time::getMillisecondCounterHiRes() - cancelStarted < 3000.0,
+               "User cancellation terminates the isolated worker and is not reported as a timeout or crash.");
+    }
+    options.cancelled.reset();
 
     options.timeoutMs = 0;
     expect(
