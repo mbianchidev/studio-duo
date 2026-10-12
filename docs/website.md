@@ -94,8 +94,37 @@ audio-driver, and distribution-coverage constraints.
 
 ScreamForge and Track2Stem are optional, separately installed companion
 projects from the same developer. ScreamForge is a vocal VST3/AU processor,
-not a guitar amp. Track2Stem uses AI-powered Demucs separation outside Studio
-Duo; do not describe it as a bundled native AI feature.
+not a guitar amp. Its repository is private, so use the requested email contact
+instead of a GitHub repository link. Track2Stem uses AI-powered Demucs separation
+outside Studio Duo; do not describe it as a bundled native AI feature.
+
+The hero uses the requested "A new DAWn for music production" headline, with
+"Your music. Your decisions." below it. Preserve the mixed case in `DAWn`,
+the exact core statement, and the visible `2026 SyncTune` footer notice when
+changing typography. The screenshot viewer's image has no source while its
+dialog is closed; the script assigns the local image URL before showing it.
+This is deferred image loading, not a visible broken-image placeholder.
+
+The DAW comparison is a sourced workflow summary, not a performance benchmark
+or feature-parity claim. Keep Fender Studio's free recording app separate from
+Fender Studio Pro. Scope Ableton to the stated Standard/Suite editions and
+Pro Tools to Studio, not Ultimate. Do not invent track limits, pricing,
+certifications, or unavailable features from missing documentation.
+The table includes Studio Duo's limited test coverage, best-effort Windows,
+unsupported Linux, missing AAX hosting, and interchange limits.
+
+Comparison sources checked on 2026-10-12:
+
+- [Fender Studio knowledge base](https://support.presonus.com/hc/en-us/categories/46418271543565-Fender-Studio)
+- [Fender Studio Pro overview](https://www.fender.com/pages/fender-studio-pro)
+- [Fender Studio Pro licensing FAQ](https://intl.fender.com/pages/fender-studio-pro-faqs)
+- [Ableton edition comparison](https://www.ableton.com/en/live/compare-editions/)
+- [Pro Tools edition comparison](https://www.avid.com/pro-tools/comparison)
+- [Pro Tools MIDI workflows](https://www.avid.com/pro-tools/midi)
+- [Avid AAX documentation](https://developer.avid.com/aax/)
+- [REAPER overview](https://www.reaper.fm/) and
+  [platform/format information](https://www.reaper.fm/about.php)
+- [REAPER license information](https://www.reaper.fm/purchase.php)
 
 The committed WebP screenshots are local assets, not runtime hotlinks:
 

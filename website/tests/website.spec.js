@@ -13,7 +13,7 @@ test('the production site loads all local assets under the Pages subpath', async
     if (response.status() >= 400) failures.push(`${response.status()} ${response.url()}`);
   });
   await page.goto('./');
-  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Your music.Your decisions.');
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('A new DAWn for music production');
   for (const image of await page.locator('img[src]').all()) {
     await image.scrollIntoViewIfNeeded();
     await image.evaluate((element) => element.decode());
@@ -32,7 +32,7 @@ test('section navigation and download links point to working destinations', asyn
   expect(missingAnchors).toEqual([]);
   await page.getByRole('navigation', { name: 'Main navigation' }).getByRole('link', { name: 'Our mission' }).click();
   await expect(page).toHaveURL(/#mission$/);
-  await expect(page.getByRole('heading', { name: "An entire record. A tool that's yours." })).toBeInViewport();
+  await expect(page.getByRole('heading', { name: 'Record, edit, mix, and master.' })).toBeInViewport();
   await page.getByRole('link', { name: 'Download for macOS or Windows' }).scrollIntoViewIfNeeded();
   await expect(page.getByRole('link', { name: 'Download for macOS or Windows' })).toHaveAttribute(
     'href', 'https://github.com/mbianchidev/studio-duo/releases/latest');
@@ -69,7 +69,7 @@ test('content and the screenshot fallback work without JavaScript', async ({ bro
     const page = await context.newPage();
     await page.goto(baseURL);
     await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
-    await expect(page.getByRole('heading', { name: 'Make the next record.' })).toBeAttached();
+    await expect(page.getByRole('heading', { name: 'Download Studio Duo.' })).toBeAttached();
     await page.getByRole('link', { name: 'Enlarge the Studio Duo session screenshot' }).click();
     await expect(page).toHaveURL(/\/studio-duo\/images\/session\.webp$/);
   } finally {
@@ -108,9 +108,9 @@ test('screenshots can be enlarged and closed by touch', async ({ page, hasTouch 
 
 test('platform expectations, built-in features, and partner tools are explicit', async ({ page }) => {
   await page.goto('./');
-  await expect(page.locator('.hero-copy')).toContainText('best-effort Windows support');
+  await expect(page.locator('.hero-copy')).toContainText('Open source core. No required account. No AI features built in.');
   await expect(page.locator('.platform-note')).toContainText('Windows support is best effort only');
-  await expect(page.locator('.platform-note')).toContainText('without a Windows testing device');
+  await expect(page.locator('.platform-note')).toContainText('no Windows testing device');
   await expect(page.locator('#record')).toContainText('ASIO-compatible interfaces on Windows');
   await expect(page.locator('#record')).toContainText('Focusrite Scarlett Duo on macOS ARM');
   await expect(page.locator('#record')).toContainText('using CoreAudio');
@@ -121,13 +121,55 @@ test('platform expectations, built-in features, and partner tools are explicit',
   await expect(page.locator('#mix')).toContainText('signal generator');
   await expect(page.locator('#master')).toContainText('WAV, AIFF, FLAC, Ogg Vorbis, or MP3');
   await expect(page.locator('#system-requirements')).toContainText('macOS 12 Monterey or later');
-  await expect(page.locator('#system-requirements')).toContainText('Apple silicon (ARM64) or Intel (x86_64)');
+  await expect(page.locator('#system-requirements')).toContainText('Apple silicon ARM64 and Intel x86_64');
   await expect(page.locator('#system-requirements')).toContainText('Windows 10 or 11');
   await expect(page.locator('#system-requirements')).toContainText('Visual C++ x64 Runtime');
   await expect(page.locator('#system-requirements')).toContainText('Linux is unsupported');
-  await expect(page.getByRole('link', { name: 'Explore ScreamForge' })).toHaveAttribute(
-    'href', 'https://github.com/mbianchidev/scream-forge');
+  await expect(page.locator('a[href*="github.com/mbianchidev/scream-forge"]')).toHaveCount(0);
+  await expect(page.locator('#scream-forge-contact')).toHaveAttribute('href', /^mailto:[^@\s]+@[^@\s]+$/);
   await expect(page.getByRole('link', { name: 'Explore Track2Stem' })).toHaveAttribute(
     'href', 'https://github.com/mbianchidev/track2stem');
   await expect(page.locator('.partner-tools')).toContainText('not inside Studio Duo');
+});
+
+test('the headline preserves DAWn case, the tagline sits below it, and copyright remains visible', async ({ page }) => {
+  await page.goto('./');
+  const headline = page.getByRole('heading', { level: 1 });
+  await expect(headline).toHaveText('A new DAWn for music production');
+  await expect(page.locator('.hero-tagline')).toHaveText('Your music. Your decisions.');
+  expect(await headline.evaluate((element) => getComputedStyle(element).textTransform)).toBe('none');
+  await page.evaluate(() => document.fonts.ready);
+  const headlineBox = await headline.boundingBox();
+  const taglineBox = await page.locator('.hero-tagline').boundingBox();
+  expect(taglineBox.y).toBeGreaterThanOrEqual(headlineBox.y + headlineBox.height);
+  await page.locator('.copyright').scrollIntoViewIfNeeded();
+  await expect(page.locator('.copyright')).toBeVisible();
+  await expect(page.locator('.copyright')).toHaveText('\u00a9 2026 SyncTune');
+});
+
+test('the comparison is edition-aware, states limitations, and scrolls by keyboard', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.goto('./');
+  const comparison = page.locator('#comparison');
+  await expect(comparison).toContainText('It does less than the established full DAWs here.');
+  const table = comparison.getByRole('table');
+  await expect(table.getByRole('row')).toHaveCount(7);
+  await expect(table.getByRole('rowheader', { name: 'Fender Studio Free recording app' })).toBeVisible();
+  await expect(table.getByRole('rowheader', { name: 'Fender Studio Pro', exact: true })).toBeVisible();
+  await expect(table.getByRole('rowheader', { name: 'Ableton Live 12 Standard / Suite' })).toBeAttached();
+  await expect(table.getByRole('rowheader', { name: 'Pro Tools Studio' })).toBeAttached();
+  await expect(table.getByRole('rowheader', { name: 'REAPER' })).toBeAttached();
+  await expect(table.locator('.studio-duo-row')).toContainText('No AAX hosting');
+  await expect(table.locator('.studio-duo-row')).toContainText('Windows is best effort');
+  await expect(table.locator('caption')).toContainText('Sources checked 12 October 2026');
+  const scrollRegion = comparison.getByRole('region', { name: 'DAW comparison, scroll horizontally' });
+  await scrollRegion.focus();
+  await expect(scrollRegion).toBeFocused();
+  if (await scrollRegion.evaluate((element) => element.scrollWidth > element.clientWidth)) {
+    await scrollRegion.press('ArrowRight');
+    await expect.poll(() => scrollRegion.evaluate((element) => element.scrollLeft)).toBeGreaterThan(0);
+  }
+  await page.keyboard.press('Tab');
+  await expect(table.getByRole('link', { name: 'Studio Duo', exact: true })).toBeFocused();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });

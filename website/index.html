@@ -4,17 +4,17 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#101214">
-    <meta name="description" content="Studio Duo is an open-source native DAW for macOS, with best-effort Windows support. Record, edit, mix, and master heavy music. No required account. No AI.">
+    <meta name="description" content="Studio Duo is an open source DAW for recording, MIDI, mixing, and album mastering. macOS is the main test platform. Windows support is best effort. No AI features built in.">
     <meta property="og:type" content="website">
-    <meta property="og:title" content="Studio Duo - Your music. Your decisions.">
-    <meta property="og:description" content="An open-source studio for the whole record. Native on macOS, with best-effort Windows support. Built for modern metal, open to every musician.">
+    <meta property="og:title" content="Studio Duo | A new DAWn for music production">
+    <meta property="og:description" content="Record, edit, mix, and master with a smaller open source DAW focused on metal production. macOS is the main test platform; Windows support is best effort.">
     <meta property="og:url" content="https://mbianchidev.github.io/studio-duo/">
     <meta property="og:image" content="https://mbianchidev.github.io/studio-duo/images/session.webp">
     <meta property="og:image:alt" content="Studio Duo's Metal Tracking template, with the timeline, track inspector, and mixer in one window.">
     <meta name="twitter:card" content="summary_large_image">
     <link rel="canonical" href="https://mbianchidev.github.io/studio-duo/">
     <link rel="icon" href="./images/studio-duo-icon.svg" type="image/svg+xml">
-    <title>Studio Duo - Your music. Your decisions.</title>
+    <title>Studio Duo | A new DAWn for music production</title>
   </head>
   <body>
     <a class="skip-link" href="#main">Skip to content</a>
@@ -26,20 +26,23 @@
       <nav aria-label="Main navigation">
         <a href="#mission">Our mission</a>
         <a href="#features">Inside the studio</a>
+        <a href="#comparison">Compare DAWs</a>
         <a href="#open-source">Open source</a>
         <a class="nav-download" href="#download">Get Studio Duo <span aria-hidden="true">&#8599;</span></a>
       </nav>
     </header>
 
-    <main id="main">
+    <main id="main" tabindex="-1">
       <section class="hero wrap" id="top" aria-labelledby="hero-title">
-        <p class="eyebrow"><span class="signal-dot" aria-hidden="true"></span> An open-source DAW. Built for heavy music.</p>
+        <p class="eyebrow"><span class="signal-dot" aria-hidden="true"></span> An open source DAW for heavy music</p>
         <div class="hero-intro">
-          <h1 id="hero-title">Your music.<br>Your <span>decisions.</span></h1>
+          <h1 id="hero-title">A new <span>DAWn</span><br> for music production</h1>
           <div class="hero-copy">
-            <p>A whole record, from the first take to the final master. A native studio for macOS, with best-effort Windows support, built to keep you in control.</p>
-            <a class="button button-light" href="#download">Get Studio Duo <span aria-hidden="true">&#8599;</span></a>
-            <p class="small-note">Open-source core. No required account. No AI.</p>
+            <p class="hero-tagline">Your music. Your decisions.</p>
+            <div class="hero-actions">
+              <a class="button button-light" href="#download">Get Studio Duo <span aria-hidden="true">&#8599;</span></a>
+              <p class="small-note">Open source core. No required account. No AI features built in.</p>
+            </div>
           </div>
         </div>
         <nav class="signal-path" aria-label="Explore the production workflow">
@@ -49,11 +52,11 @@
           <a href="#master"><span class="path-light" aria-hidden="true"></span>Master <span aria-hidden="true">&#8600;</span></a>
         </nav>
         <figure class="hero-shot">
-          <a class="screenshot-link" href="./images/session.webp" data-title="One window. The whole session." data-caption="The Metal Tracking template in Studio Duo, with the timeline, inspector, mixer, and transport." aria-label="Enlarge the Studio Duo session screenshot">
+          <a class="screenshot-link" href="./images/session.webp" data-title="The Metal Tracking template." data-caption="The Metal Tracking template in Studio Duo, with the timeline, inspector, mixer, and transport." aria-label="Enlarge the Studio Duo session screenshot">
             <img src="./images/session.webp" width="1707" height="1107" fetchpriority="high" alt="Studio Duo's Metal Tracking template: rhythm guitars, lead guitar, bass DI, drums, vocals, and master channels, with timeline and inspector above the mixer.">
             <span class="enlarge-label" aria-hidden="true">View full screenshot &#8599;</span>
           </a>
-          <figcaption><span>One window. The whole session.</span><span>Metal Tracking template / macOS</span></figcaption>
+          <figcaption><span>Timeline, inspector, and mixer in one window.</span><span>Metal Tracking template / macOS</span></figcaption>
         </figure>
       </section>
 
@@ -61,29 +64,29 @@
         <div class="section-intro">
           <div>
             <p class="eyebrow">Why Studio Duo exists</p>
-            <h2 id="mission-title">An entire record.<br>A tool that's yours.</h2>
+            <h2 id="mission-title">Record, edit,<br>mix, and master.</h2>
           </div>
           <div class="section-copy">
-            <p>For the solo musician making a record at home. For the producer tracking a whole band. Studio Duo's mission is to make the full production path possible in one open, dependable DAW.</p>
-            <p>Modern metal gets first-class tools: linked performance edits, drum programming, DI and reamp workflows, and dense routing. The fundamentals stay familiar, whatever you play.</p>
+            <p>Studio Duo's goal is to let a musician record and finish a song in one local application. It has multitrack audio, MIDI, mixing, and album mastering, with tools aimed at metal production.</p>
+            <p>It is a smaller, actively developed project. It does less than the established full DAWs below and has far less real-world testing. The focus is linked performance edits, drum programming, DI tracks, and reamping, not a claim of feature parity.</p>
           </div>
         </div>
         <div class="values">
           <article>
-            <h3>You make the decisions.</h3>
-            <p>No AI generation, assistants, or cloud models. Deterministic analysis and editing tools help you work; they don't decide what your record should be.</p>
+            <h3>No built-in AI.</h3>
+            <p>Transient detection, audio analysis, and seeded humanization use deterministic code. The app does not include AI assistants, generation, or cloud models.</p>
           </article>
           <article>
-            <h3>Your session stays yours.</h3>
-            <p>No cloud service or required account. Documented project files, portable copies, and open interchange keep your work movable.</p>
+            <h3>Local audio and projects.</h3>
+            <p>Studio Duo processes audio locally. No account or cloud service is required. Portable project copies include media, and the native file format is documented.</p>
           </article>
           <article>
-            <h3>Keep the performance.</h3>
-            <p>Non-destructive editing, comping, and tone workflows preserve the source. Try a different direction without throwing away the take.</p>
+            <h3>Keep the source files.</h3>
+            <p>Comping, timing edits, and reamp paths preserve the original recordings. Change a comp or tone without replacing the source take.</p>
           </article>
           <article>
-            <h3>Open, from the start.</h3>
-            <p>An AGPLv3 open-source core. Modern plug-in formats. DAWproject exchange. A studio you can inspect, contribute to, and build on.</p>
+            <h3>An open source core.</h3>
+            <p>The core uses AGPLv3. You can inspect or change the code. DAWproject exchange transfers supported session data and reports unsupported details.</p>
           </article>
         </div>
       </section>
@@ -91,22 +94,22 @@
       <section class="features section-space" id="features" aria-labelledby="features-title">
         <div class="wrap feature-heading">
           <p class="eyebrow">Inside the studio</p>
-          <h2 id="features-title">Less between you<br>and the record.</h2>
-          <p>Familiar tracks, takes, buses, and inserts. Tools for the parts of heavy production that usually take the longest.</p>
+          <h2 id="features-title">Tools for<br>metal sessions.</h2>
+          <p>Linked multitrack edits, live MIDI drums, reamp paths, and parallel racks. These are the workflows Studio Duo focuses on.</p>
         </div>
 
         <article class="feature-row wrap" id="record">
           <div class="feature-copy">
             <p class="eyebrow">Tracking &amp; editing</p>
-            <h3>Track together.<br>Edit together.</h3>
-            <p>Record sample-aligned multitrack audio. Build the performance with take lanes and comping. Link edits across drum mics, doubled guitars, or DI and amp tracks without losing their relative timing.</p>
+            <h3>Record takes.<br>Link the edits.</h3>
+            <p>Record sample-aligned multitrack audio, then choose takes with lanes and comping. Link edits across drum microphones, doubled guitars, or DI and amp tracks to preserve their relative timing.</p>
             <ul class="feature-details">
               <li>Punch, loop recording, and count-in</li>
               <li>Tempo maps and a routable metronome</li>
               <li>Transient tools, elastic audio, and crossfades</li>
               <li>CoreAudio on macOS; ASIO-compatible interfaces on Windows</li>
             </ul>
-            <p class="small-note hardware-note">Tested with a Focusrite Scarlett Duo on macOS ARM (Apple silicon), using CoreAudio. Windows ASIO support is best effort only.</p>
+            <p class="small-note hardware-note">Tested with a Focusrite Scarlett Duo on macOS ARM using CoreAudio. Windows ASIO support is best effort only.</p>
             <a class="text-link" href="https://github.com/mbianchidev/studio-duo/blob/main/docs/user-guide.md">Read the user guide <span aria-hidden="true">&#8599;</span></a>
           </div>
           <figure class="feature-shot">
@@ -123,19 +126,19 @@
             <div class="drum-intro">
               <div>
                 <p class="eyebrow">MIDI &amp; metal drums</p>
-                <h3>Drums you can see.<br>Patterns you can feel.</h3>
+                <h3>Record MIDI with<br>the kit on screen.</h3>
               </div>
               <div class="feature-copy">
-                <p>Play and record native MIDI drums with the on-screen kit of twelve performance pads visible as you perform. Click the pads or use your keyboard, then refine each recorded hit in the drum grid or piano roll.</p>
-                <p>Use the built-in drum instrument, genre sound presets, kit tuning, blast-beat and double-kick tools, and seeded humanization. The song transport, metronome, and count-in stay part of the recording workflow. Switch to geometry to see connected rhythm rings without changing the notes.</p>
+                <p>Play and record native MIDI drums with the kit of twelve performance pads visible. Click the pads or use your keyboard. Edit the recorded hits in the drum grid or piano roll.</p>
+                <p>The built-in drum instrument has genre presets and kit tuning. Use blast-beat and double-kick entry tools, seeded humanization, and the song's metronome and count-in. Geometry is an alternate view of the same notes, drawn as rhythm rings.</p>
               </div>
             </div>
             <figure class="geometry-shot">
-              <a class="screenshot-link" href="./images/drum-geometry.webp" data-title="A different view of the same groove." data-caption="Native drum-geometry preview with a synthetic double-kick pattern. Each ring is a drum voice; dot size represents velocity." aria-label="Enlarge the drum geometry screenshot">
+              <a class="screenshot-link" href="./images/drum-geometry.webp" data-title="The drum geometry view." data-caption="Native drum-geometry preview with a synthetic double-kick pattern. Each ring is a drum voice; dot size represents velocity." aria-label="Enlarge the drum geometry screenshot">
                 <img src="./images/drum-geometry.webp" width="2200" height="860" loading="lazy" decoding="async" alt="Drum geometry view of a double-kick groove: kick, snare, hi-hat, and crash notes form concentric colored rings, with 46 hits and a playback sweep.">
-                <span class="enlarge-label" aria-hidden="true">Explore the rhythm rings &#8599;</span>
+                <span class="enlarge-label" aria-hidden="true">View the rhythm rings &#8599;</span>
               </a>
-              <figcaption><span>A different view of the same groove.</span><span>Native preview / synthetic MIDI pattern</span></figcaption>
+              <figcaption><span>Each ring is a drum voice. Dot size represents velocity.</span><span>Native preview / synthetic MIDI pattern</span></figcaption>
             </figure>
           </div>
         </article>
@@ -143,8 +146,8 @@
         <article class="feature-row feature-row-reverse wrap" id="mix">
           <div class="feature-copy">
             <p class="eyebrow">Mixing &amp; plug-ins</p>
-            <h3>Make room for<br>every signal.</h3>
-            <p>Shape a dense mix with sends, sidechains, auxes, nested buses, and sample-accurate automation. Build nested plug-in racks and parallel chains with latency compensation that keeps the branches aligned.</p>
+            <h3>Mix with buses<br>and parallel racks.</h3>
+            <p>Route tracks through sends, sidechains, auxes, and nested buses. Automate mixer and plug-in parameters. Parallel racks compensate for branch latency, so different processing chains stay aligned.</p>
             <ul class="feature-details">
               <li>VST3, CLAP, and Audio Units on macOS</li>
               <li>Sandboxed standard plug-in processing</li>
@@ -155,11 +158,11 @@
             <p class="small-note">ARA 2 uses an explicit compatibility mode.</p>
           </div>
           <figure class="feature-shot mixer-shot">
-            <a class="screenshot-link" href="./images/mixer.webp" data-title="A familiar place to build your mix." data-caption="Mixer detail from the Metal Tracking template, showing channel strips, inserts, sends, faders, and pan controls." aria-label="Enlarge the mixer screenshot">
+            <a class="screenshot-link" href="./images/mixer.webp" data-title="The mixer channel strips." data-caption="Mixer detail from the Metal Tracking template, showing channel strips, inserts, sends, faders, and pan controls." aria-label="Enlarge the mixer screenshot">
               <img src="./images/mixer.webp" width="2012" height="880" loading="lazy" decoding="async" alt="Seven Studio Duo mixer channel strips for rhythm guitars, lead guitar, bass DI, drums, vocals, and master, with insert and send slots above the faders.">
               <span class="enlarge-label" aria-hidden="true">See the channel strips &#8599;</span>
             </a>
-            <figcaption>A familiar place to build your mix / mixer detail</figcaption>
+            <figcaption>Channel strips, inserts, sends, and faders / mixer detail</figcaption>
           </figure>
         </article>
 
@@ -167,59 +170,121 @@
           <article>
             <p class="eyebrow">Guitar &amp; bass</p>
             <h3>Keep the DI.<br>Change the tone.</h3>
-            <p>Use bundled amps and cabinets, load your own cabinet IRs, and save tone snapshots. Compare at matched levels, freeze, print, or batch-render without replacing the source DI.</p>
+            <p>Keep the DI and compare amp chains at matched levels. Freeze or print a tone without replacing the source track. The bundled guitar and bass amps include cabinets and accept your own cabinet IRs.</p>
             <a class="text-link" href="https://github.com/mbianchidev/studio-duo/blob/main/docs/devices.md">Explore bundled devices <span aria-hidden="true">&#8599;</span></a>
           </article>
           <article>
             <p class="eyebrow">Project exchange</p>
-            <h3>Take the session<br>with you.</h3>
-            <p>Import and export DAWproject sessions with media and plug-in state. Make portable copies with hash-verified media. Guided Studio One migration reports what can transfer and what can't.</p>
+            <h3>Transfer projects<br>with their media.</h3>
+            <p>Portable copies include hash-verified media. DAWproject import and export transfer supported session data and plug-in state. Some structures cannot transfer, including native rack topology. Studio One migration also reports its limits.</p>
             <a class="text-link" href="https://github.com/mbianchidev/studio-duo/blob/main/docs/dawproject.md">Check interchange support <span aria-hidden="true">&#8599;</span></a>
           </article>
           <article id="master">
             <p class="eyebrow">Mastering &amp; delivery</p>
-            <h3>Finish the<br>whole release.</h3>
-            <p>Sequence an album in a dedicated mastering workspace. Set gaps, fades, and metadata; measure loudness and true peak. Export mixes and masters as WAV, AIFF, FLAC, Ogg Vorbis, or MP3, with signed render reports for mastering delivery.</p>
+            <h3>Sequence and<br>export an album.</h3>
+            <p>Sequence songs, set gaps and fades, and add release metadata in the mastering workspace. Measure loudness and true peak. Export mixes and masters as WAV, AIFF, FLAC, Ogg Vorbis, or MP3. Mastering exports include signed render reports.</p>
             <a class="text-link" href="https://github.com/mbianchidev/studio-duo/blob/main/docs/mastering.md">Explore mastering <span aria-hidden="true">&#8599;</span></a>
             <p class="small-note">DDP delivery requires an external licensed encoder.</p>
           </article>
         </div>
-        <div class="partner-tools wrap" aria-labelledby="partner-title">
+        <section class="partner-tools wrap" aria-labelledby="partner-title">
           <p class="eyebrow">Partner tools</p>
-          <h3 id="partner-title">More from the same developer.</h3>
-          <p>Companion projects by <a class="inline-link" href="https://github.com/mbianchidev">mbianchidev</a>. Separate, optional installs; Studio Duo doesn't depend on either.</p>
+          <h3 id="partner-title">Other projects by mbianchidev.</h3>
+          <p>These are separate, optional tools. Studio Duo does not depend on either project.</p>
           <div class="partner-grid">
             <article>
               <h4>ScreamForge</h4>
-              <p>A partner VST3 vocal processor for aggressive metal and metalcore vocals, from Studio Duo's developer. Shape a reorderable processing chain, transform your voice, and edit monophonic pitch. Also available as an Audio Unit on macOS.</p>
-              <a class="text-link" href="https://github.com/mbianchidev/scream-forge">Explore ScreamForge <span aria-hidden="true">&#8599;</span></a>
+              <p>A partner VST3 vocal processor for metal and metalcore, developed by mbianchidev. It has a reorderable processing chain, voice effects, and monophonic pitch editing. An Audio Unit version is available on macOS. The repository is private.</p>
+              <a class="text-link" id="scream-forge-contact" href="mailto:black.corekid00@gmail.com">Email black.corekid00@gmail.com about ScreamForge <span aria-hidden="true">&#8599;</span></a>
             </article>
             <article>
               <h4>Track2Stem</h4>
-              <p>Partner software for separating existing audio into vocals, drums, bass, and other stems with Demucs. Its AI-powered separation runs in this separate project, not inside Studio Duo. Import the resulting stems as ordinary audio tracks.</p>
+              <p>Track2Stem separates existing audio into vocals, drums, bass, and other stems with Demucs. The AI-powered separation runs in that separate project, not inside Studio Duo. Import the resulting stems as audio tracks.</p>
               <a class="text-link" href="https://github.com/mbianchidev/track2stem">Explore Track2Stem <span aria-hidden="true">&#8599;</span></a>
             </article>
           </div>
+        </section>
+      </section>
+
+      <section class="comparison wrap section-space" id="comparison" aria-labelledby="comparison-title">
+        <p class="eyebrow">Choosing a DAW</p>
+        <h2 id="comparison-title">What each<br>DAW covers.</h2>
+        <div class="comparison-intro">
+          <p>Studio Duo can record and edit audio, write MIDI, mix, and sequence an album for mastering. It does less than the established full DAWs here. It has a smaller toolset, less production testing, and one developer.</p>
+          <p>This is a workflow comparison, not a speed or reliability benchmark. Fender Studio's free recording app is a different product from Fender Studio Pro. Features and license terms depend on the edition and version.</p>
         </div>
+        <p class="small-note" id="comparison-scroll-note">On a small screen, scroll the table sideways. Keyboard users can focus it and use the arrow keys.</p>
+        <div class="comparison-scroll" role="region" aria-label="DAW comparison, scroll horizontally" aria-describedby="comparison-scroll-note" tabindex="0">
+          <table>
+            <caption>Selected workflows and limitations. Official documentation links are in the software column. Sources checked 12 October 2026.</caption>
+            <thead>
+              <tr>
+                <th scope="col">Software</th>
+                <th scope="col">What it covers</th>
+                <th scope="col">Where the difference matters</th>
+                <th scope="col">License and scope</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr class="studio-duo-row">
+                <th scope="row"><a href="https://github.com/mbianchidev/studio-duo/blob/main/docs/user-guide.md">Studio Duo</a></th>
+                <td>Audio and MIDI recording/editing, linked edits, live drum pads, routing and racks, VST3/AU/CLAP, reamping, and album mastering.</td>
+                <td>Actively developed with limited hardware and plug-in coverage. Windows is best effort and Linux is unsupported. No AAX hosting. DAWproject cannot represent every native project detail.</td>
+                <td>AGPLv3 open source core. No required account. Optional paid plug-ins/content are planned.</td>
+              </tr>
+              <tr>
+                <th scope="row"><a href="https://support.presonus.com/hc/en-us/categories/46418271543565-Fender-Studio">Fender Studio</a><span class="edition-label">Free recording app</span></th>
+                <td>A free cross-platform recording app for capturing audio ideas.</td>
+                <td>A focused recording app, not the full Studio Pro DAW below. Do not treat the two products as interchangeable or assume Pro's features are included.</td>
+                <td>Free app. Check its current documentation for recording and platform limits.</td>
+              </tr>
+              <tr>
+                <th scope="row"><a href="https://www.fender.com/pages/fender-studio-pro">Fender Studio Pro</a></th>
+                <td>A full recording, production, mixing, and mastering DAW, continuing the Studio One product line, with a broader collection of included instruments and effects.</td>
+                <td>More production workflows and included content than Studio Duo. Studio Duo does not claim to match its full arrangement, instrument, and session workflow.</td>
+                <td>Commercial, proprietary software. Check current purchase, subscription, and update terms.</td>
+              </tr>
+              <tr>
+                <th scope="row"><a href="https://www.ableton.com/en/live/compare-editions/">Ableton Live 12</a><span class="edition-label">Standard / Suite</span></th>
+                <td>Audio/MIDI production, Session View clip launching, arrangement, and included instruments/effects. Suite includes Max for Live.</td>
+                <td>Studio Duo has no equivalent to Live's Session View performance workflow or Max for Live environment, and a smaller included tool and sound collection.</td>
+                <td>Commercial, proprietary software. Standard and Suite differ; this row does not describe Intro.</td>
+              </tr>
+              <tr>
+                <th scope="row"><a href="https://www.avid.com/pro-tools/comparison">Pro Tools Studio</a></th>
+                <td>Audio/MIDI production, detailed clip editing and automation, and the AAX effects/instrument ecosystem.</td>
+                <td>An established studio and session workflow. Studio Duo is not an AAX host or a replacement for specialised post-production workflows.</td>
+                <td>Commercial, proprietary software. This is the Studio edition; other Pro Tools editions have different limits.</td>
+              </tr>
+              <tr>
+                <th scope="row"><a href="https://www.reaper.fm/">REAPER</a></th>
+                <td>Audio/MIDI recording, editing, mixing, and mastering; flexible routing; scripting/custom actions; broad plug-in and format support.</td>
+                <td>Supported Linux builds, scripting/extensions, and more workflow customisation and format coverage than Studio Duo currently provides.</td>
+                <td>Commercial, proprietary software. A full evaluation is available; ongoing use requires a license.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="comparison-note">Test Studio Duo with your own interface and plug-ins before moving an important session. Keep the original project and backups.</p>
       </section>
 
       <section class="open-source section-space" id="open-source" aria-labelledby="open-title">
         <div class="wrap open-layout">
           <div>
             <p class="eyebrow">Built in the open</p>
-            <h2 id="open-title">The studio doesn't<br>need a login.</h2>
-            <p>Studio Duo is a local, native desktop application, not a cloud service. The core is licensed under AGPLv3. Optional paid plug-ins and content are the planned business model, not a requirement for making music.</p>
+            <h2 id="open-title">Read and change<br>the source code.</h2>
+            <p>Studio Duo runs locally and uses an AGPLv3 core. The planned business model is optional paid plug-ins and content. Neither is required to use the core.</p>
             <a class="button button-outline" href="https://github.com/mbianchidev/studio-duo">Explore the source <span aria-hidden="true">&#8599;</span></a>
           </div>
           <div class="open-notes">
             <article>
-              <h3>Understand the direction.</h3>
-              <p>The product principles, roadmap, and technical decisions are public. Familiar controls and real-time audio safety come first.</p>
+              <h3>Read the product decisions.</h3>
+              <p>The design document explains the roadmap, project formats, plug-in isolation, and audio-thread rules. Real-time audio safety takes priority over appearance.</p>
               <a class="text-link" href="https://github.com/mbianchidev/studio-duo/blob/main/docs/design.md">Read the product design <span aria-hidden="true">&#8599;</span></a>
             </article>
             <article>
-              <h3>Help make it dependable.</h3>
-              <p>Report a reproducible bug, improve the docs, or contribute code. Studio Duo is actively developed; back up important projects and check release notes.</p>
+              <h3>Report bugs or contribute.</h3>
+              <p>A reproducible bug report helps more than a vague promise of stability. Include the steps, platform, and relevant logs. Documentation and code contributions are welcome.</p>
               <a class="text-link" href="https://github.com/mbianchidev/studio-duo/blob/main/docs/contributing.md">Contribution guide <span aria-hidden="true">&#8599;</span></a>
             </article>
           </div>
@@ -228,14 +293,14 @@
 
       <section class="download wrap section-space" id="download" aria-labelledby="download-title">
         <p class="eyebrow"><span class="signal-dot" aria-hidden="true"></span> Your next session</p>
-        <h2 id="download-title">Make the next record.</h2>
-        <p>Get the latest release for your machine. Open a blank song or start with a template, and take it from there.</p>
+        <h2 id="download-title">Download Studio Duo.</h2>
+        <p>Choose the release for your machine. Start with a blank song or the Metal Tracking, Songwriting, or Mix Session template.</p>
         <div class="download-actions">
           <a class="button button-light" href="https://github.com/mbianchidev/studio-duo/releases/latest">Download for macOS or Windows <span aria-hidden="true">&#8599;</span></a>
           <a class="text-link" href="https://github.com/mbianchidev/studio-duo/blob/main/docs/user-guide.md">Get to know the studio <span aria-hidden="true">&#8599;</span></a>
         </div>
         <p class="small-note">Universal macOS DMG / Windows x64 installer &amp; portable ZIP / Checksums included</p>
-        <p class="platform-note"><strong>Windows support is best effort only.</strong> This is a one-person development team without a Windows testing device, and limited development time restricts hands-on Windows testing.</p>
+        <p class="platform-note"><strong>Windows support is best effort only.</strong> I work on Studio Duo alone. I have no Windows testing device, and limited development time restricts hands-on Windows testing.</p>
         <div class="system-requirements" id="system-requirements">
           <h3>Desktop system requirements</h3>
           <div class="requirements-grid">
@@ -243,24 +308,24 @@
               <h4>macOS</h4>
               <ul>
                 <li>macOS 12 Monterey or later</li>
-                <li>Apple silicon (ARM64) or Intel (x86_64); universal build</li>
+                <li>Universal build for Apple silicon ARM64 and Intel x86_64</li>
                 <li>CoreAudio-compatible interface or built-in audio</li>
               </ul>
-              <p>Hands-on audio-interface testing: Focusrite Scarlett Duo on macOS ARM.</p>
+              <p>I test with a Focusrite Scarlett Duo on macOS ARM.</p>
             </article>
             <article>
               <h4>Windows / best effort</h4>
               <ul>
                 <li>Windows 10 or 11, 64-bit target platforms</li>
                 <li>x64-compatible system</li>
-                <li>Microsoft Visual C++ x64 Runtime; included by the installer</li>
+                <li>Microsoft Visual C++ x64 Runtime, included by the installer</li>
                 <li>ASIO-compatible interface and driver, or Windows Audio fallback</li>
               </ul>
               <p>CI builds and checks do not replace physical Windows audio-device testing.</p>
             </article>
           </div>
-          <p class="linux-note"><strong>Linux is unsupported.</strong> Audio-driver integrations and the differences between distributions are beyond the available time of the one-person development team.</p>
-          <p class="small-note">RAM, storage, and processing needs depend on your project media, track count, and plug-ins; fixed performance minima have not been validated.</p>
+          <p class="linux-note"><strong>Linux is unsupported.</strong> I do not have the time to support its audio-driver integrations and distribution differences.</p>
+          <p class="small-note">RAM, storage, and CPU needs depend on your media, track count, and plug-ins. I have not validated fixed performance minima.</p>
         </div>
       </section>
     </main>
@@ -270,7 +335,7 @@
         <img src="./images/studio-duo-icon.svg" width="36" height="36" loading="lazy" alt="">
         <span>STUDIO <strong>DUO</strong></span>
       </a>
-      <p>Made for musicians. Built in the open.</p>
+      <p class="copyright">&copy; 2026 SyncTune</p>
       <nav aria-label="Footer navigation">
         <a href="https://github.com/mbianchidev/studio-duo">GitHub</a>
         <a href="https://github.com/mbianchidev/studio-duo/issues">Report an issue</a>
