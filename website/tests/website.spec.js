@@ -105,3 +105,29 @@ test('screenshots can be enlarged and closed by touch', async ({ page, hasTouch 
   await page.getByRole('button', { name: 'Close screenshot' }).tap();
   await expect(page.getByRole('dialog')).not.toBeVisible();
 });
+
+test('platform expectations, built-in features, and partner tools are explicit', async ({ page }) => {
+  await page.goto('./');
+  await expect(page.locator('.hero-copy')).toContainText('best-effort Windows support');
+  await expect(page.locator('.platform-note')).toContainText('Windows support is best effort only');
+  await expect(page.locator('.platform-note')).toContainText('without a Windows testing device');
+  await expect(page.locator('#record')).toContainText('ASIO-compatible interfaces on Windows');
+  await expect(page.locator('#record')).toContainText('Focusrite Scarlett Duo on macOS ARM');
+  await expect(page.locator('#record')).toContainText('using CoreAudio');
+  await expect(page.locator('#drums')).toContainText('record native MIDI drums');
+  await expect(page.locator('#drums')).toContainText('kit of twelve performance pads visible');
+  await expect(page.locator('#drums')).toContainText('metronome');
+  await expect(page.locator('#mix')).toContainText('parametric EQ');
+  await expect(page.locator('#mix')).toContainText('signal generator');
+  await expect(page.locator('#master')).toContainText('WAV, AIFF, FLAC, Ogg Vorbis, or MP3');
+  await expect(page.locator('#system-requirements')).toContainText('macOS 12 Monterey or later');
+  await expect(page.locator('#system-requirements')).toContainText('Apple silicon (ARM64) or Intel (x86_64)');
+  await expect(page.locator('#system-requirements')).toContainText('Windows 10 or 11');
+  await expect(page.locator('#system-requirements')).toContainText('Visual C++ x64 Runtime');
+  await expect(page.locator('#system-requirements')).toContainText('Linux is unsupported');
+  await expect(page.getByRole('link', { name: 'Explore ScreamForge' })).toHaveAttribute(
+    'href', 'https://github.com/mbianchidev/scream-forge');
+  await expect(page.getByRole('link', { name: 'Explore Track2Stem' })).toHaveAttribute(
+    'href', 'https://github.com/mbianchidev/track2stem');
+  await expect(page.locator('.partner-tools')).toContainText('not inside Studio Duo');
+});

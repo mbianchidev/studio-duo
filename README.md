@@ -12,6 +12,11 @@ Studio Duo is an open-source native desktop DAW for recording, editing, mixing,
 and mastering music. It follows familiar professional workflows while making
 modern metal production faster.
 
+**Windows support is best effort only.** This is a one-person development team
+without a Windows testing device, and limited development time restricts
+hands-on Windows testing. Automated Windows CI does not replace physical
+audio-interface and MIDI-device testing.
+
 <img width="1707" height="1107" alt="image" src="https://github.com/user-attachments/assets/21b07b83-1ca7-4809-9e0d-e17088a1581e" />
 
 ## Status
@@ -82,6 +87,21 @@ hardening remains before the complete DAW described in the
   and stale-entry cleanup
 - Four accessible dark themes, persisted custom surface/accent colors, and an
   indexed, offline, version-matched in-app user guide
+
+## Platform support and requirements
+
+| Platform | Requirements |
+| --- | --- |
+| macOS | macOS 12 Monterey or later; Apple silicon (ARM64) or Intel (x86_64); CoreAudio-compatible interface or built-in audio |
+| Windows (best effort) | Windows 10/11 64-bit target platforms; x64-compatible system; Microsoft Visual C++ x64 Runtime (included by the installer); native ASIO driver or Windows Audio fallback |
+
+Audio-interface testing is on **macOS ARM with a Focusrite Scarlett Duo**,
+using CoreAudio. ASIO-compatible interfaces are supported on Windows; ASIO is
+not the macOS audio backend. RAM, storage, and CPU needs depend on project media,
+track count, and plug-ins; fixed performance minima have not been validated.
+
+**Linux is unsupported.** Covering audio-driver integrations and different
+distributions is beyond the available time of the one-person development team.
 
 ## Build
 

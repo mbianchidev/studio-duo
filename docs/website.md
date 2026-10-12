@@ -84,6 +84,19 @@ hard-coding a version or platform asset filename. Mark native previews as
 previews, and retain explicit limits such as ARA compatibility mode,
 DAWproject compatibility reports, and the external licensed DDP encoder.
 
+State Windows support as best effort only, with the one-person team's lack of
+a Windows testing device and limited testing time. Keep Windows ASIO separate
+from macOS CoreAudio: the reported physical-interface test is Focusrite Scarlett
+Duo on macOS ARM. macOS release builds target 12.0 and include ARM64/x86_64;
+Windows 10/11 x64 are best-effort target platforms, not a claim of validated
+minimum hardware performance. Linux is unsupported because of development-time,
+audio-driver, and distribution-coverage constraints.
+
+ScreamForge and Track2Stem are optional, separately installed companion
+projects from the same developer. ScreamForge is a vocal VST3/AU processor,
+not a guitar amp. Track2Stem uses AI-powered Demucs separation outside Studio
+Duo; do not describe it as a bundled native AI feature.
+
 The committed WebP screenshots are local assets, not runtime hotlinks:
 
 - `session.webp` is the application's Metal Tracking template screenshot
