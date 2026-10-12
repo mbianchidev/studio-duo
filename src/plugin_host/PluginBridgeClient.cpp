@@ -3,6 +3,10 @@
 #include <limits>
 #include <new>
 
+#if STUDIO_DUO_TESTING
+#include <thread>
+#endif
+
 namespace studio
 {
 PluginBridgeClient::PluginBridgeClient(
@@ -596,6 +600,86 @@ void PluginBridgeClient::terminateWorkerForTesting()
     connectionLost.store(true, std::memory_order_release);
     killWorkerProcess();
     responseCondition.notify_all();
+}
+
+bool PluginBridgeClient::isolatesConcurrentTransportsForTesting()
+{
+    juce::TemporaryFile temporaryDirectory;
+    const auto directoryCreated = temporaryDirectory.getFile().createDirectory();
+    if (directoryCreated.failed())
+    {
+        juce::Logger::writeToLog(
+            "Could not create the sandbox transport fixture directory: "
+            + directoryCreated.getErrorMessage());
+        return false;
+    }
+    auto first = std::make_unique<PluginBridgeClient>();
+    auto second = std::make_unique<PluginBridgeClient>();
+    first->sharedDirectoryForTesting = temporaryDirectory.getFile();
+    second->sharedDirectoryForTesting = temporaryDirectory.getFile();
+    juce::WaitableEvent firstSelected;
+    juce::WaitableEvent secondSelected;
+    auto firstSynchronized = false;
+    auto secondSynchronized = false;
+    first->beforeSharedFileCreateForTesting =
+        [&]
+        {
+            firstSelected.signal();
+            firstSynchronized = secondSelected.wait(5000);
+            if (!firstSynchronized)
+                return juce::Result::fail("Second transport filename selection timed out");
+            return first->sharedFile != second->sharedFile
+                ? juce::Result::ok()
+                : juce::Result::fail("Concurrent sandbox transport filename collision");
+        };
+    second->beforeSharedFileCreateForTesting =
+        [&]
+        {
+            secondSelected.signal();
+            secondSynchronized = firstSelected.wait(5000);
+            if (!secondSynchronized)
+                return juce::Result::fail("First transport filename selection timed out");
+            return first->sharedFile != second->sharedFile
+                ? juce::Result::ok()
+                : juce::Result::fail("Concurrent sandbox transport filename collision");
+        };
+    auto firstResult = juce::Result::fail("Transport not created");
+    auto secondResult = firstResult;
+    std::thread firstCreator(
+        [&] { firstResult = first->createSharedFile(); });
+    std::thread secondCreator(
+        [&] { secondResult = second->createSharedFile(); });
+    firstCreator.join();
+    secondCreator.join();
+    if (firstResult.failed() || secondResult.failed())
+    {
+        juce::Logger::writeToLog(
+            "Concurrent sandbox transport setup failed: "
+            + firstResult.getErrorMessage() + "; "
+            + secondResult.getErrorMessage());
+        return false;
+    }
+    if (!firstSynchronized || !secondSynchronized
+        || first->sharedFile == second->sharedFile)
+        return false;
+
+    first->sharedState->hostSequence.store(42, std::memory_order_release);
+    second->sharedState->hostSequence.store(84, std::memory_order_release);
+    first->sharedState->input[0][0] = 0.25f;
+    second->sharedState->input[0][0] = 0.75f;
+    if (first->sharedState->hostSequence.load(std::memory_order_acquire) != 42
+        || second->sharedState->hostSequence.load(std::memory_order_acquire) != 84
+        || first->sharedState->input[0][0] != 0.25f
+        || second->sharedState->input[0][0] != 0.75f)
+        return false;
+
+    const auto survivingFile = second->sharedFile;
+    first->stop();
+    return survivingFile.existsAsFile()
+        && PluginBridgeProtocol::isValid(*second->sharedState)
+        && second->sharedState->shutdownRequested.load(std::memory_order_acquire) == 0
+        && second->sharedState->hostSequence.load(std::memory_order_acquire) == 84
+        && second->sharedState->input[0][0] == 0.75f;
 }
 
 bool PluginBridgeClient::recoversLateFirstOutputForTesting()
@@ -1295,12 +1379,24 @@ void PluginBridgeClient::handleConnectionLost()
 
 juce::Result PluginBridgeClient::createSharedFile()
 {
-    const auto directory = juce::File::getSpecialLocation(juce::File::tempDirectory)
+    auto directory = juce::File::getSpecialLocation(juce::File::tempDirectory)
         .getChildFile("Studio Duo Bridges");
+#if STUDIO_DUO_TESTING
+    if (sharedDirectoryForTesting != juce::File())
+        directory = sharedDirectoryForTesting;
+#endif
     if (!directory.createDirectory())
         return juce::Result::fail("Could not create the bridge transport directory.");
 
-    sharedFile = directory.getNonexistentChildFile("bridge-", ".shared", true);
+    sharedFile = directory.getChildFile(
+        "bridge-" + juce::Uuid().toString() + ".shared");
+#if STUDIO_DUO_TESTING
+    if (beforeSharedFileCreateForTesting)
+    {
+        if (const auto result = beforeSharedFileCreateForTesting(); result.failed())
+            return result;
+    }
+#endif
     auto stream = sharedFile.createOutputStream();
     if (stream == nullptr
         || !stream->setPosition(static_cast<juce::int64>(sizeof(PluginBridgeSharedState) - 1))
