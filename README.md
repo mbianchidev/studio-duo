@@ -4,6 +4,10 @@
 
 [![CI](https://github.com/mbianchidev/studio-duo/actions/workflows/ci.yml/badge.svg)](https://github.com/mbianchidev/studio-duo/actions/workflows/ci.yml)
 
+[Website](https://mbianchidev.github.io/studio-duo/) ·
+[Download](https://github.com/mbianchidev/studio-duo/releases/latest) ·
+[User guide](docs/user-guide.md)
+
 Studio Duo is an open-source native desktop DAW for recording, editing, mixing,
 and mastering music. It follows familiar professional workflows while making
 modern metal production faster.
@@ -114,6 +118,7 @@ or MIDI. See [startup troubleshooting and logs](docs/user-guide.md#logs-and-diag
 ## Documentation
 
 - [Documentation index](docs/README.md)
+- [Website development and GitHub Pages](docs/website.md)
 - [User guide](docs/user-guide.md)
 - [Product, roadmap, and technical design](docs/design.md)
 - [Development and architecture](docs/development.md)
@@ -123,6 +128,16 @@ or MIDI. See [startup troubleshooting and logs](docs/user-guide.md#logs-and-diag
 - [Studio One import](docs/studio-one.md)
 - [Contributing](docs/contributing.md)
 - [Releasing](docs/releasing.md)
+
+## Website
+
+The static product website lives in `website/`, separate from the native app.
+With Node.js 24 LTS, run `cd website && npm ci && npm run dev` and open the
+printed URL at `/studio-duo/`. `npm run build` produces `website/dist/`.
+Website changes are checked on pull requests and deployed to GitHub Pages
+only from `main`; select **GitHub Actions** in the repository's Pages settings.
+See [website development](docs/website.md) for browser checks, screenshots,
+and deployment details.
 
 ## License
 

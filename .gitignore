@@ -10,3 +10,7 @@
 *.user
 .DS_Store
 Thumbs.db
+/website/node_modules/
+/website/dist/
+/website/test-results/
+/website/playwright-report/
