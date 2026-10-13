@@ -110,13 +110,14 @@ bool sameFile(const juce::File& left,
 }
 
 StudioPreferences::StudioPreferences(
-    juce::File file)
+    juce::File file, bool loadFromDisk)
     : settingsFile(
           file == juce::File()
               ? defaultSettingsFile()
               : std::move(file))
 {
-    load();
+    if (loadFromDisk)
+        load();
 }
 
 bool StudioPreferences::autosaveEnabled() const noexcept
@@ -311,8 +312,8 @@ void StudioPreferences::load()
     statusMessage.clear();
     if (!settingsFile.existsAsFile())
         return;
-    const auto parsed = juce::JSON::parse(
-        settingsFile.loadFileAsString());
+    const auto parsed = settingsFile.getSize() <= 1024 * 1024
+        ? juce::JSON::parse(settingsFile.loadFileAsString()) : juce::var();
     const auto* object = parsed.getDynamicObject();
     if (object == nullptr
         || !object->getProperty(
@@ -394,7 +395,7 @@ void StudioPreferences::load()
                 entry->getProperty("name").toString();
             const auto edited =
                 entry->getProperty("lastEditedMs");
-            if (path.isEmpty()
+            if (!juce::File::isAbsolutePath(path)
                 || (!edited.isInt()
                     && !edited.isInt64()
                     && !edited.isDouble()))
@@ -422,6 +423,8 @@ void StudioPreferences::load()
                 return left.lastEdited
                     > right.lastEdited;
             });
+        if (recent.size() > 12)
+            recent.resize(12);
     }
     if (hadInvalidOptionalData)
     {

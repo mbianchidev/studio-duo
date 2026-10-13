@@ -13,7 +13,7 @@ a reliable cross-platform DAW.
 ## Development workflow
 
 ```sh
-cmake -S . -B build -DSTUDIO_DUO_BUILD_TESTS=ON
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DSTUDIO_DUO_BUILD_TESTS=ON
 cmake --build build --config Release --parallel
 ctest --test-dir build --build-config Release --output-on-failure
 ```

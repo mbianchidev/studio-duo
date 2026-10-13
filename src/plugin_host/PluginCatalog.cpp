@@ -1,6 +1,7 @@
 #include "PluginCatalog.h"
 
 #include "logging/StudioLogger.h"
+#include "platform/Architecture.h"
 #include "PluginFormats.h"
 #include "PluginScanWorker.h"
 #include "devices/DeviceRegistry.h"
@@ -14,17 +15,6 @@ namespace studio
 {
 namespace
 {
-juce::String currentArchitecture()
-{
-#if JUCE_ARM
-    return JUCE_64BIT ? "arm64" : "arm";
-#elif JUCE_64BIT
-    return "x86_64";
-#else
-    return "x86";
-#endif
-}
-
 PluginCompatibilityRecord compatibilityIdentity(
     const PluginInsert& insert)
 {
@@ -129,8 +119,10 @@ private:
 class OutOfProcessPluginScanner final : public juce::KnownPluginList::CustomScanner
 {
 public:
-    explicit OutOfProcessPluginScanner(std::shared_ptr<std::atomic<bool>> cancelFlag)
-        : cancelled(std::move(cancelFlag))
+    OutOfProcessPluginScanner(
+        std::shared_ptr<std::atomic<bool>> cancelFlag,
+        std::function<void(const juce::String&, PluginFailureKind)> reportFailure)
+        : cancelled(std::move(cancelFlag)), onFailure(std::move(reportFailure))
     {
     }
 
@@ -146,6 +138,7 @@ public:
 
         if (!coordinator->isLaunched())
         {
+            onFailure(fileOrIdentifier, PluginFailureKind::scanCrash);
             coordinator.reset();
             return false;
         }
@@ -157,6 +150,7 @@ public:
 
         if (!coordinator->send(request))
         {
+            onFailure(fileOrIdentifier, PluginFailureKind::protocolMismatch);
             coordinator.reset();
             return false;
         }
@@ -173,11 +167,12 @@ public:
 
             if (response.state == ScanCoordinator::ResponseState::connectionLost)
             {
+                onFailure(fileOrIdentifier, PluginFailureKind::scanCrash);
                 coordinator.reset();
                 return false;
             }
 
-            if (response.xml != nullptr)
+            if (response.xml != nullptr && response.xml->hasTagName("PLUGIN_SCAN_RESULT"))
             {
                 for (const auto* item : response.xml->getChildIterator())
                 {
@@ -185,10 +180,14 @@ public:
                     if (description->loadFromXml(*item))
                         result.add(std::move(description));
                 }
+                return true;
             }
-            return true;
+            onFailure(fileOrIdentifier, PluginFailureKind::protocolMismatch);
+            coordinator.reset();
+            return false;
         }
 
+        onFailure(fileOrIdentifier, PluginFailureKind::timeout);
         coordinator.reset();
         return false;
     }
@@ -199,6 +198,7 @@ public:
 
 private:
     std::shared_ptr<std::atomic<bool>> cancelled;
+    std::function<void(const juce::String&, PluginFailureKind)> onFailure;
     std::unique_ptr<ScanCoordinator> coordinator;
 };
 
@@ -226,9 +226,10 @@ juce::Result writeTextAtomically(const juce::File& destination, const juce::Stri
 }
 }
 
-PluginCatalog::PluginCatalog()
+PluginCatalog::PluginCatalog(juce::File directory, bool restoreCache)
     : juce::Thread("Studio Duo plugin scanner"),
-      catalogDirectory(juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
+      catalogDirectory(directory != juce::File() ? std::move(directory)
+          : juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
                            .getChildFile("Studio Duo")
                            .getChildFile("Plugin Catalog")),
       catalogFile(catalogDirectory.getChildFile("plugins.xml")),
@@ -238,7 +239,6 @@ PluginCatalog::PluginCatalog()
           catalogDirectory.getChildFile("compatibility.json")),
       cancelRequested(std::make_shared<std::atomic<bool>>(false))
 {
-    catalogDirectory.createDirectory();
     PluginFormats::addSupportedFormats(formatManager);
     for (auto* format : formatManager.getFormats())
     {
@@ -248,7 +248,19 @@ PluginCatalog::PluginCatalog()
             break;
         }
     }
-    knownPlugins.setCustomScanner(std::make_unique<OutOfProcessPluginScanner>(cancelRequested));
+    knownPlugins.setCustomScanner(std::make_unique<OutOfProcessPluginScanner>(
+        cancelRequested, [this](const auto& identifier, auto failure)
+        {
+            scanFailures.emplace_back(identifier, failure);
+            lastScanFailure.store(failure, std::memory_order_release);
+        }));
+    if (!restoreCache)
+    {
+        statusMessage = "Cached plug-ins were bypassed for this launch.";
+        return;
+    }
+    if (!catalogDirectory.createDirectory())
+        cacheWarningMessage = "The plug-in catalog directory is unavailable.";
     juce::String searchPathError;
     pluginSearchPaths.load(searchPathError);
     load();
@@ -262,18 +274,20 @@ PluginCatalog::PluginCatalog()
                                : juce::String(count) + " plugins loaded from catalog.";
     if (searchPathError.isNotEmpty())
     {
-        statusMessage << " " << searchPathError;
+        cacheWarningMessage << " " << searchPathError;
         logError(
             "plugin.catalog",
             searchPathError);
     }
     if (compatibilityError.isNotEmpty())
     {
-        statusMessage << " " << compatibilityError;
+        cacheWarningMessage << " " << compatibilityError;
         logError(
             "plugin.catalog",
             compatibilityError);
     }
+    if (cacheWarningMessage.isNotEmpty())
+        statusMessage << " " << cacheWarningMessage.trim();
 }
 
 PluginCatalog::~PluginCatalog()
@@ -282,14 +296,25 @@ PluginCatalog::~PluginCatalog()
     stopThread(35000);
 }
 
-void PluginCatalog::startScan(bool forceRescan)
+void PluginCatalog::startScan(bool forceRescan, int timeoutMs)
 {
     if (isThreadRunning())
         return;
+    if (timeoutMs <= 0)
+    {
+        lastScanState.store(PluginScanState::failed, std::memory_order_release);
+        updateState("A positive plug-in scan deadline is required.", 0.0f);
+        logError("plugin.scan", "Invalid plug-in scan deadline.");
+        return;
+    }
 
+    scanTimeoutMs.store(timeoutMs, std::memory_order_release);
+    scanFailures.clear();
+    lastScanFailure.store(PluginFailureKind::none, std::memory_order_release);
     cancelRequested->store(false, std::memory_order_release);
     forceNextScan.store(forceRescan, std::memory_order_release);
     scanning.store(true, std::memory_order_release);
+    lastScanState.store(PluginScanState::running, std::memory_order_release);
     updateState("Preparing sandboxed plugin scan...", 0.0f);
     logInfo(
         "plugin.scan",
@@ -301,6 +326,7 @@ void PluginCatalog::startScan(bool forceRescan)
         const auto message =
             juce::String("Could not start the plugin scanner thread.");
         scanning.store(false, std::memory_order_release);
+        lastScanState.store(PluginScanState::failed, std::memory_order_release);
         updateState(message, 0.0f);
         logError("plugin.scan", message);
     }
@@ -326,6 +352,27 @@ juce::String PluginCatalog::status() const
 {
     const juce::ScopedLock lock(stateLock);
     return statusMessage;
+}
+
+juce::String PluginCatalog::cacheWarning() const
+{
+    const juce::ScopedLock lock(stateLock);
+    return cacheWarningMessage.trim();
+}
+
+bool PluginCatalog::cacheNeedsRescan() const noexcept
+{
+    return invalidatedCache.load(std::memory_order_acquire);
+}
+
+PluginFailureKind PluginCatalog::scanFailure() const noexcept
+{
+    return lastScanFailure.load(std::memory_order_acquire);
+}
+
+PluginScanState PluginCatalog::scanState() const noexcept
+{
+    return lastScanState.load(std::memory_order_acquire);
 }
 
 std::vector<PluginCatalogEntry> PluginCatalog::entries() const
@@ -649,12 +696,24 @@ std::optional<juce::PluginDescription> PluginCatalog::descriptionForIdentifier(
 
 void PluginCatalog::run()
 {
+    const auto deadline = std::chrono::steady_clock::now()
+        + std::chrono::milliseconds(scanTimeoutMs.load(std::memory_order_acquire));
+    auto deadlineExceeded = false;
+    const auto timedOut = [&]
+    {
+        if (std::chrono::steady_clock::now() < deadline)
+            return false;
+        deadlineExceeded = true;
+        cancelRequested->store(true, std::memory_order_release);
+        lastScanFailure.store(PluginFailureKind::timeout, std::memory_order_release);
+        return true;
+    };
     const auto force = forceNextScan.exchange(false, std::memory_order_acq_rel);
     const auto formatCount = formatManager.getNumFormats();
     juce::StringArray failedFiles;
     juce::StringArray searchPathWarnings;
 
-    for (int formatIndex = 0; formatIndex < formatCount && !threadShouldExit(); ++formatIndex)
+    for (int formatIndex = 0; formatIndex < formatCount && !threadShouldExit() && !timedOut(); ++formatIndex)
     {
         auto* format = formatManager.getFormat(formatIndex);
         if (format == nullptr)
@@ -676,6 +735,8 @@ void PluginCatalog::run()
         auto identifiers = format->searchPathsForPlugins(folders,
                                                          true,
                                                          false);
+        if (timedOut())
+            break;
         if (identifiers.isEmpty())
         {
             auto message =
@@ -702,7 +763,7 @@ void PluginCatalog::run()
 
         for (;;)
         {
-            if (threadShouldExit() || cancelRequested->load(std::memory_order_acquire))
+            if (threadShouldExit() || timedOut() || cancelRequested->load(std::memory_order_acquire))
                 break;
 
             juce::String currentPlugin;
@@ -722,16 +783,22 @@ void PluginCatalog::run()
 
     if (threadShouldExit() || cancelRequested->load(std::memory_order_acquire))
     {
-        updateState("Plugin scan cancelled.", scanProgress.load(std::memory_order_relaxed));
+        updateState(deadlineExceeded ? "Plugin scan timed out; cached plug-ins remain available."
+                                     : "Plugin scan cancelled.",
+                    scanProgress.load(std::memory_order_relaxed));
         logInfo(
             "plugin.scan",
-            "Plugin scan cancelled.");
+            deadlineExceeded ? "Plugin scan deadline exceeded." : "Plugin scan cancelled.");
+        lastScanState.store(deadlineExceeded ? PluginScanState::timedOut : PluginScanState::cancelled,
+                            std::memory_order_release);
         scanning.store(false, std::memory_order_release);
         catalogRevision.fetch_add(1, std::memory_order_acq_rel);
         return;
     }
 
     const auto saveResult = save();
+    if (saveResult.wasOk())
+        invalidatedCache.store(false, std::memory_order_release);
     const auto pluginCount = knownPlugins.getNumTypes();
     const auto blockedCount = knownPlugins.getBlacklistedFiles().size();
     juce::String completionMessage;
@@ -788,22 +855,25 @@ void PluginCatalog::run()
     }
     {
         const juce::ScopedLock compatibilityGuard(compatibilityLock);
-        for (const auto& failedFile : failedFiles)
+        for (const auto& failure : scanFailures)
         {
             PluginCompatibilityRecord record;
-            record.pluginIdentifier = "scan:" + failedFile;
-            record.name = juce::File(failedFile).getFileName();
+            record.pluginIdentifier = "scan:" + failure.first;
+            record.name = juce::File::isAbsolutePath(failure.first)
+                ? juce::File(failure.first).getFileName() : "Plug-in discovery";
             record.architecture = currentArchitecture();
-            compatibilityDatabase.noteFailure(
-                record,
-                PluginFailureKind::scanCrash,
-                "Plugin scan worker failed or timed out.");
+            const auto kind = failure.second;
+            compatibilityDatabase.noteFailure(record, kind,
+                kind == PluginFailureKind::timeout ? "Plugin scan worker timed out."
+                : kind == PluginFailureKind::scanCrash ? "Plugin scan worker exited unexpectedly."
+                : "Plugin discovery did not return a supported description.");
         }
-        if (!failedFiles.isEmpty())
+        if (!scanFailures.empty())
         {
             juce::String compatibilityError;
             if (!compatibilityDatabase.save(compatibilityError))
             {
+                lastScanState.store(PluginScanState::failed, std::memory_order_release);
                 updateState(compatibilityError, 1.0f);
                 logError(
                     "plugin.catalog",
@@ -812,6 +882,11 @@ void PluginCatalog::run()
         }
     }
 
+    if (lastScanState.load(std::memory_order_acquire) != PluginScanState::failed)
+        lastScanState.store(saveResult.failed() ? PluginScanState::failed
+            : !failedFiles.isEmpty() || !searchPathWarnings.isEmpty() || !scanFailures.empty()
+                ? PluginScanState::warning : PluginScanState::succeeded,
+            std::memory_order_release);
     scanning.store(false, std::memory_order_release);
     catalogRevision.fetch_add(1, std::memory_order_acq_rel);
 }
@@ -821,10 +896,11 @@ void PluginCatalog::load()
     if (!catalogFile.existsAsFile())
         return;
 
-    auto xml = juce::parseXML(catalogFile);
-    if (xml == nullptr)
+    auto xml = catalogFile.getSize() <= 16 * 1024 * 1024 ? juce::parseXML(catalogFile) : nullptr;
+    if (xml == nullptr || !xml->hasTagName("KNOWNPLUGINS"))
     {
-        updateState("Plugin catalog is corrupt; a new scan will rebuild it.", 0.0f);
+        cacheWarningMessage = "Plugin catalog is corrupt or oversized; a background scan can rebuild it.";
+        updateState(cacheWarningMessage, 0.0f);
         logError(
             "plugin.catalog",
             "Plugin catalog is corrupt; a new scan will rebuild it.");
@@ -832,6 +908,11 @@ void PluginCatalog::load()
     }
 
     knownPlugins.recreateFromXml(*xml);
+    invalidatedCache.store(
+        xml->getIntAttribute("studioDuoCatalogVersion") != 1
+            || xml->getStringAttribute("studioDuoAppVersion") != STUDIO_DUO_VERSION
+            || xml->getStringAttribute("studioDuoArchitecture") != currentArchitecture(),
+        std::memory_order_release);
     catalogRevision.fetch_add(1, std::memory_order_acq_rel);
 }
 
@@ -841,6 +922,9 @@ juce::Result PluginCatalog::save()
     if (xml == nullptr)
         return juce::Result::fail("Could not serialize the plugin catalog.");
 
+    xml->setAttribute("studioDuoCatalogVersion", 1);
+    xml->setAttribute("studioDuoAppVersion", STUDIO_DUO_VERSION);
+    xml->setAttribute("studioDuoArchitecture", currentArchitecture());
     return writeTextAtomically(catalogFile, xml->toString());
 }
 

@@ -1,6 +1,6 @@
-#include "ui/MainComponent.h"
+#include "ui/StartupShellComponent.h"
+#include "project_io/ProjectImportService.h"
 #include "ui/MainWindowSizing.h"
-#include "ui/ReentrancySafeTimer.h"
 #include "plugin_host/PluginBridgeClient.h"
 #include "plugin_host/PluginBridgeWorker.h"
 #include "plugin_host/PluginScanWorker.h"
@@ -9,6 +9,7 @@
 #include "platform/ApplicationIcon.h"
 #include "logging/StudioLogger.h"
 #include "audio/AudioDeviceProbe.h"
+#include "audio/StudioAudioDeviceManager.h"
 #include "platform/WindowsCrashHandler.h"
 
 #include <juce_gui_extra/juce_gui_extra.h>
@@ -98,22 +99,32 @@ public:
             return;
         }
 
-        auto bridgeWorker = std::make_unique<PluginBridgeWorker>();
-        if (bridgeWorker->initialise(commandLine))
+        if (commandLine.trim().startsWith("--" + juce::String(pluginBridgeProcessId) + ":"))
         {
-            logDebug(
-                "app.lifecycle",
-                "Plugin bridge worker started.");
+            auto bridgeWorker = std::make_unique<PluginBridgeWorker>();
+            if (!bridgeWorker->initialise(commandLine))
+            {
+                logError("app.worker", "The plug-in bridge worker received an invalid launch request.");
+                setApplicationReturnValue(2);
+                quit();
+                return;
+            }
+            logDebug("app.lifecycle", "Plugin bridge worker started.");
             pluginBridgeWorker = std::move(bridgeWorker);
             return;
         }
 
-        auto worker = std::make_unique<PluginScanWorker>();
-        if (worker->initialise(commandLine))
+        if (commandLine.trim().startsWith("--" + juce::String(pluginScanProcessId) + ":"))
         {
-            logDebug(
-                "app.lifecycle",
-                "Plugin scan worker started.");
+            auto worker = std::make_unique<PluginScanWorker>();
+            if (!worker->initialise(commandLine))
+            {
+                logError("app.worker", "The plug-in scan worker received an invalid launch request.");
+                setApplicationReturnValue(2);
+                quit();
+                return;
+            }
+            logDebug("app.lifecycle", "Plugin scan worker started.");
             pluginScanWorker = std::move(worker);
             return;
         }
@@ -178,10 +189,18 @@ public:
 #endif
         logInfo("app.startup", "Constructing the main window.");
         fileLogger->flush();
-        mainWindow = std::make_unique<MainWindow>(
-            getApplicationName(),
-            !startupSelfTest && !arguments.contains("--safe-audio"),
-            startupProjectFromArguments(arguments));
+        StartupOptions startupOptions {
+                startupSelfTest || arguments.contains("--safe-audio") || arguments.contains("--safe-start"),
+                arguments.contains("--safe-start"),
+                arguments.contains("--default-audio"),
+                startupSelfTest,
+                {},
+                startupProjectFromArguments(arguments)
+            };
+        for (const auto& argument : arguments)
+            if (startupSelfTest && argument.startsWith("--startup-scenario="))
+                startupOptions.selfTestScenario = argument.fromFirstOccurrenceOf("=", false, false);
+        mainWindow = std::make_unique<MainWindow>(getApplicationName(), std::move(startupOptions));
         logInfo("app.startup", "The main window is ready.");
         fileLogger->flush();
 #if JUCE_WINDOWS
@@ -190,24 +209,20 @@ public:
 #endif
         if (startupSelfTest)
         {
-            callAfterDelaySafely(750, [this]
+            auto* shell = dynamic_cast<StartupShellComponent*>(mainWindow->getContentComponent());
+            shell->onSelfTestFinished = [this](bool startupPassed, const juce::var& report)
             {
-                const auto* content = mainWindow != nullptr
-                    ? dynamic_cast<MainComponent*>(mainWindow->getContentComponent())
-                    : nullptr;
-                const auto ready = mainWindow != nullptr
-                    && mainWindow->getPeer() != nullptr
-                    && mainWindow->isVisible()
-                    && content != nullptr
-                    && !content->hasAudioDeviceManager();
+                const auto ready = startupPassed && mainWindow != nullptr
+                    && mainWindow->getPeer() != nullptr && mainWindow->isVisible();
                 setApplicationReturnValue(ready ? 0 : 1);
+                std::cout << juce::JSON::toString(report, true) << std::endl;
                 if (ready)
                     logInfo("app.self-test", "Main-window startup self-test completed.");
                 else
                     logError("app.self-test", "Safe startup did not create a visible, driver-free window.");
                 fileLogger->flush();
                 systemRequestedQuit();
-            });
+            };
         }
     }
 
@@ -491,17 +506,14 @@ private:
     public:
         MainWindow(
             const juce::String& name,
-            bool startAudioOnLaunch,
-            juce::File startupProject)
+            StartupOptions startupOptions)
             : juce::DocumentWindow(name,
                                    juce::Colour(StudioColours::window),
                                    juce::DocumentWindow::allButtons)
         {
             setUsingNativeTitleBar(true);
             setContentOwned(
-                new MainComponent(
-                    startAudioOnLaunch,
-                    std::move(startupProject)),
+                new StartupShellComponent(std::move(startupOptions)),
                 true);
             setBackgroundColour(
                 juce::Colour(
@@ -554,7 +566,7 @@ private:
         bool prepareForShutdown()
         {
             if (auto* content =
-                    dynamic_cast<MainComponent*>(getContentComponent()))
+                    dynamic_cast<StartupShellComponent*>(getContentComponent()))
             {
                 return content->prepareForShutdown();
             }

@@ -1650,6 +1650,7 @@ int main(int argc, char* argv[])
     RUN_SUITE(mixerPanelTests);
     RUN_SUITE(infoPanelTests);
     RUN_SUITE(reentrancySafeTimerTests);
+    RUN_SUITE(startupTests);
 
 #undef RUN_SUITE
 

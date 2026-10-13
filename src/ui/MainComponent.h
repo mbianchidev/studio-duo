@@ -29,6 +29,7 @@
 #include "render/RenderEngine.h"
 #include "update/StudioPreferences.h"
 #include "update/UpdateService.h"
+#include "startup/StartupDiagnostics.h"
 
 #include <juce_audio_utils/juce_audio_utils.h>
 
@@ -46,12 +47,26 @@ class MainComponent final : public juce::Component,
                             private UpdateService::Listener
 {
 public:
-    explicit MainComponent(
-        bool startAudioOnLaunch = true,
-        juce::File startupProject = {});
+    MainComponent(StudioPreferences restoredPreferences,
+                  std::unique_ptr<PluginCatalog> restoredCatalog,
+                  bool bypassThirdPartyPlugins,
+                  bool preserveSavedAudioSetup,
+                  bool checkUpdatesOnLaunch);
     ~MainComponent() override;
 
     [[nodiscard]] bool hasAudioDeviceManager() const noexcept;
+    juce::Result initialiseStartupAudio(const juce::XmlElement* savedSetup);
+    [[nodiscard]] StartupDeviceSummary startupDeviceSummary() const;
+    [[nodiscard]] juce::String startupAudioDescription() const;
+    [[nodiscard]] bool startupAudioHasWarning() const noexcept;
+    void disableStartupAudio();
+    StartupOutcome initialiseStartupMidi(const juce::XmlElement* savedSetup);
+    [[nodiscard]] PluginCatalog& startupCatalog() noexcept;
+    StartupOutcome openStartupProject(const juce::File& source);
+    void setStartupAvailable(bool degraded);
+    void openStartupIo(bool discoveryProbePassed = false);
+    void bypassStartupPlugins();
+    std::function<void()> onShowStartupDiagnostics;
     bool prepareForShutdown();
     void paint(juce::Graphics& graphics) override;
     void resized() override;
@@ -105,7 +120,6 @@ private:
     bool keyPressed(const juce::KeyPress& key) override;
     bool keyPressed(const juce::KeyPress& key, juce::Component*) override;
 
-    void initialiseAudio();
     bool ensureAudioDeviceManager();
     [[nodiscard]] juce::AudioIODevice* currentAudioDevice() const noexcept;
     bool connectAudioEngine();
@@ -336,6 +350,8 @@ private:
     static juce::String positionText(double seconds, const Project& project);
 
     StudioPreferences preferences;
+    std::unique_ptr<PluginCatalog> pluginCatalogOwner;
+    PluginCatalog& pluginCatalog;
     StudioTheme theme {
         preferences.themePalette()
     };
@@ -347,6 +363,13 @@ private:
     std::unique_ptr<StudioAudioDeviceManager> deviceManager;
     juce::String audioStartupError;
     bool audioInitialiseInFlight = false;
+    bool startupProbePassed = false;
+    bool safeStartPlugins = false;
+    bool preserveStartupAudioSetup = false;
+    bool startupServicesAvailable = false;
+    bool checkUpdatesAfterStartup = false;
+    bool startupAudioWarning = false;
+    int startupUnavailableMidiDevices = 0;
     StudioAudioEngine audioEngine;
     Project project { Project::createDefault() };
     CommandStack commandStack;
@@ -595,7 +618,6 @@ private:
     int midiEditorHeight = 330;
     bool leftPanelCollapsed = false;
     bool masteringWorkspaceVisible = false;
-    PluginCatalog pluginCatalog;
     std::unique_ptr<PluginBrowserComponent> pluginBrowser;
     std::unique_ptr<RoutingPanel> routingPanel;
     std::unique_ptr<PluginInsertPanel> insertPanel;

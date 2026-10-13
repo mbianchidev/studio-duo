@@ -214,9 +214,38 @@ int callbackChannelIndex(
     return callbackChannel;
 }
 
+juce::String audioDeviceConfigurationSignature(const juce::AudioDeviceManager& manager)
+{
+    auto* device = manager.getCurrentAudioDevice();
+    if (device == nullptr)
+        return {};
+    const auto setup = manager.getAudioDeviceSetup();
+    juce::StringArray enabledInputs;
+    for (const auto& input : juce::MidiInput::getAvailableDevices())
+        if (manager.isMidiInputDeviceEnabled(input.identifier))
+            enabledInputs.add(input.identifier);
+    enabledInputs.sort(false);
+    return manager.getCurrentAudioDeviceType() + ":" + setup.inputDeviceName + ":"
+        + setup.outputDeviceName + ":" + device->getActiveInputChannels().toString(16) + ":"
+        + device->getActiveOutputChannels().toString(16) + ":"
+        + juce::String(device->getCurrentSampleRate(), 1) + ":"
+        + juce::String(device->getCurrentBufferSizeSamples()) + ":"
+        + enabledInputs.joinIntoString(";") + ":" + manager.getDefaultMidiOutputIdentifier();
+}
+
 juce::Result probeNativeAudioDeviceSetup(const juce::XmlElement& setup)
 {
-#if JUCE_WINDOWS
+    if (setup.getStringAttribute("deviceType") == studioAudioStartupProbeType)
+    {
+        auto saved = setup.getChildByName("DEVICESETUP");
+        StudioAudioDeviceManager manager;
+        const auto result = manager.initialiseStudioAudio(saved, false);
+        if (result.wasOk()
+            && !juce::MessageManager::getInstance()->runDispatchLoopUntil(100))
+            return juce::Result::fail("The device stopped the isolated startup event loop.");
+        manager.closeAudioDevice();
+        return result;
+    }
     if (setup.getStringAttribute("deviceType") == midiDeviceDiscoveryProbeType)
     {
         logInfo("audio.probe", "Creating the audio manager and enumerating MIDI devices.");
@@ -232,6 +261,7 @@ juce::Result probeNativeAudioDeviceSetup(const juce::XmlElement& setup)
                 + " inputs, " + juce::String(outputCount) + " outputs.");
         return juce::Result::ok();
     }
+#if JUCE_WINDOWS
     if (!setup.getStringAttribute("deviceType").equalsIgnoreCase("ASIO"))
         return juce::Result::fail("The isolated audio probe received an unsupported device type.");
     auto asio = std::unique_ptr<juce::AudioIODeviceType>(
@@ -283,6 +313,21 @@ StudioAudioDeviceManager::StudioAudioDeviceManager()
 
 juce::Result StudioAudioDeviceManager::initialiseStudioAudio()
 {
+    auto saved = settingsFile.existsAsFile() && settingsFile.getSize() <= 1024 * 1024
+        ? juce::parseXML(settingsFile) : nullptr;
+    if (settingsFile.existsAsFile() && (saved == nullptr || !saved->hasTagName("DEVICESETUP")))
+    {
+        startupNotice = "Saved audio settings are invalid; the default device is being used.";
+        logError("audio.settings", "Ignored corrupt audio-device.xml.");
+        saved.reset();
+    }
+    return initialiseStudioAudio(saved.get(), true);
+}
+
+juce::Result StudioAudioDeviceManager::initialiseStudioAudio(
+    const juce::XmlElement* savedSetup, bool checkDrivers)
+{
+    const juce::ScopedValueSetter<bool> probeGuard(performDriverChecks, checkDrivers);
     logInfo("audio.startup", "Discovering audio devices and reading the saved setup.");
     flushStudioLog();
     const auto started = juce::Time::getMillisecondCounterHiRes();
@@ -304,10 +349,10 @@ juce::Result StudioAudioDeviceManager::initialiseStudioAudio()
             logInfo("audio.startup", timedMessage);
     };
 
-    if (settingsFile.existsAsFile())
+    if (savedSetup != nullptr)
     {
-        auto saved = juce::parseXML(settingsFile);
-        if (saved == nullptr || !saved->hasTagName("DEVICESETUP"))
+        auto saved = std::make_unique<juce::XmlElement>(*savedSetup);
+        if (!saved->hasTagName("DEVICESETUP"))
         {
             logError(
                 "audio.settings",
@@ -449,7 +494,7 @@ juce::String StudioAudioDeviceManager::initialiseCheckedSetup(
     const juce::XmlElement& setup)
 {
 #if JUCE_WINDOWS
-    if (setup.getStringAttribute("deviceType").equalsIgnoreCase("ASIO"))
+    if (performDriverChecks && setup.getStringAttribute("deviceType").equalsIgnoreCase("ASIO"))
     {
         if (const auto result = probeAudioDeviceSetup(setup); result.failed())
             return result.getErrorMessage();

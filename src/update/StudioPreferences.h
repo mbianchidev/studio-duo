@@ -19,7 +19,8 @@ class StudioPreferences
 {
 public:
     explicit StudioPreferences(
-        juce::File settingsFile = {});
+        juce::File settingsFile = {},
+        bool loadFromDisk = true);
 
     [[nodiscard]] bool autosaveEnabled() const noexcept;
     [[nodiscard]] bool scanPluginsAtStartup() const noexcept;

@@ -86,7 +86,8 @@ bool PluginSearchPaths::load(juce::String& error)
     if (!file.existsAsFile())
         return true;
 
-    const auto value = juce::JSON::parse(file.loadFileAsString());
+    const auto value = file.getSize() <= 1024 * 1024
+        ? juce::JSON::parse(file.loadFileAsString()) : juce::var();
     const auto* root = value.getDynamicObject();
     if (root == nullptr
         || (static_cast<int>(root->getProperty("schemaVersion")) != 1
@@ -111,8 +112,13 @@ bool PluginSearchPaths::load(juce::String& error)
         }
 
         const auto path = folderValue.toString().trim();
-        if (path.isNotEmpty())
-            loadedFolders.add(juce::File(path).getFullPathName());
+        if (!juce::File::isAbsolutePath(path))
+        {
+            writable = false;
+            error = "VST3 search-folder settings contain a non-absolute path.";
+            return false;
+        }
+        loadedFolders.add(juce::File(path).getFullPathName());
     }
 
     folders = normalizeAndDeduplicate(loadedFolders, nativePathStyle());

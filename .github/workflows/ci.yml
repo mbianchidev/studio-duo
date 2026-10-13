@@ -25,6 +25,7 @@ jobs:
             build_parallel: 1
             test_parallel: 2
             configure_args: >-
+              -DCMAKE_BUILD_TYPE=Release
               -DCMAKE_C_COMPILER_LAUNCHER=sccache
               -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
             sccache_enabled: "true"

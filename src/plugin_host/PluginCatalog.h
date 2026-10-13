@@ -28,18 +28,24 @@ struct PluginCatalogEntry
     bool bundledDevice = false;
 };
 
+enum class PluginScanState { idle, running, succeeded, warning, failed, cancelled, timedOut };
+
 class PluginCatalog final : private juce::Thread
 {
 public:
-    PluginCatalog();
+    explicit PluginCatalog(juce::File directory = {}, bool restoreCache = true);
     ~PluginCatalog() override;
 
-    void startScan(bool forceRescan);
+    void startScan(bool forceRescan, int timeoutMs = 120000);
     void cancelScan();
 
     [[nodiscard]] bool isScanning() const noexcept;
     [[nodiscard]] float progress() const noexcept;
     [[nodiscard]] juce::String status() const;
+    [[nodiscard]] juce::String cacheWarning() const;
+    [[nodiscard]] bool cacheNeedsRescan() const noexcept;
+    [[nodiscard]] PluginFailureKind scanFailure() const noexcept;
+    [[nodiscard]] PluginScanState scanState() const noexcept;
     [[nodiscard]] std::vector<PluginCatalogEntry> entries() const;
     [[nodiscard]] juce::StringArray blacklistedFiles() const;
     [[nodiscard]] std::uint64_t revision() const noexcept;
@@ -99,10 +105,16 @@ private:
     std::atomic<bool> forceNextScan { false };
     std::atomic<float> scanProgress { 0.0f };
     std::atomic<std::uint64_t> catalogRevision { 0 };
+    std::atomic<bool> invalidatedCache { true };
+    std::atomic<PluginFailureKind> lastScanFailure { PluginFailureKind::none };
+    std::atomic<PluginScanState> lastScanState { PluginScanState::idle };
+    std::atomic<int> scanTimeoutMs { 120000 };
     mutable juce::CriticalSection stateLock;
     mutable juce::CriticalSection searchPathLock;
     mutable juce::CriticalSection compatibilityLock;
     juce::String statusMessage;
+    juce::String cacheWarningMessage;
+    std::vector<std::pair<juce::String, PluginFailureKind>> scanFailures;
     std::vector<std::pair<juce::String, juce::String>>
         recordedRuntimeStates;
 
