@@ -11,7 +11,27 @@
 
 #include <cmath>
 #include <algorithm>
+#include <chrono>
 #include <limits>
+#include <memory>
+
+namespace
+{
+bool dispatchQueuedMessages()
+{
+    const auto dispatched = std::make_shared<bool>(false);
+    if (!juce::MessageManager::callAsync([dispatched] { *dispatched = true; }))
+        return false;
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    auto* messages = juce::MessageManager::getInstance();
+    while (!*dispatched && std::chrono::steady_clock::now() < deadline)
+        if (!messages->runDispatchLoopUntil(10))
+            break;
+
+    return *dispatched;
+}
+}
 
 void startupTests()
 {
@@ -266,15 +286,36 @@ void startupTests()
     {
         StartupProgressComponent surface;
         surface.setSize(900, 600);
-        surface.addToDesktop(juce::ComponentPeer::windowIsTemporary);
         auto paintNotifications = 0;
-        surface.onFirstPaint = [&] { ++paintNotifications; };
+        auto ownerObservedPaint = false;
+        surface.onFirstPaint = [&]
+        {
+            ++paintNotifications;
+            ownerObservedPaint = surface.hasPainted();
+        };
         juce::Image image(juce::Image::ARGB, 900, 600, true);
         juce::Graphics graphics(image);
         surface.paintEntireComponent(graphics, true);
-        juce::MessageManager::getInstance()->runDispatchLoopUntil(30);
-        expect(surface.hasPainted() && paintNotifications == 1,
+        expect(surface.hasPainted() && paintNotifications == 0,
+               "The first paint returns before startup initialization is dispatched.");
+        surface.paintEntireComponent(graphics, true);
+        expect(dispatchQueuedMessages() && ownerObservedPaint && paintNotifications == 1,
                "The lightweight surface paints before notifying the startup owner to begin initialization.");
+        surface.paintEntireComponent(graphics, true);
+        expect(dispatchQueuedMessages() && paintNotifications == 1,
+               "Repainting the startup surface never notifies the startup owner again.");
+        auto destroyedPaintNotifications = 0;
+        {
+            StartupProgressComponent destroyedSurface;
+            destroyedSurface.setSize(900, 600);
+            destroyedSurface.onFirstPaint = [&] { ++destroyedPaintNotifications; };
+            destroyedSurface.paintEntireComponent(graphics, true);
+            expect(destroyedSurface.hasPainted(),
+                   "A transient startup surface queues its first-paint notification.");
+        }
+        expect(dispatchQueuedMessages() && destroyedPaintNotifications == 0,
+               "Destroying the startup surface cancels its pending owner notification.");
+        surface.addToDesktop(juce::ComponentPeer::windowIsTemporary);
         surface.setSnapshot(startup, true);
         auto keyboardButtons = 0;
         auto accessibleProgress = false;
