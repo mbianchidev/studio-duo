@@ -112,7 +112,7 @@ command-line tools or Windows with Visual Studio 2022.
 ```sh
 git clone https://github.com/mbianchidev/studio-duo.git
 cd studio-duo
-cmake -S . -B build -DSTUDIO_DUO_BUILD_TESTS=ON
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DSTUDIO_DUO_BUILD_TESTS=ON
 cmake --build build --config Release --parallel
 ctest --test-dir build --build-config Release --output-on-failure
 ```

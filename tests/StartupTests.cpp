@@ -7,6 +7,7 @@
 #include "plugin_host/PluginCatalog.h"
 #include "ui/StartupProgressComponent.h"
 #include "update/StudioPreferences.h"
+#include "platform/Architecture.h"
 
 #include <cmath>
 #include <algorithm>
@@ -248,7 +249,7 @@ void startupTests()
         const auto xml = known.createXml();
         xml->setAttribute("studioDuoCatalogVersion", 1);
         xml->setAttribute("studioDuoAppVersion", STUDIO_DUO_VERSION);
-        xml->setAttribute("studioDuoArchitecture", JUCE_ARM ? "arm64" : JUCE_64BIT ? "x86_64" : "x86");
+        xml->setAttribute("studioDuoArchitecture", currentArchitecture());
         expect(directory.getChildFile("plugins.xml").replaceWithText(xml->toString()),
                "Synthetic warm catalog can be written.");
         PluginCatalog warm(directory);

@@ -1,6 +1,7 @@
 #include "PluginCatalog.h"
 
 #include "logging/StudioLogger.h"
+#include "platform/Architecture.h"
 #include "PluginFormats.h"
 #include "PluginScanWorker.h"
 #include "devices/DeviceRegistry.h"
@@ -14,17 +15,6 @@ namespace studio
 {
 namespace
 {
-juce::String currentArchitecture()
-{
-#if JUCE_ARM
-    return JUCE_64BIT ? "arm64" : "arm";
-#elif JUCE_64BIT
-    return "x86_64";
-#else
-    return "x86";
-#endif
-}
-
 PluginCompatibilityRecord compatibilityIdentity(
     const PluginInsert& insert)
 {

@@ -1,4 +1,5 @@
 #include "StartupDiagnostics.h"
+#include "platform/Architecture.h"
 
 #include <algorithm>
 #include <memory>
@@ -42,7 +43,7 @@ juce::var buildDetails()
     build->setProperty("platform", "unsupported");
 #endif
     build->setProperty("osVersion", juce::SystemStats::getOperatingSystemName());
-    build->setProperty("architecture", JUCE_ARM ? "arm64" : (JUCE_64BIT ? "x86_64" : "x86"));
+    build->setProperty("architecture", currentArchitecture());
     return juce::var(build.release());
 }
 

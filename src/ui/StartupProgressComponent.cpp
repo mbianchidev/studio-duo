@@ -2,6 +2,7 @@
 
 #include "ReentrancySafeTimer.h"
 #include "StudioTheme.h"
+#include "platform/Architecture.h"
 
 #include <cmath>
 
@@ -21,7 +22,7 @@ StartupProgressComponent::StartupProgressComponent()
     title.setFont(juce::Font(juce::FontOptions(30.0f, juce::Font::bold)));
     build.setText("Version " + juce::String(STUDIO_DUO_VERSION) + " / "
         + juce::SystemStats::getOperatingSystemName()
-        + (JUCE_ARM ? " / arm64" : " / x86_64")
+        + " / " + currentArchitecture()
 #if defined(STUDIO_DUO_BUILD_REVISION)
         + " / build " + juce::String(STUDIO_DUO_BUILD_REVISION)
 #endif

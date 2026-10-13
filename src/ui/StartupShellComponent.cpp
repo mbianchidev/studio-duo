@@ -3,6 +3,7 @@
 #include "MainComponent.h"
 #include "audio/AudioDeviceProbe.h"
 #include "logging/StudioLogger.h"
+#include "platform/Architecture.h"
 
 #include <algorithm>
 
@@ -253,7 +254,7 @@ void StartupShellComponent::startTask(StartupToken token)
                     juce::MemoryOutputStream xml;
                     xml << "<KNOWNPLUGINS studioDuoCatalogVersion=\"1\" studioDuoAppVersion=\""
                         << STUDIO_DUO_VERSION << "\" studioDuoArchitecture=\""
-                        << (JUCE_ARM ? "arm64" : JUCE_64BIT ? "x86_64" : "x86") << "\">\n";
+                        << currentArchitecture() << "\">\n";
                     const auto count = scenario == "large-catalog" ? 20000 : 128;
                     for (int index = 0; index < count; ++index)
                     {

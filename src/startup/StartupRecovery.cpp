@@ -26,7 +26,12 @@ juce::int64 currentPid()
 
 bool processIsRunning(juce::int64 pid)
 {
-    if (pid <= 0 || pid > std::numeric_limits<int>::max())
+#if JUCE_WINDOWS
+    constexpr auto maximumPid = static_cast<juce::int64>((std::numeric_limits<DWORD>::max)());
+#else
+    constexpr auto maximumPid = static_cast<juce::int64>((std::numeric_limits<pid_t>::max)());
+#endif
+    if (pid <= 0 || pid > maximumPid)
         return false;
 #if JUCE_WINDOWS
     const auto process = OpenProcess(SYNCHRONIZE, FALSE, static_cast<DWORD>(pid));

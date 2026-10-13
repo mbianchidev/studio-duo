@@ -340,6 +340,7 @@ set(STUDIO_DUO_PLUGIN_SOURCES
 )
 
 set(STUDIO_DUO_STARTUP_SOURCES
+    src/platform/Architecture.h
     src/startup/StartupCoordinator.cpp
     src/startup/StartupCoordinator.h
     src/startup/StartupDiagnostics.cpp
