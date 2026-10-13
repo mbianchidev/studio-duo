@@ -117,8 +117,14 @@ void StartupShellComponent::timerCallback()
 {
     if (stopped || nativeAudioActivationInFlight)
         return;
-    if (startup.result(StartupTaskId::pluginCatalog)->state == StartupState::running)
+    const auto checkingResponsiveness = options.selfTest && options.selfTestScenario == "slow-catalog";
+    if (startup.result(StartupTaskId::pluginCatalog)->state == StartupState::running
+        && (!checkingResponsiveness || mailbox->waitingForCatalogHeartbeats.load(std::memory_order_acquire)))
+    {
         ++responsiveWorkerTicks;
+        if (checkingResponsiveness)
+            mailbox->catalogHeartbeats.store(responsiveWorkerTicks, std::memory_order_release);
+    }
     collectCompletions();
     startup.expire(now());
     if (audioProbeInFlight && !startup.accepts({ StartupTaskId::audio,
@@ -247,7 +253,23 @@ void StartupShellComponent::startTask(StartupToken token)
                     return;
                 Completion completion { token };
                 if (scenario == "slow-catalog")
-                    juce::Thread::sleep(300);
+                {
+                    target->waitingForCatalogHeartbeats.store(true, std::memory_order_release);
+                    const auto deadline = now() + 2000.0;
+                    while (target->catalogHeartbeats.load(std::memory_order_acquire) < 5
+                           && !target->cancelled->load(std::memory_order_acquire) && now() < deadline)
+                        juce::Thread::sleep(5);
+                    target->waitingForCatalogHeartbeats.store(false, std::memory_order_release);
+                    if (target->cancelled->load(std::memory_order_acquire))
+                        return;
+                    if (target->catalogHeartbeats.load(std::memory_order_acquire) < 5)
+                    {
+                        completion.outcome = { StartupState::failed, StartupIssue::timeout,
+                            "The message thread did not service five callbacks while catalog initialization was pending." };
+                        post(target, std::move(completion));
+                        return;
+                    }
+                }
                 const auto directory = root.getChildFile("Plugin Catalog");
                 if (scenario == "warm-catalog" || scenario == "large-catalog")
                 {

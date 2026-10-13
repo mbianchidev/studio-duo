@@ -54,6 +54,8 @@ private:
         std::mutex mutex;
         std::vector<Completion> completed;
         std::shared_ptr<std::atomic<bool>> cancelled = std::make_shared<std::atomic<bool>>(false);
+        std::atomic<bool> waitingForCatalogHeartbeats { false };
+        std::atomic<int> catalogHeartbeats { 0 };
     };
 
     static std::vector<StartupTask> tasks();

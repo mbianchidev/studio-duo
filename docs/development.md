@@ -127,7 +127,10 @@ cover slow, warm, and 20,000-entry catalogs, corruption, unavailable audio/MIDI,
 plug-in-worker timeout, and unclean-session safe recovery. Tests use isolated
 temporary preferences/catalogs/markers and only synthetic data. Slow-catalog
 coverage requires timer callbacks while the worker is active, rather than merely
-checking that a window was eventually created. Each injection must appear in the
+checking that a window was eventually created. The fixture holds the worker at a
+bounded barrier until five actual message-thread callbacks arrive; it does not
+assume that a fixed sleep yields a particular timer count on hosted runners.
+Each injection must appear in the
 typed result/history; the driver-free fallback alone cannot pass the case.
 CI and releases then install the
 signed Windows package into a temporary directory and run the same startup
