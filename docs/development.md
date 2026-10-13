@@ -125,7 +125,12 @@ with `--startup-self-test`, paints its lightweight window, completes the coordin
 startup graph, and asserts that no audio manager was constructed. Separate cases
 cover slow, warm, and 20,000-entry catalogs, corruption, unavailable audio/MIDI,
 plug-in-worker timeout, and unclean-session safe recovery. Tests use isolated
-temporary preferences/catalogs/markers and only synthetic data. Slow-catalog
+temporary preferences/catalogs/markers and only synthetic data. The first-paint
+unit fixture waits for a queued message fence with a five-second monotonic
+deadline, rather than assuming a fixed dispatch interval clears native GUI work.
+It checks deferred owner notification, one-shot behavior across repaints, and
+destruction before callback dispatch; application startup timing budgets remain
+unchanged. Slow-catalog
 coverage requires timer callbacks while the worker is active, rather than merely
 checking that a window was eventually created. The fixture holds the worker at a
 bounded barrier until five actual message-thread callbacks arrive; it does not
