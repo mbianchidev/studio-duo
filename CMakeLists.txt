@@ -632,9 +632,8 @@ target_link_libraries(
 )
 
 if(APPLE)
-    add_custom_command(
-        TARGET StudioDuo
-        POST_BUILD
+    add_custom_target(
+        StudioDuoDevelopmentSignature ALL
         COMMAND /usr/bin/codesign
             --force
             --deep
@@ -642,6 +641,7 @@ if(APPLE)
             --identifier "${STUDIO_DUO_BUNDLE_ID}"
             --requirements "=designated => identifier \"${STUDIO_DUO_BUNDLE_ID}\""
             "$<TARGET_BUNDLE_DIR:StudioDuo>"
+        DEPENDS StudioDuo
         COMMENT "Applying stable development signature to Studio Duo"
         VERBATIM
     )
@@ -904,6 +904,9 @@ if(STUDIO_DUO_BUILD_TESTS)
     endif()
 
     juce_add_console_app(StudioDuoTests PRODUCT_NAME "Studio Duo Tests")
+    if(APPLE)
+        add_dependencies(StudioDuoTests StudioDuoDevelopmentSignature)
+    endif()
     target_compile_definitions(StudioDuoTests PRIVATE
         STUDIO_DUO_BUILD_REVISION="${STUDIO_DUO_BUILD_REVISION}"
         STUDIO_DUO_BUILD_CONFIG="$<CONFIG>")

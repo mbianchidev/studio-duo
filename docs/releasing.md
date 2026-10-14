@@ -119,6 +119,9 @@ Tagged builds additionally require both ARM64 and x86_64 slices.
 macOS 26 and later use the current `diskutil image` creation/attachment APIs;
 older supported build hosts retain the compatible `hdiutil` path. Image
 checksums are verified before installation.
+The build's development-signature target runs after all bundle resource copies;
+packaging verifies that completed seal instead of re-signing an invalid bundle
+and hiding an ordering failure.
 
 ```sh
 ./packaging/macos/build-release-packages.sh \
