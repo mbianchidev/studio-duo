@@ -234,7 +234,7 @@ void performanceHardeningTests()
     {
         constexpr int viewY = 80 + 96 * 88;
         timeline.setViewportPosition(viewX);
-        juce::Image image(juce::Image::ARGB, 1024, 600, true);
+        juce::Image image(juce::Image::ARGB, 1024, 600, true, juce::SoftwareImageType {});
         juce::Graphics graphics(image);
         graphics.addTransform(juce::AffineTransform::translation(
             -static_cast<float>(viewX), -static_cast<float>(viewY)));
@@ -318,6 +318,7 @@ void performanceHardeningTests()
     report->setProperty("maximumCallbackMilliseconds", maximumCallbackMs);
     report->setProperty("renderMilliseconds", renderMs);
     report->setProperty("maximumPaintMilliseconds", maximumPaintMs);
+    report->setProperty("paintBackend", "software");
     report->setProperty("peakMemoryBytes", static_cast<juce::int64>(after.peakMemoryBytes));
     report->setProperty("packageBytes", diskBytes);
     report->setProperty("maximumNullError", static_cast<double>(nullError));

@@ -87,7 +87,7 @@ hardware requirements.
 | Callback batch: 128 blocks of 256 samples | Under 10 seconds wall time and 5 seconds process CPU |
 | Longest measured callback | Under 100 ms |
 | Offline reference render | Under 5 seconds |
-| Each 1024 x 600 late viewport | Under 500 ms; at most 8 rows, 128 clips, and 128 grid iterations visited |
+| Each 1024 x 600 software-rendered late viewport | Under 500 ms; at most 8 rows, 128 clips, and 128 grid iterations visited |
 | Peak process working set | Under 1 GiB |
 | Saved native documents/recovery | Under 32 MiB, excluding the external synthetic source |
 | Unclipped deterministic live/offline null | Maximum absolute sample error below `1e-5` |
@@ -96,6 +96,9 @@ These generous hosted-runner limits catch pathological regressions. They are
 not real-time audio deadlines: 256 samples at 48 kHz have a roughly 5.33 ms
 deadline. Physical-device deadline misses and realistic long-media memory/disk
 behavior require the qualification below.
+The pixel/CPU fixture uses an explicit software image so Windows Direct2D
+deferred GPU submission cannot turn an immediate pixel read into a false blank
+frame. Native accelerated presentation remains part of hands-on UI qualification.
 
 Snapshot construction shares decoded media only within that build, with a
 64 MiB additional cache budget. It does not cache between graph updates or
