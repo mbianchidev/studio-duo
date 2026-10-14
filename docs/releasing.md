@@ -116,6 +116,9 @@ license/source material, then installs and starts a private copy with a
 30-second driver-free deadline. Cleanup removes only its own temporary install
 and detaches its own volume; it refuses to run while Studio Duo is already open.
 Tagged builds additionally require both ARM64 and x86_64 slices.
+macOS 26 and later use the current `diskutil image` creation/attachment APIs;
+older supported build hosts retain the compatible `hdiutil` path. Image
+checksums are verified before installation.
 
 ```sh
 ./packaging/macos/build-release-packages.sh \

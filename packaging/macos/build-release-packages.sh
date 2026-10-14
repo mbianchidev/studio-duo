@@ -36,6 +36,9 @@ fi
 if pgrep -x 'Studio Duo' >/dev/null; then
     fail "Close the running Studio Duo application before installed-startup validation."
 fi
+os_version="$(sw_vers -productVersion)"
+os_major="${os_version%%.*}"
+[[ "$os_major" =~ ^[0-9]+$ ]] || fail "Could not determine the macOS tooling version."
 
 work="$(mktemp -d "${TMPDIR:-/tmp}/studio-duo-macos-package.XXXXXX")"
 mount="$work/mount"
@@ -44,7 +47,7 @@ cleanup() {
     result=$?
     trap - EXIT
     if [[ "$mounted" == true ]]; then
-        if ! hdiutil detach "$mount"; then
+        if ! diskutil eject "$mount"; then
             printf 'Could not detach the package smoke-test volume: %s\n' "$mount" >&2
             result=1
         else
@@ -72,9 +75,18 @@ mkdir -p "$work/staging" "$mount" "$work/install" "$work/unpacked" "$work/user-d
 ditto "$app" "$work/staging/Studio Duo.app"
 ln -s /Applications "$work/staging/Applications"
 ditto -c -k --sequesterRsrc --keepParent "$app" "$zip"
-hdiutil create -volname "Studio Duo $version" -srcfolder "$work/staging" -ov -format UDZO "$dmg"
+if [[ "$os_major" -ge 26 ]]; then
+    rm -f -- "$dmg"
+    diskutil image create from --volumeName "Studio Duo $version" --format UDZO "$work/staging" "$dmg"
+else
+    hdiutil create -volname "Studio Duo $version" -srcfolder "$work/staging" -ov -format UDZO "$dmg"
+fi
 hdiutil verify "$dmg"
-hdiutil attach -readonly -nobrowse -noautoopen -mountpoint "$mount" "$dmg" > "$work/mount.log"
+if [[ "$os_major" -ge 26 ]]; then
+    diskutil image attach --readOnly --nobrowse --mountPoint "$mount" "$dmg" > "$work/mount.log"
+else
+    hdiutil attach -readonly -nobrowse -noautoopen -mountpoint "$mount" "$dmg" > "$work/mount.log"
+fi
 mounted=true
 [[ -L "$mount/Applications" ]] || fail "The DMG Applications shortcut is missing."
 ditto "$mount/Studio Duo.app" "$work/install/Studio Duo.app"
