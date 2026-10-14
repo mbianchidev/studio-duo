@@ -28,6 +28,12 @@ Project.studioduo/
 6. Write `recovery/latest.json`.
 
 The prior manifest and generation remain valid until step 5 succeeds.
+Saves and recovery writes hold a per-package inter-process writer lock. A busy
+writer returns an explicit error; termination releases its native lock. The
+next generation advances past both the manifest and all existing session/
+automation generations, including unpublished generations left by interruption.
+Previously published files are never reused. Invalid or exhausted counters fail
+before publication. Temporary files are not selected as complete generations.
 
 ## Manifest
 
@@ -46,6 +52,13 @@ Current manifests include `midiCompositionV1`,
 `masteringAlbumV1`, `sectionTransportV1`, `timelineMarkersV1`, and `pluginRacksV1`. Readers must reject a manifest
 version newer than they support rather than silently dropping MIDI, bundled
 output/cabinet state, scenes, or interchange diagnostics.
+Versions/counters must be whole numeric values; textual or fractional values
+are not truncated. Every required capability is checked, including the
+historical supported `renderReportsV1` declaration. Unknown requirements block
+both ordinary open and recovery fallback, and cannot be overwritten by Save.
+Manifest/session identities must agree. Version 3 and later packages must
+select their independent automation document, whose project ID and schema are
+validated.
 
 Paths must be relative children of the package and cannot contain `..`.
 
@@ -267,11 +280,18 @@ internal `1..16` range.
 `recovery/in-process-active.json` records trusted or ARA instances active during
 the current run. If the application exits uncleanly, those instances reopen
 disabled until explicit reload. Clean shutdown removes the marker.
+Recovery envelopes require supported schema version 1 and valid complete
+project data. A malformed or unsupported recovery point cannot replace valid
+saved data; opening reports the reason. Recovery writes validate the project
+before replacing `latest.json`. A corrupt manifest is retained for diagnosis;
+save recovered data to a new package with **Save As** rather than replacing it.
 
 ## Migrations
 
 - Version 1 projects gain direct-to-master routes.
 - Version 2 `outputTrackId` values become version 3 main-output connections.
+  Migrated main-output IDs are stable `legacy-main-output-<track-id>` values,
+  so reopening the same source does not invent different routing identities.
 - Versions 1 and 2 gain empty automation, snapshot, and report collections.
 - Versions 1-4 gain empty per-track `midiClips` plus the deterministic default
   metal map, pattern aliases, and routing template. Their fixed IDs remain
@@ -295,3 +315,7 @@ disabled until explicit reload. Clean shutdown removes the marker.
 
 [`schema/project-v12.schema.json`](schema/project-v12.schema.json) documents the
 current public session envelope; older schema files remain historical.
+Committed version 1/2 fixtures and repeatable version 3-12 migration cases
+verify source immutability, defaults, and stable data. See
+[release readiness](release-readiness.md) for cross-platform package exchange,
+abrupt-save drills, and qualification boundaries.

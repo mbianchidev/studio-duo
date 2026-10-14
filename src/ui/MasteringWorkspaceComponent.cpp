@@ -95,28 +95,26 @@ MasteringWorkspaceComponent::MasteringWorkspaceComponent()
     setupLabel(*this, fadeOutLabel, "Fade out s");
     setupLabel(*this, trackGainLabel, "Track gain dB");
 
-    for (auto* editor : {
-             &albumTitleEditor,
-             &albumArtistEditor,
-             &albumSongwriterEditor,
-             &labelNameEditor,
-             &catalogEditor,
-             &mcnEditor,
-             &releaseDateEditor,
-             &genreEditor,
-             &outputGainEditor })
-        configureEditor(*editor, "Edit album release metadata");
-    for (auto* editor : {
-             &trackTitleEditor,
-             &trackArtistEditor,
-             &trackSongwriterEditor,
-             &isrcEditor,
-             &gapEditor,
-             &overlapEditor,
-             &fadeInEditor,
-             &fadeOutEditor,
-             &trackGainEditor })
-        configureEditor(*editor, "Edit selected mastering song");
+    for (const auto& [editor, name] : std::initializer_list<std::pair<juce::TextEditor*, const char*>> {
+             { &albumTitleEditor, "Album title" },
+             { &albumArtistEditor, "Album artist" },
+             { &albumSongwriterEditor, "Album songwriter" },
+             { &labelNameEditor, "Release label" },
+             { &catalogEditor, "Catalog number" },
+             { &mcnEditor, "MCN or EAN" },
+             { &releaseDateEditor, "Release date" },
+             { &genreEditor, "Release genre" },
+             { &outputGainEditor, "Album output gain in decibels" },
+             { &trackTitleEditor, "Song title" },
+             { &trackArtistEditor, "Song artist" },
+             { &trackSongwriterEditor, "Song songwriter" },
+             { &isrcEditor, "Song ISRC" },
+             { &gapEditor, "Gap before song in seconds" },
+             { &overlapEditor, "Song overlap in seconds" },
+             { &fadeInEditor, "Song fade in seconds" },
+             { &fadeOutEditor, "Song fade out seconds" },
+             { &trackGainEditor, "Song gain in decibels" } })
+        configureEditor(*editor, name);
 
     const auto albumCommit = [this] { commitAlbumFields(); };
     for (auto* editor : {
@@ -155,6 +153,7 @@ MasteringWorkspaceComponent::MasteringWorkspaceComponent()
         juce::ListBox::backgroundColourId,
         juce::Colour(StudioColours::panel));
     addAndMakeVisible(sourceSelector);
+    sourceSelector.setTitle("Mastering source mix");
     sourceSelector.onChange = [this]
     {
         if (refreshing || sourceSelector.getSelectedItemIndex() < 0)
@@ -189,8 +188,7 @@ MasteringWorkspaceComponent::MasteringWorkspaceComponent()
              &repairButton })
     {
         addAndMakeVisible(*button);
-        if (button->getButtonText().isNotEmpty())
-            button->setWantsKeyboardFocus(false);
+        button->setWantsKeyboardFocus(true);
     }
     addSongButton.onClick = [this] { chooseAudio(AddMode::song); };
     addAlternateButton.onClick =
@@ -234,6 +232,8 @@ void MasteringWorkspaceComponent::configureEditor(
     const juce::String& tooltip)
 {
     addAndMakeVisible(editor);
+    editor.setTitle(tooltip);
+    editor.setName(tooltip);
     editor.setTooltip(tooltip);
     editor.setSelectAllWhenFocused(true);
 }

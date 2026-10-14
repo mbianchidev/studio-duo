@@ -568,6 +568,16 @@ bool StudioIconButton::isShowingLabel() const noexcept
     return showLabel;
 }
 
+bool StudioIconButton::keyPressed(const juce::KeyPress& key)
+{
+    if (isEnabled() && key == juce::KeyPress::spaceKey)
+    {
+        triggerClick();
+        return true;
+    }
+    return juce::TextButton::keyPressed(key);
+}
+
 void StudioIconButton::paintButton(juce::Graphics& graphics,
                                    bool highlighted,
                                    bool down)

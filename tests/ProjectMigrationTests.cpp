@@ -116,6 +116,27 @@ void projectMigrationTests()
                && loaded->automationLanes[1].target.midiChannel == 4,
            "Version 8 automation generation preserves channel-scoped pressure.");
 
+    auto unsupportedManifest = manifest.clone();
+    unsupportedManifest.getDynamicObject()
+        ->getProperty("requiredCapabilities")
+        .getArray()
+        ->add("futureEditingCapabilityV1");
+    const auto manifestFile = package.getChildFile("manifest.json");
+    expect(manifestFile.replaceWithText(
+               juce::JSON::toString(unsupportedManifest, true)),
+           "A future-capability manifest fixture can be written.");
+    error.clear();
+    expect(!studio::ProjectFile::load(package, error)
+               && error.contains("futureEditingCapabilityV1"),
+           "Unknown required capabilities are rejected with their names.");
+    error.clear();
+    expect(!studio::ProjectFile::loadForOpen(package, error)
+               && error.contains("futureEditingCapabilityV1"),
+           "Recovery cannot bypass an unsupported project capability.");
+    expect(manifestFile.replaceWithText(
+               juce::JSON::toString(manifest, true)),
+           "The supported manifest can be restored after compatibility checks.");
+
     auto legacyVersionSeven = project.toVar();
     auto* legacyObject = legacyVersionSeven.getDynamicObject();
     auto* legacyLanes =

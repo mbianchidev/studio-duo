@@ -42,12 +42,23 @@ float waveformAmplitude(const AudioClip& clip, double sourceSeconds) noexcept
 TimelineComponent::TimelineComponent()
 {
     setOpaque(true);
+    setWantsKeyboardFocus(true);
+    setTitle("Timeline");
+    setDescription("Arrangement");
+    setHelpText("Up/Down select tracks. Left/Right select clips. Shift+arrows move clips. "
+                "Alt+Left/Right move the playhead. Shift+F10 opens actions. Tab leaves the timeline.");
     setMouseCursor(juce::MouseCursor::NormalCursor);
 }
 
 void TimelineComponent::setProject(const Project* projectToDisplay)
 {
     project = projectToDisplay;
+    if (project == nullptr || project->findTrack(selectedTrackId) == nullptr)
+    {
+        selectedTrackId.clear();
+        selectedClipId.clear();
+    }
+    updateAccessibleSelection();
     repaint();
 }
 
@@ -55,6 +66,9 @@ void TimelineComponent::setSelection(juce::String trackId, juce::String clipId)
 {
     selectedTrackId = std::move(trackId);
     selectedClipId = std::move(clipId);
+    updateAccessibleSelection();
+    if (hasKeyboardFocus(false))
+        ensureSelectionVisible();
     repaint();
 }
 
@@ -146,9 +160,242 @@ int TimelineComponent::preferredHeight(int minimumHeight) const
                     rulerHeight + trackCount * trackHeight + addTrackHeight);
 }
 
+void TimelineComponent::updateAccessibleSelection()
+{
+    auto title = juce::String("Timeline");
+    if (project != nullptr)
+    {
+        if (const auto* track = project->findTrack(selectedTrackId))
+            title += ": " + track->name;
+        if (const auto* clip = project->findClip(selectedClipId))
+            title += " / " + clip->name;
+        else if (const auto* midi = project->findMidiClip(selectedClipId))
+            title += " / " + midi->name;
+    }
+    if (getTitle() == title)
+        return;
+    setTitle(title);
+    if (auto* handler = getAccessibilityHandler())
+        handler->notifyAccessibilityEvent(juce::AccessibilityEvent::valueChanged);
+}
+
+std::unique_ptr<juce::AccessibilityHandler> TimelineComponent::createAccessibilityHandler()
+{
+    class SelectionValue final : public juce::AccessibilityTextValueInterface
+    {
+    public:
+        explicit SelectionValue(TimelineComponent& component) : owner(component) {}
+        bool isReadOnly() const override { return true; }
+        juce::String getCurrentValueAsString() const override { return owner.getTitle(); }
+        void setValueAsString(const juce::String&) override {}
+    private:
+        TimelineComponent& owner;
+    };
+    return std::make_unique<juce::AccessibilityHandler>(
+        *this, juce::AccessibilityRole::list,
+        juce::AccessibilityActions().addAction(juce::AccessibilityActionType::focus,
+                                               [this] { grabKeyboardFocus(); }),
+        juce::AccessibilityHandler::Interfaces(std::make_unique<SelectionValue>(*this)));
+}
+
+void TimelineComponent::ensureSelectionVisible()
+{
+    auto* viewport = findParentComponentOfClass<juce::Viewport>();
+    if (viewport == nullptr || selectedTrackId.isEmpty())
+        return;
+    const auto view = viewport->getViewArea();
+    const auto y = static_cast<int>(trackY(selectedTrackId));
+    auto viewY = view.getY();
+    if (y < viewY)
+        viewY = y;
+    else if (y + trackHeight > view.getBottom())
+        viewY = y + trackHeight - view.getHeight();
+    auto viewX = view.getX();
+    if (selectedClipId.isNotEmpty())
+        for (const auto& hit : clipHits({ 0.0f, static_cast<float>(y), static_cast<float>(getWidth()),
+                                        static_cast<float>(trackHeight) }))
+            if (hit.clipId == selectedClipId)
+            {
+                if (hit.bounds.getX() < static_cast<float>(viewX + trackHeaderWidth)
+                    || hit.bounds.getX() >= static_cast<float>(view.getRight() - 24))
+                    viewX = static_cast<int>(hit.bounds.getX()) - trackHeaderWidth - 24;
+                break;
+            }
+    viewport->setViewPosition(std::max(0, viewX), std::max(0, viewY));
+    setViewportPosition(viewport->getViewPositionX());
+}
+
+void TimelineComponent::selectForKeyboard(juce::String trackId, juce::String clipId)
+{
+    setSelection(trackId, clipId);
+    ensureSelectionVisible();
+    if (clipId.isNotEmpty())
+    {
+        if (onClipSelected)
+            onClipSelected(trackId, clipId);
+    }
+    else if (onTrackSelected)
+        onTrackSelected(trackId);
+}
+
+void TimelineComponent::focusGained(FocusChangeType)
+{
+    const auto tracks = visibleTracks();
+    if (selectedTrackId.isEmpty() && !tracks.empty())
+        selectForKeyboard(tracks.front()->id);
+    else
+        ensureSelectionVisible();
+    repaint();
+}
+
+void TimelineComponent::focusLost(FocusChangeType)
+{
+    repaint();
+}
+
+bool TimelineComponent::keyPressed(const juce::KeyPress& key)
+{
+    if (project == nullptr || key.getModifiers().isCommandDown()
+        || key.getModifiers().isCtrlDown())
+        return false;
+    const auto code = key.getKeyCode();
+    const auto shift = key.getModifiers().isShiftDown();
+    const auto alt = key.getModifiers().isAltDown();
+    const auto tracks = visibleTracks();
+    if (tracks.empty())
+        return false;
+    const auto selected = std::find_if(tracks.begin(), tracks.end(),
+                                       [this](const auto* track) { return track->id == selectedTrackId; });
+    const auto index = selected == tracks.end() ? -1 : static_cast<int>(std::distance(tracks.begin(), selected));
+    const auto horizontal = code == juce::KeyPress::leftKey || code == juce::KeyPress::rightKey;
+    const auto vertical = code == juce::KeyPress::upKey || code == juce::KeyPress::downKey;
+    const auto direction = code == juce::KeyPress::leftKey || code == juce::KeyPress::upKey ? -1 : 1;
+    if (alt && horizontal && !shift && onSeek)
+    {
+        onSeek(project->secondsAtBeat(std::max(0.0, project->beatsAt(playheadSeconds) + direction * editGridBeats)));
+        return true;
+    }
+    if (!alt && !shift && (code == juce::KeyPress::homeKey || code == juce::KeyPress::endKey) && onSeek)
+    {
+        onSeek(code == juce::KeyPress::homeKey ? 0.0 : project->timelineEndSeconds());
+        return true;
+    }
+    if (!alt && !shift && vertical)
+    {
+        const auto next = index < 0 ? 0 : juce::jlimit(0, static_cast<int>(tracks.size()) - 1, index + direction);
+        selectForKeyboard(tracks[static_cast<std::size_t>(next)]->id);
+        return true;
+    }
+    if (index < 0)
+        return false;
+    const auto* track = tracks[static_cast<std::size_t>(index)];
+    if (alt && !shift)
+    {
+        if (code == 'M' && onTrackMute)
+        {
+            onTrackMute(track->id);
+            return true;
+        }
+        if (code == 'S' && onTrackSolo)
+        {
+            onTrackSolo(track->id);
+            return true;
+        }
+        if (code == 'R' && onTrackArm
+            && (track->type == TrackType::audio || track->type == TrackType::midi || track->type == TrackType::instrument))
+        {
+            onTrackArm(track->id);
+            return true;
+        }
+    }
+    if (alt)
+        return false;
+    auto hits = clipHits({ 0.0f, trackY(track->id), static_cast<float>(getWidth()), static_cast<float>(trackHeight) });
+    hits.erase(std::remove_if(hits.begin(), hits.end(),
+                             [track](const auto& hit) { return hit.trackId != track->id; }), hits.end());
+    std::sort(hits.begin(), hits.end(), [](const auto& left, const auto& right)
+    {
+        if (left.startSeconds < right.startSeconds)
+            return true;
+        if (right.startSeconds < left.startSeconds)
+            return false;
+        return left.clipId < right.clipId;
+    });
+    const auto clip = std::find_if(hits.begin(), hits.end(),
+                                  [this](const auto& hit) { return hit.clipId == selectedClipId; });
+    if (shift && (horizontal || vertical) && clip != hits.end() && onClipMoved)
+    {
+        if (horizontal)
+        {
+            const auto seconds = project->secondsAtBeat(
+                std::max(0.0, project->beatsAt(clip->startSeconds) + direction * editGridBeats));
+            onClipMoved(clip->clipId, track->id, seconds);
+            return true;
+        }
+        for (int destination = index + direction; destination >= 0 && destination < static_cast<int>(tracks.size());
+             destination += direction)
+        {
+            const auto* target = tracks[static_cast<std::size_t>(destination)];
+            const auto compatible = clip->midi
+                ? target->parentTrackId.isEmpty() && (target->type == TrackType::midi || target->type == TrackType::instrument)
+                : target->type == TrackType::audio;
+            if (compatible)
+            {
+                onClipMoved(clip->clipId, target->id, clip->startSeconds);
+                return true;
+            }
+        }
+        return false;
+    }
+    if (!shift && horizontal && !hits.empty())
+    {
+        const auto current = clip == hits.end() ? -1 : static_cast<int>(std::distance(hits.begin(), clip));
+        const auto next = current < 0 ? (direction > 0 ? 0 : static_cast<int>(hits.size()) - 1)
+            : juce::jlimit(0, static_cast<int>(hits.size()) - 1, current + direction);
+        selectForKeyboard(track->id, hits[static_cast<std::size_t>(next)].clipId);
+        return true;
+    }
+    if (shift && code == juce::KeyPress::F10Key)
+    {
+        ensureSelectionVisible();
+        auto position = juce::Point<float>(static_cast<float>(viewportPositionX + trackHeaderWidth / 2),
+                                           trackY(track->id) + trackHeight * 0.5f);
+        if (clip != hits.end())
+        {
+            auto bounds = clip->bounds;
+            if (const auto* viewport = findParentComponentOfClass<juce::Viewport>())
+                bounds = bounds.getIntersection(viewport->getViewArea().toFloat().withTrimmedLeft(trackHeaderWidth));
+            if (!bounds.isEmpty())
+                position = bounds.getCentre();
+        }
+        showContextMenu(position, false);
+        return true;
+    }
+    if (!shift && code == juce::KeyPress::returnKey)
+    {
+        if (clip != hits.end() && onSeek)
+        {
+            onSeek(clip->startSeconds);
+            return true;
+        }
+        if (onEditTrack)
+        {
+            onEditTrack(track->id, localAreaToGlobal(juce::Rectangle<int> {
+                viewportPositionX + 24, static_cast<int>(trackY(track->id)) + 8, trackHeaderWidth - 34, 32 }));
+            return true;
+        }
+    }
+    return false;
+}
+
 void TimelineComponent::paint(juce::Graphics& graphics)
 {
+#if defined(STUDIO_DUO_TESTING)
+    testingPaintStatistics = {};
+#endif
     graphics.fillAll(juce::Colour(StudioColours::window));
+    const auto dirty = graphics.getClipBounds();
+    const auto dirtyBounds = dirty.toFloat();
     graphics.setColour(juce::Colour(StudioColours::panel));
     graphics.fillRect(0, 0, getWidth(), rulerHeight);
     graphics.fillRect(viewportPositionX, 0, trackHeaderWidth, getHeight());
@@ -263,7 +510,13 @@ void TimelineComponent::paint(juce::Graphics& graphics)
                       juce::Colour(StudioColours::orange));
     }
 
-    auto seconds = 0.0;
+    const auto firstSeconds = xToSeconds(static_cast<float>(std::max(0, dirty.getX() - 48)));
+    const auto firstMeter = project->meterAt(firstSeconds);
+    const auto meterAnchor = project->beatsAt(firstMeter.timeSeconds);
+    const auto firstStep = 4.0 / firstMeter.denominator;
+    auto seconds = project->secondsAtBeat(meterAnchor
+        + std::max(0.0, std::floor((project->beatsAt(firstSeconds) - meterAnchor) / firstStep)) * firstStep);
+    const auto gridEndSeconds = std::min(maximumSeconds, xToSeconds(static_cast<float>(dirty.getRight() + 48)));
     constexpr auto minimumGridSpacing = 4;
     constexpr auto minimumBarLabelSpacing = 48;
     auto lastGridX =
@@ -271,8 +524,11 @@ void TimelineComponent::paint(juce::Graphics& graphics)
     auto lastBarLabelRight =
         trackHeaderWidth
         - minimumBarLabelSpacing;
-    for (int line = 0; line < 100000 && seconds <= maximumSeconds; ++line)
+    for (int line = 0; line < 100000 && seconds <= gridEndSeconds; ++line)
     {
+#if defined(STUDIO_DUO_TESTING)
+        ++testingPaintStatistics.gridLinesConsidered;
+#endif
         const auto x = static_cast<int>(secondsToX(seconds));
         const auto position = project->musicalPositionAt(seconds);
         const auto isBar = position.beat == 1 && position.ticks < 2;
@@ -431,12 +687,22 @@ void TimelineComponent::paint(juce::Graphics& graphics)
     const auto tracks = visibleTracks();
     for (std::size_t index = 0; index < tracks.size(); ++index)
     {
-        const auto& track = *tracks[index];
         const auto y = rulerHeight + static_cast<int>(index) * trackHeight;
+        if (!dirty.intersects(juce::Rectangle<int> { 0, y, getWidth(), trackHeight }))
+            continue;
+#if defined(STUDIO_DUO_TESTING)
+        ++testingPaintStatistics.tracksPainted;
+#endif
+        const auto& track = *tracks[index];
         const auto selected = track.id == selectedTrackId;
 
         graphics.setColour(juce::Colour(selected ? 0xff22272b : 0xff15181b));
         graphics.fillRect(viewportPositionX, y, trackHeaderWidth, trackHeight);
+        if (selected && hasKeyboardFocus(false))
+        {
+            graphics.setColour(juce::Colour(StudioColours::orange));
+            graphics.drawRect(viewportPositionX + 2, y + 2, trackHeaderWidth - 4, trackHeight - 4, 2);
+        }
         graphics.setColour(juce::Colour(StudioColours::border));
         graphics.drawHorizontalLine(y + trackHeight - 1, 0.0f, static_cast<float>(getWidth()));
         graphics.drawVerticalLine(viewportPositionX + trackHeaderWidth - 1,
@@ -833,6 +1099,9 @@ void TimelineComponent::paint(juce::Graphics& graphics)
             continue;
 
         const auto parentY = rulerHeight + static_cast<int>(visibleIndex) * trackHeight + 12;
+        if (!dirtyBounds.intersects(juce::Rectangle<float> {
+                0.0f, static_cast<float>(parentY), static_cast<float>(getWidth()), trackHeight - 24.0f }))
+            continue;
         for (const auto& child : project->tracks)
         {
             if (child.parentTrackId != parent.id)
@@ -878,8 +1147,11 @@ void TimelineComponent::paint(juce::Graphics& graphics)
         }
     }
 
-    for (const auto& hit : clipHits())
+    for (const auto& hit : clipHits(dirtyBounds))
     {
+#if defined(STUDIO_DUO_TESTING)
+        ++testingPaintStatistics.clipsPainted;
+#endif
         if (hit.midi)
         {
             const auto* midiClip = project->findMidiClip(hit.clipId);
@@ -1249,6 +1521,8 @@ void TimelineComponent::paint(juce::Graphics& graphics)
         const auto top = static_cast<float>(
             rulerHeight + index * trackHeight + 8);
         const auto height = static_cast<float>(trackHeight - 16);
+        if (!dirtyBounds.intersects(juce::Rectangle<float> { 0.0f, top, static_cast<float>(getWidth()), height }))
+            continue;
         juce::Path path;
         auto started = false;
         graphics.setColour(
@@ -1304,6 +1578,8 @@ void TimelineComponent::paint(juce::Graphics& graphics)
                 static_cast<float>(std::max(96.0,
                                             recordingPreview.durationSeconds * pixelsPerSecond)),
                 trackHeight - 24.0f);
+            if (!preview.intersects(dirtyBounds))
+                continue;
             graphics.setColour(juce::Colour(StudioColours::orange).withAlpha(0.72f));
             graphics.fillRoundedRectangle(preview, 5.0f);
             graphics.setColour(juce::Colours::white);
@@ -1368,9 +1644,10 @@ void TimelineComponent::paint(juce::Graphics& graphics)
 
 void TimelineComponent::mouseDown(const juce::MouseEvent& event)
 {
+    grabKeyboardFocus();
     if (event.mods.isPopupMenu())
     {
-        showContextMenu(event);
+        showContextMenu(event.position);
         return;
     }
 
@@ -2211,23 +2488,24 @@ void TimelineComponent::mouseMagnify(const juce::MouseEvent& event,
     }
 }
 
-void TimelineComponent::showContextMenu(const juce::MouseEvent& event)
+void TimelineComponent::showContextMenu(juce::Point<float> position, bool selectFromPosition)
 {
     if (project == nullptr)
         return;
+    const auto actionSeconds = selectFromPosition ? xToSeconds(position.x) : playheadSeconds;
 
-    const auto inTrackHeader = event.position.x >= static_cast<float>(viewportPositionX)
-        && event.position.x < static_cast<float>(viewportPositionX + trackHeaderWidth);
+    const auto inTrackHeader = position.x >= static_cast<float>(viewportPositionX)
+        && position.x < static_cast<float>(viewportPositionX + trackHeaderWidth);
     if (!inTrackHeader
-        && event.position.y >= 0.0f
-        && event.position.y < static_cast<float>(timelineRulerTop))
+        && position.y >= 0.0f
+        && position.y < static_cast<float>(timelineRulerTop))
     {
         juce::PopupMenu menu;
         const auto safeThis = juce::Component::SafePointer<TimelineComponent>(this);
-        if (event.position.y
+        if (position.y
             < static_cast<float>(markerLaneHeight))
         {
-            const auto markerId = markerIdAt(event.position);
+            const auto markerId = markerIdAt(position);
             if (markerId.isNotEmpty())
             {
                 menu.addItem("Rename marker...", [safeThis, markerId]
@@ -2246,15 +2524,15 @@ void TimelineComponent::showContextMenu(const juce::MouseEvent& event)
             }
             menu.addItem(
                 "Add marker here...",
-                [safeThis, position = xToSeconds(event.position.x)]
+                [safeThis, seconds = xToSeconds(position.x)]
                 {
                     if (safeThis != nullptr && safeThis->onAddMarkerRequested)
-                        safeThis->onAddMarkerRequested(position);
+                        safeThis->onAddMarkerRequested(seconds);
                 });
         }
         else
         {
-            const auto sectionId = sectionIdAt(event.position);
+            const auto sectionId = sectionIdAt(position);
             if (sectionId.isNotEmpty())
             {
                 menu.addItem("Tempo, time signature and click...", [safeThis, sectionId]
@@ -2276,13 +2554,13 @@ void TimelineComponent::showContextMenu(const juce::MouseEvent& event)
             }
             menu.addItem(
                 "Add section here...",
-                [safeThis, position = xToSeconds(event.position.x)]
+                [safeThis, seconds = xToSeconds(position.x)]
                 {
                     if (safeThis != nullptr && safeThis->onAddSectionRequested)
-                        safeThis->onAddSectionRequested(position);
+                        safeThis->onAddSectionRequested(seconds);
                 });
         }
-        const auto screenPosition = event.getScreenPosition();
+        const auto screenPosition = localPointToGlobal(position).toInt();
         menu.showMenuAsync(juce::PopupMenu::Options()
                                .withTargetComponent(this)
                                .withTargetScreenArea({ screenPosition.x,
@@ -2293,20 +2571,22 @@ void TimelineComponent::showContextMenu(const juce::MouseEvent& event)
     }
 
     const auto tracks = visibleTracks();
-    const auto trackIndex = trackIndexAt(event.position.y);
+    const auto trackIndex = trackIndexAt(position.y);
     const auto* clickedTrack = trackIndex >= 0 && trackIndex < static_cast<int>(tracks.size())
         ? tracks[static_cast<std::size_t>(trackIndex)]
         : nullptr;
 
-    if (!inTrackHeader && onSeek)
-        onSeek(xToSeconds(event.position.x));
+    if (selectFromPosition && !inTrackHeader && onSeek)
+        onSeek(xToSeconds(position.x));
 
     auto hitClip = false;
     const auto hits = clipHits();
     for (auto iterator = hits.rbegin(); iterator != hits.rend(); ++iterator)
     {
+        if (!selectFromPosition)
+            break;
         const auto& hit = *iterator;
-        if (!hit.bounds.contains(event.position))
+        if (!hit.bounds.contains(position))
             continue;
 
         hitClip = true;
@@ -2317,7 +2597,7 @@ void TimelineComponent::showContextMenu(const juce::MouseEvent& event)
         break;
     }
 
-    if (!hitClip)
+    if (selectFromPosition && !hitClip)
     {
         if (clickedTrack != nullptr)
         {
@@ -2575,7 +2855,7 @@ void TimelineComponent::showContextMenu(const juce::MouseEvent& event)
                          false,
                          [this,
                           clipId = selectedClipId,
-                          timelineSeconds = xToSeconds(event.position.x)]
+                          timelineSeconds = actionSeconds]
                          {
                              if (onWarpTransientToTimeline)
                                  onWarpTransientToTimeline(clipId,
@@ -2586,7 +2866,7 @@ void TimelineComponent::showContextMenu(const juce::MouseEvent& event)
                          false,
                          [this,
                           clipId = selectedClipId,
-                          timelineSeconds = xToSeconds(event.position.x)]
+                          timelineSeconds = actionSeconds]
                          {
                              if (onSetFadeIn)
                                  onSetFadeIn(clipId, timelineSeconds);
@@ -2596,7 +2876,7 @@ void TimelineComponent::showContextMenu(const juce::MouseEvent& event)
                          false,
                          [this,
                           clipId = selectedClipId,
-                          timelineSeconds = xToSeconds(event.position.x)]
+                          timelineSeconds = actionSeconds]
                          {
                              if (onSetFadeOut)
                                  onSetFadeOut(clipId, timelineSeconds);
@@ -2657,7 +2937,7 @@ void TimelineComponent::showContextMenu(const juce::MouseEvent& event)
         menu.addItem(std::move(remove));
     }
 
-    const auto screenPosition = event.getScreenPosition();
+    const auto screenPosition = localPointToGlobal(position).toInt();
     menu.showMenuAsync(juce::PopupMenu::Options()
                            .withTargetComponent(this)
                            .withTargetScreenArea({ screenPosition.x,
@@ -2755,7 +3035,7 @@ double TimelineComponent::sectionEndSeconds(
         : fallback;
 }
 
-std::vector<TimelineComponent::Hit> TimelineComponent::clipHits() const
+std::vector<TimelineComponent::Hit> TimelineComponent::clipHits(juce::Rectangle<float> interest) const
 {
     std::vector<Hit> hits;
     if (project == nullptr)
@@ -2766,11 +3046,19 @@ std::vector<TimelineComponent::Hit> TimelineComponent::clipHits() const
     {
         const auto& track = *tracks[trackIndex];
         const auto y = rulerHeight + static_cast<int>(trackIndex) * trackHeight + 12;
+        const auto activeRow = track.id == selectedTrackId || track.id == dragOriginalTrackId;
+        if (!interest.isEmpty() && !activeRow
+            && !interest.intersects(juce::Rectangle<float> {
+                0.0f, static_cast<float>(y), static_cast<float>(getWidth()), trackHeight - 24.0f }))
+            continue;
         for (const auto& clip : track.clips)
         {
             const auto x = secondsToX(clip.startSeconds);
             const auto width = static_cast<float>(std::max(20.0, clip.durationSeconds * pixelsPerSecond));
-            hits.push_back({ track.id, clip.id, { x, static_cast<float>(y), width, trackHeight - 24.0f } });
+            const juce::Rectangle<float> bounds { x, static_cast<float>(y), width, trackHeight - 24.0f };
+            if (interest.isEmpty() || bounds.expanded(8.0f).intersects(interest)
+                || clip.id == selectedClipId || clip.id == draggedClipId || clip.id == hoveredClipId)
+                hits.push_back({ track.id, clip.id, bounds, false, clip.startSeconds });
         }
         for (const auto& clip : track.midiClips)
         {
@@ -2783,6 +3071,10 @@ std::vector<TimelineComponent::Hit> TimelineComponent::clipHits() const
                 std::max(
                     20.0,
                     (endSeconds - startSeconds) * pixelsPerSecond));
+            const juce::Rectangle<float> bounds { x, static_cast<float>(y), width, trackHeight - 24.0f };
+            if (!interest.isEmpty() && !bounds.expanded(8.0f).intersects(interest)
+                && clip.id != selectedClipId)
+                continue;
             hits.push_back({
                 track.id,
                 clip.id,
@@ -2792,7 +3084,8 @@ std::vector<TimelineComponent::Hit> TimelineComponent::clipHits() const
                     width,
                     trackHeight - 24.0f
                 },
-                true
+                true,
+                startSeconds
             });
         }
     }

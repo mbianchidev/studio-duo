@@ -1565,6 +1565,10 @@ int main(int argc, char* argv[])
     juce::StringArray arguments;
     for (int index = 1; index < argc; ++index)
         arguments.add(juce::String::fromUTF8(argv[index]));
+    if (const auto result = runProjectSaveFixture(arguments))
+        return *result;
+    if (const auto result = runProjectExchangeFixture(arguments))
+        return *result;
     if (const auto result = runAudioDeviceProbeFixture(arguments))
         return *result;
 #if JUCE_WINDOWS
@@ -1638,6 +1642,11 @@ int main(int argc, char* argv[])
     RUN_SUITE(audioExportOptionsTests);
     RUN_SUITE(pluginCompatibilityTests);
     RUN_SUITE(projectMigrationTests);
+    RUN_SUITE(projectHardeningTests);
+    RUN_SUITE(saveInterruptionTests);
+    RUN_SUITE(projectExchangeTests);
+    RUN_SUITE(keyboardAccessibilityTests);
+    RUN_SUITE(performanceHardeningTests);
     RUN_SUITE(projectTemplateTests);
     RUN_SUITE(windowSizingTests);
     RUN_SUITE(updateTests);

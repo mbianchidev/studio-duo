@@ -22,6 +22,7 @@ jobs:
       matrix:
         include:
           - os: macos-latest
+            test_executable: StudioDuoTests
             build_parallel: 1
             test_parallel: 2
             configure_args: >-
@@ -30,6 +31,7 @@ jobs:
               -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
             sccache_enabled: "true"
           - os: windows-latest
+            test_executable: StudioDuoTests.exe
             build_parallel: 4
             test_parallel: 4
             configure_args: ""
@@ -71,6 +73,54 @@ jobs:
           --parallel ${{ matrix.test_parallel }}
           --output-on-failure
           --no-tests=error
+          --output-junit "${{ github.workspace }}/build/Testing/phase6-junit.xml"
+
+      - name: Upload regression evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-hardening-${{ runner.os }}
+          path: |
+            build/Testing/phase6-junit.xml
+            build/Testing/phase6-performance.json
+            build/Testing/Temporary/LastTest.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Create native exchange fixture
+        run: >
+          cmake
+          "-DTEST_BINARY=${{ github.workspace }}/build/StudioDuoTests_artefacts/Release/${{ matrix.test_executable }}"
+          "-DOUTPUT_DIRECTORY=${{ github.workspace }}/build/phase6-exchange"
+          -P cmake/StudioDuoExchangeFixture.cmake
+
+      - name: Upload native exchange fixture
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: native-exchange-${{ runner.os }}
+          path: build/phase6-exchange
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Validate macOS packages and installed startup
+        if: runner.os == 'macOS'
+        shell: bash
+        timeout-minutes: 10
+        run: |
+          version="$(tr -d '[:space:]' < VERSION)"
+          ./packaging/macos/build-release-packages.sh \
+            "$version" \
+            "build/StudioDuo_artefacts/Release/Studio Duo.app" \
+            build/phase6-packages
+
+      - name: Upload macOS test packages
+        if: always() && runner.os == 'macOS'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: macos-test-packages
+          path: build/phase6-packages/Studio-Duo-*
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Validate signed Windows packages
         if: runner.os == 'Windows'
@@ -157,3 +207,7 @@ jobs:
             build/Testing/Temporary/LastTest.log
           if-no-files-found: ignore
           retention-days: 7
+
+  cross-platform-exchange:
+    needs: build-and-test
+    uses: ./.github/workflows/project-exchange.yml

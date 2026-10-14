@@ -156,6 +156,7 @@ public:
     [[nodiscard]] float rightPeak() const noexcept;
     [[nodiscard]] double currentSampleRate() const noexcept;
 #if defined(STUDIO_DUO_TESTING)
+    [[nodiscard]] std::uint64_t sourceReadCountForTesting() const noexcept;
     struct MidiEventForTesting
     {
         std::uint64_t runtimeKey = 0;
@@ -810,6 +811,7 @@ private:
     [[nodiscard]] static std::uint64_t runtimeKey(const juce::String& trackId) noexcept;
     void requestMidiNoteTermination() noexcept;
 #if defined(STUDIO_DUO_TESTING)
+    std::atomic<std::uint64_t> testingSourceReadCount { 0 };
     void recordMidiEventsForTesting(
         std::uint64_t runtimeKey,
         const juce::MidiBuffer& midi) noexcept;

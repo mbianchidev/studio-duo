@@ -2,18 +2,12 @@
 
 #include "model/ProjectModel.h"
 
+#include <cmath>
+
 namespace studio
 {
 namespace
 {
-int formatVersion(const juce::DynamicObject& object)
-{
-    const auto value = object.getProperty("formatVersion");
-    return value.isInt() || value.isInt64() || value.isDouble()
-        ? static_cast<int>(value)
-        : 0;
-}
-
 void addEmptyArray(juce::DynamicObject& object, const juce::Identifier& name)
 {
     if (object.getProperty(name).isVoid())
@@ -106,6 +100,7 @@ bool addVersionThreeRouting(juce::DynamicObject& project, juce::String& error)
             continue;
 
         RoutingConnection connection;
+        connection.id = "legacy-main-output-" + trackId;
         connection.name = "Main output";
         connection.kind = RouteKind::mainOutput;
         connection.sourceTrackId = trackId;
@@ -151,6 +146,17 @@ bool addVersionEightMidiChannelMetadata(
 }
 }
 
+std::optional<int> ProjectMigration::supportedVersion(const juce::var& value)
+{
+    if (!value.isInt() && !value.isInt64() && !value.isDouble())
+        return std::nullopt;
+    const auto number = static_cast<double>(value);
+    if (!std::isfinite(number) || number < 1.0
+        || number > Project::currentFormatVersion || std::floor(number) < number)
+        return std::nullopt;
+    return static_cast<int>(number);
+}
+
 std::optional<juce::var> ProjectMigration::migrateToCurrent(
     const juce::var& value,
     juce::String& error)
@@ -163,25 +169,25 @@ std::optional<juce::var> ProjectMigration::migrateToCurrent(
         return std::nullopt;
     }
 
-    const auto version = formatVersion(*object);
-    if (version < 1 || version > Project::currentFormatVersion)
+    const auto version = supportedVersion(object->getProperty("formatVersion"));
+    if (!version)
     {
         error = "Unsupported Studio Duo project format version "
-            + juce::String(version)
+            + object->getProperty("formatVersion").toString()
             + ".";
         return std::nullopt;
     }
 
-    if (version < 3
+    if (*version < 3
         && !addVersionThreeRouting(*object, error))
         return std::nullopt;
-    if (version < 5
+    if (*version < 5
         && !addVersionFiveMidi(*object, error))
         return std::nullopt;
-    if (version < 8
+    if (*version < 8
         && !addVersionEightMidiChannelMetadata(*object, error))
         return std::nullopt;
-    if (version < 11)
+    if (*version < 11)
         object->setProperty(
             "markers",
             object->getProperty("sections").clone());

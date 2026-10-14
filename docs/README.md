@@ -16,6 +16,8 @@
   master/DDP exports, signed reports, portable copies, and repair
 - [Releasing](releasing.md): versioning, release minting, CI artifacts, and
   installation
+- [Release readiness](release-readiness.md): automated hardening gates,
+  performance budgets, candidate compatibility matrix, and manual release blockers
 - [Native project format](project-format.md): version 12 package layout,
   generations, schemas, state hashes, recovery, and migrations
 - [Contributing](contributing.md): coding expectations and pull-request workflow

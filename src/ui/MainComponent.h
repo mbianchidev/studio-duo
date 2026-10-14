@@ -83,10 +83,15 @@ private:
         }
 
         void paintButton(
-            juce::Graphics&,
+            juce::Graphics& graphics,
             bool,
             bool) override
         {
+            if (hasKeyboardFocus(true))
+            {
+                graphics.setColour(juce::Colour(StudioColours::orange));
+                graphics.drawRoundedRectangle(getLocalBounds().toFloat().reduced(2.0f), 4.0f, 2.0f);
+            }
         }
     };
 
@@ -136,7 +141,7 @@ private:
     void beginImportStudioOne();
     void chooseProjectImportSource(const juce::String& title,
                                    const juce::String& patterns);
-    void beginSaveProject();
+    void beginSaveProject(bool saveAs = false);
     void beginImportAudio();
     void beginExportMix();
     void chooseMixExportDestination(MixExportSettings settings);

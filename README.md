@@ -26,6 +26,9 @@ editing, mixing, plugin hosting, MIDI composition, bundled instruments and
 amps, DAWproject 1.0 interchange, and mastering/release delivery. Version 1.0
 hardening remains before the complete DAW described in the
 [accepted design](docs/design.md).
+The [release-readiness gate](docs/release-readiness.md) separates automated
+regression coverage from still-required hardware, vendor, accessibility,
+long-session, and clean-machine qualification; a `1.x` tag is not that sign-off.
 
 ## Highlights
 
@@ -152,6 +155,7 @@ a privacy-safe JSON report. See [startup troubleshooting and logs](docs/user-gui
 - [Studio One import](docs/studio-one.md)
 - [Contributing](docs/contributing.md)
 - [Releasing](docs/releasing.md)
+- [Release readiness and compatibility matrix](docs/release-readiness.md)
 
 ## Website
 

@@ -89,6 +89,15 @@ Use the configuration subdirectory with multi-configuration generators or
 when an explicit `CMAKE_BUILD_TYPE` adds it to the JUCE artefact path.
 Unknown suite names fail instead of silently running nothing.
 
+The `hardening` CTest label selects release-critical suites, including native
+format/recovery guardrails, real child-process save interruption and writer
+exclusion, cross-platform exchange, keyboard accessibility, and a bounded
+large-edit-density performance profile. Its numeric report is written to
+`build/Testing/phase6-performance.json`; CI preserves JUnit/failure evidence and
+exchanges complete native fixtures between both operating systems. See
+[release readiness](release-readiness.md) for exact commands, budgets, and
+what still requires hands-on qualification.
+
 Multi-engine test fixtures keep `StudioAudioEngine` instances on the heap:
 their fixed MIDI trace arrays can exceed Windows's default 1 MiB stack when
 several engines share a test frame.
@@ -532,6 +541,17 @@ generation it extends. Project open restores a valid divergent recovery point
 from the active generation, marks it unsaved, and can fall back to that point
 when the saved session is damaged. Stale or corrupt recovery data never
 replaces a valid saved generation and is reported to the user.
+Writers serialize per package, skip orphaned generation names, validate recovery
+before replacement, and reject unsupported capabilities/versions without
+recovery bypass. A corrupt manifest requires Save As. Legacy output-route IDs
+are deterministic across repeated migration and platform exchange.
+
+Graph construction reuses decoded source buffers within one snapshot, capped
+at 64 MiB of additional cached audio; no cache survives a rebuild. Thus edits to
+same-size/same-mtime media are observed. Timeline painting starts its grid at
+the visible meter anchor and culls offscreen rows/clips/automation/previews.
+Prepared audio storage still needs realistic long-file evaluation; the short
+synthetic performance fixture is not a streaming or hardware-capacity guarantee.
 
 Project format version 6 introduced the typed routing graph, separate automation
 generations, processor policy/state metadata, tone and mixer snapshots, render

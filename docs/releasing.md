@@ -89,16 +89,47 @@ The workflow rejects a tag when:
 
 Both platform builds must pass the complete test suite before the GitHub Release
 is published. Windows publication also requires successful Authenticode signing
-and verification of both `Studio Duo.exe` and the installer. The signed installer
-is then installed into a temporary directory on the disposable runner; the
-installed executable must pass its driver-free main-window startup check before
-the test installation is uninstalled. The installer
-embeds the current Microsoft Visual C++ x64 Redistributable, verifies its
+and production trust verification of both `Studio Duo.exe` and the installer.
+The release workflow no longer bypasses the trust check; an untrusted publisher
+certificate blocks publication. Disposable CI packages explicitly use an
+ephemeral test certificate instead.
+Both native readers must also open the synthetic packages produced by both
+platforms before tagged publication. JUnit and numeric hardening evidence are
+retained in workflow artifacts. The signed installer is installed into a
+temporary directory on the disposable runner; the installed executable must
+pass its driver-free main-window startup check. The smoke test also exercises
+same-version replacement and checks that uninstall removes application
+executables while preserving a synthetic user-data sentinel. This does not
+qualify a different-version upgrade.
+
+The installer embeds the current Microsoft Visual C++ x64 Redistributable, verifies its
 Microsoft signature while packaging, and installs it only when the installed
 runtime is older. The publication job generates `update-manifest.json` from the
 finished macOS updater ZIP and Windows installer, including their exact release
 URLs, byte sizes, and SHA-256 checksums. GitHub automatically generates release
 notes from the merged changes since the previous tag.
+
+macOS packaging shares `packaging/macos/build-release-packages.sh` between CI
+and releases. It verifies the bundle version/development signature, packages
+the DMG and updater ZIP, checks mounted/extracted binary equality and
+license/source material, then installs and starts a private copy with a
+30-second driver-free deadline. Cleanup removes only its own temporary install
+and detaches its own volume; it refuses to run while Studio Duo is already open.
+Tagged builds additionally require both ARM64 and x86_64 slices.
+
+```sh
+./packaging/macos/build-release-packages.sh \
+  "$(cat VERSION)" \
+  "build/StudioDuo_artefacts/Release/Studio Duo.app" \
+  build/phase6-packages
+```
+
+Use `--universal` as the fourth argument for a universal Release build. These
+checks do not imply Developer ID/notarization, clean-machine Gatekeeper behavior,
+physical hardware operation, or actual updater/different-version upgrade passes.
+The [candidate compatibility matrix](release-readiness.md) records those
+release-blocking qualifications separately. Keep Phase 6 open until they have
+relevant candidate evidence.
 
 The updater introduces no new release secret or signing system. macOS updates
 use the same ad-hoc-signed bundle produced by the normal build and do not

@@ -483,14 +483,13 @@ MainComponent::MainComponent(
     {
         addAndMakeVisible(button);
         button.setTooltip(tooltip);
-        if (button.getButtonText().isNotEmpty())
-            button.setWantsKeyboardFocus(false);
+        button.setWantsKeyboardFocus(true);
         button.addKeyListener(this);
     };
 
     configureButton(newButton, "Create a new project");
     configureButton(openButton, "Open a .studioduo project, Studio One .song, or .dawproject export");
-    configureButton(saveButton, "Save project (Command/Ctrl+S)");
+    configureButton(saveButton, "Save (Command/Ctrl+S); Save As (Command/Ctrl+Shift+S or Shift-click)");
     configureButton(
         exportButton,
         "Import from Studio One, export audio, or use mastering and DAWproject tools");
@@ -611,6 +610,7 @@ MainComponent::MainComponent(
             snapButton.getToggleState());
     };
     addAndMakeVisible(editGridSelector);
+    editGridSelector.setTitle("Timeline edit grid");
     editGridSelector.addItem("1/4", 1);
     editGridSelector.addItem("1/8", 2);
     editGridSelector.addItem("1/16", 3);
@@ -638,7 +638,10 @@ MainComponent::MainComponent(
 
     newButton.onClick = [this] { createNewProject(); };
     openButton.onClick = [this] { beginOpenProject(); };
-    saveButton.onClick = [this] { beginSaveProject(); };
+    saveButton.onClick = [this]
+    {
+        beginSaveProject(juce::ModifierKeys::getCurrentModifiers().isShiftDown());
+    };
     exportButton.onClick = [this] { showExportMenu(); };
     settingsButton.onClick = [this] { showSettings(); };
     helpButton.onClick = [this] { showHelpMenu(); };
@@ -833,6 +836,7 @@ MainComponent::MainComponent(
         juce::Justification::centred);
 
     addAndMakeVisible(tempoSlider);
+    tempoSlider.setTitle("Project tempo");
     tempoSlider.setSliderStyle(juce::Slider::LinearBar);
     tempoSlider.setTextBoxStyle(juce::Slider::TextBoxLeft, false, 54, 24);
     tempoSlider.setRange(20.0, 400.0, 1.0);
@@ -909,6 +913,7 @@ MainComponent::MainComponent(
     inputLabel.setText("INPUT", juce::dontSendNotification);
     inputLabel.setColour(juce::Label::textColourId, juce::Colour(StudioColours::secondaryText));
     addAndMakeVisible(inputSelector);
+    inputSelector.setTitle("Track hardware input");
     inputSelector.setTooltip(
         "Select an input channel from the active audio device; "
         "change devices in Settings");
@@ -935,6 +940,7 @@ MainComponent::MainComponent(
     outputLabel.setColour(juce::Label::textColourId,
                           juce::Colour(StudioColours::secondaryText));
     addAndMakeVisible(outputSelector);
+    outputSelector.setTitle("Track main output");
     outputSelector.setTooltip("Route this track through a bus or directly to the master");
     outputSelector.onChange = [this]
     {
@@ -974,6 +980,7 @@ MainComponent::MainComponent(
         slider.addKeyListener(this);
     };
     configureInspectorSlider(volumeSlider, -60.0, 12.0, 0.1);
+    volumeSlider.setTitle("Track volume in decibels");
     volumeSlider.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
     volumeSlider.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 76, 24);
     volumeSlider.setDoubleClickReturnValue(true, 0.0);
@@ -988,6 +995,7 @@ MainComponent::MainComponent(
             parseTrackDecibels(text).value_or(0.0f));
     };
     configureInspectorSlider(panSlider, -1.0, 1.0, 0.01);
+    panSlider.setTitle("Track pan");
     panSlider.setSliderStyle(juce::Slider::LinearHorizontal);
     panSlider.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 76, 24);
     panSlider.setDoubleClickReturnValue(true, 0.0);
@@ -3202,16 +3210,32 @@ bool MainComponent::keyPressed(const juce::KeyPress& key)
         return false;
     const auto command = key.getModifiers().isCommandDown();
     const auto shift = key.getModifiers().isShiftDown();
+    const auto alt = key.getModifiers().isAltDown();
+
+    if (key.getKeyCode() == juce::KeyPress::F6Key && !command && !alt)
+    {
+        if (!timeline.isShowing())
+            return false;
+        timeline.grabKeyboardFocus();
+        return true;
+    }
 
     if (key == juce::KeyPress::spaceKey)
     {
+        if (auto* button = dynamic_cast<juce::Button*>(juce::Component::getCurrentlyFocusedComponent());
+            button != nullptr && isParentOf(button))
+        {
+            if (button->isEnabled())
+                button->triggerClick();
+            return true;
+        }
         togglePlayback();
         return true;
     }
 
     if (command && key.getKeyCode() == 'S')
     {
-        beginSaveProject();
+        beginSaveProject(shift);
         return true;
     }
 
@@ -3275,19 +3299,19 @@ bool MainComponent::keyPressed(const juce::KeyPress& key)
         return true;
     }
 
-    if (!command && key.getKeyCode() == 'S')
+    if (!command && !alt && key.getKeyCode() == 'S')
     {
         splitSelectedClip();
         return true;
     }
 
-    if (!command && key.getKeyCode() == '[')
+    if (!command && !alt && key.getKeyCode() == '[')
     {
         trimSelectedClipStartToPlayhead();
         return true;
     }
 
-    if (!command && key.getKeyCode() == ']')
+    if (!command && !alt && key.getKeyCode() == ']')
     {
         trimSelectedClipEndToPlayhead();
         return true;
@@ -3526,24 +3550,31 @@ void MainComponent::beginImportStudioOne()
         });
 }
 
-void MainComponent::beginSaveProject()
+void MainComponent::beginSaveProject(bool saveAs)
 {
-    if (projectPackage.exists())
+    if (fileChooser != nullptr)
+    {
+        setStatus("Complete the current file selection before saving a project.", true);
+        return;
+    }
+    if (projectPackage.exists() && !saveAs)
     {
         saveProjectTo(projectPackage);
         return;
     }
 
-    const auto initial = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
-        .getChildFile(project.name + ".studioduo");
-    fileChooser = std::make_unique<juce::FileChooser>("Save Studio Duo project",
+    const auto initial = projectPackage.exists()
+        ? projectPackage.getParentDirectory().getNonexistentChildFile(project.name + " copy", ".studioduo", false)
+        : juce::File::getSpecialLocation(juce::File::userDocumentsDirectory).getChildFile(project.name + ".studioduo");
+    fileChooser = std::make_unique<juce::FileChooser>(saveAs ? "Save Studio Duo project as" : "Save Studio Duo project",
                                                       initial,
                                                       "*.studioduo",
                                                       true,
                                                       true,
                                                       this);
     const auto chooserFlags = juce::FileBrowserComponent::saveMode
-        | juce::FileBrowserComponent::canSelectFiles;
+        | juce::FileBrowserComponent::canSelectFiles
+        | juce::FileBrowserComponent::warnAboutOverwriting;
     fileChooser->launchAsync(chooserFlags, [safe = juce::Component::SafePointer<MainComponent>(this)](const auto& chooser)
     {
         if (safe == nullptr)
@@ -7375,6 +7406,34 @@ void MainComponent::moveClip(const juce::String& clipId,
                              const juce::String& destinationTrackId,
                              double startSeconds)
 {
+    if (const auto* midi = project.findMidiClip(clipId))
+    {
+        const auto* source = project.findTrackContainingMidiClip(clipId);
+        const auto* destination = project.findTrack(destinationTrackId);
+        if (source == nullptr || destination == nullptr || destination->parentTrackId.isNotEmpty()
+            || (destination->type != TrackType::midi && destination->type != TrackType::instrument)
+            || !std::isfinite(startSeconds))
+        {
+            showError("Move MIDI clip", "Choose a top-level MIDI or instrument track and a finite clip position.");
+            return;
+        }
+        const auto sourceId = source->id;
+        const auto destinationId = destination->id;
+        const auto before = *midi;
+        auto after = before;
+        after.startBeats = project.beatsAt(std::max(0.0, startSeconds));
+        if (sourceId == destinationId)
+            editMidiClip(sourceId, before, after, "Move MIDI clip");
+        else
+        {
+            std::vector<std::unique_ptr<ProjectCommand>> commands;
+            commands.push_back(std::make_unique<DeleteMidiClipCommand>(before.id));
+            commands.push_back(std::make_unique<AddMidiClipCommand>(destinationId, after));
+            if (perform(std::make_unique<BatchProjectCommand>("Move MIDI clip", std::move(commands))))
+                selectClip(destinationId, after.id);
+        }
+        return;
+    }
     const auto* clip = project.findClip(clipId);
     const auto* sourceTrack = project.findTrackContainingClip(clipId);
     if (clip == nullptr || sourceTrack == nullptr)

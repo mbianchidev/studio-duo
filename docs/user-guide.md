@@ -68,6 +68,14 @@ DAWproject exchange, and Phase 5 mastering and release workflows.
 | --- | --- |
 | Play or pause | `Space` |
 | Save | `Command/Ctrl+S` |
+| Save As to a new package | `Command/Ctrl+Shift+S`, or Shift-click Save |
+| Focus the timeline | `F6` |
+| Select visible timeline tracks / clips | `Up/Down` / `Left/Right` |
+| Nudge selected audio or MIDI clip by the edit grid | `Shift+Left/Right` |
+| Move selected clip to a compatible visible track | `Shift+Up/Down` |
+| Seek by the edit grid / seek project boundaries | `Alt+Left/Right` / `Home/End` |
+| Open selected track or clip actions | `Shift+F10` |
+| Mute / solo / arm selected timeline track | `Alt+M` / `Alt+S` / `Alt+R` |
 | Open | `Command/Ctrl+O` |
 | Import audio | `Command/Ctrl+I` |
 | Create MIDI clip at playhead | `Command/Ctrl+Shift+N` |
@@ -89,6 +97,21 @@ DAWproject exchange, and Phase 5 mastering and release workflows.
 | Select all notes | `Command/Ctrl+A` while the editor is focused |
 | Zoom timeline out or in | `Command/Ctrl+-` or `Command/Ctrl++` |
 | Reset timeline zoom | `Command/Ctrl+0` |
+
+Tab/Shift+Tab reach native controls. Return or Space activates focused icon
+buttons; Space activates a focused workspace button rather than unexpectedly
+starting playback. With timeline focus, Return seeks to the selected clip's
+start or opens the selected track's name/color editor. Collapsed take lanes are
+skipped, clips are selected chronologically, and offscreen selections scroll
+into view. Shift+F10 uses the existing context actions without changing the
+playhead; fade/warp actions use its current position. Musical nudges respect the
+chosen edit grid, tempo map, and existing linked-edit protections. Tab always
+leaves the timeline. The lower MIDI editor retains its own note-editing keys.
+
+Mastering metadata/timing fields have distinct accessible names; its add,
+analyze, export, DDP, portable-copy, and repair controls are keyboard-focusable.
+Actual assistive-technology and full-workflow qualification remains tracked in
+the [release-readiness matrix](release-readiness.md).
 
 Scroll the mouse wheel over the timeline canvas to zoom around the pointer.
 Wheel or trackpad scrolling over the track-header column instead moves the
@@ -170,6 +193,12 @@ Opening the package restores newer unsaved recovery state and marks the project
 with `*` so it can be saved normally. If the active saved generation is damaged,
 Studio Duo opens a valid recovery point instead; stale or corrupt recovery data
 is ignored with a warning when the saved project remains usable.
+Unknown required capabilities or unsupported/fractional format versions are
+not bypassed using an older recovery point. Open those packages with a compatible
+application version. A damaged manifest can still open through a valid recovery
+point, but is not overwritten: use **Save As** to a fresh package. Invalid edits
+cannot replace the last complete recovery point, and another process's active
+save is reported as busy instead of allowing overlapping writes.
 
 Monitoring is off by default to avoid accidental feedback. Stereo capture uses
 the selected hardware input and the adjacent channel. Monitored input enters the

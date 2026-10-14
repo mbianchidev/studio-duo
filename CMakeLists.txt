@@ -935,6 +935,11 @@ if(STUDIO_DUO_BUILD_TESTS)
             tests/MasteringTests.cpp
             tests/PluginCompatibilityTests.cpp
             tests/ProjectMigrationTests.cpp
+            tests/ProjectHardeningTests.cpp
+            tests/ProjectExchangeTests.cpp
+            tests/KeyboardAccessibilityTests.cpp
+            tests/PerformanceHardeningTests.cpp
+            tests/ReleaseFixtures.h
             tests/ProjectTemplateTests.cpp
             tests/WindowSizingTests.cpp
             tests/TransportTests.cpp
@@ -967,6 +972,8 @@ if(STUDIO_DUO_BUILD_TESTS)
             src/ui/StudioPanControl.h
             src/ui/TimelineComponent.cpp
             src/ui/TimelineComponent.h
+            src/ui/MasteringWorkspaceComponent.cpp
+            src/ui/MasteringWorkspaceComponent.h
             src/ui/MixerPanel.cpp
             src/ui/MixerPanel.h
             src/ui/PluginInsertPanel.cpp
@@ -1051,6 +1058,7 @@ if(STUDIO_DUO_BUILD_TESTS)
     )
     if(WIN32)
         target_compile_definitions(StudioDuoTests PRIVATE JUCE_ASIO=1)
+        target_link_libraries(StudioDuoTests PRIVATE psapi)
         target_sources(
             StudioDuoTests
             PRIVATE
@@ -1157,6 +1165,21 @@ if(STUDIO_DUO_BUILD_TESTS)
         )
     endforeach()
 
+    foreach(STUDIO_DUO_HARDENING_SUITE IN ITEMS
+        projectHardeningTests saveInterruptionTests projectExchangeTests
+        keyboardAccessibilityTests performanceHardeningTests
+        projectMigrationTests packagePersistence projectRecovery startupTests
+        pluginFormatTests pluginRecoveryTests pluginCompatibilityTests pluginRackEngineTests
+        routingEngineTests routingModelTests automationTests renderEngineTests
+        dawProjectTests masteringTests transportTests linkedMultitrackEditing
+        synchronizedRecordingCapture multitrackRecordingCommand reampWorkflow)
+        set_property(TEST "StudioDuoTests.${STUDIO_DUO_HARDENING_SUITE}" APPEND PROPERTY LABELS "hardening")
+    endforeach()
+    set_tests_properties(
+        StudioDuoTests.performanceHardeningTests
+        PROPERTIES ENVIRONMENT "STUDIO_DUO_HARDENING_REPORT=${CMAKE_CURRENT_BINARY_DIR}/Testing/phase6-performance.json"
+    )
+
     set(STUDIO_DUO_HOST_TESTS)
     foreach(
         STUDIO_DUO_HOST_SUITE
@@ -1166,6 +1189,7 @@ if(STUDIO_DUO_BUILD_TESTS)
             windowsCrashHandlerTests
             pluginFormatTests
             pluginCompatibilityTests
+            performanceHardeningTests
     )
         if(STUDIO_DUO_HOST_SUITE IN_LIST STUDIO_DUO_TEST_SUITES)
             list(
@@ -1188,13 +1212,14 @@ if(STUDIO_DUO_BUILD_TESTS)
             PROPERTIES
                 RESOURCE_LOCK studio_duo_host
                 TIMEOUT 30
+                LABELS "hardening;startup"
         )
         foreach(STUDIO_DUO_STARTUP_SCENARIO IN ITEMS
             slow-catalog warm-catalog large-catalog corrupt-catalog missing-audio missing-midi recovery plugin-timeout)
             add_test(NAME "StudioDuoStartup.${STUDIO_DUO_STARTUP_SCENARIO}"
                 COMMAND StudioDuo --startup-self-test "--startup-scenario=${STUDIO_DUO_STARTUP_SCENARIO}")
             set_tests_properties("StudioDuoStartup.${STUDIO_DUO_STARTUP_SCENARIO}"
-                PROPERTIES RESOURCE_LOCK studio_duo_host TIMEOUT 30)
+                PROPERTIES RESOURCE_LOCK studio_duo_host TIMEOUT 30 LABELS "hardening;startup")
         endforeach()
     endif()
 endif()
