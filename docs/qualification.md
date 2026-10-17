@@ -86,6 +86,15 @@ The null uses the graph's **declared** output latency and captures that many
 extra live samples before comparison with the latency-trimmed offline range;
 it never estimates a convenient offset from the measured audio.
 
+The hosted CTest smoke verifies complete media, graph overlap, null accuracy,
+and the CLI's outcome contract, with separate generous regression limits of
+100 ms maximum callback and 10 seconds playback wall time. A shared runner can
+preempt the callback past its much shorter audio deadline. Such a measurement
+must still retain `status: fail`, a nonzero qualification outcome, its actual
+miss counter and raw CSV; a passing **smoke contract test** does not convert it
+to a deadline pass. The opt-in command and manual evidence gate keep the strict
+zero-miss / 0.70 p99 requirements unchanged.
+
 `report.json` records the embedded candidate/build, exact profile, source bytes,
 estimated decoded/prepared exposure, process CPU and peak working set by phase,
 platform I/O operation counters, decode count, save/load/portable/render timings,

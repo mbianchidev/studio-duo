@@ -971,9 +971,21 @@ void longSessionQualificationTests()
     profile.bufferSize = 1024;
     profile.sampleRate = 96000;
     const auto destination = directory.file.getChildFile("characterisation");
-    expect(qualifyLongSession(profile, destination) == 0,
-           "A bounded full-media smoke run covers graph/callback overlap, portable media, and a complete live/offline null.");
+    const auto outcome = qualifyLongSession(profile, destination);
     const auto report = juce::JSON::parse(destination.getChildFile("report.json"));
+    const auto deadlineExceeded = static_cast<int>(report["callbackDeadlineMisses"]) > 0
+        || static_cast<double>(report["p99CallbackMilliseconds"])
+            > static_cast<double>(report["callbackDeadlineMilliseconds"]) * 0.7;
+    const auto* blockers = report["blockers"].getArray();
+    expect(outcome == (deadlineExceeded ? 1 : 0)
+               && report["status"].toString() == (deadlineExceeded ? "fail" : "pass")
+               && blockers != nullptr && blockers->size() == (deadlineExceeded ? 1 : 0)
+               && (!deadlineExceeded || blockers->getReference(0).toString()
+                   == "Headless callback cost or paced harness scheduling exceeds its deadline budget."),
+           "The smoke verifies the CLI's strict outcome contract and retains shared-runner deadline misses as failed evidence.");
+    expect(static_cast<double>(report["maximumCallbackMilliseconds"]) < 100.0
+               && static_cast<double>(report["playbackWallMilliseconds"]) < 10000.0,
+           "The shared-runner smoke stays inside generous regression bounds, not physical audio deadlines.");
     expect(report["physicalDevicesOpened"] == juce::var(false)
                && report["scope"].toString() == "synthetic-headless-characterisation"
                && static_cast<double>(report["sampleRate"]) == 96000.0

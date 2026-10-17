@@ -111,7 +111,11 @@ preallocated output buffer, republishes graphs concurrently, validates a portabl
 copy, and compares complete deterministic live/offline renders. Its CSV/report
 are characterisation, not physical-device qualification. The CTest smoke uses
 only three one-second songs and explicitly records that scope; CI retains
-`phase6-long-session-smoke.json` and `.csv`. The standard-library Python evidence
+`phase6-long-session-smoke.json` and `.csv`. That smoke checks the strict
+qualification exit/status contract independently of shared-runner scheduling:
+a measured audio-deadline failure stays failed in the retained report, while
+the smoke itself enforces the separate generous hosted-runner regression bounds.
+The opt-in command's real deadline budgets are not widened. The standard-library Python evidence
 gate rejects incomplete matrices, skipped checks, wrong candidates, absent or
 changed raw evidence, and missing reduced-isolation release dispositions.
 See [qualification procedures](qualification.md) for budgets and invocation.
