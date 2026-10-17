@@ -4881,7 +4881,39 @@ bool MainComponent::captureCurrentPluginStates(
         error = "Save the project before capturing processor state.";
         return false;
     }
-    for (auto& capture : audioEngine.capturePluginStates(2000))
+    const auto capturedProjectId = project.id;
+    const auto capturedPackage = projectPackage;
+    std::map<juce::String, juce::String> capturedIdentifiers;
+    for (const auto& trackId : trackIds)
+        if (const auto* track = project.findTrack(trackId))
+            for (const auto& insert : track->inserts)
+                capturedIdentifiers.emplace(insert.id, insert.pluginIdentifier);
+    auto captures = audioEngine.capturePluginStates(2000);
+    if (project.id != capturedProjectId || projectPackage != capturedPackage)
+    {
+        error = "The project changed during processor state capture. Retry the operation.";
+        return false;
+    }
+    for (const auto& capture : captures)
+    {
+        if (capture.insertId.isEmpty())
+        {
+            error = capture.result.getErrorMessage();
+            return false;
+        }
+        if (std::find(trackIds.cbegin(), trackIds.cend(), capture.trackId) == trackIds.cend())
+            continue;
+        const auto* track = project.findTrack(capture.trackId);
+        const auto* insert = track != nullptr ? PluginRack::find(track->inserts, capture.insertId) : nullptr;
+        const auto expected = capturedIdentifiers.find(capture.insertId);
+        if (insert == nullptr || expected == capturedIdentifiers.cend()
+            || insert->pluginIdentifier != expected->second)
+        {
+            error = "A processor changed during state capture. Retry the operation.";
+            return false;
+        }
+    }
+    for (auto& capture : captures)
     {
         if (capture.insertId.isEmpty())
         {
