@@ -1095,6 +1095,11 @@ std::uint64_t StudioAudioEngine::runtimeKeyForTesting(
     return runtimeKey(trackId);
 }
 
+std::uint64_t StudioAudioEngine::sourceReadCountForTesting() const noexcept
+{
+    return testingSourceReadCount.load(std::memory_order_relaxed);
+}
+
 void StudioAudioEngine::processActiveBlockForTesting(int samples)
 {
     juce::ignoreUnused(renderActiveBlockForTesting(samples));
@@ -3540,7 +3545,10 @@ std::optional<StudioAudioEngine::RenderSnapshot> StudioAudioEngine::buildSnapsho
             master->polarityInverted;
     }
 
-    const auto buildClips = [this, targetSampleRate, &error](
+    constexpr std::size_t maximumDecodedCacheBytes = 64 * 1024 * 1024;
+    std::size_t decodedCacheBytes = 0;
+    std::map<juce::String, juce::AudioBuffer<float>> decodedSources;
+    const auto buildClips = [this, targetSampleRate, &error, &decodedSources, &decodedCacheBytes](
                                 const Track& track,
                                 const std::vector<CompRegion>* compRegions)
         -> std::optional<std::vector<RenderClip>>
@@ -3552,9 +3560,28 @@ std::optional<StudioAudioEngine::RenderSnapshot> StudioAudioEngine::buildSnapsho
             if (clip.muted || !clip.sourceFile.existsAsFile())
                 continue;
 
-            auto audio = readAndResample(clip.sourceFile, targetSampleRate, error);
-            if (!audio.has_value())
-                return std::nullopt;
+            const auto sourcePath = clip.sourceFile.getFullPathName();
+            auto cached = decodedSources.find(sourcePath);
+            std::optional<juce::AudioBuffer<float>> decoded;
+            const juce::AudioBuffer<float>* audio = nullptr;
+            if (cached != decodedSources.end())
+                audio = &cached->second;
+            else
+            {
+                decoded = readAndResample(clip.sourceFile, targetSampleRate, error);
+                if (!decoded)
+                    return std::nullopt;
+                const auto bytes = static_cast<std::size_t>(decoded->getNumChannels())
+                    * static_cast<std::size_t>(decoded->getNumSamples()) * sizeof(float);
+                if (bytes <= maximumDecodedCacheBytes - decodedCacheBytes)
+                {
+                    decodedCacheBytes += bytes;
+                    cached = decodedSources.emplace(sourcePath, std::move(*decoded)).first;
+                    audio = &cached->second;
+                }
+                else
+                    audio = &*decoded;
+            }
             auto processed = processClipAudio(clip,
                                               *audio,
                                               targetSampleRate,
@@ -4879,6 +4906,9 @@ std::optional<juce::AudioBuffer<float>> StudioAudioEngine::readAndResample(
     double targetSampleRate,
     juce::String& error)
 {
+#if defined(STUDIO_DUO_TESTING)
+    testingSourceReadCount.fetch_add(1, std::memory_order_relaxed);
+#endif
     auto reader = std::unique_ptr<juce::AudioFormatReader>(
         formatManager.createReaderFor(source));
     if (reader == nullptr)

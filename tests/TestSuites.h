@@ -4,6 +4,13 @@
 #include <optional>
 
 std::optional<int> runAudioDeviceProbeFixture(const juce::StringArray& arguments);
+std::optional<int> runProjectSaveFixture(const juce::StringArray& arguments);
+std::optional<int> runProjectExchangeFixture(const juce::StringArray& arguments);
+void projectHardeningTests();
+void saveInterruptionTests();
+void projectExchangeTests();
+void keyboardAccessibilityTests();
+void performanceHardeningTests();
 void audioDeviceProbeTests();
 #if JUCE_WINDOWS
 std::optional<int> runWindowsCrashHandlerFixture(const juce::StringArray& arguments);

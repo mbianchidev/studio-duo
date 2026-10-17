@@ -37,6 +37,19 @@ public:
 
     static constexpr double defaultPixelsPerSecond = 96.0;
 
+#if defined(STUDIO_DUO_TESTING)
+    struct PaintStatistics
+    {
+        int gridLinesConsidered = 0;
+        int tracksPainted = 0;
+        int clipsPainted = 0;
+    };
+    [[nodiscard]] PaintStatistics paintStatisticsForTesting() const noexcept
+    {
+        return testingPaintStatistics;
+    }
+#endif
+
     std::function<void(const juce::String&)> onTrackSelected;
     std::function<void(const juce::String&)> onTrackMute;
     std::function<void(const juce::String&)> onTrackSolo;
@@ -92,6 +105,9 @@ public:
     std::function<void(const juce::String&)> onConsolidateClip;
 
     void paint(juce::Graphics& graphics) override;
+    bool keyPressed(const juce::KeyPress& key) override;
+    void focusGained(FocusChangeType cause) override;
+    void focusLost(FocusChangeType cause) override;
     void mouseDown(const juce::MouseEvent& event) override;
     void mouseDoubleClick(const juce::MouseEvent& event) override;
     void mouseDrag(const juce::MouseEvent& event) override;
@@ -103,12 +119,16 @@ public:
     void mouseMagnify(const juce::MouseEvent& event, float scaleFactor) override;
 
 private:
+#if defined(STUDIO_DUO_TESTING)
+    PaintStatistics testingPaintStatistics;
+#endif
     struct Hit
     {
         juce::String trackId;
         juce::String clipId;
         juce::Rectangle<float> bounds;
         bool midi = false;
+        double startSeconds = 0.0;
     };
 
     enum class DragMode
@@ -136,7 +156,7 @@ private:
     [[nodiscard]] double sectionEndSeconds(
         std::size_t index,
         double fallback) const noexcept;
-    [[nodiscard]] std::vector<Hit> clipHits() const;
+    [[nodiscard]] std::vector<Hit> clipHits(juce::Rectangle<float> interest = {}) const;
     [[nodiscard]] std::vector<const Track*> visibleTracks() const;
     [[nodiscard]] int trackIndexAt(float y) const noexcept;
     [[nodiscard]] float trackY(const juce::String& trackId) const noexcept;
@@ -162,7 +182,11 @@ private:
                                      const AudioClip& clip,
                                      juce::Point<float> position) const noexcept;
     void updateHoverState(juce::Point<float> position);
-    void showContextMenu(const juce::MouseEvent& event);
+    void showContextMenu(juce::Point<float> position, bool selectFromPosition = true);
+    void selectForKeyboard(juce::String trackId, juce::String clipId = {});
+    void ensureSelectionVisible();
+    void updateAccessibleSelection();
+    std::unique_ptr<juce::AccessibilityHandler> createAccessibilityHandler() override;
 
     const Project* project = nullptr;
     juce::String selectedTrackId;

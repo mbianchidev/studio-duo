@@ -1,0 +1,57 @@
+name: Native project exchange
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Exchange on ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            artifact: macOS
+            executable: StudioDuoTests
+          - os: windows-latest
+            artifact: Windows
+            executable: StudioDuoTests.exe
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - name: Download both native project fixtures
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: native-exchange-*
+          path: exchange
+
+      - name: Open both packages with the local native reader
+        shell: pwsh
+        env:
+          NATIVE_ARTIFACT: ${{ matrix.artifact }}
+          NATIVE_EXECUTABLE: ${{ matrix.executable }}
+        run: |
+          $root = (Resolve-Path -LiteralPath 'exchange').Path
+          $verifier = Join-Path $root (
+            'native-exchange-' + $env:NATIVE_ARTIFACT + '/' + $env:NATIVE_EXECUTABLE
+          )
+          if (-not (Test-Path -LiteralPath $verifier -PathType Leaf)) {
+            throw "The native exchange verifier is missing: $verifier"
+          }
+          if (-not $IsWindows) {
+            & chmod u+x $verifier
+            if ($LASTEXITCODE -ne 0) {
+              throw 'Could not restore the native verifier executable permission.'
+            }
+          }
+          foreach ($origin in @('macOS', 'Windows')) {
+            $package = Join-Path $root ('native-exchange-' + $origin + '/project.studioduo')
+            Write-Host "Opening the $origin project on $env:NATIVE_ARTIFACT"
+            & $verifier "--verify-exchange-fixture=$package"
+            if ($LASTEXITCODE -ne 0) {
+              throw "Native project exchange failed from $origin to $env:NATIVE_ARTIFACT."
+            }
+          }

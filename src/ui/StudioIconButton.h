@@ -134,6 +134,7 @@ public:
     void paintButton(juce::Graphics& graphics,
                      bool highlighted,
                      bool down) override;
+    bool keyPressed(const juce::KeyPress& key) override;
 
 private:
     StudioIcon icon;

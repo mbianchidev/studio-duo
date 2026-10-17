@@ -1,0 +1,15 @@
+{
+  "formatVersion": 1,
+  "id": "synthetic-legacy-project",
+  "name": "Synthetic legacy song",
+  "tempo": 137,
+  "tempoChanges": [{"timeSeconds": 0, "bpm": 137, "rampToNext": false}],
+  "sections": [{"id": "synthetic-section", "name": "Verse", "timeSeconds": 2}],
+  "loopStartSeconds": 1.25,
+  "loopEndSeconds": 6.75,
+  "tracks": [
+    {"id": "synthetic-audio", "name": "Synthetic audio", "type": "audio", "clips": [], "volumeDecibels": -6, "pan": -0.25},
+    {"id": "synthetic-bus", "name": "Synthetic bus", "type": "bus", "clips": []},
+    {"id": "synthetic-master", "name": "Master", "type": "master", "clips": []}
+  ]
+}

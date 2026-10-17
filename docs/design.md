@@ -540,6 +540,10 @@ Completed in the working application:
 
 ### Phase 6: version 1.0 hardening
 
+The [release-readiness gate and candidate matrix](release-readiness.md) define
+automated evidence and focused release-blocking qualification. This phase is
+not complete merely because an application version or tag starts with `1`.
+
 - Large-session performance work
 - Coordinated startup progress, safe-start recovery, and redacted diagnostics
   ([tracking issue](https://github.com/mbianchidev/studio-duo/issues/14))

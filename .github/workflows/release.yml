@@ -62,7 +62,36 @@ jobs:
         run: cmake --build build --config Release --parallel 1
 
       - name: Test
-        run: ctest --test-dir build --build-config Release --output-on-failure
+        run: >
+          ctest --test-dir build --build-config Release --output-on-failure --no-tests=error
+          --output-junit "${{ github.workspace }}/build/Testing/phase6-junit.xml"
+
+      - name: Create native exchange fixture
+        run: >
+          cmake
+          "-DTEST_BINARY=${{ github.workspace }}/build/StudioDuoTests_artefacts/Release/StudioDuoTests"
+          "-DOUTPUT_DIRECTORY=${{ github.workspace }}/build/phase6-exchange"
+          -P cmake/StudioDuoExchangeFixture.cmake
+
+      - name: Upload native exchange fixture
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: native-exchange-macOS
+          path: build/phase6-exchange
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload macOS regression evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-hardening-macOS
+          path: |
+            build/Testing/phase6-junit.xml
+            build/Testing/phase6-performance.json
+            build/Testing/Temporary/LastTest.log
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Package macOS release
         shell: bash
@@ -70,25 +99,10 @@ jobs:
           VERSION: ${{ needs.validate.outputs.version }}
         run: |
           set -euo pipefail
-          app="build/StudioDuo_artefacts/Release/Studio Duo.app"
-          staging="$RUNNER_TEMP/Studio Duo"
-          output="Studio-Duo-${VERSION}-macOS-universal.dmg"
-          update_output="Studio-Duo-${VERSION}-macOS-universal.zip"
-
-          test -d "$app"
-          ditto -c -k --sequesterRsrc --keepParent \
-            "$app" \
-            "$update_output"
-          rm -rf "$staging"
-          mkdir -p "$staging"
-          ditto "$app" "$staging/Studio Duo.app"
-          ln -s /Applications "$staging/Applications"
-          hdiutil create \
-            -volname "Studio Duo $VERSION" \
-            -srcfolder "$staging" \
-            -ov \
-            -format UDZO \
-            "$output"
+          ./packaging/macos/build-release-packages.sh \
+            "$VERSION" \
+            "build/StudioDuo_artefacts/Release/Studio Duo.app" \
+            . --universal
 
       - name: Upload macOS artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -122,7 +136,36 @@ jobs:
         run: cmake --build build --config Release --parallel 4
 
       - name: Test
-        run: ctest --test-dir build --build-config Release --output-on-failure
+        run: >
+          ctest --test-dir build --build-config Release --output-on-failure --no-tests=error
+          --output-junit "${{ github.workspace }}/build/Testing/phase6-junit.xml"
+
+      - name: Create native exchange fixture
+        run: >
+          cmake
+          "-DTEST_BINARY=${{ github.workspace }}/build/StudioDuoTests_artefacts/Release/StudioDuoTests.exe"
+          "-DOUTPUT_DIRECTORY=${{ github.workspace }}/build/phase6-exchange"
+          -P cmake/StudioDuoExchangeFixture.cmake
+
+      - name: Upload native exchange fixture
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: native-exchange-Windows
+          path: build/phase6-exchange
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload Windows regression evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-hardening-Windows
+          path: |
+            build/Testing/phase6-junit.xml
+            build/Testing/phase6-performance.json
+            build/Testing/Temporary/LastTest.log
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Build signed Windows packages
         shell: pwsh
@@ -142,8 +185,7 @@ jobs:
             -Executable "build/StudioDuo_artefacts/Release/Studio Duo.exe" `
             -OutputDirectory (Get-Location).Path `
             -CertificateBase64 $env:CERTIFICATE_BASE64 `
-            -CertificatePassword $env:CERTIFICATE_PASSWORD `
-            -SkipTrustVerification
+            -CertificatePassword $env:CERTIFICATE_PASSWORD
           & ./packaging/windows/test-installed-startup.ps1 `
             -Installer "Studio-Duo-$env:VERSION-Windows-x64-Setup.exe"
           $pdb = "build/StudioDuo_artefacts/Release/Studio Duo.pdb"
@@ -166,9 +208,13 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  cross-platform-exchange:
+    needs: [macos, windows]
+    uses: ./.github/workflows/project-exchange.yml
+
   publish:
     name: Publish GitHub Release
-    needs: [validate, macos, windows]
+    needs: [validate, macos, windows, cross-platform-exchange]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
