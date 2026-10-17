@@ -11,6 +11,7 @@
 #include "logging/StudioLogger.h"
 #include "update/UpdateSettingsComponent.h"
 #include "plugin_host/PluginStateStore.h"
+#include "plugin_host/PluginIsolationPolicy.h"
 #include "model/PluginRack.h"
 #if JUCE_WINDOWS
 #include "platform/WindowsCrashHandler.h"
@@ -6390,7 +6391,16 @@ void MainComponent::changePluginMode(const juce::String& trackId,
                                      const juce::String& insertId,
                                      PluginBridgeMode mode)
 {
-    if (mode != PluginBridgeMode::araCompatibility)
+    const auto* track = project.findTrack(trackId);
+    const auto* insert = track != nullptr ? PluginRack::find(track->inserts, insertId) : nullptr;
+    if (insert == nullptr)
+    {
+        setStatus("The plugin is no longer available. Select an existing insert.", true);
+        return;
+    }
+    if (insert->bridgeMode == mode)
+        return;
+    if (!requiresReducedIsolationConsent(*insert, mode))
     {
         perform(std::make_unique<SetPluginBridgeModeCommand>(
             trackId,
@@ -6403,43 +6413,68 @@ void MainComponent::changePluginMode(const juce::String& trackId,
     {
         showError(
             "Save required",
-            "Save the project before enabling ARA 2 compatibility mode so Studio Duo can create a recovery point.");
-        return;
-    }
-    if (const auto result = ProjectFile::writeRecoveryPoint(
-            project,
-            projectPackage);
-        result.failed())
-    {
-        showError("ARA recovery point failed", result.getErrorMessage());
+            "Save the project before enabling reduced-isolation plugin hosting so Studio Duo can create a recovery point.");
         return;
     }
 
+    const auto ara = mode == PluginBridgeMode::araCompatibility;
+    const auto projectId = project.id;
+    const auto package = projectPackage;
+    const auto identifier = insert->pluginIdentifier;
     auto* dialog = new juce::AlertWindow(
-        "Enable ARA 2 compatibility mode?",
-        "ARA 2 needs synchronous access to the project document and runs this plugin in the Studio Duo process. Crash isolation is reduced. A recovery point has been written.",
+        ara ? "Enable ARA 2 compatibility mode?" : "Enable trusted in-process mode?",
+        reducedIsolationWarning(mode),
         juce::MessageBoxIconType::WarningIcon);
     dialog->addButton(
-        "Enable ARA 2",
+        ara ? "Enable ARA 2" : "Enable trusted mode",
         1,
         juce::KeyPress(juce::KeyPress::returnKey));
     dialog->addButton(
         "Cancel",
         0,
         juce::KeyPress(juce::KeyPress::escapeKey));
-    dialog->centreAroundComponent(insertPanel.get(), 520, 230);
+    dialog->centreAroundComponent(insertPanel.get(), 540, 260);
     const juce::Component::SafePointer<MainComponent> safe(this);
     dialog->enterModalState(
         true,
         juce::ModalCallbackFunction::create(
-            [safe, trackId, insertId](int result)
+            [safe, trackId, insertId, mode, projectId, package, identifier](int result)
             {
                 if (safe == nullptr || result != 1)
                     return;
+                const auto* currentTrack = safe->project.findTrack(trackId);
+                const auto* currentInsert = currentTrack != nullptr
+                    ? PluginRack::find(currentTrack->inserts, insertId) : nullptr;
+                if (safe->project.id != projectId || safe->projectPackage != package
+                    || currentInsert == nullptr || currentInsert->pluginIdentifier != identifier)
+                {
+                    safe->setStatus("The project or plugin changed. Request the hosting mode again.", true);
+                    return;
+                }
+                std::vector<juce::String> trackIds;
+                for (const auto& current : safe->project.tracks)
+                    trackIds.push_back(current.id);
+                juce::String stateError;
+                if (!safe->captureCurrentPluginStates(trackIds, stateError))
+                {
+                    safe->showError("Plugin recovery state failed", stateError);
+                    return;
+                }
+                if (safe->project.id != projectId || safe->projectPackage != package)
+                {
+                    safe->setStatus("The project changed while capturing recovery state. Request the hosting mode again.", true);
+                    return;
+                }
+                if (const auto recovery = ProjectFile::writeRecoveryPoint(safe->project, package);
+                    recovery.failed())
+                {
+                    safe->showError("Plugin recovery point failed", recovery.getErrorMessage());
+                    return;
+                }
                 safe->perform(std::make_unique<SetPluginBridgeModeCommand>(
                     trackId,
                     insertId,
-                    PluginBridgeMode::araCompatibility));
+                    mode));
             }),
         true);
 }

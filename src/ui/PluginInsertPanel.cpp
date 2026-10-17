@@ -495,7 +495,7 @@ void PluginInsertPanel::showInsertMenu()
             const auto enabled = mode == PluginBridgeMode::trustedInProcess
                 || (!selected->bundledDevice && (mode != PluginBridgeMode::araCompatibility || selected->araCapable));
             menu.addItem(mode == PluginBridgeMode::sandboxed ? "Sandboxed DSP"
-                : mode == PluginBridgeMode::araCompatibility ? "ARA 2 (reduced isolation)" : "Trusted in-process",
+                : mode == PluginBridgeMode::araCompatibility ? "ARA 2 (reduced isolation)" : "Trusted in-process (reduced isolation)",
                 enabled, selected->bridgeMode == mode, [safe, trackIdToUse, insertId, mode]
                 { if (safe != nullptr && safe->onModeChange) safe->onModeChange(trackIdToUse, insertId, mode); });
         }

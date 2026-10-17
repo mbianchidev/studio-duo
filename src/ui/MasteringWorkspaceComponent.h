@@ -41,6 +41,7 @@ private:
     };
 
     int getNumRows() override;
+    juce::String getNameForRow(int row) override;
     void paintListBoxItem(int row,
                           juce::Graphics& graphics,
                           int width,

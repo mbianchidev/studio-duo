@@ -148,6 +148,7 @@ MasteringWorkspaceComponent::MasteringWorkspaceComponent()
     }
 
     addAndMakeVisible(trackList);
+    trackList.setTitle("Mastering album songs");
     trackList.setRowHeight(42);
     trackList.setColour(
         juce::ListBox::backgroundColourId,
@@ -243,6 +244,14 @@ int MasteringWorkspaceComponent::getNumRows()
     return project != nullptr
         ? static_cast<int>(project->mastering.tracks.size())
         : 0;
+}
+
+juce::String MasteringWorkspaceComponent::getNameForRow(int row)
+{
+    if (project == nullptr || row < 0 || row >= getNumRows())
+        return {};
+    const auto& track = project->mastering.tracks[static_cast<std::size_t>(row)];
+    return juce::String(row + 1) + ". " + track.title;
 }
 
 void MasteringWorkspaceComponent::paintListBoxItem(

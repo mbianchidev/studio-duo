@@ -20,6 +20,7 @@ The `hardening` CTest label selects the release-critical coverage:
 | Native exchange | Each platform creates the same complete synthetic package; both native readers open both packages in a separate dependent CI job |
 | Keyboard/accessibility | Native timeline focus, selection role/value, chronological audio/MIDI clip navigation, musical nudges, offscreen-selection reveal, button activation, and named mastering controls |
 | Engine/processing | Routing, linked edits, recording, automation, latency/racks, deterministic live/offline renders, sandbox crash/reload, and public-standard plugin fixtures |
+| Qualification tooling | Full-media one-second smoke at 96 kHz, concurrent graph/callback work, complete live/offline null, portable validation, raw callback CSV, and fail-closed evidence matrix contracts |
 | Interchange/mastering | Official embedded DAWproject schemas, transactional failures, compatibility reports, portable/missing-resource checks, analytical loudness/true-peak fixtures, and multi-song delivery |
 | Packaging | macOS DMG/updater ZIP signatures, binary equality, license/source material, private install/startup/removal; disposable Windows signed install, same-version replacement, startup, and user-data-preserving uninstall |
 
@@ -125,8 +126,22 @@ personal paths, customer sessions, license material, and signing credentials.
 
 The accepted design explicitly allows opt-in ARA/trusted in-process modes with
 reduced crash isolation. Sandbox fixture success cannot establish containment
-for these modes. Resolve the qualification policy explicitly; do not silently
-waive the tracker's crash-containment criterion.
+for these modes. The [qualification policy](qualification.md#vendor-and-reduced-isolation-policy)
+requires saved-project, mode-specific consent and a successful recovery point
+before third-party opt-in. It requires separate vendor/mode results and an
+explicit human release disposition for the in-process exception. No such
+disposition is inferred from consent, recovery, or green CI; the tracker's
+unqualified crash-containment criterion remains blocked until that decision.
+
+The [qualification runbook](qualification.md) defines repeatable procedures,
+provisional workstation budgets, and the `scripts/qualify.py` evidence gate for
+issues #59, #58, #55, and #60. Its generated matrix starts entirely **not run**.
+The opt-in long-media command is driver-free computational characterisation,
+not a physical deadline or vendor pass. Whole-file decoding/prepared storage
+remains a resource risk; the preflight estimate and phase peaks expose it rather
+than advertising streaming. Native Mackie Control/HUI and MIDI-learn mappings
+are design targets, not implemented protocol handlers in the current source;
+do not substitute ordinary MIDI note/CC input for that missing qualification.
 
 For blocker triage, attach a minimal synthetic reproducer and candidate evidence,
 classify data-loss/crash, unusable primary workflow, deadline/resource, or

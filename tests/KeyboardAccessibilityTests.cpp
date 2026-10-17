@@ -3,11 +3,127 @@
 
 #include "ui/TimelineComponent.h"
 #include "ui/MasteringWorkspaceComponent.h"
+#include "ui/AutomationPanel.h"
+#include "ui/PluginParameterPanel.h"
+#include "ui/RoutingPanel.h"
+#include "ui/StudioTheme.h"
+#include "plugin_host/PluginIsolationPolicy.h"
 
 #include <cmath>
 
 namespace
 {
+void namedProductionControls()
+{
+    studio::PluginParameterPanel parameters("Synthetic processor", "synthetic-insert",
+        { { 0, "gain", "Gain", 0.25f, true }, { 1, "meter", "Meter", 0.5f, false } });
+    juce::Slider* slider = nullptr;
+    juce::ComboBox* selector = nullptr;
+    for (auto* child : parameters.getChildren())
+    {
+        if (auto* candidate = dynamic_cast<juce::Slider*>(child))
+            slider = candidate;
+        if (auto* candidate = dynamic_cast<juce::ComboBox*>(child))
+            selector = candidate;
+    }
+    expect(slider != nullptr && selector != nullptr,
+           "The generic parameter editor exposes native selector and value controls.");
+    if (slider != nullptr && selector != nullptr)
+    {
+        expect(selector->getTitle().isNotEmpty() && selector->getWantsKeyboardFocus()
+                   && slider->getTitle().contains("Gain") && slider->getWantsKeyboardFocus(),
+               "Generic plugin controls have accessible names and explicit keyboard focus.");
+        int starts = 0, changes = 0, ends = 0;
+        parameters.onGestureStarted = [&](const auto&, const auto&, const auto&, int, float) { ++starts; };
+        parameters.onValueChanged = [&](const auto&, const auto&, const auto&, int, float) { ++changes; };
+        parameters.onGestureEnded = [&](const auto&, const auto&, const auto&, int, float) { ++ends; };
+        slider->setValue(0.75, juce::sendNotificationSync);
+        expect(starts == 1 && changes == 1 && ends == 1,
+               "Non-drag parameter edits retain the complete automation gesture.");
+        selector->setSelectedId(2, juce::sendNotificationSync);
+        expect(slider->getTitle().contains("Meter") && !slider->isEnabled(),
+               "Parameter selection updates its accessible identity and preserves read-only values.");
+    }
+    studio::PluginParameterPanel empty("Unavailable", "empty", {});
+    for (auto* child : empty.getChildren())
+        if (dynamic_cast<juce::Slider*>(child) != nullptr || dynamic_cast<juce::ComboBox*>(child) != nullptr)
+            expect(!child->isEnabled(), "An empty parameter editor cannot present a working-looking control.");
+
+    studio::AutomationPanel automation;
+    auto namedControls = 0;
+    for (auto* child : automation.getChildren())
+        if (dynamic_cast<juce::ComboBox*>(child) != nullptr || dynamic_cast<juce::Slider*>(child) != nullptr)
+        {
+            ++namedControls;
+            expect(child->getTitle().isNotEmpty() && child->getWantsKeyboardFocus(),
+                   "Every automation mode/lane/target/value control is named and keyboard-reachable.");
+        }
+    expect(namedControls == 4, "The automation audit covers all four selector/value controls.");
+
+    auto project = studio::Project::createDefault();
+    studio::RoutingPanel routing;
+    routing.setProject(&project);
+    routing.setTrack(project.tracks.front().id);
+    juce::Button* edit = nullptr;
+    for (auto* child : routing.getChildren())
+        if (auto* button = dynamic_cast<juce::Button*>(child);
+            button != nullptr && button->getTitle() == "Edit existing routes")
+            edit = button;
+    expect(edit != nullptr && !edit->isEnabled(),
+           "Existing routes have a native keyboard action, disabled when no routes are available.");
+    auto route = release_fixture::mainRoute("keyboard-send", project.tracks.front().id, project.masterTrackId());
+    route.kind = studio::RouteKind::send;
+    project.routingConnections.push_back(route);
+    routing.setProject(&project);
+    expect(edit != nullptr && edit->isEnabled() && edit->getWantsKeyboardFocus(),
+           "Adding a send enables its keyboard editing alternative.");
+    routing.setProject(nullptr);
+    expect(edit != nullptr && !edit->isEnabled(),
+           "Removing the project disables route editing instead of leaving a stale action.");
+}
+
+void isolationConsentPolicy()
+{
+    studio::PluginInsert insert;
+    expect(!studio::requiresReducedIsolationConsent(insert, studio::PluginBridgeMode::sandboxed)
+               && studio::requiresReducedIsolationConsent(insert, studio::PluginBridgeMode::trustedInProcess)
+               && studio::requiresReducedIsolationConsent(insert, studio::PluginBridgeMode::araCompatibility),
+           "Both third-party reduced-isolation modes require explicit consent, unlike sandboxed mode.");
+    for (const auto mode : { studio::PluginBridgeMode::trustedInProcess,
+                             studio::PluginBridgeMode::araCompatibility })
+    {
+        const auto warning = studio::reducedIsolationWarning(mode);
+        expect(warning.contains("crash or hang") && warning.contains("recovery point")
+                   && warning.contains("sandbox crash containment does not apply"),
+               "Every reduced-isolation warning describes crash/hang risk and recovery without a containment claim.");
+    }
+    insert.bridgeMode = studio::PluginBridgeMode::trustedInProcess;
+    expect(!studio::requiresReducedIsolationConsent(insert, insert.bridgeMode)
+               && studio::requiresReducedIsolationConsent(insert, studio::PluginBridgeMode::araCompatibility),
+           "An existing consent is mode-specific and does not authorize switching to ARA.");
+    insert.bundledDevice = true;
+    expect(!studio::requiresReducedIsolationConsent(insert, studio::PluginBridgeMode::araCompatibility),
+           "Bundled DSP does not acquire a misleading third-party consent dialog.");
+}
+
+void themeContrastContracts()
+{
+    for (const auto& preset : studio::studioThemePresets())
+    {
+        juce::String error;
+        expect(preset.palette.isAccessible(error),
+               (juce::String(preset.name) + ": " + error).toRawUTF8());
+        auto transparent = preset.palette;
+        transparent.text &= 0x00ffffff;
+        expect(!transparent.isAccessible(error) && error.contains("opaque"),
+               "Transparent custom colours cannot bypass contrast validation.");
+        auto unreadableTransport = preset.palette;
+        unreadableTransport.transportRaised = unreadableTransport.text;
+        expect(!unreadableTransport.isAccessible(error),
+               "Raised transport surfaces participate in text contrast validation.");
+    }
+}
+
 void masteringKeyboardControls()
 {
     release_fixture::Directory directory;
@@ -44,6 +160,9 @@ void masteringKeyboardControls()
 
 void keyboardAccessibilityTests()
 {
+    namedProductionControls();
+    isolationConsentPolicy();
+    themeContrastContracts();
     masteringKeyboardControls();
     studio::StudioIconButton activation(studio::StudioIcon::stop, "Stop", {});
     auto activations = 0;

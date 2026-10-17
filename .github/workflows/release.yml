@@ -89,6 +89,8 @@ jobs:
           path: |
             build/Testing/phase6-junit.xml
             build/Testing/phase6-performance.json
+            build/Testing/phase6-long-session-smoke.json
+            build/Testing/phase6-long-session-smoke.csv
             build/Testing/Temporary/LastTest.log
           if-no-files-found: ignore
           retention-days: 7
@@ -163,6 +165,8 @@ jobs:
           path: |
             build/Testing/phase6-junit.xml
             build/Testing/phase6-performance.json
+            build/Testing/phase6-long-session-smoke.json
+            build/Testing/phase6-long-session-smoke.csv
             build/Testing/Temporary/LastTest.log
           if-no-files-found: ignore
           retention-days: 7

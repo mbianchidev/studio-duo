@@ -110,6 +110,12 @@ leaves the timeline. The lower MIDI editor retains its own note-editing keys.
 
 Mastering metadata/timing fields have distinct accessible names; its add,
 analyze, export, DDP, portable-copy, and repair controls are keyboard-focusable.
+The generic plugin parameter editor names the selected parameter and its
+normalized value; use the selector, arrow keys, or editable value field.
+Automation mode/lane/target/value controls are named too. **Routing > EDIT**
+opens every existing route, including routes beyond the painted preview,
+without requiring a mouse. Linear and rotary sliders show a focus outline,
+and mastering song rows expose their sequence number and title.
 Actual assistive-technology and full-workflow qualification remains tracked in
 the [release-readiness matrix](release-readiness.md).
 
@@ -702,11 +708,19 @@ ARA 2 mode.
 Moving the playhead resets existing plugin processors and queued bridge audio
 in place. Sandboxed workers remain running and ready instead of being rebuilt.
 
-ARA activation requires a saved project, writes a recovery point, and warns
-about reduced crash isolation. Studio Duo registers the track's immutable audio
+Third-party **Trusted in-process** and **ARA 2** activation both require a saved
+project and explicit consent. The warning explains that a plugin crash or hang
+can close or freeze Studio Duo: these modes do not provide sandbox containment.
+After confirmation, Studio Duo writes a recovery point before changing the mode;
+if writing fails, the mode is not changed. Switching between reduced-isolation
+modes requires fresh consent. Cancel retains the previous mode.
+Studio Duo registers the ARA track's immutable audio
 sources, clip playback regions, tempo map, and meter map with the ARA document.
 Processor and ARA document state are archived together, including unsaved ARA
 edits preserved across clip, tempo, and meter graph rebuilds.
+An unclean session reopens affected in-process inserts disabled until explicit
+reload. Recovery does not make an in-process crash isolated or establish a
+vendor compatibility pass.
 
 The inspector reports loading, ready, missing, bypassed, recovery-disabled,
 crashed, and late-block states. Select a failed insert and choose **Reload plugin**
