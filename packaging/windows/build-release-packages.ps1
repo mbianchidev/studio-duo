@@ -147,10 +147,11 @@ try {
             [System.Security.Cryptography.X509Certificates.X509Certificate2]::new(
                 $signingCertificate.RawData
             )
+        # Avoid the protected CurrentUser Root confirmation dialog on hosted runners.
         $trustStore =
             [System.Security.Cryptography.X509Certificates.X509Store]::new(
                 'Root',
-                [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser
+                [System.Security.Cryptography.X509Certificates.StoreLocation]::LocalMachine
             )
         $trustStore.Open(
             [System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite

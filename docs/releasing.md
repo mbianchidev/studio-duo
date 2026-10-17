@@ -94,8 +94,10 @@ is published. Windows publication also requires successful Authenticode signing,
 with an ephemeral test certificate.
 
 The hosted Windows workflows explicitly pass `-TrustSigningCertificate` to
-temporarily trust the configured certificate in the runner's current-user
-Root store. Only the public certificate enters that store; the private key
+temporarily trust the configured certificate in the disposable runner's
+LocalMachine Root store. Hosted Windows runners are elevated; this store avoids
+the protected CurrentUser Root confirmation dialog in headless sessions.
+Only the public certificate enters that store; the private key
 remains ephemeral. Packaging preserves any pre-existing trust entry and removes
 only the entry it added, including on failure. The switch is rejected outside
 disposable GitHub-hosted runners; local packaging uses normal Windows trust.

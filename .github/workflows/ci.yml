@@ -176,7 +176,7 @@ jobs:
               -CertificatePassword $passwordText `
               -TimestampUrl "" `
               -TrustSigningCertificate
-            if (Test-Path -LiteralPath "Cert:\CurrentUser\Root\$($certificate.Thumbprint)") {
+            if (Test-Path -LiteralPath "Cert:\LocalMachine\Root\$($certificate.Thumbprint)") {
               throw "Packaging left the ephemeral signing certificate trusted"
             }
             & ./packaging/windows/test-installed-startup.ps1 `
