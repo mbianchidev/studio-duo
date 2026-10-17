@@ -63,7 +63,7 @@ audible output:
   --qualify-long-session \
   "--qualification-output=$PWD/build/qualification/long-48k-256" \
   --tracks=16 --songs=3 --song-seconds=180 --clips-per-song=4 \
-  --sample-rate=48000 --buffer-size=256 --memory-budget-mib=16384
+  --sample-rate=48000 --buffer-size=256 --memory-budget-mib=24576
 ```
 
 Use the `.exe` on Windows and an absolute, **new** output directory for every
@@ -105,12 +105,17 @@ session, on a dedicated qualification system with adequate capacity. Add longer
 passes/repeated manual edits for a multi-hour soak. Do not increase the memory
 budget beyond the testing system's available headroom.
 
-Current playback prepares whole files/clips in memory. A conservative preflight
-estimates three decoded/prepared generations plus stereo render buffers and
-512 MiB overhead; phase checks stop further work after a measured budget
+Current playback prepares whole files/clips in memory. The preflight includes
+alternate-take preparation and allows six simultaneous prepared generations
+for publication slots, templates and in-progress/retired builds, plus stereo
+render buffers and 512 MiB overhead. Three generations underestimated measured
+full-media graph-edit peaks; do not revert to counting source PCM alone.
+Phase checks stop further work after a measured budget
 overrun. This is an estimate/soft guard, not a hard allocator or OS memory limit.
-The default 16-track/30-minute profile exceeds a 16 GiB preflight budget at
-48 kHz; 96 kHz needs still more memory. That result is a resource blocker for
+The default 16-track/nine-minute profile already exceeds the default 16 GiB
+preflight budget at 48 kHz; the example explicitly selects 24 GiB of available
+headroom. A thirty-minute or 96 kHz profile needs still more memory.
+That result is a resource blocker for
 that configuration, **not** a streaming guarantee. The exact point depends on
 edits, takes, transient processing allocations, graph generations, and plugins.
 Generated PCM/packages are removed from the owned `synthetic-workload` child

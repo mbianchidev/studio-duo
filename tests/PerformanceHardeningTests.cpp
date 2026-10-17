@@ -656,9 +656,12 @@ int qualifyLongSession(const LongSessionProfile& profile, const juce::File& outp
     constexpr juce::int64 stereoFrameBytes = 2 * static_cast<juce::int64>(sizeof(float));
     const auto decodedBytes = static_cast<juce::int64>(profile.tracks)
         * profile.songs * profile.songSeconds * profile.sampleRate * stereoFrameBytes;
-    const auto estimatedPeakBytes = decodedBytes * 3
+    const auto preparedBytes = decodedBytes + decodedBytes / profile.songs / profile.clipsPerSong;
+    const auto estimatedPeakBytes = preparedBytes * 6
         + totalSamples * stereoFrameBytes * 2 + 512LL * 1024 * 1024;
     report->setProperty("decodedMediaBytes", decodedBytes);
+    report->setProperty("preparedMediaBytesUpperBound", preparedBytes);
+    report->setProperty("estimatedPreparedGenerations", 6);
     report->setProperty("estimatedPeakBytes", estimatedPeakBytes);
     if (totalSamples > std::numeric_limits<int>::max() - studio::PluginBridgeSharedState::maxSupportedLatencySamples
         || estimatedPeakBytes > static_cast<juce::int64>(profile.memoryBudgetMiB) * 1024 * 1024)
@@ -953,6 +956,15 @@ void longSessionQualificationTests()
     expect(parseLongSessionProfile({ "--unknown=1" }, profile, output).failed(),
            "Unknown qualification settings fail instead of changing the measurement implicitly.");
     release_fixture::Directory directory;
+    profile = {};
+    const auto boundedDestination = directory.file.getChildFile("memory-preflight");
+    expect(qualifyLongSession(profile, boundedDestination) == 2,
+           "The full-length default profile is rejected before allocation when graph generations exceed 16 GiB.");
+    const auto preflight = juce::JSON::parse(boundedDestination.getChildFile("report.json"));
+    expect(preflight["status"].toString() == "blocked"
+               && static_cast<juce::int64>(preflight["estimatedPeakBytes"]) == 22517030912LL
+               && !boundedDestination.getChildFile("synthetic-workload").exists(),
+           "The preflight includes alternate-take preparation and six concurrent graph generations, not just source PCM.");
     profile = {};
     profile.tracks = 2;
     profile.songSeconds = 1;
