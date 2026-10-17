@@ -20,7 +20,7 @@ param(
 
     [string] $TimestampUrl = 'http://timestamp.digicert.com',
 
-    [switch] $SkipTrustVerification
+    [switch] $TrustSigningCertificate
 )
 
 Set-StrictMode -Version Latest
@@ -44,6 +44,12 @@ if ([string]::IsNullOrWhiteSpace($CertificateBase64)) {
 }
 if ([string]::IsNullOrWhiteSpace($CertificatePassword)) {
     throw 'The Authenticode certificate password is empty.'
+}
+if (
+    $TrustSigningCertificate -and
+    ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted')
+) {
+    throw 'Temporary signing-certificate trust is only allowed on disposable GitHub-hosted runners.'
 }
 
 $repositoryRootPath = Get-FullPath $RepositoryRoot
@@ -105,24 +111,25 @@ function Invoke-CodeSigning {
         -TimeoutSeconds 120
 
     Write-Host "Verifying $Path"
-    if ($SkipTrustVerification) {
-        $signature = Get-AuthenticodeSignature -LiteralPath $Path
-        if (
-            $null -eq $signature.SignerCertificate -or
-            $signature.SignerCertificate.Thumbprint -ne $signingCertificate.Thumbprint
-        ) {
-            throw "Authenticode signer verification failed for $Path"
-        }
-    } else {
-        Invoke-StudioDuoProcess `
-            -FilePath $signTool.FullName `
-            -ArgumentList @('verify', '/pa', '/v', $Path) `
-            -Description "Authenticode verification $Path" `
-            -TimeoutSeconds 60
+    Invoke-StudioDuoProcess `
+        -FilePath $signTool.FullName `
+        -ArgumentList @('verify', '/pa', '/v', $Path) `
+        -Description "Authenticode verification $Path" `
+        -TimeoutSeconds 60
+    $signature = Get-AuthenticodeSignature -LiteralPath $Path
+    if (
+        $signature.Status -ne 'Valid' -or
+        $null -eq $signature.SignerCertificate -or
+        $signature.SignerCertificate.Thumbprint -ne $signingCertificate.Thumbprint
+    ) {
+        throw "Authenticode signer verification failed for ${Path}: $($signature.StatusMessage)"
     }
 }
 
 $signingCertificate = $null
+$publicSigningCertificate = $null
+$trustStore = $null
+$addedCertificateTrust = $false
 try {
     $certificateBytes = [Convert]::FromBase64String(
         ($CertificateBase64 -replace '\s', '')
@@ -134,6 +141,31 @@ try {
             $CertificatePassword,
             [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::EphemeralKeySet
         )
+
+    if ($TrustSigningCertificate) {
+        $publicSigningCertificate =
+            [System.Security.Cryptography.X509Certificates.X509Certificate2]::new(
+                $signingCertificate.RawData
+            )
+        $trustStore =
+            [System.Security.Cryptography.X509Certificates.X509Store]::new(
+                'Root',
+                [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser
+            )
+        $trustStore.Open(
+            [System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite
+        )
+        $existingCertificates = $trustStore.Certificates.Find(
+            [System.Security.Cryptography.X509Certificates.X509FindType]::FindByThumbprint,
+            $publicSigningCertificate.Thumbprint,
+            $false
+        )
+        if ($existingCertificates.Count -eq 0) {
+            Write-Host 'Temporarily trusting the configured public signing certificate'
+            $trustStore.Add($publicSigningCertificate)
+            $addedCertificateTrust = $true
+        }
+    }
 
     Invoke-CodeSigning $executablePath
     Write-Host 'Building Inno Setup installer'
@@ -179,16 +211,29 @@ try {
         PortableZip = $zipPath
     })
 } finally {
-    Remove-Item `
-        -LiteralPath $certificatePath `
-        -Force `
-        -ErrorAction SilentlyContinue
-    Remove-Item `
-        -LiteralPath $stagingDirectory `
-        -Recurse `
-        -Force `
-        -ErrorAction SilentlyContinue
-    if ($null -ne $signingCertificate) {
-        $signingCertificate.Dispose()
+    try {
+        if ($addedCertificateTrust) {
+            Write-Host 'Removing temporary signing-certificate trust'
+            $trustStore.Remove($publicSigningCertificate)
+        }
+    } finally {
+        if ($null -ne $trustStore) {
+            $trustStore.Dispose()
+        }
+        if ($null -ne $publicSigningCertificate) {
+            $publicSigningCertificate.Dispose()
+        }
+        if ($null -ne $signingCertificate) {
+            $signingCertificate.Dispose()
+        }
+        try {
+            if (Test-Path -LiteralPath $certificatePath) {
+                Remove-Item -LiteralPath $certificatePath -Force
+            }
+        } finally {
+            if (Test-Path -LiteralPath $stagingDirectory) {
+                Remove-Item -LiteralPath $stagingDirectory -Recurse -Force
+            }
+        }
     }
 }

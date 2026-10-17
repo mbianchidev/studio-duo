@@ -175,7 +175,10 @@ jobs:
               -CertificateBase64 $certificateBase64 `
               -CertificatePassword $passwordText `
               -TimestampUrl "" `
-              -SkipTrustVerification
+              -TrustSigningCertificate
+            if (Test-Path -LiteralPath "Cert:\CurrentUser\Root\$($certificate.Thumbprint)") {
+              throw "Packaging left the ephemeral signing certificate trusted"
+            }
             & ./packaging/windows/test-installed-startup.ps1 `
               -Installer "$env:RUNNER_TEMP\studio-duo-windows-packages\Studio-Duo-$version-Windows-x64-Setup.exe"
           } finally {
