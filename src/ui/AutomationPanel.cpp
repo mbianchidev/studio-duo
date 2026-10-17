@@ -10,6 +10,15 @@ namespace studio
 {
 AutomationPanel::AutomationPanel()
 {
+    mode.setTitle("Track automation mode");
+    armed.setTitle("Arm track automation writing");
+    lanes.setTitle("Automation lane");
+    target.setTitle("New automation lane target");
+    beatTime.setTitle("Use beat-based automation time");
+    stepInterpolation.setTitle("Use step interpolation");
+    value.setTitle("Automation point normalized value");
+    value.setDescription("Normalized range 0 to 1. Use arrow keys or enter a value.");
+    value.setWantsKeyboardFocus(true);
     for (const auto& [label, automationMode] :
          std::initializer_list<std::pair<const char*, AutomationMode>> {
              { "Read", AutomationMode::read },
@@ -39,7 +48,10 @@ AutomationPanel::AutomationPanel()
              &removeLaneButton,
              &commitPreviewButton
          })
+    {
+        component->setWantsKeyboardFocus(true);
         addAndMakeVisible(component);
+    }
 
     mode.onChange = [this]
     {

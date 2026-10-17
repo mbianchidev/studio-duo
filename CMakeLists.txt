@@ -28,6 +28,17 @@ execute_process(
 if(NOT STUDIO_DUO_BUILD_REVISION_RESULT EQUAL 0)
     set(STUDIO_DUO_BUILD_REVISION "source-archive")
 endif()
+execute_process(
+    COMMAND git rev-parse --verify HEAD
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    OUTPUT_VARIABLE STUDIO_DUO_BUILD_COMMIT
+    RESULT_VARIABLE STUDIO_DUO_BUILD_COMMIT_RESULT
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+)
+if(NOT STUDIO_DUO_BUILD_COMMIT_RESULT EQUAL 0)
+    set(STUDIO_DUO_BUILD_COMMIT "source-archive")
+endif()
 
 option(STUDIO_DUO_BUILD_TESTS "Build Studio Duo tests" ON)
 option(STUDIO_DUO_AUDIO_EXPORT_TESTS_ONLY "Build only the headless audio export regression tests" OFF)
@@ -908,6 +919,7 @@ if(STUDIO_DUO_BUILD_TESTS)
         add_dependencies(StudioDuoTests StudioDuoDevelopmentSignature)
     endif()
     target_compile_definitions(StudioDuoTests PRIVATE
+        STUDIO_DUO_BUILD_COMMIT="${STUDIO_DUO_BUILD_COMMIT}"
         STUDIO_DUO_BUILD_REVISION="${STUDIO_DUO_BUILD_REVISION}"
         STUDIO_DUO_BUILD_CONFIG="$<CONFIG>")
 
@@ -977,6 +989,12 @@ if(STUDIO_DUO_BUILD_TESTS)
             src/ui/TimelineComponent.h
             src/ui/MasteringWorkspaceComponent.cpp
             src/ui/MasteringWorkspaceComponent.h
+            src/ui/AutomationPanel.cpp
+            src/ui/AutomationPanel.h
+            src/ui/PluginParameterPanel.cpp
+            src/ui/PluginParameterPanel.h
+            src/ui/RoutingPanel.cpp
+            src/ui/RoutingPanel.h
             src/ui/MixerPanel.cpp
             src/ui/MixerPanel.h
             src/ui/PluginInsertPanel.cpp
@@ -1170,7 +1188,7 @@ if(STUDIO_DUO_BUILD_TESTS)
 
     foreach(STUDIO_DUO_HARDENING_SUITE IN ITEMS
         projectHardeningTests saveInterruptionTests projectExchangeTests
-        keyboardAccessibilityTests performanceHardeningTests
+        keyboardAccessibilityTests performanceHardeningTests longSessionQualificationTests
         projectMigrationTests packagePersistence projectRecovery startupTests
         pluginFormatTests pluginRecoveryTests pluginCompatibilityTests pluginRackEngineTests
         routingEngineTests routingModelTests automationTests renderEngineTests
@@ -1182,6 +1200,8 @@ if(STUDIO_DUO_BUILD_TESTS)
         StudioDuoTests.performanceHardeningTests
         PROPERTIES ENVIRONMENT "STUDIO_DUO_HARDENING_REPORT=${CMAKE_CURRENT_BINARY_DIR}/Testing/phase6-performance.json"
     )
+    set_tests_properties(StudioDuoTests.longSessionQualificationTests PROPERTIES
+        ENVIRONMENT "STUDIO_DUO_LONG_SESSION_SMOKE_REPORT=${CMAKE_CURRENT_BINARY_DIR}/Testing/phase6-long-session-smoke.json")
 
     set(STUDIO_DUO_HOST_TESTS)
     foreach(
@@ -1193,6 +1213,7 @@ if(STUDIO_DUO_BUILD_TESTS)
             pluginFormatTests
             pluginCompatibilityTests
             performanceHardeningTests
+            longSessionQualificationTests
     )
         if(STUDIO_DUO_HOST_SUITE IN_LIST STUDIO_DUO_TEST_SUITES)
             list(
@@ -1208,6 +1229,11 @@ if(STUDIO_DUO_BUILD_TESTS)
             PROPERTIES RESOURCE_LOCK studio_duo_host
         )
     endif()
+    find_package(Python3 3.9 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME StudioDuoQualificationEvidence
+        COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/QualificationTests.py")
+    set_tests_properties(StudioDuoQualificationEvidence PROPERTIES
+        LABELS "hardening;qualification" TIMEOUT 30)
     if(APPLE OR WIN32)
         add_test(NAME StudioDuoStartup COMMAND StudioDuo --startup-self-test)
         set_tests_properties(

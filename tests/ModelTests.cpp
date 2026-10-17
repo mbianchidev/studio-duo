@@ -1569,6 +1569,8 @@ int main(int argc, char* argv[])
         return *result;
     if (const auto result = runProjectExchangeFixture(arguments))
         return *result;
+    if (const auto result = runLongSessionQualification(arguments))
+        return *result;
     if (const auto result = runAudioDeviceProbeFixture(arguments))
         return *result;
 #if JUCE_WINDOWS
@@ -1647,6 +1649,7 @@ int main(int argc, char* argv[])
     RUN_SUITE(projectExchangeTests);
     RUN_SUITE(keyboardAccessibilityTests);
     RUN_SUITE(performanceHardeningTests);
+    RUN_SUITE(longSessionQualificationTests);
     RUN_SUITE(projectTemplateTests);
     RUN_SUITE(windowSizingTests);
     RUN_SUITE(updateTests);

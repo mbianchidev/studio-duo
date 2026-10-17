@@ -31,6 +31,15 @@ struct StudioThemePalette
     [[nodiscard]] bool isAccessible(
         juce::String& error) const
     {
+        for (const auto colour : { window, panel, raised, transport, transportRaised,
+                                   border, text, secondaryText, orange, amber, green, violet })
+        {
+            if ((colour >> 24) != 0xff)
+            {
+                error = "Theme colours must be opaque so contrast does not depend on the surface behind them.";
+                return false;
+            }
+        }
         const auto luminance = [](std::uint32_t argb)
         {
             const auto channel = [](std::uint32_t value)
@@ -57,7 +66,7 @@ struct StudioThemePalette
                 / (juce::jmin(left, right) + 0.05);
         };
         for (const auto surface :
-             { window, panel, raised, transport })
+             { window, panel, raised, transport, transportRaised })
         {
             if (contrast(text, surface) < 4.5)
             {
@@ -67,12 +76,13 @@ struct StudioThemePalette
                 return false;
             }
         }
-        if (contrast(secondaryText, panel) < 4.5)
+        for (const auto surface : { window, panel, raised, transport, transportRaised })
         {
-            error =
-                "Secondary text must keep at least 4.5:1 contrast "
-                "against panels.";
-            return false;
+            if (contrast(secondaryText, surface) < 4.5)
+            {
+                error = "Secondary text must keep at least 4.5:1 contrast against every core surface.";
+                return false;
+            }
         }
         if (contrast(border, panel) < 3.0
             || contrast(border, raised) < 3.0)
@@ -84,7 +94,9 @@ struct StudioThemePalette
         }
         if (contrast(orange, window) < 4.5
             || contrast(orange, panel) < 3.0
-            || contrast(orange, raised) < 3.0)
+            || contrast(orange, raised) < 3.0
+            || contrast(orange, transport) < 3.0
+            || contrast(orange, transportRaised) < 3.0)
         {
             error =
                 "The accent must keep readable button text and a "
@@ -404,7 +416,33 @@ public:
         }
     }
 
+    void drawLinearSlider(juce::Graphics& graphics, int x, int y, int width, int height,
+                          float sliderPosition, float minimumPosition, float maximumPosition,
+                          juce::Slider::SliderStyle style, juce::Slider& slider) override
+    {
+        juce::LookAndFeel_V4::drawLinearSlider(graphics, x, y, width, height,
+            sliderPosition, minimumPosition, maximumPosition, style, slider);
+        drawSliderFocus(graphics, slider);
+    }
+
+    void drawRotarySlider(juce::Graphics& graphics, int x, int y, int width, int height,
+                          float position, float startAngle, float endAngle, juce::Slider& slider) override
+    {
+        juce::LookAndFeel_V4::drawRotarySlider(graphics, x, y, width, height,
+            position, startAngle, endAngle, slider);
+        drawSliderFocus(graphics, slider);
+    }
+
 private:
+    static void drawSliderFocus(juce::Graphics& graphics, const juce::Slider& slider)
+    {
+        if (slider.hasKeyboardFocus(true))
+        {
+            graphics.setColour(juce::Colour(StudioColours::orange));
+            graphics.drawRoundedRectangle(slider.getLocalBounds().toFloat().reduced(1.0f), 3.0f, 2.0f);
+        }
+    }
+
     StudioThemePalette currentPalette;
 };
 }

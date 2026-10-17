@@ -156,6 +156,8 @@ public:
     [[nodiscard]] float rightPeak() const noexcept;
     [[nodiscard]] double currentSampleRate() const noexcept;
 #if defined(STUDIO_DUO_TESTING)
+    juce::Result configureAudioForTesting(double rate, int blockSize);
+    void renderActiveBlockForTesting(juce::AudioBuffer<float>& output);
     [[nodiscard]] std::uint64_t sourceReadCountForTesting() const noexcept;
     struct MidiEventForTesting
     {
@@ -167,6 +169,7 @@ public:
 
     [[nodiscard]] int minimumRouteBufferCapacityForTesting() const noexcept;
     [[nodiscard]] double activeSnapshotSampleRateForTesting() const noexcept;
+    [[nodiscard]] int outputLatencySamplesForTesting() const noexcept;
     [[nodiscard]] std::vector<int> parallelBranchDelaysForTesting() const;
     [[nodiscard]] juce::AudioBuffer<float>
         renderActiveBlockForTesting(int samples, int outputChannels = 2);

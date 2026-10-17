@@ -960,6 +960,26 @@ double StudioAudioEngine::currentSampleRate() const noexcept
 }
 
 #if defined(STUDIO_DUO_TESTING)
+juce::Result StudioAudioEngine::configureAudioForTesting(double rate, int blockSize)
+{
+    if (!std::isfinite(rate) || rate <= 0.0 || blockSize <= 0
+        || blockSize > PluginBridgeSharedState::maxBlockSize)
+        return juce::Result::fail("Synthetic audio configuration requires a valid sample rate and block size.");
+    if (isPlaying() || isRecording() || pluginRuntimeTransitionPending())
+        return juce::Result::fail("Stop synthetic playback and graph transitions before changing configuration.");
+    sampleRate.store(rate, std::memory_order_release);
+    deviceBlockSize.store(blockSize, std::memory_order_release);
+    midiCollector.reset(rate);
+    return juce::Result::ok();
+}
+
+void StudioAudioEngine::renderActiveBlockForTesting(juce::AudioBuffer<float>& output)
+{
+    juce::AudioIODeviceCallbackContext context;
+    audioDeviceIOCallbackWithContext(nullptr, 0, output.getArrayOfWritePointers(),
+        output.getNumChannels(), output.getNumSamples(), context);
+}
+
 int StudioAudioEngine::minimumRouteBufferCapacityForTesting() const noexcept
 {
     const juce::ScopedLock lock(pluginRequestLock);
@@ -988,6 +1008,14 @@ double StudioAudioEngine::activeSnapshotSampleRateForTesting() const noexcept
         : snapshots.front().sampleRate;
 }
 
+int StudioAudioEngine::outputLatencySamplesForTesting() const noexcept
+{
+    const juce::ScopedLock lock(pluginRequestLock);
+    return activeSnapshotTemplate != nullptr
+        ? activeSnapshotTemplate->clickCompensation.delaySamples
+        : snapshots.front().clickCompensation.delaySamples;
+}
+
 juce::AudioBuffer<float>
 StudioAudioEngine::renderActiveBlockForTesting(int samples,
                                                int outputChannels)
@@ -997,18 +1025,7 @@ StudioAudioEngine::renderActiveBlockForTesting(int samples,
         channelCount,
         std::max(1, samples));
     output.clear();
-    std::vector<float*> channels;
-    channels.reserve(static_cast<std::size_t>(channelCount));
-    for (int channel = 0; channel < channelCount; ++channel)
-        channels.push_back(output.getWritePointer(channel));
-    juce::AudioIODeviceCallbackContext context;
-    audioDeviceIOCallbackWithContext(
-        nullptr,
-        0,
-        channels.data(),
-        channelCount,
-        output.getNumSamples(),
-        context);
+    renderActiveBlockForTesting(output);
     return output;
 }
 

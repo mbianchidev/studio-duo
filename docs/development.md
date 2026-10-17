@@ -53,6 +53,7 @@ GitHub Actions are pinned to exact release commits for checkout 7.0.1, cache
 - Git
 - A C++20 compiler
 - macOS with Xcode command-line tools, or Windows with Visual Studio 2022
+- Python 3.9 or newer for test builds and qualification evidence tools only
 
 ## Configure and build
 
@@ -104,6 +105,20 @@ large-edit-density performance profile. Its numeric report is written to
 exchanges complete native fixtures between both operating systems. See
 [release readiness](release-readiness.md) for exact commands, budgets, and
 what still requires hands-on qualification.
+The separate opt-in `--qualify-long-session` test-executable command generates
+unique full-length PCM, exercises the actual callback at 48/96 kHz with a
+preallocated output buffer, republishes graphs concurrently, validates a portable
+copy, and compares complete deterministic live/offline renders. Its CSV/report
+are characterisation, not physical-device qualification. The CTest smoke uses
+only three one-second songs and explicitly records that scope; CI retains
+`phase6-long-session-smoke.json` and `.csv`. That smoke checks the strict
+qualification exit/status contract independently of shared-runner scheduling:
+a measured audio-deadline failure stays failed in the retained report, while
+the smoke itself enforces the separate generous hosted-runner regression bounds.
+The opt-in command's real deadline budgets are not widened. The standard-library Python evidence
+gate rejects incomplete matrices, skipped checks, wrong candidates, absent or
+changed raw evidence, and missing reduced-isolation release dispositions.
+See [qualification procedures](qualification.md) for budgets and invocation.
 
 Multi-engine test fixtures keep `StudioAudioEngine` instances on the heap:
 their fixed MIDI trace arrays can exceed Windows's default 1 MiB stack when
@@ -804,9 +819,14 @@ the live runtime state before rebuilding the offline graph, preserving unsaved
 cabinet and parameter changes.
 
 ARA-capable VST3 and Audio Unit instances can opt into an in-process document
-binding. Studio Duo writes a recovery point before activation, shows the
-reduced-isolation warning, records an unclean-session marker, and reopens marked
-instances safe-disabled until explicit reload. The host registers immutable
+binding. Both third-party trusted in-process and ARA mode changes require a
+saved project and explicit, mode-specific crash/hang consent. After consent,
+Studio Duo revalidates the project/insert, captures current processor state
+through the existing state-store path, and writes the current recovery point
+before activation; failed capture/checkpoint prevents the change. Bundled DSP is not
+misrepresented as a third-party isolation opt-in. Studio Duo records an
+unclean-session marker and reopens marked instances safe-disabled until explicit
+reload. The host registers immutable
 audio sources, audio modifications, per-track region sequences, playback
 regions, and tempo/meter content before processor preparation. ARA model,
 archive, and teardown calls stay on one runtime thread; processor destruction

@@ -12,6 +12,9 @@ PluginParameterPanel::PluginParameterPanel(
       id(std::move(insertId)),
       descriptors(std::move(parameters))
 {
+    setTitle(name + " parameter editor");
+    parameter.setTitle("Plugin parameter");
+    parameter.setWantsKeyboardFocus(true);
     for (std::size_t index = 0; index < descriptors.size(); ++index)
         parameter.addItem(descriptors[index].name,
                           static_cast<int>(index + 1));
@@ -21,6 +24,10 @@ PluginParameterPanel::PluginParameterPanel(
     value.setRange(0.0, 1.0, 0.0001);
     value.setSliderStyle(juce::Slider::LinearHorizontal);
     value.setTextBoxStyle(juce::Slider::TextBoxRight, false, 72, 24);
+    value.setTitle("Plugin parameter normalized value");
+    value.setWantsKeyboardFocus(true);
+    parameter.setEnabled(!descriptors.empty());
+    value.setEnabled(!descriptors.empty());
     value.onValueChange = [this]
     {
         if (rebuilding
@@ -90,10 +97,14 @@ void PluginParameterPanel::selectParameter()
     if (index < 0 || index >= static_cast<int>(descriptors.size()))
         return;
     rebuilding = true;
-    value.setValue(descriptors[static_cast<std::size_t>(index)].value,
+    const auto& descriptor = descriptors[static_cast<std::size_t>(index)];
+    value.setTitle(name + " / " + descriptor.name + " normalized value");
+    value.setDescription("Normalized range 0 to 1. Use arrow keys or enter a value.");
+    value.setValue(descriptor.value,
                    juce::dontSendNotification);
-    value.setEnabled(
-        descriptors[static_cast<std::size_t>(index)].automatable);
+    value.setEnabled(descriptor.automatable);
+    if (auto* handler = value.getAccessibilityHandler())
+        handler->notifyAccessibilityEvent(juce::AccessibilityEvent::titleChanged);
     rebuilding = false;
 }
 
