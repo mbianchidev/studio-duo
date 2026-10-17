@@ -185,7 +185,8 @@ jobs:
             -Executable "build/StudioDuo_artefacts/Release/Studio Duo.exe" `
             -OutputDirectory (Get-Location).Path `
             -CertificateBase64 $env:CERTIFICATE_BASE64 `
-            -CertificatePassword $env:CERTIFICATE_PASSWORD
+            -CertificatePassword $env:CERTIFICATE_PASSWORD `
+            -TrustSigningCertificate
           & ./packaging/windows/test-installed-startup.ps1 `
             -Installer "Studio-Duo-$env:VERSION-Windows-x64-Setup.exe"
           $pdb = "build/StudioDuo_artefacts/Release/Studio Duo.pdb"
