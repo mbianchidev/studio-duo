@@ -479,6 +479,10 @@ target_sources(
         src/audio/StudioAudioDeviceManager.h
         src/audio/StudioAudioEngine.cpp
         src/audio/StudioAudioEngine.h
+        src/midi/ControlSurface.cpp
+        src/midi/ControlSurface.h
+        src/midi/ControlSurfaceProject.cpp
+        src/midi/ControlSurfaceProject.h
         src/audio/RecordingWaveform.h
         src/logging/StudioLogger.cpp
         src/logging/StudioLogger.h
@@ -501,6 +505,8 @@ target_sources(
         src/update/UpdateSettingsComponent.h
         src/ui/MainComponent.cpp
         src/ui/MainComponent.h
+        src/ui/ControlSurfaceSettingsComponent.cpp
+        src/ui/ControlSurfaceSettingsComponent.h
         src/platform/MediaFileRevision.cpp
         src/platform/MediaFileRevision.h
         src/ui/StartupProgressComponent.cpp
@@ -934,6 +940,13 @@ if(STUDIO_DUO_BUILD_TESTS)
         PRIVATE
             tests/ModelTests.cpp
             tests/MidiTests.cpp
+            tests/ControlSurfaceTests.cpp
+            src/midi/ControlSurface.cpp
+            src/midi/ControlSurface.h
+            src/midi/ControlSurfaceProject.cpp
+            src/midi/ControlSurfaceProject.h
+            src/ui/ControlSurfaceSettingsComponent.cpp
+            src/ui/ControlSurfaceSettingsComponent.h
             tests/RoutingModelTests.cpp
             tests/RoutingEngineTests.cpp
             tests/RoutingUiModelTests.cpp
@@ -1199,7 +1212,7 @@ if(STUDIO_DUO_BUILD_TESTS)
         keyboardAccessibilityTests performanceHardeningTests longSessionQualificationTests
         projectMigrationTests packagePersistence projectRecovery startupTests
         pluginFormatTests pluginRecoveryTests pluginCompatibilityTests pluginRackEngineTests
-        routingEngineTests routingModelTests automationTests renderEngineTests
+        routingEngineTests routingModelTests automationTests renderEngineTests controlSurfaceTests
         dawProjectTests masteringTests transportTests linkedMultitrackEditing
         synchronizedRecordingCapture multitrackRecordingCommand reampWorkflow)
         set_property(TEST "StudioDuoTests.${STUDIO_DUO_HARDENING_SUITE}" APPEND PROPERTY LABELS "hardening")

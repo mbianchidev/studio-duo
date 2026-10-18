@@ -797,6 +797,11 @@ void StudioAudioEngine::seekSeconds(double seconds) noexcept
     requestMidiNoteTermination();
 }
 
+void StudioAudioEngine::setControlSurfaceInputReservation(juce::String identifier)
+{
+    midiCollector.setReservedInput(std::move(identifier));
+}
+
 void StudioAudioEngine::setMidiAuditionEnabled(bool enabled) noexcept
 {
     softwareMidiAuditionEnabled.store(enabled, std::memory_order_release);

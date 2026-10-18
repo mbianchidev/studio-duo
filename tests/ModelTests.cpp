@@ -1656,6 +1656,7 @@ int main(int argc, char* argv[])
     RUN_SUITE(windowSizingTests);
     RUN_SUITE(updateTests);
     RUN_SUITE(midiTests);
+    RUN_SUITE(controlSurfaceTests);
     RUN_SUITE(dawProjectTests);
     RUN_SUITE(studioOneProjectTests);
     RUN_SUITE(masteringTests);

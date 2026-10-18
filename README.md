@@ -106,6 +106,13 @@ using CoreAudio. ASIO-compatible interfaces are supported on Windows; ASIO is
 not the macOS audio backend. RAM, storage, and CPU needs depend on project media,
 track count, and plug-ins; fixed performance minima have not been validated.
 
+An optional eight-strip **Mackie Control** profile is available in
+**Settings > Controls**, disabled by default. It uses explicitly selected,
+dedicated MIDI ports for transport, mix controls, bank selection and feedback;
+it never treats ordinary musical MIDI routing as a control-surface mapping.
+See [control-surface setup and limits](docs/user-guide.md#mackie-control-surfaces).
+Physical model/firmware qualification is still required.
+
 **Linux is unsupported.** Covering audio-driver integrations and different
 distributions is beyond the available time of the one-person development team.
 

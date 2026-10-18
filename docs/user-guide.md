@@ -451,6 +451,60 @@ of channels 1-16; the metal multi-output template uses those filters.
 
 ## Record and edit MIDI
 
+### Mackie Control surfaces
+
+**Settings > Controls** provides an optional Mackie Control profile, disabled by
+default. Put the controller in **Mackie Control** mode manually, not HUI or an
+extender mode. Choose its dedicated input and output; Studio Duo never selects
+ports by a similar name or changes the musical device assignments for you.
+
+1. Stop recording, export and reamp calibration before changing control ports.
+2. In **Audio / MIDI**, disable that input for musical MIDI and choose a
+   different musical output, or no musical output.
+3. In **Controls**, choose **Mackie Control (8 strips + master)**, select the
+   exact controller ports, and choose **APPLY**. Do not select a synthesizer or
+   an output-to-input MIDI loop: feedback includes note, CC, pitch-bend and SysEx
+   messages.
+4. Verify the actual hardware response with a disposable synthetic project.
+   A connected status means the selected ports opened, not that its firmware,
+   wiring or physical behavior has been certified.
+
+| Control | Studio Duo mapping |
+| --- | --- |
+| Play / Stop / Record | Start playback / stop and finalize / start recording; Record does not stop an existing take |
+| Rewind / Forward | Move one bar using the current tempo/meter, disabled while recording |
+| Eight channel faders / master | Fourteen-bit normalized mixer volume over the existing -60 to +12 dB range |
+| V-Pots / V-Pot press | Relative pan / center pan |
+| Channel Rec / Solo / Mute / Select | Existing track arm, solo, mute and selection actions |
+| Bank / Channel left-right | Move eight tracks / one track, including a final partial bank |
+| Cycle / Click / Save / Undo | Existing loop, metronome, save and undo commands |
+
+Banks follow root mixer-track order, excluding folders and the independently
+mapped master. Track IDs remain stable when names change. Faders and pan use
+the existing undo and automation modes; each message-thread frame coalesces
+continuous input into one mix/automation transaction. Preview remains staged
+until committed. Motor feedback is suppressed while a channel fader is touched;
+release resynchronizes it to host state. Release channel faders before banking.
+LEDs, pan rings and bounded seven-bit LCD track names follow the current mixer
+model. Live metering/timecode, plug-in layers, expanders, HUI and MIDI learn are
+not implemented by this profile.
+
+The selected input is reserved and excluded from musical recording and
+retrospective capture. Other musical inputs remain unchanged. Commands are
+ignored in startup/modals/export/calibration; queued input older than 250 ms is
+discarded visibly rather than replaying a delayed Record press. An input overflow
+halts surface commands until **RECONNECT**; audio and other MIDI routing keep
+running. Unplug/replug retries only the saved port identities and resends host
+feedback. **REFRESH PORTS** updates the selectors; **RECONNECT** retries the saved
+configuration, not unsaved selections. Disable the profile to release its
+reservation before reusing that input for musical MIDI.
+
+Protocol and mocked connection tests do not certify a physical surface. Record
+the device/firmware, exact candidate and observed mappings using the
+[qualification procedure](qualification.md#physical-audio-midi-reamp-and-control-surfaces).
+
+### MIDI recording and editing
+
 Arm any combination of root MIDI and instrument tracks, then press **Start
 Recording** (circle icon).
 Studio Duo records the same enabled hardware MIDI input delivered to live

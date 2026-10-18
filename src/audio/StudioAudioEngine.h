@@ -5,6 +5,7 @@
 #include "StudioAudioDeviceManager.h"
 #include "automation/AutomationScheduler.h"
 #include "midi/MidiCaptureBuffer.h"
+#include "midi/ControlSurface.h"
 #include "model/ProjectModel.h"
 #include "plugin_host/PluginBridgeClient.h"
 #include "plugin_host/AraDocumentHost.h"
@@ -146,6 +147,7 @@ public:
     [[nodiscard]] bool resetPluginProcessing();
     void setMetronomeEnabled(bool enabled) noexcept;
     void setMidiAuditionEnabled(bool enabled) noexcept;
+    void setControlSurfaceInputReservation(juce::String identifier);
     juce::Result enqueueMidiInput(const juce::String& trackId,
                                  const juce::MidiMessage& message);
 
@@ -899,7 +901,7 @@ private:
     std::atomic<bool> midiInputEnabled { false };
     std::atomic<std::uint64_t> midiTerminationRequested { 0 };
     std::atomic<std::uint64_t> midiTerminationHandled { 0 };
-    juce::MidiMessageCollector midiCollector;
+    MusicalMidiInputCollector midiCollector;
     juce::MidiBuffer incomingMidi;
     struct SoftwareMidiEvent
     {

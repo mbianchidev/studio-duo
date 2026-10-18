@@ -220,10 +220,15 @@ professional multi-I/O interface, not only built-in stereo audio.
    record/arm, fader/pan, bank/track selection, feedback and reconnect with a
    documented mapping and no unintended musical MIDI recording.
 
-Mackie Control/HUI and MIDI learn are accepted design targets, but the current
-source has no protocol/mapping implementation to qualify. Ordinary MIDI
-note/CC routing is not a substitute. Record this as an implementation blocker;
-do not report control-surface support from the existing MIDI regression suite.
+The common eight-strip/master **Mackie Control** profile is implemented in
+**Settings > Controls**. Follow the [dedicated-port setup](user-guide.md#mackie-control-surfaces);
+it defaults to disabled and must not share musical MIDI assignments. Its
+synthetic protocol/connection tests cover mappings, differential feedback,
+musical exclusion, stale/overflow safeguards, reconnect and undo/automation,
+but are not a physical-device pass. Qualify the actual model/firmware and every
+documented mapping, including touch and partial banks. HUI, MIDI learn, extenders,
+timecode/meters and plug-in layers are not implemented by this profile; do not
+advertise them or substitute ordinary note/CC routing.
 Windows remains best effort until physical-system evidence exists.
 
 ## Vendor and reduced-isolation policy

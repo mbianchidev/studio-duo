@@ -214,23 +214,25 @@ int callbackChannelIndex(
     return callbackChannel;
 }
 
-juce::String audioDeviceConfigurationSignature(const juce::AudioDeviceManager& manager)
+juce::String audioDeviceConfigurationSignature(const juce::AudioDeviceManager& manager, bool midiAvailable)
 {
     auto* device = manager.getCurrentAudioDevice();
     if (device == nullptr)
         return {};
     const auto setup = manager.getAudioDeviceSetup();
     juce::StringArray enabledInputs;
-    for (const auto& input : juce::MidiInput::getAvailableDevices())
-        if (manager.isMidiInputDeviceEnabled(input.identifier))
-            enabledInputs.add(input.identifier);
+    if (midiAvailable)
+        for (const auto& input : juce::MidiInput::getAvailableDevices())
+            if (manager.isMidiInputDeviceEnabled(input.identifier))
+                enabledInputs.add(input.identifier);
     enabledInputs.sort(false);
     return manager.getCurrentAudioDeviceType() + ":" + setup.inputDeviceName + ":"
         + setup.outputDeviceName + ":" + device->getActiveInputChannels().toString(16) + ":"
         + device->getActiveOutputChannels().toString(16) + ":"
         + juce::String(device->getCurrentSampleRate(), 1) + ":"
         + juce::String(device->getCurrentBufferSizeSamples()) + ":"
-        + enabledInputs.joinIntoString(";") + ":" + manager.getDefaultMidiOutputIdentifier();
+        + enabledInputs.joinIntoString(";") + ":"
+        + (midiAvailable ? manager.getDefaultMidiOutputIdentifier() : juce::String("midi-unavailable"));
 }
 
 juce::Result probeNativeAudioDeviceSetup(const juce::XmlElement& setup)

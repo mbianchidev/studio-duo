@@ -148,9 +148,11 @@ issues #59, #58, #55, and #60. Its generated matrix starts entirely **not run**.
 The opt-in long-media command is driver-free computational characterisation,
 not a physical deadline or vendor pass. Whole-file decoding/prepared storage
 remains a resource risk; the preflight estimate and phase peaks expose it rather
-than advertising streaming. Native Mackie Control/HUI and MIDI-learn mappings
-are design targets, not implemented protocol handlers in the current source;
-do not substitute ordinary MIDI note/CC input for that missing qualification.
+than advertising streaming. The optional dedicated-port Mackie Control profile
+now has protocol, connection, musical-exclusion, undo/automation and native
+settings contracts. Its physical model/firmware mappings and feedback remain
+unqualified. HUI, MIDI learn and extender/layer support are not implemented;
+ordinary musical note/CC routing still cannot substitute for surface testing.
 
 For blocker triage, attach a minimal synthetic reproducer and candidate evidence,
 classify data-loss/crash, unusable primary workflow, deadline/resource, or

@@ -47,6 +47,7 @@ void sectionTransportTests();
 void transportSettingsTests();
 void updateTests();
 void midiTests();
+void controlSurfaceTests();
 void dawProjectTests();
 void studioOneProjectTests();
 void masteringTests();

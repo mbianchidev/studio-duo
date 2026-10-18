@@ -184,6 +184,49 @@ Audio-probe tests use synthetic worker responses, abrupt exits, and timeouts;
 they never load an installed hardware driver. Windows additionally checks native
 exception reporting in a disposable child process.
 
+## Control-surface MIDI
+
+`midi/ControlSurface` separates the Mackie Control wire profile from an owned
+input/output connection. Construction, default/disabled preferences and
+pre-probe polling never discover or open MIDI. `MainComponent` permits a saved
+opt-in only after MIDI service readiness; explicit Settings retries retain the
+Windows separate-process discovery gate. Exact input/output identities are
+persisted in preferences schema 3. Legacy preferences default to disabled;
+invalid/unknown protocols are reported without opening a driver.
+
+Control ports must not be selected for musical input/output. Configuration
+rejects conflicts before changing saved settings or reservations. The engine's
+`MusicalMidiInputCollector` also excludes the reserved input from live musical
+and retrospective recording paths if a user later changes device assignments.
+The surface owns only its dedicated MIDI handles and never changes unrelated
+device-manager settings. Disconnect closes only those handles; reconnect never
+substitutes a similarly named device.
+
+The driver callback copies bounded packets into a 512-slot FIFO, with serialized
+producers and project-generation/dispatch guards. Project edits, feedback, and
+logging happen on the message thread. Stale commands older than 250 ms are
+discarded visibly; overflow fails closed until an explicit reconnect. Continuous
+controls coalesce before `ControlSurfaceProject` creates one undoable
+mix/automation transaction. Preview is staged, not committed accidentally.
+Lifecycle generation checks prevent a command callback from closing/reconfiguring
+its session and then receiving stale feedback from the old dispatch.
+
+Feedback is differential: fourteen-bit faders, pan rings, button LEDs and
+seven-bit LCD names. Touch suppresses motor updates and banking cannot retarget
+a held channel fader. MCU host-query/reply bytes are exchanged in memory only;
+device identity/serial bytes are not logged, exported or saved. The wire facts
+are documented by the independent
+[MCU interoperability reference](https://github.com/NicoG60/TouchMCU/blob/main/doc/mackie_control_protocol.md).
+This implements the documented common profile, not HUI, extenders, plug-in
+layers, timecode or physical-model certification.
+
+`controlSurfaceTests` uses only synthetic ports, challenges and projects. It
+covers protocol values, touch/feedback, musical exclusion, disconnected and
+conflicting ports, reconnect, stale/overflow input, project replacement,
+reentrant shutdown, undo/automation and native settings names/focus/layout.
+Its optional `STUDIO_DUO_CONTROL_SURFACE_IMAGE` output is an offscreen software
+render, never a desktop capture or screen-reader pass.
+
 ## Coordinated startup
 
 `StartupShellComponent` owns the lightweight surface, workers and
@@ -194,8 +237,9 @@ install. Preferences/recent metadata, cached catalog/compatibility data, and rec
 inspection run concurrently without constructing the full workspace or an audio
 manager. Workspace construction depends on those results; audio preflight depends
 on settings and the recovery decision. MIDI and requested-project dispatch wait
-for their actual services. Unsupported locale/control-surface/extension systems
-are not invented as startup tasks.
+for their actual services. Optional control surfaces stay driver-free until
+the MIDI service is available and an explicit saved profile is enabled.
+Unsupported locale/extension systems are not invented as startup tasks.
 
 The coordinator is message-thread-owned. Workers publish owned results through a
 mailbox; attempt tokens reject stale results after timeout, retry, or cancellation.

@@ -1843,6 +1843,7 @@ MainComponent::MainComponent(
     };
     masteringWorkspace.onProjectRepaired = [this](auto repaired)
     {
+        controlSurface.discardPendingCommands();
         project = std::move(repaired);
         commandStack.clear();
         projectChanged();
@@ -2158,6 +2159,25 @@ MainComponent::MainComponent(
     refreshInputControls();
 
     setStatus("Preparing required startup services.");
+    controlSurface.onEvents = [this](auto events) { handleControlSurfaceEvents(events); };
+    controlSurface.readState = [this]
+    {
+        return controlSurfaceStateForProject(project, selectedTrackId, audioEngine.isPlaying(), hasActiveRecordingTargets());
+    };
+    controlSurface.onStatusChanged = [this](const auto& message, bool error)
+    {
+        const auto previousWasSurface = statusPanel.latestMessage() == lastControlSurfaceStatus;
+        lastControlSurfaceStatus = message;
+        if (error || !statusIsError || previousWasSurface)
+            setStatus(message, error);
+        else
+            logInfo("control-surface", message);
+    };
+    const auto& surfaceSettings = preferences.controlSurfaceSettings();
+    audioEngine.setControlSurfaceInputReservation(
+        surfaceSettings.enabled() ? surfaceSettings.inputDeviceId : juce::String());
+    if (const auto configured = controlSurface.configure(surfaceSettings); configured.failed())
+        setStatus(configured.getErrorMessage(), true);
     projectChanged(false);
     startTimerHz(30);
     setSize(1480, 900);
@@ -2213,7 +2233,7 @@ StartupDeviceSummary MainComponent::startupDeviceSummary() const
         summary.audioInputs = device->getActiveInputChannels().countNumberOfSetBits();
         summary.audioOutputs = device->getActiveOutputChannels().countNumberOfSetBits();
     }
-    if (deviceManager != nullptr)
+    if (deviceManager != nullptr && controlSurface.hardwareAvailable())
     {
         summary.midiAvailable = true;
         summary.retrospectiveCapture = summary.audioEnabled;
@@ -2232,6 +2252,7 @@ bool MainComponent::startupAudioHasWarning() const noexcept { return startupAudi
 
 void MainComponent::disableStartupAudio()
 {
+    controlSurface.setHardwareAvailable(false);
     audioEngine.shutdown();
     audioEngineInitialised = false;
     deviceManager.reset();
@@ -2275,6 +2296,7 @@ StartupOutcome MainComponent::initialiseStartupMidi(const juce::XmlElement* save
         + (audioEngineInitialised ? "Retrospective capture is available while audio processing is active."
                                   : "Retrospective capture requires active audio processing.");
     startupUnavailableMidiDevices = unavailable;
+    controlSurface.setHardwareAvailable(true);
     return { unavailable > 0 ? StartupState::warning : StartupState::succeeded,
              unavailable > 0 ? StartupIssue::midiUnavailable : StartupIssue::none, detail };
 }
@@ -2475,6 +2497,7 @@ bool MainComponent::prepareForShutdown()
         return true;
     appShutdownPrepared = true;
     stopTimer();
+    controlSurface.shutdown();
     midiEditor.drumPerformance().setKeyboardEnabled(false);
     audioEngine.setMidiAuditionEnabled(false);
     compatibilityValidator.removeAllJobs(true, 2000);
@@ -2930,6 +2953,7 @@ void MainComponent::timerCallback()
 {
     if (audioInitialiseInFlight)
         return;
+    pollControlSurface();
     if (auto calibration = audioEngine.takeLatencyCalibrationResult();
         calibration.has_value())
     {
@@ -3157,7 +3181,7 @@ void MainComponent::timerCallback()
     {
         inputConfigurationPollTicks = 0;
         auto* device = currentAudioDevice();
-        const auto signature = audioDeviceConfigurationSignature(*deviceManager);
+        const auto signature = audioDeviceConfigurationSignature(*deviceManager, controlSurface.hardwareAvailable());
         if (signature != inputConfigurationSignature)
         {
             inputConfigurationSignature = signature;
@@ -3371,6 +3395,7 @@ void MainComponent::replaceWithUnsavedProject(
     audioEngine.stop();
     if (projectPackage.exists())
         ProjectFile::clearReducedIsolationMarker(projectPackage);
+    controlSurface.discardPendingCommands();
     project = std::move(replacement);
     projectPackage = juce::File();
     transientCompatibilityReport.reset();
@@ -4292,8 +4317,24 @@ void MainComponent::showSettings(bool showUpdates)
 
     if (!showUpdates && !ensureAudioDeviceManager())
         logError("audio.settings", audioStartupError);
+    if (!showUpdates && deviceManager != nullptr && !controlSurface.hardwareAvailable())
+    {
+        auto ready = juce::Result::ok();
+#if JUCE_WINDOWS
+        juce::XmlElement discovery("DEVICESETUP");
+        discovery.setAttribute("deviceType", midiDeviceDiscoveryProbeType);
+        ready = probeAudioDeviceSetup(discovery);
+#endif
+        if (ready.wasOk())
+            juce::ignoreUnused(initialiseStartupMidi(nullptr));
+        else
+        {
+            setStatus("MIDI discovery failed: " + ready.getErrorMessage(), true);
+            logError("control-surface.discovery", ready.getErrorMessage());
+        }
+    }
     const auto settingsAudioSignature = deviceManager != nullptr
-        ? audioDeviceConfigurationSignature(*deviceManager) : juce::String();
+        ? audioDeviceConfigurationSignature(*deviceManager, controlSurface.hardwareAvailable()) : juce::String();
     auto settings = std::make_unique<SettingsComponent>(
         deviceManager.get(),
         updateService,
@@ -4318,7 +4359,13 @@ void MainComponent::showSettings(bool showUpdates)
                 safe->restartForUpdate();
         },
         showUpdates,
-        audioStartupError);
+        audioStartupError,
+        &controlSurface,
+        [safe = juce::Component::SafePointer<MainComponent>(this)](const ControlSurfaceSettings& surfaceSettings)
+        {
+            return safe != nullptr ? safe->configureControlSurface(surfaceSettings)
+                : juce::Result::fail("The workspace is no longer available.");
+        });
     settings->setLookAndFeel(&theme);
 
     juce::DialogWindow::LaunchOptions options;
@@ -4330,6 +4377,7 @@ void MainComponent::showSettings(bool showUpdates)
     options.useNativeTitleBar = true;
     options.resizable = true;
     settingsWindow.reset(options.create());
+    settingsWindow->setResizeLimits(680, 520, 3000, 2000);
     settingsWindow->enterModalState(
         true,
         juce::ModalCallbackFunction::create(
@@ -4340,7 +4388,7 @@ void MainComponent::showSettings(bool showUpdates)
                 {
                     if (safe->preserveStartupAudioSetup && safe->deviceManager != nullptr
                         && safe->currentAudioDevice() != nullptr
-                        && audioDeviceConfigurationSignature(*safe->deviceManager) != settingsAudioSignature)
+                        && audioDeviceConfigurationSignature(*safe->deviceManager, safe->controlSurface.hardwareAvailable()) != settingsAudioSignature)
                     {
                         safe->preserveStartupAudioSetup = false;
                         if (const auto saved = safe->deviceManager->saveCurrentSetup(); saved.failed())
@@ -4350,6 +4398,145 @@ void MainComponent::showSettings(bool showUpdates)
                 }
             }),
         false);
+}
+
+juce::Result MainComponent::configureControlSurface(const ControlSurfaceSettings& settings)
+{
+    if (hasActiveRecordingTargets() || recordingFinalizationInProgress || exportInProgress
+        || calibratingReampRouteId.isNotEmpty())
+        return juce::Result::fail("Stop recording, export or reamp calibration before changing control-surface ports.");
+    const auto* output = deviceManager != nullptr ? deviceManager->getDefaultMidiOutput() : nullptr;
+    if (const auto valid = validateControlSurfacePortUse(settings,
+            deviceManager != nullptr && deviceManager->isMidiInputDeviceEnabled(settings.inputDeviceId),
+            output != nullptr ? output->getIdentifier() : juce::String()); valid.failed())
+        return valid;
+    if (const auto saved = preferences.setControlSurfaceSettings(settings); saved.failed())
+        return saved;
+    audioEngine.setControlSurfaceInputReservation(settings.enabled() ? settings.inputDeviceId : juce::String());
+    return controlSurface.configure(settings);
+}
+
+bool MainComponent::controlSurfaceCommandsAllowed() const
+{
+    return startupServicesAvailable && !startupHub.isVisible() && !audioInitialiseInFlight
+        && !appShutdownPrepared && !exportInProgress && !recordingFinalizationInProgress
+        && calibratingReampRouteId.isEmpty() && juce::Component::getNumCurrentlyModalComponents() == 0;
+}
+
+void MainComponent::pollControlSurface()
+{
+    if (!controlSurface.settings().enabled() || !controlSurface.hardwareAvailable())
+        return;
+    const auto* output = deviceManager != nullptr ? deviceManager->getDefaultMidiOutput() : nullptr;
+    controlSurface.poll(controlSurfaceStateForProject(
+            project, selectedTrackId, audioEngine.isPlaying(), hasActiveRecordingTargets()),
+        juce::Time::getMillisecondCounterHiRes(), controlSurfaceCommandsAllowed(),
+        deviceManager != nullptr && deviceManager->isMidiInputDeviceEnabled(controlSurface.settings().inputDeviceId),
+        output != nullptr ? output->getIdentifier() : juce::String());
+}
+
+void MainComponent::handleControlSurfaceEvents(std::span<const ControlSurfaceEvent> events)
+{
+    using Type = ControlSurfaceEvent::Type;
+    if (events.empty() || !controlSurfaceCommandsAllowed())
+        return;
+    if (events.front().type == Type::volume || events.front().type == Type::pan)
+    {
+        juce::String error;
+        auto edit = prepareControlSurfaceMixEdit(project, events, audioEngine.positionSeconds(), error);
+        if (!edit)
+        {
+            setStatus(error, true);
+            return;
+        }
+        auto preview = pendingAutomationPreview;
+        if (!edit->previews.empty())
+        {
+            auto merged = preview.targets();
+            for (const auto& change : edit->previews)
+            {
+                const auto existing = std::find_if(merged.begin(), merged.end(),
+                    [&](const auto& target) { return target.target == change.target; });
+                if (existing != merged.end())
+                {
+                    existing->endSeconds = change.endSeconds;
+                    existing->endValue = change.endValue;
+                }
+                else
+                    merged.push_back(change);
+            }
+            if (const auto staged = preview.stage(std::move(merged)); staged.failed())
+            {
+                setStatus(staged.getErrorMessage(), true);
+                return;
+            }
+        }
+        if (edit->command && !perform(std::move(edit->command)))
+            return;
+        if (!edit->previews.empty())
+        {
+            pendingAutomationPreview = std::move(preview);
+            setStatus("Control-surface automation preview ready to commit.");
+        }
+        return;
+    }
+    for (const auto& event : events)
+    {
+        if (event.projectId != project.id)
+        {
+            setStatus("Discarded a control-surface command for a replaced project.", true);
+            continue;
+        }
+        switch (event.type)
+        {
+            case Type::play:
+                if (!audioEngine.isPlaying()) togglePlayback();
+                break;
+            case Type::stop: stopTransportAndRecording(); break;
+            case Type::record:
+                if (!hasActiveRecordingTargets()) toggleRecording();
+                break;
+            case Type::select:
+                if (project.findTrack(event.trackId) != nullptr) selectTrack(event.trackId);
+                break;
+            case Type::arm:
+                if (timeline.onTrackArm) timeline.onTrackArm(event.trackId);
+                break;
+            case Type::solo:
+                if (timeline.onTrackSolo) timeline.onTrackSolo(event.trackId);
+                break;
+            case Type::mute:
+                if (timeline.onTrackMute) timeline.onTrackMute(event.trackId);
+                break;
+            case Type::loop:
+                changeTransportState([](auto& state) { state.loopEnabled = !state.loopEnabled; });
+                break;
+            case Type::metronome:
+                changeTransportState([](auto& state) { state.metronomeEnabled = !state.metronomeEnabled; });
+                break;
+            case Type::save: beginSaveProject(); break;
+            case Type::undo: undo(); break;
+            case Type::rewind:
+            case Type::forward:
+            {
+                if (hasActiveRecordingTargets())
+                {
+                    setStatus("Stop recording before seeking from the control surface.", true);
+                    break;
+                }
+                const auto position = audioEngine.positionSeconds();
+                const auto meter = project.meterAt(position);
+                const auto barBeats = static_cast<double>(meter.numerator) * 4.0 / meter.denominator;
+                const auto beats = std::max(0.0, project.beatsAt(position) + (event.type == Type::forward ? barBeats : -barBeats));
+                audioEngine.seekSeconds(project.secondsAtBeat(beats));
+                break;
+            }
+            case Type::bankWhileTouched: setStatus("Release channel faders before changing the control-surface bank."); break;
+            case Type::unavailableTarget: setStatus("The touched control-surface track was removed. Release its fader before continuing.", true); break;
+            case Type::volume:
+            case Type::pan: setStatus("A mixed control-surface command batch was rejected.", true); break;
+        }
+    }
 }
 
 void MainComponent::applyTheme(
@@ -4513,6 +4700,7 @@ void MainComponent::requestStartupHub()
 
 void MainComponent::leaveProjectForStartupHub()
 {
+    controlSurface.discardPendingCommands();
     audioEngine.stop();
     if (projectPackage.exists())
     {
@@ -5069,6 +5257,7 @@ bool MainComponent::openProjectFrom(
             }
         }
     }
+    controlSurface.discardPendingCommands();
     project = std::move(opened->project);
     transientCompatibilityReport.reset();
     activeAutomationGesture.reset();
