@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "name": "Surge XT",
+  "manufacturer": "Surge Synth Team",
+  "version": "1.3.4",
+  "format": "CLAP",
+  "automatedParameterId": "3484083994",
+  "parameters": [
+    { "id": "3365237974", "name": "A Osc 1 Retrigger", "value": 1.0 },
+    { "id": "1568286615", "name": "A Osc 2 Retrigger", "value": 1.0 },
+    { "id": "4066302552", "name": "A Osc 3 Retrigger", "value": 1.0 },
+    { "id": "2854703797", "name": "B Osc 1 Retrigger", "value": 1.0 },
+    { "id": "1057752438", "name": "B Osc 2 Retrigger", "value": 1.0 },
+    { "id": "3555768375", "name": "B Osc 3 Retrigger", "value": 1.0 }
+  ]
+}

@@ -974,6 +974,24 @@ public:
         }
     }
 
+    bool beginProcessCall(bool mayWait) noexcept
+    {
+        const auto deadline = mayWait ? juce::Time::getMillisecondCounterHiRes() + 5000.0 : 0.0;
+        for (;;)
+        {
+            if (!lifecycleChanging.load(std::memory_order_seq_cst) || lifecycleAdmissionOwner == this)
+            {
+                processCallsInFlight.fetch_add(1, std::memory_order_seq_cst);
+                if (!lifecycleChanging.load(std::memory_order_seq_cst) || lifecycleAdmissionOwner == this)
+                    return true;
+                processCallsInFlight.fetch_sub(1, std::memory_order_seq_cst);
+            }
+            if (!mayWait || juce::Time::getMillisecondCounterHiRes() >= deadline)
+                return false;
+            juce::Thread::sleep(1);
+        }
+    }
+
     void waitForAudioCalls() const noexcept
     {
         while (processCallsInFlight.load(std::memory_order_seq_cst) > 0)
@@ -1457,7 +1475,12 @@ public:
     std::int64_t steadyTime = 0;
     std::atomic<bool> lifecycleChanging { false };
     std::atomic<int> processCallsInFlight { 0 };
-    inline static thread_local int lifecycleAdmissionDepth = 0;
+    std::atomic<std::uint64_t> suppressedProcessBlocks { 0 };
+    std::atomic<bool> isolatedWorkerProcessing { false };
+    std::atomic<bool> resetRequested { false };
+    enum class PreparationFailure { none, requiresRealtime, renderingMode, activation, mainThread };
+    std::atomic<PreparationFailure> preparationFailure { PreparationFailure::none };
+    inline static thread_local const Impl* lifecycleAdmissionOwner = nullptr;
     std::atomic<bool> flushRequested { false };
     std::atomic<std::uint32_t> parameterRescanFlags { 0 };
     std::atomic<std::uint32_t> audioPortRescanFlags { 0 };
@@ -1599,12 +1622,32 @@ void ClapPluginInstance::prepareToPlay(double sampleRate, int maximumBlockSize)
                            sampleRate,
                            blockSize = std::max(1, maximumBlockSize)]
     {
+        using Failure = Impl::PreparationFailure;
         auto parameterValuesChanged = false;
         impl->lifecycleChanging.store(true, std::memory_order_seq_cst);
         impl->waitForAudioCalls();
         impl->stopProcessingOnAudioThread();
         if (impl->active.exchange(false, std::memory_order_acq_rel))
             impl->plugin->deactivate(impl->plugin);
+        impl->preparationFailure.store(Failure::none, std::memory_order_release);
+        const auto* rendering = static_cast<const clap_plugin_render_t*>(
+            impl->plugin->get_extension(impl->plugin, CLAP_EXT_RENDER));
+        if (rendering != nullptr)
+        {
+            const auto hardRealtime = rendering->has_hard_realtime_requirement != nullptr
+                && rendering->has_hard_realtime_requirement(impl->plugin);
+            if (isNonRealtime() && hardRealtime)
+                impl->preparationFailure.store(Failure::requiresRealtime, std::memory_order_release);
+            else if (rendering->set == nullptr
+                || !rendering->set(impl->plugin, isNonRealtime() ? CLAP_RENDER_OFFLINE : CLAP_RENDER_REALTIME))
+                impl->preparationFailure.store(Failure::renderingMode, std::memory_order_release);
+            if (impl->preparationFailure.load(std::memory_order_acquire) != Failure::none)
+            {
+                impl->lifecycleChanging.store(false, std::memory_order_seq_cst);
+                logError("clap.lifecycle", preparationResult().getErrorMessage());
+                return;
+            }
+        }
         impl->sampleRate = sampleRate;
         impl->maximumBlockSize = blockSize;
         impl->inputScratch.setSize(
@@ -1629,6 +1672,11 @@ void ClapPluginInstance::prepareToPlay(double sampleRate, int maximumBlockSize)
             impl->refreshLatency(*this);
             parameterValuesChanged = impl->refreshParameters(true);
         }
+        else
+        {
+            impl->preparationFailure.store(Failure::activation, std::memory_order_release);
+            logError("clap.lifecycle", "The CLAP processor rejected audio activation.");
+        }
         impl->lifecycleChanging.store(false, std::memory_order_seq_cst);
         if (parameterValuesChanged)
             updateHostDisplay(juce::AudioProcessor::ChangeDetails {}.withParameterInfoChanged(true));
@@ -1642,9 +1690,10 @@ void ClapPluginInstance::prepareToPlay(double sampleRate, int maximumBlockSize)
                   {
                       activate();
                   }))
-        logError(
-            "clap.lifecycle",
-            "Activation main thread unavailable.");
+    {
+        impl->preparationFailure.store(Impl::PreparationFailure::mainThread, std::memory_order_release);
+        logError("clap.lifecycle", "Activation main thread unavailable.");
+    }
 }
 
 void ClapPluginInstance::releaseResources()
@@ -1674,17 +1723,21 @@ void ClapPluginInstance::releaseResources()
             "Deactivation main thread unavailable.");
 }
 
+void ClapPluginInstance::reset()
+{
+    impl->resetRequested.store(true, std::memory_order_release);
+}
+
 void ClapPluginInstance::processBlock(juce::AudioBuffer<float>& audio,
                                       juce::MidiBuffer& midi)
 {
     juce::ScopedNoDenormals noDenormals;
-    if (impl->lifecycleChanging.load(std::memory_order_seq_cst)
-        && Impl::lifecycleAdmissionDepth == 0)
+    if (!impl->beginProcessCall(isNonRealtime() || impl->isolatedWorkerProcessing.load(std::memory_order_relaxed)))
     {
+        impl->suppressedProcessBlocks.fetch_add(1, std::memory_order_relaxed);
         audio.clear();
         return;
     }
-    impl->processCallsInFlight.fetch_add(1, std::memory_order_seq_cst);
     struct ProcessScope
     {
         ~ProcessScope()
@@ -1693,10 +1746,9 @@ void ClapPluginInstance::processBlock(juce::AudioBuffer<float>& audio,
         }
         std::atomic<int>& count;
     } processScope { impl->processCallsInFlight };
-    if ((impl->lifecycleChanging.load(std::memory_order_seq_cst)
-         && Impl::lifecycleAdmissionDepth == 0)
-        || !impl->active.load(std::memory_order_acquire))
+    if (!impl->active.load(std::memory_order_acquire))
     {
+        impl->suppressedProcessBlocks.fetch_add(1, std::memory_order_relaxed);
         audio.clear();
         return;
     }
@@ -1712,11 +1764,14 @@ void ClapPluginInstance::processBlock(juce::AudioBuffer<float>& audio,
             std::memory_order_release);
         if (!impl->plugin->start_processing(impl->plugin))
         {
+            impl->suppressedProcessBlocks.fetch_add(1, std::memory_order_relaxed);
             audio.clear();
             return;
         }
         impl->processing.store(true, std::memory_order_release);
     }
+    if (impl->resetRequested.exchange(false, std::memory_order_acq_rel))
+        impl->plugin->reset(impl->plugin);
     impl->buildDirtyParameterEvents(true);
     for (std::uint32_t index = 0;
          index < impl->scheduledAutomationEventCount
@@ -1924,12 +1979,40 @@ void ClapPluginInstance::processBlock(juce::AudioBuffer<float>& audio,
     impl->outputEvents.midiOutput = nullptr;
     impl->steadyTime += audio.getNumSamples();
     if (status == CLAP_PROCESS_ERROR)
+    {
+        impl->suppressedProcessBlocks.fetch_add(1, std::memory_order_relaxed);
         audio.clear();
+    }
     else if (status == CLAP_PROCESS_SLEEP)
     {
         impl->plugin->stop_processing(impl->plugin);
         impl->processing.store(false, std::memory_order_release);
     }
+}
+
+std::uint64_t ClapPluginInstance::suppressedProcessBlockCount() const noexcept
+{
+    return impl->suppressedProcessBlocks.load(std::memory_order_relaxed);
+}
+
+void ClapPluginInstance::setIsolatedWorkerProcessing(bool isolated) noexcept
+{
+    impl->isolatedWorkerProcessing.store(isolated, std::memory_order_relaxed);
+}
+
+juce::Result ClapPluginInstance::preparationResult() const
+{
+    using Failure = Impl::PreparationFailure;
+    switch (impl->preparationFailure.load(std::memory_order_acquire))
+    {
+        case Failure::requiresRealtime: return juce::Result::fail("The CLAP processor requires real-time processing and cannot run in offline export.");
+        case Failure::renderingMode: return juce::Result::fail("The CLAP processor rejected the requested rendering mode.");
+        case Failure::activation: return juce::Result::fail("The CLAP processor rejected audio activation.");
+        case Failure::mainThread: return juce::Result::fail("The CLAP activation main thread is unavailable.");
+        case Failure::none: break;
+    }
+    return impl->active.load(std::memory_order_acquire) ? juce::Result::ok()
+        : juce::Result::fail("The CLAP processor is not prepared for processing.");
 }
 
 double ClapPluginInstance::getTailLengthSeconds() const
@@ -2167,12 +2250,9 @@ bool ClapPluginInstance::supportsSampleAccurateAutomation(
     std::span<const PluginBridgeParameterEvent> events,
     int numSamples) const noexcept
 {
-    if (impl->lifecycleChanging.load(std::memory_order_seq_cst))
+    if (!impl->beginProcessCall(isNonRealtime() || impl->isolatedWorkerProcessing.load(std::memory_order_relaxed)))
         return false;
 
-    impl->processCallsInFlight.fetch_add(
-        1,
-        std::memory_order_seq_cst);
     struct SupportScope
     {
         ~SupportScope()
@@ -2181,9 +2261,6 @@ bool ClapPluginInstance::supportsSampleAccurateAutomation(
         }
         std::atomic<int>& count;
     } supportScope { impl->processCallsInFlight };
-    if (impl->lifecycleChanging.load(std::memory_order_seq_cst))
-        return false;
-
     for (const auto& event : events)
     {
         if (event.parameterIndex
@@ -2205,14 +2282,12 @@ void ClapPluginInstance::processBlockWithAutomation(
     juce::MidiBuffer& midi,
     std::span<const PluginBridgeParameterEvent> events) noexcept
 {
-    if (impl->lifecycleChanging.load(std::memory_order_seq_cst))
+    if (!impl->beginProcessCall(isNonRealtime() || impl->isolatedWorkerProcessing.load(std::memory_order_relaxed)))
     {
+        impl->suppressedProcessBlocks.fetch_add(1, std::memory_order_relaxed);
         audio.clear();
         return;
     }
-    impl->processCallsInFlight.fetch_add(
-        1,
-        std::memory_order_seq_cst);
     struct AutomationScope
     {
         ~AutomationScope()
@@ -2221,22 +2296,19 @@ void ClapPluginInstance::processBlockWithAutomation(
         }
         std::atomic<int>& count;
     } automationScope { impl->processCallsInFlight };
-    if (impl->lifecycleChanging.load(std::memory_order_seq_cst))
-    {
-        audio.clear();
-        return;
-    }
     struct LifecycleAdmissionScope
     {
-        LifecycleAdmissionScope()
+        explicit LifecycleAdmissionScope(const Impl* current)
+            : previous(Impl::lifecycleAdmissionOwner)
         {
-            ++Impl::lifecycleAdmissionDepth;
+            Impl::lifecycleAdmissionOwner = current;
         }
         ~LifecycleAdmissionScope()
         {
-            --Impl::lifecycleAdmissionDepth;
+            Impl::lifecycleAdmissionOwner = previous;
         }
-    } lifecycleAdmissionScope;
+        const Impl* previous;
+    } lifecycleAdmissionScope { impl.get() };
 
     auto requiresFallback = !automationFitsCapacity(
         events,

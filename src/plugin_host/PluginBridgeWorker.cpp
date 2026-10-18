@@ -4,6 +4,7 @@
 #include "PluginEditorWindow.h"
 #include "SampleAccurateAutomationTarget.h"
 #include "ValidatedPluginStateTarget.h"
+#include "ClapPluginInstance.h"
 #include <algorithm>
 #include <cmath>
 #include <span>
@@ -121,6 +122,7 @@ void PluginBridgeWorker::handleMessageFromCoordinator(const juce::MemoryBlock& m
     const auto sampleRate = stream.readDouble();
     const auto blockSize = stream.readInt();
     const auto requestedSidechainChannels = stream.readInt();
+    const auto nonRealtime = stream.readBool();
     auto newMapping = std::make_unique<juce::MemoryMappedFile>(
         sharedFile,
         juce::MemoryMappedFile::readWrite,
@@ -156,7 +158,7 @@ void PluginBridgeWorker::handleMessageFromCoordinator(const juce::MemoryBlock& m
                         pluginState,
                         sampleRate,
                         blockSize,
-                        requestedSidechainChannels);
+                        requestedSidechainChannels, nonRealtime);
         return;
     }
 
@@ -176,7 +178,8 @@ void PluginBridgeWorker::handleMessageFromCoordinator(const juce::MemoryBlock& m
          pluginState,
          sampleRate,
          blockSize,
-         requestedSidechainChannels](
+         requestedSidechainChannels,
+         nonRealtime](
             std::unique_ptr<juce::AudioPluginInstance> instance,
             const juce::String& error)
         {
@@ -190,7 +193,7 @@ void PluginBridgeWorker::handleMessageFromCoordinator(const juce::MemoryBlock& m
                             pluginState,
                             sampleRate,
                             blockSize,
-                            requestedSidechainChannels);
+                            requestedSidechainChannels, nonRealtime);
         });
 }
 
@@ -317,6 +320,8 @@ void PluginBridgeWorker::run()
         const std::lock_guard pluginLock(pluginMutex);
         const auto transport = sharedState->transport;
         playHead.setTransport(transport);
+        const auto* clap = dynamic_cast<const ClapPluginInstance*>(plugin.get());
+        const auto suppressedBefore = clap != nullptr ? clap->suppressedProcessBlockCount() : 0;
         const auto resetApplied =
             sharedState->resetRequested.exchange(
                 0,
@@ -586,10 +591,11 @@ void PluginBridgeWorker::run()
         sharedState->numOutputChannels.store(
             static_cast<std::uint32_t>(mainOutputChannels),
             std::memory_order_relaxed);
+        auto outputFlags = resetApplied ? PluginBridgeSharedState::resetAppliedFlag : 0u;
+        if (clap != nullptr && clap->suppressedProcessBlockCount() != suppressedBefore)
+            outputFlags |= PluginBridgeSharedState::bypassOutputFlag;
         sharedState->outputFlags.store(
-            resetApplied
-                ? PluginBridgeSharedState::resetAppliedFlag
-                : 0,
+            outputFlags,
             std::memory_order_relaxed);
         sharedState->workerSequence.store(hostSequence, std::memory_order_release);
     }
@@ -599,7 +605,7 @@ void PluginBridgeWorker::startProcessing(std::unique_ptr<juce::AudioPluginInstan
                                          const juce::MemoryBlock& state,
                                          double sampleRate,
                                          int blockSize,
-                                         int requestedSidechainChannels)
+                                         int requestedSidechainChannels, bool nonRealtime)
 {
     editorWindow.reset();
     if (newPlugin != nullptr)
@@ -639,6 +645,9 @@ void PluginBridgeWorker::startProcessing(std::unique_ptr<juce::AudioPluginInstan
             return;
         }
 
+        newPlugin->setNonRealtime(nonRealtime);
+        if (auto* clap = dynamic_cast<ClapPluginInstance*>(newPlugin.get()))
+            clap->setIsolatedWorkerProcessing(true);
         newPlugin->setPlayHead(&playHead);
         newPlugin->setRateAndBufferSizeDetails(sampleRate, blockSize);
         if (!state.isEmpty())
@@ -667,6 +676,12 @@ void PluginBridgeWorker::startProcessing(std::unique_ptr<juce::AudioPluginInstan
             }
         }
         newPlugin->prepareToPlay(sampleRate, blockSize);
+        if (const auto* clap = dynamic_cast<const ClapPluginInstance*>(newPlugin.get()))
+            if (const auto prepared = clap->preparationResult(); prepared.failed())
+            {
+                sendStatus("error:prepare:" + prepared.getErrorMessage());
+                return;
+            }
     }
 
     if (plugin != nullptr)

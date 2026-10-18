@@ -2082,6 +2082,7 @@ StudioAudioEngine::preserveLiveAraStates(
         const auto preserveRackState = rackChanged && previous != previousRequests.cend()
             && origin != previousOrigins.cend() && origin->second == pluginStateHash(request.state)
             && previous->bridgeMode == request.bridgeMode
+            && previous->nonRealtime == request.nonRealtime
             && previous->deviceIdentifier == request.deviceIdentifier
             && previous->description.has_value() == request.description.has_value()
             && (!request.description.has_value()
@@ -3368,9 +3369,12 @@ juce::Result StudioAudioEngine::renderToBufferInternal(
             return failure;
         };
 
+        auto renderRequests = pluginRequests;
+        for (auto& request : renderRequests)
+            request.nonRealtime = true;
         if (const auto result = updateProjectInternal(
                 renderProject,
-                pluginRequests,
+                renderRequests,
                 true);
             result.failed())
         {
@@ -3434,7 +3438,7 @@ juce::Result StudioAudioEngine::renderToBufferInternal(
             false);
         destination.clear();
 
-        const auto realtime = std::any_of(
+        const auto hasSandboxedProcessors = std::any_of(
             pluginRequests.cbegin(),
             pluginRequests.cend(),
             [](const auto& request)
@@ -3476,16 +3480,21 @@ juce::Result StudioAudioEngine::renderToBufferInternal(
                         channel, destinationOffset, block, channel, sourceOffset, capturedSamples);
             }
             offset += samples;
-            if (realtime)
+            const auto runtimeIndex = activePluginRuntime.load(std::memory_order_acquire);
+            for (const auto& track : pluginRuntimeGraphs[static_cast<std::size_t>(runtimeIndex)].tracks)
             {
-                const auto runtimeIndex = activePluginRuntime.load(std::memory_order_acquire);
-                for (const auto& track : pluginRuntimeGraphs[static_cast<std::size_t>(runtimeIndex)].tracks)
-                    for (const auto& insert : track.inserts)
-                        if (insert.bridge != nullptr)
-                            if (const auto completed = insert.bridge->waitForPendingOutput(std::chrono::seconds(5));
-                                completed.failed())
-                                return restoreAfterFailure(juce::Result::fail(
-                                    insert.name + ": " + completed.getErrorMessage()), true);
+                for (const auto& insert : track.inserts)
+                {
+                    if (hasSandboxedProcessors && insert.bridge != nullptr)
+                        if (const auto completed = insert.bridge->waitForPendingOutput(std::chrono::seconds(5));
+                            completed.failed())
+                            return restoreAfterFailure(juce::Result::fail(
+                                insert.name + ": " + completed.getErrorMessage()), true);
+                    if (const auto* clap = dynamic_cast<const ClapPluginInstance*>(insert.inProcess.get());
+                        clap != nullptr && clap->suppressedProcessBlockCount() != 0)
+                        return restoreAfterFailure(juce::Result::fail(
+                            insert.name + ": CLAP processing was suppressed or failed during offline export."), true);
+                }
             }
         }
         for (const auto& status : pluginRuntimeStatuses())
@@ -7573,9 +7582,18 @@ void StudioAudioEngine::runPluginRuntimeBuilder()
                         continue;
                     }
                 }
+                processor->setNonRealtime(request.nonRealtime);
                 processor->prepareToPlay(
                     currentSampleRate(),
                     PluginBridgeSharedState::maxBlockSize);
+                if (const auto* clap = dynamic_cast<const ClapPluginInstance*>(processor.get()))
+                    if (const auto prepared = clap->preparationResult(); prepared.failed())
+                    {
+                        status.state = PluginRuntimeStatus::State::failed;
+                        status.message = prepared.getErrorMessage();
+                        statuses.push_back(std::move(status));
+                        continue;
+                    }
 
                 auto track = std::find_if(
                     graph.tracks.begin(),
@@ -7674,7 +7692,8 @@ void StudioAudioEngine::runPluginRuntimeBuilder()
                                                         deviceBlockSize.load(
                                                             std::memory_order_acquire)),
                                                     request.state,
-                                                    request.sidechainChannels);
+                                                    request.sidechainChannels,
+                                                    request.nonRealtime);
             if (result.failed())
             {
                 auto track = std::find_if(graph.tracks.begin(),
@@ -7854,6 +7873,7 @@ juce::String StudioAudioEngine::pluginRuntimeFingerprint(
                     << (request.missing ? "m" : "a")
                     << ":"
                     << pluginBridgeModeToString(request.bridgeMode)
+                    << (request.nonRealtime ? ":offline" : ":realtime")
                     << ":"
                     << (request.recoveryDisabled ? "r" : "n")
                     << ":"

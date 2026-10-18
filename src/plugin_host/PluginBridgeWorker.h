@@ -31,7 +31,7 @@ private:
                          const juce::MemoryBlock& state,
                          double sampleRate,
                          int blockSize,
-                         int sidechainChannels);
+                         int sidechainChannels, bool nonRealtime);
     void sendStatus(const juce::String& status);
     void showEditor();
     void hideEditor();

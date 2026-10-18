@@ -27,7 +27,8 @@ public:
                              double sampleRate,
                              int blockSize,
                              const juce::MemoryBlock& state = {},
-                             int sidechainChannels = 0);
+                             int sidechainChannels = 0,
+                             bool nonRealtime = false);
     void stop();
     juce::Result requestState(juce::MemoryBlock& state,
                               std::chrono::milliseconds timeout);
@@ -74,7 +75,7 @@ private:
                                double sampleRate,
                                int blockSize,
                                const juce::MemoryBlock& state,
-                               int sidechainChannels);
+                               int sidechainChannels, bool nonRealtime);
     void fetchWorkerOutput() noexcept;
     void publishInputBlock(int samples, std::int64_t startSample) noexcept;
     void prepareOutputTimeline(int blockSize);

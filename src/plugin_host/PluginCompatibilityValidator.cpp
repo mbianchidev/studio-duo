@@ -421,6 +421,18 @@ PluginValidationReport PluginCompatibilityValidator::validate(
     }
 
     instance->prepareToPlay(48000.0, 256);
+    if (const auto* clap = dynamic_cast<const ClapPluginInstance*>(instance.get()))
+    {
+        const auto prepared = clap->preparationResult();
+        addCheck(report, "prepare", prepared.wasOk() ? "pass" : "fail",
+            prepared.wasOk() ? "CLAP audio/render mode prepared" : prepared.getErrorMessage());
+        if (prepared.failed())
+        {
+            instance->releaseResources();
+            report.status = "fail";
+            return report;
+        }
+    }
     juce::AudioBuffer<float> audio(
         std::max({
             2,

@@ -815,7 +815,7 @@ they must not overwrite the single-slot bridge input before the worker can run.
 Ramp endpoints may be one sample past the block, preserving the original slope
 instead of reaching the endpoint a sample early.
 
-Bridge protocol 7 also carries the first slice's block-start transport snapshot:
+Bridge protocol 8 also carries the first slice's block-start transport snapshot:
 sample/second/quarter-note position, tempo and ramp increment, meter, bar start/
 count, loop bounds and play/record/loop flags. Trusted and bundled processors use
 an owned `PluginHostPlayHead`; its atomic-word snapshots are coherent and its
@@ -826,6 +826,20 @@ worker MIDI is rebased and reassembled with those sub-blocks, not replayed in
 every slice. Context describes the processing quantum's start, not a claim of
 sample-accurate within-quantum tempo/meter/loop transitions. The sliced bridge
 must retain its first clock, not silently substitute the post-wrap slice's time.
+
+Offline requests carry a transient non-realtime processing context through the
+runtime identity and worker startup; restoring the live graph restores its
+original context. The CLAP render extension receives the matching mode on the
+main thread before activation. Hard-realtime-only processors, rejected render
+modes, and failed activation produce explicit preparation errors, not successful
+dry exports. Offline and isolated-worker processing may wait up to five seconds
+for native lifecycle admission; the parent realtime callback never waits.
+Suppressed or failed CLAP processing is counted and rejected during offline
+export, including trusted processors and worker fallback output. The exporter
+waits for completed worker DSP outside the audio callback rather than sleeping
+for a nominal block duration. Host seek/reset requests reach the native CLAP
+reset callback on the next admitted audio-thread block, rather than inheriting
+JUCE's empty default reset.
 
 CLAP activation refreshes clean parameter values while retaining pending host
 edits. Worker parameter changes publish refreshed metadata, including discrete

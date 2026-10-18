@@ -28,27 +28,28 @@ PluginBridgeClient::~PluginBridgeClient()
 
 juce::Result PluginBridgeClient::start()
 {
-    return startInternal(nullptr, 48000.0, 512, {}, 0);
+    return startInternal(nullptr, 48000.0, 512, {}, 0, false);
 }
 
 juce::Result PluginBridgeClient::startPlugin(const juce::PluginDescription& description,
                                              double pluginSampleRate,
                                              int blockSize,
                                              const juce::MemoryBlock& state,
-                                             int requestedSidechainChannels)
+                                             int requestedSidechainChannels,
+                                             bool nonRealtime)
 {
     return startInternal(&description,
                          pluginSampleRate,
                          blockSize,
                          state,
-                         requestedSidechainChannels);
+                         requestedSidechainChannels, nonRealtime);
 }
 
 juce::Result PluginBridgeClient::startInternal(const juce::PluginDescription* description,
                                                double pluginSampleRate,
                                                int blockSize,
                                                const juce::MemoryBlock& state,
-                                               int requestedSidechainChannels)
+                                               int requestedSidechainChannels, bool nonRealtime)
 {
     stop();
 
@@ -83,6 +84,7 @@ juce::Result PluginBridgeClient::startInternal(const juce::PluginDescription* de
     stream.writeDouble(pluginSampleRate);
     stream.writeInt(PluginBridgeSharedState::maxBlockSize);
     stream.writeInt(std::max(0, requestedSidechainChannels));
+    stream.writeBool(nonRealtime);
     if (!sendMessageToWorker(request))
     {
         stop();

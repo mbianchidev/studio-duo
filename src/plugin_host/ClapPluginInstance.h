@@ -26,9 +26,13 @@ public:
     const juce::String getName() const override;
     void prepareToPlay(double sampleRate, int maximumBlockSize) override;
     void releaseResources() override;
+    void reset() override;
     void processBlock(juce::AudioBuffer<float>& audio,
                       juce::MidiBuffer& midi) override;
     double getTailLengthSeconds() const override;
+    [[nodiscard]] std::uint64_t suppressedProcessBlockCount() const noexcept;
+    void setIsolatedWorkerProcessing(bool isolated) noexcept;
+    [[nodiscard]] juce::Result preparationResult() const;
     bool acceptsMidi() const override;
     bool producesMidi() const override;
     juce::AudioProcessorEditor* createEditor() override;

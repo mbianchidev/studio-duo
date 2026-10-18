@@ -290,6 +290,25 @@ must survive; reloading only initial defaults is not a pass. Calls are paced at
 30 ms per 256 samples to test exchange/recovery, **not** physical deadlines.
 It does not simulate a vendor hang inside state capture or certify every mode.
 
+`--exercise-workflows` runs independent editable instances, actual MIDI-instrument
+or stereo-effect audio, complete repeated/live-offline nulls, two nested serial
+racks, parent bypass, tempo changes and parameter steps through real workers.
+It uses the graph's declared latency; paced exchange is not physical deadline
+qualification. Every null keeps the `1e-5` maximum-error gate. Per-case timings,
+public parameter metadata and mismatch spans remain in `workflowMeasurements`.
+Unavailable bus-specific exercises remain explicit skips, not compatibility
+passes.
+
+For a processor needing an explicit deterministic setup, add
+`--workflow-profile=/absolute/profile.json`. Schema 1 profiles identify the exact
+name, manufacturer, version and native format, list public parameter IDs, names
+and normalized values, and select a continuous `automatedParameterId`. The
+runner verifies retained values and records the profile SHA-256; it never
+silently substitutes another preset or raises the null tolerance. The
+`tests/vendor-profiles/` Surge XT 1.3.4 recipes enable oscillator retrigger and
+use separate VST3/CLAP ID namespaces. Unconfigured stochastic failures remain
+failed evidence.
+
 On macOS, `scripts/vendor-probe-macos.sb` denies network access, Apple events,
 and writes outside explicit work/output roots. Supply those parameters to
 `sandbox-exec`, set a private child `HOME` and `TMPDIR`, and bound the executable

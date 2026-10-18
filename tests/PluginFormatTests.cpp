@@ -4,6 +4,7 @@
 
 #include "plugin_host/PluginFormats.h"
 #include "plugin_host/ClapPluginFormat.h"
+#include "plugin_host/ClapPluginInstance.h"
 #include "plugin_host/PluginBridgeClient.h"
 #include "plugin_host/ValidatedPluginStateTarget.h"
 #include "model/ProjectCommands.h"
@@ -247,6 +248,57 @@ void hostTransportTests(const juce::PluginDescription& description, const studio
     }
 }
 
+void lifecycleAdmissionTests(const juce::PluginDescription& description)
+{
+    ScopedTestEnvironment delay("STUDIO_DUO_TEST_CLAP_ACTIVATE_DELAY_MS", "30");
+    expect(delay.status().wasOk(), "The lifecycle fixture uses a bounded native activation delay.");
+    for (int context = 0; context < 3; ++context)
+    {
+        juce::String error;
+        auto processor = studio::ClapPluginInstance::create(description, 48000.0, 64, error);
+        expect(processor != nullptr, error.toRawUTF8());
+        if (!processor)
+            continue;
+        processor->setNonRealtime(context == 1);
+        processor->setIsolatedWorkerProcessing(context == 2);
+        processor->prepareToPlay(48000.0, 64);
+        std::atomic<bool> running { true };
+        std::atomic<int> calls { 0 }, silent { 0 };
+        std::thread audio([&]
+        {
+            juce::AudioBuffer<float> buffer(2, 64);
+            juce::MidiBuffer events;
+            while (running.load(std::memory_order_acquire))
+            {
+                for (int channel = 0; channel < 2; ++channel)
+                    for (int sample = 0; sample < 64; ++sample)
+                        buffer.setSample(channel, sample, 0.2f);
+                events.clear();
+                processor->processBlockWithAutomation(buffer, events, {});
+                if (buffer.getMagnitude(0, 64) < 0.05f)
+                    silent.fetch_add(1, std::memory_order_relaxed);
+                calls.fetch_add(1, std::memory_order_release);
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+        });
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while (calls.load(std::memory_order_acquire) < 5 && std::chrono::steady_clock::now() < deadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        processor->prepareToPlay(48000.0, 64);
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        running.store(false, std::memory_order_release);
+        audio.join();
+        expect(calls.load() >= 5, "Lifecycle admission proof includes actual native DSP calls.");
+        if (context == 0)
+            expect(processor->suppressedProcessBlockCount() > 0 && silent.load() > 0,
+                   "A true in-process realtime caller stays nonblocking during native lifecycle changes.");
+        else
+            expect(processor->suppressedProcessBlockCount() == 0 && silent.load() == 0,
+                   "Offline and isolated-worker callers wait for native lifecycle admission instead of publishing silence.");
+        processor->releaseResources();
+    }
+}
+
 void sandboxOfflineWaitTests(const juce::PluginDescription& description, const studio::AudioClip& clip)
 {
     ScopedTestEnvironment delay("STUDIO_DUO_TEST_CLAP_PROCESS_DELAY_MS", "30");
@@ -277,6 +329,78 @@ void sandboxOfflineWaitTests(const juce::PluginDescription& description, const s
                && engine->pluginLateBlockCount() == 0,
            ("Offline sandbox export waits for actual wet DSP, not fixed sleep followed by dry fallback: "
             + result.getErrorMessage()).toRawUTF8());
+}
+
+void renderModeTests(const juce::PluginDescription& description, const studio::AudioClip& clip)
+{
+    ScopedTestEnvironment diagnostics("STUDIO_DUO_TEST_CLAP_RENDER_DIAGNOSTICS", "1");
+    expect(diagnostics.status().wasOk(), "The render-mode fixture is confined to its own process and workers.");
+    juce::String error;
+    auto processor = studio::ClapPluginInstance::create(description, 48000.0, 64, error);
+    expect(processor != nullptr, error.toRawUTF8());
+    if (!processor)
+        return;
+    for (const auto nonRealtime : { true, false })
+    {
+        processor->setNonRealtime(nonRealtime);
+        processor->prepareToPlay(48000.0, 64);
+        juce::AudioBuffer<float> signal(2, 64);
+        signal.clear();
+        juce::MidiBuffer midi;
+        processor->processBlock(signal, midi);
+        expect(processor->preparationResult().wasOk()
+                    && std::abs(signal.getSample(0, 0) - (nonRealtime ? 0.75f : 0.25f)) < 1e-6f,
+                "The actual CLAP render extension receives offline mode and restores realtime mode before activation.");
+        processor->reset();
+        signal.clear();
+        processor->processBlock(signal, midi);
+        expect(std::abs(signal.getSample(0, 0) - (nonRealtime ? 0.751f : 0.251f)) < 1e-6f,
+                "A host seek/reset calls the actual CLAP reset on its next admitted audio thread block.");
+        processor->releaseResources();
+    }
+    processor.reset();
+    for (const auto* policy : { "hard-realtime", "reject-offline", "reject-activation" })
+    {
+        ScopedTestEnvironment configuredPolicy("STUDIO_DUO_TEST_CLAP_RENDER_POLICY", policy);
+        expect(configuredPolicy.status().wasOk(), "The fixture render rejection policy is process-local.");
+        auto rejected = studio::ClapPluginInstance::create(description, 48000.0, 64, error);
+        expect(rejected != nullptr, error.toRawUTF8());
+        if (rejected)
+        {
+             rejected->setNonRealtime(true);
+             rejected->prepareToPlay(48000.0, 64);
+             expect(rejected->preparationResult().failed(),
+                    "Rejected render modes, hard-realtime requirements and activation failures cannot report prepared.");
+        }
+        if (juce::String(policy) != "hard-realtime")
+             continue;
+        for (const auto mode : { studio::PluginBridgeMode::trustedInProcess, studio::PluginBridgeMode::sandboxed })
+        {
+             auto project = studio::Project::createDefault();
+             project.metronomeEnabled = false;
+             project.tracks.front().clips = { clip };
+             studio::PluginInsert insert;
+             insert.pluginIdentifier = description.createIdentifierString();
+             insert.name = "Synthetic hard-realtime processor";
+             insert.format = "CLAP";
+             insert.bridgeMode = mode;
+             project.tracks.front().inserts.push_back(insert);
+             studio::StudioAudioEngine::PluginRuntimeRequest request;
+             request.trackId = project.tracks.front().id;
+             request.insertId = insert.id;
+             request.name = insert.name;
+             request.description = description;
+             request.bridgeMode = mode;
+             auto engine = std::make_unique<studio::StudioAudioEngine>(juce::File(STUDIO_DUO_BRIDGE_WORKER_PATH));
+             expect(engine->configureAudioForTesting(48000.0, 64).wasOk(), "Render-mode rejection uses the configured clock.");
+             juce::AudioBuffer<float> rendered;
+             const auto result = engine->renderRangeToBuffer(project, rendered, 48000.0,
+                 { 0.0, clip.durationSeconds, 0.0 }, { request });
+             expect(result.failed() && result.getErrorMessage().contains("requires real-time"),
+                    ("Trusted and sandboxed offline export surface actual hard-realtime CLAP requirements: "
+                     + result.getErrorMessage()).toRawUTF8());
+        }
+    }
 }
 }
 
@@ -1167,7 +1291,9 @@ void pluginFormatTests()
 
     sandboxCrashRecoveryTests(*descriptions[0], monoClip);
     hostTransportTests(*descriptions[0], monoClip);
+    lifecycleAdmissionTests(*descriptions[0]);
     sandboxOfflineWaitTests(*descriptions[0], monoClip);
+    renderModeTests(*descriptions[0], monoClip);
     monoSource.deleteFile();
 
     auto project = studio::Project::createDefault();

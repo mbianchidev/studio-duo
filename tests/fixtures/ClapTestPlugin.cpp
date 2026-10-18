@@ -5,7 +5,28 @@
 #include <stdlib.h>
 #include <string.h>
 #include <chrono>
+#include <string>
 #include <thread>
+
+static std::string test_environment(const char* name)
+{
+#if defined(_WIN32)
+    char* value = NULL;
+    size_t size = 0;
+    if (_dupenv_s(&value, &size, name) != 0)
+    {
+        fprintf(stderr, "Cannot read synthetic CLAP fixture configuration: %s\n", name);
+        free(value);
+        abort();
+    }
+    const std::string result = value != NULL ? value : "";
+    free(value);
+    return result;
+#else
+    const char* value = getenv(name);
+    return value != NULL ? value : "";
+#endif
+}
 
 typedef struct test_plugin {
     clap_plugin_t plugin;
@@ -27,7 +48,14 @@ typedef struct test_plugin {
     bool metadata_rescan_requested;
     uint32_t metadata_epoch;
     bool transport_diagnostics;
+    bool render_diagnostics;
+    bool hard_realtime;
+    bool reject_offline_mode;
+    bool reject_activation;
+    clap_plugin_render_mode render_mode;
+    uint32_t reset_count;
     uint32_t process_delay_milliseconds;
+    uint32_t activation_delay_milliseconds;
 } test_plugin_t;
 
 static const char* features[] = {
@@ -89,13 +117,15 @@ static bool plugin_activate(const clap_plugin_t* plugin,
 {
     test_plugin_t* instance = self(plugin);
     expect_main_thread(plugin);
-    instance->active = true;
+    instance->active = sample_rate > 0.0 && min_frames > 0 && max_frames >= min_frames
+        && !instance->reject_activation;
+    instance->reset_count = 0;
     ++instance->activation_count;
-    const char* activation_values = getenv("STUDIO_DUO_TEST_CLAP_ACTIVATION_VALUES");
-    if (activation_values != NULL && strcmp(activation_values, "1") == 0)
+    if (instance->activation_count > 1 && instance->activation_delay_milliseconds > 0)
+        std::this_thread::sleep_for(std::chrono::milliseconds(instance->activation_delay_milliseconds));
+    if (test_environment("STUDIO_DUO_TEST_CLAP_ACTIVATION_VALUES") == "1")
         instance->parameters[0] = 0.75;
-    return sample_rate > 0.0 && min_frames > 0
-        && max_frames >= min_frames;
+    return instance->active;
 }
 
 static void plugin_deactivate(const clap_plugin_t* plugin)
@@ -120,6 +150,7 @@ static void plugin_stop_processing(const clap_plugin_t* plugin)
 static void plugin_reset(const clap_plugin_t* plugin)
 {
     expect_audio_thread(plugin);
+    ++self(plugin)->reset_count;
 }
 
 static uint32_t input_event_count(const clap_input_events_t* events)
@@ -222,7 +253,10 @@ static clap_process_status plugin_process(const clap_plugin_t* plugin,
                         && channel < input->channel_count
                     ? input->data32[channel][frame]
                     : 0.0f;
-                if (instance->transport_diagnostics)
+                if (instance->render_diagnostics)
+                    output->data32[channel][frame] = (instance->render_mode == CLAP_RENDER_OFFLINE ? 0.75f : 0.25f)
+                        + (float) instance->reset_count / 1000.0f;
+                else if (instance->transport_diagnostics)
                 {
                     const clap_event_transport_t* clock = process->transport;
                     float value = -0.25f;
@@ -621,6 +655,28 @@ static const clap_plugin_tail_t tail = {
     .get = tail_get
 };
 
+static bool render_requires_realtime(const clap_plugin_t* plugin)
+{
+    expect_main_thread(plugin);
+    return self(plugin)->hard_realtime;
+}
+
+static bool render_set(const clap_plugin_t* plugin, clap_plugin_render_mode mode)
+{
+    expect_main_thread(plugin);
+    test_plugin_t* instance = self(plugin);
+    if (instance->active || (mode != CLAP_RENDER_REALTIME && mode != CLAP_RENDER_OFFLINE)
+        || (mode == CLAP_RENDER_OFFLINE && instance->reject_offline_mode))
+        return false;
+    instance->render_mode = mode;
+    return true;
+}
+
+static const clap_plugin_render_t rendering = {
+    .has_hard_realtime_requirement = render_requires_realtime,
+    .set = render_set
+};
+
 static const void* plugin_get_extension(const clap_plugin_t* plugin,
                                         const char* id)
 {
@@ -637,6 +693,8 @@ static const void* plugin_get_extension(const clap_plugin_t* plugin,
         return &latency;
     if (strcmp(id, CLAP_EXT_TAIL) == 0)
         return &tail;
+    if (strcmp(id, CLAP_EXT_RENDER) == 0)
+        return &rendering;
     return NULL;
 }
 
@@ -684,14 +742,25 @@ static const clap_plugin_t* create_plugin(const clap_plugin_factory_t* factory,
     if (instance == NULL)
         return NULL;
     instance->host = host;
-    const char* transport_values = getenv("STUDIO_DUO_TEST_CLAP_TRANSPORT");
-    instance->transport_diagnostics = transport_values != NULL && strcmp(transport_values, "1") == 0;
-    const char* process_delay = getenv("STUDIO_DUO_TEST_CLAP_PROCESS_DELAY_MS");
-    if (process_delay != NULL)
+    instance->transport_diagnostics = test_environment("STUDIO_DUO_TEST_CLAP_TRANSPORT") == "1";
+    instance->render_diagnostics = test_environment("STUDIO_DUO_TEST_CLAP_RENDER_DIAGNOSTICS") == "1";
+    const auto render_policy = test_environment("STUDIO_DUO_TEST_CLAP_RENDER_POLICY");
+    instance->hard_realtime = render_policy == "hard-realtime";
+    instance->reject_offline_mode = render_policy == "reject-offline";
+    instance->reject_activation = render_policy == "reject-activation";
+    const auto process_delay = test_environment("STUDIO_DUO_TEST_CLAP_PROCESS_DELAY_MS");
+    if (!process_delay.empty())
     {
-        const int milliseconds = atoi(process_delay);
+        const int milliseconds = atoi(process_delay.c_str());
         if (milliseconds > 0 && milliseconds <= 1000)
             instance->process_delay_milliseconds = (uint32_t) milliseconds;
+    }
+    const auto activation_delay = test_environment("STUDIO_DUO_TEST_CLAP_ACTIVATE_DELAY_MS");
+    if (!activation_delay.empty())
+    {
+        const int milliseconds = atoi(activation_delay.c_str());
+        if (milliseconds > 0 && milliseconds <= 1000)
+            instance->activation_delay_milliseconds = (uint32_t) milliseconds;
     }
     instance->thread_check =
         (const clap_host_thread_check_t*) host->get_extension(

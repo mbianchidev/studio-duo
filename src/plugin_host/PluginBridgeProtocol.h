@@ -45,7 +45,7 @@ struct PluginBridgeMidiEvent
 struct alignas(64) PluginBridgeSharedState
 {
     static constexpr std::uint32_t magicValue = 0x53444252;
-    static constexpr std::uint32_t protocolVersion = 7;
+    static constexpr std::uint32_t protocolVersion = 8;
     static constexpr std::uint32_t bypassOutputFlag = 1u;
     static constexpr std::uint32_t resetAppliedFlag = 1u << 1u;
     static constexpr int maxChannels = 8;

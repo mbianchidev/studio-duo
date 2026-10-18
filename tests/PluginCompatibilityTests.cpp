@@ -2,6 +2,7 @@
 #include "TestSuites.h"
 #include "ReleaseFixtures.h"
 #include "ScopedTestEnvironment.h"
+#include "VendorWorkflowProbe.h"
 
 #include "plugin_host/PluginCompatibilityValidator.h"
 #include "plugin_host/ScreamForgeValidation.h"
@@ -290,10 +291,12 @@ std::optional<int> runVendorPluginQualification(const juce::StringArray& argumen
         [](const auto& argument) { return argument.startsWith("--qualify-plugin"); });
     if (!requested)
         return std::nullopt;
-    juce::String source, outputPath;
+    juce::String source, outputPath, profilePath;
     bool sourceSeen = false, outputSeen = false;
     bool omitPlatformTools = false;
     bool exerciseSandboxEffect = false;
+    bool exerciseWorkflows = false;
+    bool profileSeen = false;
     for (const auto& argument : arguments)
     {
         if (argument.startsWith("--qualify-plugin=") && !sourceSeen)
@@ -310,6 +313,13 @@ std::optional<int> runVendorPluginQualification(const juce::StringArray& argumen
             omitPlatformTools = true;
         else if (argument == "--exercise-sandbox-effect" && !exerciseSandboxEffect)
             exerciseSandboxEffect = true;
+        else if (argument == "--exercise-workflows" && !exerciseWorkflows)
+            exerciseWorkflows = true;
+        else if (argument.startsWith("--workflow-profile=") && !profileSeen)
+        {
+            profileSeen = true;
+            profilePath = argument.fromFirstOccurrenceOf("=", false, false);
+        }
         else
         {
             std::cerr << "Unknown or duplicate vendor qualification argument.\n";
@@ -324,6 +334,26 @@ std::optional<int> runVendorPluginQualification(const juce::StringArray& argumen
         return 2;
     }
     const juce::File output(outputPath);
+    juce::var workflowProfile;
+    juce::String profileHash;
+    if (profileSeen)
+    {
+        juce::MemoryBlock data;
+        if (!exerciseWorkflows || !juce::File::isAbsolutePath(profilePath)
+            || juce::File(profilePath).getSize() > 65536 || !juce::File(profilePath).loadFileAsData(data))
+        {
+            std::cerr << "A workflow profile requires --exercise-workflows and a readable absolute JSON file of at most 64 KiB.\n";
+            return 2;
+        }
+        workflowProfile = juce::JSON::parse(juce::String::fromUTF8(
+            static_cast<const char*>(data.getData()), static_cast<int>(data.getSize())));
+        if (workflowProfile.getDynamicObject() == nullptr)
+        {
+            std::cerr << "The workflow profile must be a JSON object.\n";
+            return 2;
+        }
+        profileHash = juce::SHA256(data).toHexString();
+    }
     juce::InterProcessLock reservation("StudioDuoQualification-"
         + juce::SHA256(output.getFullPathName().toLowerCase().toUTF8()).toHexString());
     if (!reservation.enter(0) || output.exists())
@@ -338,7 +368,7 @@ std::optional<int> runVendorPluginQualification(const juce::StringArray& argumen
     }
     juce::DynamicObject::Ptr report = new juce::DynamicObject();
     report->setProperty("schemaVersion", 1);
-    report->setProperty("scope", exerciseSandboxEffect
+    report->setProperty("scope", exerciseWorkflows ? "vendor-headless-app-workflow-probe" : exerciseSandboxEffect
         ? "vendor-headless-sandbox-effect-probe" : "vendor-headless-public-standard-probe");
     report->setProperty("qualificationStatus", "not-qualified");
     report->setProperty("candidateSha", STUDIO_DUO_BUILD_COMMIT);
@@ -348,6 +378,9 @@ std::optional<int> runVendorPluginQualification(const juce::StringArray& argumen
     report->setProperty("hostAudioDeviceManagerCreated", false);
     report->setProperty("supplementalTools", omitPlatformTools ? "explicitly-omitted" : "run");
     report->setProperty("effectSandboxRequested", exerciseSandboxEffect);
+    report->setProperty("workflowsRequested", exerciseWorkflows);
+    if (profileSeen)
+        report->setProperty("workflowProfileSha256", profileHash);
     report->setProperty("source", nativeAudioUnit ? source : juce::File(source).getFileName());
     juce::Array<juce::var> processors;
     const auto write = [&](const juce::String& status, const juce::String& detail)
@@ -405,7 +438,20 @@ std::optional<int> runVendorPluginQualification(const juce::StringArray& argumen
                 validation.checks.push_back({ "sandbox-procedure", "fail", backend.getErrorMessage() });
             }
         }
+        juce::var workflowMeasurements;
+        if (exerciseWorkflows)
+        {
+            const auto workflows = exerciseVendorWorkflows(*description,
+                output.getChildFile("workflow-workload"), validation.checks, workflowMeasurements, workflowProfile);
+            if (workflows.failed())
+            {
+                validation.status = "fail";
+                validation.checks.push_back({ "workflow-procedure", "fail", workflows.getErrorMessage() });
+            }
+        }
         auto value = validation.toVar();
+        if (exerciseWorkflows)
+            value.getDynamicObject()->setProperty("workflowMeasurements", workflowMeasurements);
         value.getDynamicObject()->setProperty("manufacturer", description->manufacturerName);
         value.getDynamicObject()->setProperty("role", description->isInstrument ? "instrument" : "effect");
         value.getDynamicObject()->setProperty("architecture", studio::currentArchitecture());
@@ -415,7 +461,7 @@ std::optional<int> runVendorPluginQualification(const juce::StringArray& argumen
             return 1;
     }
     if (!write(passed ? "pass" : "fail",
-            "Only the explicit standard/backend checks are measured. Full vendor/mode workflows, hang-during-capture, routing, deterministic nulls, and release approval are not certified."))
+            "Only the requested standard/backend/workflow checks are measured. Full vendor/mode routing, hang-during-capture, assistive interaction, and release approval are not certified."))
         return 1;
     std::cout << juce::JSON::toString(juce::JSON::parse(output.getChildFile("report.json")), true) << '\n';
     return passed ? 0 : 1;
@@ -524,12 +570,13 @@ void pluginCompatibilityTests()
         "--qualify-plugin=" + juce::String(STUDIO_DUO_CLAP_FIXTURE_PATH),
         "--qualification-output=" + output.getFullPathName(),
         "--omit-platform-tools",
-        "--exercise-sandbox-effect"
+        "--exercise-sandbox-effect",
+        "--exercise-workflows"
     };
     expect(runVendorPluginQualification(probeArguments) == std::optional<int>(0),
            "The explicit-source vendor probe can run without touching a persistent catalog or audio device manager.");
     const auto probe = juce::JSON::parse(output.getChildFile("report.json"));
-    expect(probe["scope"].toString() == "vendor-headless-sandbox-effect-probe"
+    expect(probe["scope"].toString() == "vendor-headless-app-workflow-probe"
                && probe["qualificationStatus"].toString() == "not-qualified"
                && probe["supplementalTools"].toString() == "explicitly-omitted"
                && probe["processors"].isArray() && probe["processors"].getArray()->size() == 1,

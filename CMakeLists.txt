@@ -968,6 +968,8 @@ if(STUDIO_DUO_BUILD_TESTS)
             tests/AudioExportTests.cpp
             tests/MasteringTests.cpp
             tests/PluginCompatibilityTests.cpp
+            tests/VendorWorkflowProbe.cpp
+            tests/VendorWorkflowProbe.h
             tests/ProjectMigrationTests.cpp
             tests/ProjectHardeningTests.cpp
             tests/ProjectExchangeTests.cpp

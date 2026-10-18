@@ -89,6 +89,7 @@ public:
         PluginInsertKind kind = PluginInsertKind::plugin;
         juce::String containerId;
         float gainDecibels = 0.0f;
+        bool nonRealtime = false;
     };
 
     struct PluginRuntimeStatus
