@@ -695,6 +695,15 @@ auxiliary outputs. Processor-output taps inside parallel branches are rejected;
 use the splitter's combined track output instead. Lower its automatable
 Main level when using stems alone to avoid summing the full mix twice.
 
+External VST3, Audio Unit and CLAP processors also expose their discovered bus
+names under **Processor output** after becoming ready. Select the named bus and
+an aux/bus destination; the final-insert/serial-path rule still applies. The
+host validates the actual bus again when activating it. Sandboxed processors
+support up to eight enabled output channels in total; unsupported layouts or
+stale buses produce a visible error, not a successful silent stem. Lower the
+source track's fader when isolating pre-fader stems, rather than muting the
+track or counting its full mix twice.
+
 **TRACK** in the routing panel changes mono/stereo layout, polarity, solo-safe
 state, folder placement, and VCA assignment. Folder mute and solo scope their
 children without hiding summing; use a bus for audio summing. VCAs control the

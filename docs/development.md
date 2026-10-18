@@ -525,7 +525,7 @@ mutate active graphs or allocate on the callback. Seeking resets those histories
 Rack edits preserve live processor state outside the callback, including
 bypassed children and validated external state, while explicit changed state
 payloads and plugin replacement remain authoritative.
-Bundled auxiliary-output taps remain limited to the final processor on a
+Bundled and external auxiliary-output taps remain limited to the final processor on a
 serial-only path, and include its enclosing rack output gains. Parallel-branch
 taps are rejected rather than bypassing branch summing or delay compensation.
 
@@ -815,7 +815,7 @@ they must not overwrite the single-slot bridge input before the worker can run.
 Ramp endpoints may be one sample past the block, preserving the original slope
 instead of reaching the endpoint a sample early.
 
-Bridge protocol 8 also carries the first slice's block-start transport snapshot:
+Bridge protocol 9 also carries the first slice's block-start transport snapshot:
 sample/second/quarter-note position, tempo and ramp increment, meter, bar start/
 count, loop bounds and play/record/loop flags. Trusted and bundled processors use
 an owned `PluginHostPlayHead`; its atomic-word snapshots are coherent and its
@@ -840,6 +840,17 @@ waits for completed worker DSP outside the audio callback rather than sleeping
 for a nominal block duration. Host seek/reset requests reach the native CLAP
 reset callback on the next admitted audio-thread block, rather than inheriting
 JUCE's empty default reset.
+
+External output-bus names are discovered from the active processor and cached
+on its insert for the native routing menu and project reopen. They do not
+authorize a native layout: activation revalidates the requested bus and enables
+its default layout after state restoration. Workers publish a bounded,
+base64-encoded name/channel/offset map and return all enabled output channels
+within the existing eight-channel bridge limit. Mono main outputs and
+mono/stereo auxiliary buses retain independent offsets and the same declared
+latency. A per-frame wet marker keeps aligned stereo dry fallback separate from
+auxiliary outputs; a missed worker cannot feed the source's right input into a
+mono auxiliary bus. Invalid or unsupported layouts fail explicitly.
 
 CLAP activation refreshes clean parameter values while retaining pending host
 edits. Worker parameter changes publish refreshed metadata, including discrete

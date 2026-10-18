@@ -183,11 +183,11 @@ bool validateConnection(const Project& project,
             || connection.tap != RouteTap::preFader
             || connection.sourceBusIndex <= 0
             || insert == source->inserts.cend()
-            || !insert->bundledDevice
+            || (!insert->bundledDevice && connection.sourceBusIndex >= insert->outputBusNames.size())
             || !hasFinalSerialInsert(*source, connection.sourceInsertId))
         {
             error =
-                "Processor-output routes require an auxiliary bus from the final bundled insert on a serial-only path.";
+                "Processor-output routes require an available auxiliary bus from the final insert on a serial-only path.";
             return false;
         }
     }

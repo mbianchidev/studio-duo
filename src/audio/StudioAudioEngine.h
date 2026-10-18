@@ -90,6 +90,7 @@ public:
         juce::String containerId;
         float gainDecibels = 0.0f;
         bool nonRealtime = false;
+        int lastOutputBus = 0;
     };
 
     struct PluginRuntimeStatus
@@ -111,6 +112,7 @@ public:
         int latencySamples = 0;
         double tailSeconds = 0.0;
         std::vector<PluginParameterDescriptor> parameters;
+        juce::StringArray outputBusNames;
     };
 
     struct TrackMeterSnapshot
@@ -607,6 +609,7 @@ private:
         PluginTransport transport;
         std::unique_ptr<AraDocumentHost> araDocument;
         juce::AudioBuffer<float> inProcessBuffer;
+        juce::AudioBuffer<float> bridgeOutputBuffer;
         juce::MidiBuffer midi;
         juce::MidiBuffer midiInput;
         juce::MidiBuffer midiSegment;

@@ -8,6 +8,7 @@
 #include "midi/MidiEditing.h"
 #include "plugin_host/PluginFormats.h"
 #include "plugin_host/ClapPluginInstance.h"
+#include "plugin_host/PluginAudioBuses.h"
 #include "devices/DeviceRegistry.h"
 #include "platform/MediaFileRevision.h"
 
@@ -2083,6 +2084,7 @@ StudioAudioEngine::preserveLiveAraStates(
             && origin != previousOrigins.cend() && origin->second == pluginStateHash(request.state)
             && previous->bridgeMode == request.bridgeMode
             && previous->nonRealtime == request.nonRealtime
+            && previous->lastOutputBus == request.lastOutputBus
             && previous->deviceIdentifier == request.deviceIdentifier
             && previous->description.has_value() == request.description.has_value()
             && (!request.description.has_value()
@@ -4292,14 +4294,13 @@ std::optional<StudioAudioEngine::RenderSnapshot> StudioAudioEngine::buildSnapsho
                     ? DeviceRegistry::descriptor(
                           sourceInsert->pluginIdentifier)
                     : nullptr;
-            if (descriptor == nullptr
-                || compiledRoute.sourceBusIndex <= 0
-                || compiledRoute.sourceBusIndex
-                    >= static_cast<int>(
-                        descriptor->outputBuses.size()))
+            const auto busCount = descriptor != nullptr ? static_cast<int>(descriptor->outputBuses.size())
+                : sourceTrack != nullptr && sourceInsert != sourceTrack->inserts.cend()
+                    ? sourceInsert->outputBusNames.size() : 0;
+            if (compiledRoute.sourceBusIndex <= 0 || compiledRoute.sourceBusIndex >= busCount)
             {
                 error =
-                    "A processor-output route references an unavailable bundled output bus.";
+                    "A processor-output route references an unavailable output bus.";
                 return std::nullopt;
             }
         }
@@ -6206,7 +6207,25 @@ void StudioAudioEngine::processRuntimeInsert(
                     std::span<const PluginBridgeParameterEvent>(
                         insert.parameterEvents.data(),
                         static_cast<std::size_t>(
-                            insert.parameterEventCount)));
+                            insert.parameterEventCount)),
+                    insert.bridgeOutputBuffer.getNumChannels() > 0 ? &insert.bridgeOutputBuffer : nullptr);
+                if (outputRoutes != nullptr && insert.bridgeOutputBuffer.getNumChannels() > 0)
+                {
+                    const auto& buses = insert.bridge->outputBuses();
+                    for (auto& route : *outputRoutes)
+                    {
+                        if (route.sourceInsertId != insert.insertId || route.sourceBusIndex <= 0
+                            || route.sourceBusIndex >= static_cast<int>(buses.size()))
+                            continue;
+                        const auto& bus = buses[static_cast<std::size_t>(route.sourceBusIndex)];
+                        if (bus.bufferChannelOffset < 0 || bus.channels <= 0)
+                            continue;
+                        for (int channel = 0; channel < 2; ++channel)
+                            route.processingBuffer.copyFrom(channel, 0, insert.bridgeOutputBuffer,
+                                bus.bufferChannelOffset + std::min(channel, bus.channels - 1), 0, buffer.getNumSamples());
+                        route.processingBuffer.applyGain(0, buffer.getNumSamples(), insert.routedOutputGain);
+                    }
+                }
                 const auto after = insert.bridge->lateBlockCount();
                 if (after > before)
                     pluginLateBlocks.fetch_add(after - before, std::memory_order_relaxed);
@@ -7039,6 +7058,10 @@ void StudioAudioEngine::prepareRackRequests(
             request.kind = insert.kind;
             request.containerId = insert.containerId;
             request.gainDecibels = insert.gainDecibels;
+            request.lastOutputBus = 0;
+            for (const auto& route : project.routingConnections)
+                if (route.enabled && route.sourceTrackId == track.id && route.sourceInsertId == insert.id)
+                    request.lastOutputBus = std::max(request.lastOutputBus, route.sourceBusIndex);
             request.bypassed = request.bypassed || PluginRack::isBypassed(track.inserts, insert);
             ordered.push_back(std::move(request));
         }
@@ -7510,24 +7533,6 @@ void StudioAudioEngine::runPluginRuntimeBuilder()
                     statuses.push_back(std::move(status));
                     continue;
                 }
-                if (request.sidechainChannels > 0
-                    && processor->getBusCount(true) > 1)
-                {
-                    auto layout = processor->getBusesLayout();
-                    layout.inputBuses.set(
-                        1,
-                        request.sidechainChannels == 1
-                            ? juce::AudioChannelSet::mono()
-                            : juce::AudioChannelSet::stereo());
-                    if (!processor->setBusesLayout(layout))
-                    {
-                        status.state = PluginRuntimeStatus::State::failed;
-                        status.message =
-                            "Processor rejected the requested sidechain layout.";
-                        statuses.push_back(std::move(status));
-                        continue;
-                    }
-                }
                 if (!processorState.isEmpty())
                 {
                     if (auto* validated =
@@ -7556,6 +7561,14 @@ void StudioAudioEngine::runPluginRuntimeBuilder()
                             static_cast<int>(
                                 processorState.getSize()));
                     }
+                }
+                if (const auto configured = configurePluginAudioBuses(*processor, request.sidechainChannels, request.lastOutputBus);
+                    configured.failed())
+                {
+                    status.state = PluginRuntimeStatus::State::failed;
+                    status.message = configured.getErrorMessage();
+                    statuses.push_back(std::move(status));
+                    continue;
                 }
                 std::unique_ptr<AraDocumentHost> araDocument;
                 if (request.bridgeMode == PluginBridgeMode::araCompatibility)
@@ -7641,6 +7654,7 @@ void StudioAudioEngine::runPluginRuntimeBuilder()
                 insertRuntime.inProcessBuffer.clear();
                 status.latencySamples = processor->getLatencySamples();
                 status.tailSeconds = processor->getTailLengthSeconds();
+                status.outputBusNames = pluginOutputBusNames(pluginOutputBuses(*processor));
                 {
                     const auto& parameters = processor->getParameters();
                     for (int index = 0; index < parameters.size(); ++index)
@@ -7693,7 +7707,7 @@ void StudioAudioEngine::runPluginRuntimeBuilder()
                                                             std::memory_order_acquire)),
                                                     request.state,
                                                     request.sidechainChannels,
-                                                    request.nonRealtime);
+                                                    request.nonRealtime, request.lastOutputBus);
             if (result.failed())
             {
                 auto track = std::find_if(graph.tracks.begin(),
@@ -7771,6 +7785,12 @@ void StudioAudioEngine::runPluginRuntimeBuilder()
                     + 1);
             insertRuntime.failureDelay.state->buffer.clear();
             insertRuntime.bridge = std::move(bridge);
+            if (request.lastOutputBus > 0)
+            {
+                insertRuntime.bridgeOutputBuffer.setSize(PluginBridgeSharedState::maxChannels,
+                    PluginBridgeSharedState::maxBlockSize);
+                insertRuntime.bridgeOutputBuffer.clear();
+            }
             track->inserts.push_back(std::move(insertRuntime));
             status.state = PluginRuntimeStatus::State::ready;
             status.message = "Sandbox ready";
@@ -7778,6 +7798,7 @@ void StudioAudioEngine::runPluginRuntimeBuilder()
             status.tailSeconds = track->inserts.back().bridge->reportedTailSeconds();
             status.parameters =
                 track->inserts.back().bridge->parameterDescriptors();
+            status.outputBusNames = pluginOutputBusNames(track->inserts.back().bridge->outputBuses());
             request.latencySamples = status.latencySamples;
             request.tailSeconds = status.tailSeconds;
             statuses.push_back(std::move(status));
@@ -7884,6 +7905,8 @@ juce::String StudioAudioEngine::pluginRuntimeFingerprint(
         fingerprint << request.deviceIdentifier
                     << ":"
                     << request.sidechainChannels
+                    << ":"
+                    << request.lastOutputBus
                     << ":";
         if (request.araDocument != nullptr)
             fingerprint << request.araDocument->revision;

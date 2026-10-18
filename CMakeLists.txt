@@ -334,6 +334,7 @@ set(STUDIO_DUO_PLUGIN_SOURCES
     src/plugin_host/PluginBridgeClient.cpp
     src/plugin_host/PluginBridgeClient.h
     src/plugin_host/PluginBridgeProtocol.h
+    src/plugin_host/PluginAudioBuses.h
     src/plugin_host/PluginCatalog.cpp
     src/plugin_host/PluginCatalog.h
     src/plugin_host/PluginCompatibilityDatabase.cpp
@@ -1049,6 +1050,7 @@ if(STUDIO_DUO_BUILD_TESTS)
             src/plugin_host/PluginBridgeClient.cpp
             src/plugin_host/PluginBridgeClient.h
             src/plugin_host/PluginBridgeProtocol.h
+            src/plugin_host/PluginAudioBuses.h
             src/plugin_host/AraDocumentHost.cpp
             src/plugin_host/AraDocumentHost.h
             src/plugin_host/ClapPluginFormat.cpp

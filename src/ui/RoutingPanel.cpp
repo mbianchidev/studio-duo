@@ -1,6 +1,5 @@
 #include "RoutingPanel.h"
 
-#include "devices/DeviceRegistry.h"
 #include "NumericInput.h"
 #include "StudioTheme.h"
 
@@ -260,16 +259,11 @@ void RoutingPanel::showAddMenu(
     juce::PopupMenu processorOutputs;
     for (const auto& insert : source->inserts)
     {
-        if (!insert.bundledDevice)
-            continue;
-        const auto* descriptor =
-            DeviceRegistry::descriptor(insert.pluginIdentifier);
-        if (descriptor == nullptr
-            || descriptor->outputBuses.size() <= 1)
+        const auto buses = RoutingUiModel::processorOutputBusNames(insert);
+        if (buses.size() <= 1)
             continue;
         for (int bus = 1;
-             bus < static_cast<int>(
-                 descriptor->outputBuses.size());
+             bus < buses.size();
              ++bus)
         {
             juce::PopupMenu destinations;
@@ -286,8 +280,7 @@ void RoutingPanel::showAddMenu(
                      destination,
                      insertId = insert.id,
                      bus,
-                     name = descriptor->outputBuses[
-                         static_cast<std::size_t>(bus)]]
+                     name = buses[bus]]
                     {
                         RoutingConnection route;
                         route.name = name;
@@ -315,8 +308,7 @@ void RoutingPanel::showAddMenu(
             processorOutputs.addSubMenu(
                 insert.name
                     + " / "
-                    + descriptor->outputBuses[
-                        static_cast<std::size_t>(bus)],
+                    + buses[bus],
                 destinations);
         }
     }

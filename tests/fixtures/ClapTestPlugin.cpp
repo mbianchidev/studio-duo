@@ -54,6 +54,7 @@ typedef struct test_plugin {
     bool reject_activation;
     clap_plugin_render_mode render_mode;
     uint32_t reset_count;
+    bool multiple_audio_buses;
     uint32_t process_delay_milliseconds;
     uint32_t activation_delay_milliseconds;
 } test_plugin_t;
@@ -280,6 +281,14 @@ static clap_process_status plugin_process(const clap_plugin_t* plugin,
                     }
                     output->data32[channel][frame] = value;
                 }
+                else if (instance->multiple_audio_buses && port > 0)
+                {
+                    const auto* main = process->audio_inputs_count > 0 ? &process->audio_inputs[0] : NULL;
+                    const auto source_channel = port == 2 && channel == 1 ? 1u : 0u;
+                    const float main_source = main != NULL && main->data32 != NULL && source_channel < main->channel_count
+                        ? main->data32[source_channel][frame] : 0.0f;
+                    output->data32[channel][frame] = main_source * (port == 1 ? 0.25f : channel == 0 ? 0.75f : 0.125f);
+                }
                 else
                     output->data32[channel][frame] += source * (float) instance->parameters[0];
             }
@@ -291,8 +300,7 @@ static clap_process_status plugin_process(const clap_plugin_t* plugin,
 static uint32_t audio_ports_count(const clap_plugin_t* plugin, bool is_input)
 {
     expect_main_thread(plugin);
-    (void) is_input;
-    return 1;
+    return self(plugin)->multiple_audio_buses ? is_input ? 2u : 3u : 1u;
 }
 
 static bool audio_ports_get(const clap_plugin_t* plugin,
@@ -301,14 +309,15 @@ static bool audio_ports_get(const clap_plugin_t* plugin,
                             clap_audio_port_info_t* info)
 {
     expect_main_thread(plugin);
-    if (index != 0 || info == NULL)
+    if (index >= audio_ports_count(plugin, is_input) || info == NULL)
         return false;
     memset(info, 0, sizeof(*info));
-    info->id = is_input ? 10 : 20;
-    snprintf(info->name, sizeof(info->name), "%s", is_input ? "Input" : "Output");
-    info->flags = CLAP_AUDIO_PORT_IS_MAIN;
-    info->channel_count = is_input ? 2 : 1;
-    info->port_type = is_input ? CLAP_PORT_STEREO : CLAP_PORT_MONO;
+    info->id = (is_input ? 10 : 20) + index;
+    snprintf(info->name, sizeof(info->name), "%s", is_input ? index == 0 ? "Input" : "Sidechain"
+        : index == 0 ? "Output" : index == 1 ? "Mono auxiliary" : "Stereo auxiliary");
+    info->flags = index == 0 ? CLAP_AUDIO_PORT_IS_MAIN : 0;
+    info->channel_count = is_input || index == 2 ? 2u : 1u;
+    info->port_type = info->channel_count == 2 ? CLAP_PORT_STEREO : CLAP_PORT_MONO;
     info->in_place_pair = CLAP_INVALID_ID;
     return true;
 }
@@ -744,6 +753,7 @@ static const clap_plugin_t* create_plugin(const clap_plugin_factory_t* factory,
     instance->host = host;
     instance->transport_diagnostics = test_environment("STUDIO_DUO_TEST_CLAP_TRANSPORT") == "1";
     instance->render_diagnostics = test_environment("STUDIO_DUO_TEST_CLAP_RENDER_DIAGNOSTICS") == "1";
+    instance->multiple_audio_buses = test_environment("STUDIO_DUO_TEST_CLAP_MULTIBUS") == "1";
     const auto render_policy = test_environment("STUDIO_DUO_TEST_CLAP_RENDER_POLICY");
     instance->hard_realtime = render_policy == "hard-realtime";
     instance->reject_offline_mode = render_policy == "reject-offline";

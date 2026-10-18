@@ -16,6 +16,7 @@ struct RoutingDestinationItem
 class RoutingUiModel
 {
 public:
+    static juce::StringArray processorOutputBusNames(const PluginInsert& insert);
     static std::vector<RoutingDestinationItem> sendDestinations(
         const Project& project,
         const juce::String& sourceTrackId);

@@ -208,10 +208,14 @@ unbound output creates a named MIDI destination track. The resulting
 
 An audio `RoutingConnection` can additionally contain `sourceInsertId` and
 `sourceBusIndex`. Both are absent/zero for normal track sends. A nonzero bus
-must belong to the final bundled insert on the source track and currently uses
-a pre-fader send to an aux or bus track. This preserves drum Kick, Snare, Toms,
-and Cymbals stem routing in the same typed graph used by live and offline
-processing.
+must belong to the final processor insert on a serial-only source path and uses
+a pre-fader send to an aux or bus track. This preserves both bundled drum stems
+and external multi-output routing in the live/offline graph. External inserts
+optionally cache `outputBusNames` as up to 128 non-empty strings of at most 256
+characters. Older documents omit this discovery cache; fresh runtime metadata
+supplies it. Cached names are not trusted native channel maps: activation must
+revalidate and enable the actual requested bus, within the sandbox bridge's
+eight active output-channel limit.
 
 Humanization uses saved integer parameters and stores the exact resulting note
 velocity/timing values. Its fixed integer generator and mapping do not depend

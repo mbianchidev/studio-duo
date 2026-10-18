@@ -1,6 +1,6 @@
 #pragma once
 
-#include "PluginBridgeProtocol.h"
+#include "PluginAudioBuses.h"
 
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_events/juce_events.h>
@@ -31,7 +31,7 @@ private:
                          const juce::MemoryBlock& state,
                          double sampleRate,
                          int blockSize,
-                         int sidechainChannels, bool nonRealtime);
+                         int sidechainChannels, bool nonRealtime, int lastOutputBus);
     void sendStatus(const juce::String& status);
     void showEditor();
     void hideEditor();
@@ -67,7 +67,7 @@ private:
     std::atomic<std::uint32_t> pluginAccessState { 0 };
     int mainInputChannels = 2;
     int sidechainInputChannels = 0;
-    int mainOutputChannels = 2;
+    int outputChannels = 2;
     int processingChannels = 2;
     std::atomic<bool> latencyReportPending { false };
     std::atomic<bool> metadataReportPending { false };

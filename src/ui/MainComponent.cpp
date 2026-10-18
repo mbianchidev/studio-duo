@@ -3056,10 +3056,13 @@ void MainComponent::timerCallback()
                     == StudioAudioEngine::PluginRuntimeStatus::State::ready
                 && (insert->latencySamples != status.latencySamples
                     || std::abs(insert->tailSeconds - status.tailSeconds)
-                        > 0.000001))
+                        > 0.000001
+                    || (!insert->bundledDevice && insert->outputBusNames != status.outputBusNames)))
             {
                 insert->latencySamples = status.latencySamples;
                 insert->tailSeconds = status.tailSeconds;
+                if (!insert->bundledDevice)
+                    insert->outputBusNames = status.outputBusNames;
                 runtimeMetadataChanged = true;
             }
             if (status.state

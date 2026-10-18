@@ -402,6 +402,73 @@ void renderModeTests(const juce::PluginDescription& description, const studio::A
         }
     }
 }
+
+void multipleOutputTests(const juce::PluginDescription& description, const studio::AudioClip& clip)
+{
+    ScopedTestEnvironment buses("STUDIO_DUO_TEST_CLAP_MULTIBUS", "1");
+    expect(buses.status().wasOk(), "The multi-bus fixture uses only owned synthetic configuration.");
+    for (const auto mode : { studio::PluginBridgeMode::trustedInProcess, studio::PluginBridgeMode::sandboxed })
+    {
+        auto project = studio::Project::createDefault();
+        project.metronomeEnabled = false;
+        auto& source = project.tracks.front();
+        source.clips = { clip };
+        source.volumeDecibels = -60.0f;
+        studio::PluginInsert insert;
+        insert.pluginIdentifier = description.createIdentifierString();
+        insert.name = "Synthetic multibus effect";
+        insert.format = "CLAP";
+        insert.bridgeMode = mode;
+        insert.outputBusNames = { "Output", "Mono auxiliary", "Stereo auxiliary" };
+        source.inserts.push_back(insert);
+        const auto sourceId = source.id;
+        studio::Track mono, stereo;
+        mono.type = stereo.type = studio::TrackType::aux;
+        mono.name = "Synthetic mono return";
+        stereo.name = "Synthetic stereo return";
+        project.tracks.insert(project.tracks.end() - 1, mono);
+        project.tracks.insert(project.tracks.end() - 1, stereo);
+        for (int bus = 1; bus <= 2; ++bus)
+        {
+            studio::RoutingConnection route;
+            route.name = "Synthetic auxiliary route";
+            route.kind = studio::RouteKind::send;
+            route.tap = studio::RouteTap::preFader;
+            route.sourceTrackId = sourceId;
+            route.sourceInsertId = insert.id;
+            route.sourceBusIndex = bus;
+            route.destination.trackId = bus == 1 ? mono.id : stereo.id;
+            project.routingConnections.push_back(route);
+        }
+        studio::StudioAudioEngine::PluginRuntimeRequest request;
+        request.trackId = sourceId;
+        request.insertId = insert.id;
+        request.name = insert.name;
+        request.description = description;
+        request.bridgeMode = mode;
+        auto engine = std::make_unique<studio::StudioAudioEngine>(juce::File(STUDIO_DUO_BRIDGE_WORKER_PATH));
+        expect(engine->configureAudioForTesting(48000.0, 64).wasOk(), "Auxiliary routing retains its selected sample clock.");
+        juce::AudioBuffer<float> rendered;
+        const auto result = engine->renderRangeToBuffer(project, rendered, 48000.0,
+            { 0.0, clip.durationSeconds, 0.0 }, { request });
+        expect(result.wasOk() && rendered.getNumSamples() == 64
+                   && std::abs(rendered.getSample(0, 17) - 0.2001f) < 2e-6f
+                   && std::abs(rendered.getSample(1, 17) - 0.1501f) < 2e-6f,
+               ("Native mono/stereo auxiliary outputs retain independent offsets and gain in trusted and sandboxed renders: "
+                + result.getErrorMessage() + "; samples " + juce::String(rendered.getNumSamples())
+                + (rendered.getNumSamples() > 17 ? "; L " + juce::String(rendered.getSample(0, 17), 8)
+                    + "; R " + juce::String(rendered.getSample(1, 17), 8) : juce::String())).toRawUTF8());
+        project.findTrack(sourceId)->inserts.front().outputBusNames.add("Absent stale output");
+        for (auto& route : project.routingConnections)
+            if (route.sourceInsertId == insert.id && route.sourceBusIndex == 1)
+                route.sourceBusIndex = 3;
+        const auto stale = engine->renderRangeToBuffer(project, rendered, 48000.0,
+            { 0.0, clip.durationSeconds, 0.0 }, { request });
+        expect(stale.failed() && stale.getErrorMessage().contains("output bus"),
+               ("Cached bus names cannot authorize a native output bus absent from this exact processor: "
+                + stale.getErrorMessage()).toRawUTF8());
+    }
+}
 }
 
 void pluginFormatTests()
@@ -467,6 +534,20 @@ void pluginFormatTests()
     expect(
         studio::PluginBridgeClient::assemblesDeviceBlockSlicesForTesting(),
         "Loop/automation slices publish once per device callback with exact audio, sidechain, MIDI and ramp offsets.");
+    expect(studio::PluginBridgeClient::separatesAuxiliaryOutputTimelineForTesting(),
+           "Wet mono/stereo buses remain separate; deadline fallback preserves stereo dry audio without leaking it into auxiliary outputs.");
+    std::vector<studio::PluginOutputBus> decodedBuses;
+    expect(studio::decodePluginOutputBuses(studio::encodePluginOutputBuses(
+               { { "Main | mono", 1, 0 }, { "Auxiliary", 2, 1 }, { "Disabled", 2, -1 } }), decodedBuses).wasOk()
+               && decodedBuses.size() == 3 && decodedBuses[0].name == "Main | mono"
+               && decodedBuses[1].bufferChannelOffset == 1 && decodedBuses[2].bufferChannelOffset == -1,
+           "Bounded bus metadata retains names and active/disabled channel offsets without delimiter ambiguity.");
+    expect(studio::decodePluginOutputBuses(studio::encodePluginOutputBuses(
+               { { "Main", 2, 0 }, { "Overlapping", 2, 1 } }), decodedBuses).failed()
+               && studio::decodePluginOutputBuses(studio::encodePluginOutputBuses(
+                   { { "Too wide", studio::PluginBridgeSharedState::maxChannels + 1, 0 } }), decodedBuses).failed()
+               && studio::decodePluginOutputBuses("invalid", decodedBuses).failed(),
+           "Overlapping, oversized and malformed worker bus maps fail before publication.");
     expect(
         studio::PluginBridgeClient::recoversLateFirstOutputForTesting(),
         "Sandbox bridges recover the first valid result after a missed deadline.");
@@ -1294,6 +1375,7 @@ void pluginFormatTests()
     lifecycleAdmissionTests(*descriptions[0]);
     sandboxOfflineWaitTests(*descriptions[0], monoClip);
     renderModeTests(*descriptions[0], monoClip);
+    multipleOutputTests(*descriptions[0], monoClip);
     monoSource.deleteFile();
 
     auto project = studio::Project::createDefault();

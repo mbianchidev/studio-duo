@@ -28,7 +28,7 @@ PluginBridgeClient::~PluginBridgeClient()
 
 juce::Result PluginBridgeClient::start()
 {
-    return startInternal(nullptr, 48000.0, 512, {}, 0, false);
+    return startInternal(nullptr, 48000.0, 512, {}, 0, false, 0);
 }
 
 juce::Result PluginBridgeClient::startPlugin(const juce::PluginDescription& description,
@@ -36,26 +36,26 @@ juce::Result PluginBridgeClient::startPlugin(const juce::PluginDescription& desc
                                              int blockSize,
                                              const juce::MemoryBlock& state,
                                              int requestedSidechainChannels,
-                                             bool nonRealtime)
+                                             bool nonRealtime, int lastOutputBus)
 {
     return startInternal(&description,
                          pluginSampleRate,
                          blockSize,
                          state,
-                         requestedSidechainChannels, nonRealtime);
+                         requestedSidechainChannels, nonRealtime, lastOutputBus);
 }
 
 juce::Result PluginBridgeClient::startInternal(const juce::PluginDescription* description,
                                                double pluginSampleRate,
                                                int blockSize,
                                                const juce::MemoryBlock& state,
-                                               int requestedSidechainChannels, bool nonRealtime)
+                                               int requestedSidechainChannels, bool nonRealtime, int lastOutputBus)
 {
     stop();
 
     if (pluginSampleRate <= 0.0
         || blockSize <= 0
-        || blockSize > PluginBridgeSharedState::maxBlockSize)
+        || blockSize > PluginBridgeSharedState::maxBlockSize || lastOutputBus < 0 || lastOutputBus >= 128)
         return juce::Result::fail("Plugin bridge received invalid audio settings.");
 
     if (const auto result = createSharedFile(); result.failed())
@@ -85,6 +85,7 @@ juce::Result PluginBridgeClient::startInternal(const juce::PluginDescription* de
     stream.writeInt(PluginBridgeSharedState::maxBlockSize);
     stream.writeInt(std::max(0, requestedSidechainChannels));
     stream.writeBool(nonRealtime);
+    stream.writeInt(lastOutputBus);
     if (!sendMessageToWorker(request))
     {
         stop();
@@ -134,6 +135,14 @@ juce::Result PluginBridgeClient::startInternal(const juce::PluginDescription* de
                             std::memory_order_release);
     if (responseParts.size() > 3)
         updateParameterMetadata(responseParts[3]);
+    const auto busMetadata = responseParts.size() == 5
+        ? decodePluginOutputBuses(responseParts[4], buses)
+        : juce::Result::fail("Plugin bridge omitted the output-bus channel map.");
+    if (busMetadata.failed())
+    {
+        stop();
+        return busMetadata;
+    }
     ready.store(true, std::memory_order_release);
     processingBlockSize = PluginBridgeSharedState::maxBlockSize;
     prepareOutputTimeline(blockSize);
@@ -162,6 +171,7 @@ void PluginBridgeClient::stop()
     killWorkerProcess();
     sharedState = nullptr;
     mapping.reset();
+    buses.clear();
     if (sharedFile.existsAsFile())
         sharedFile.deleteFile();
     sharedFile = juce::File();
@@ -188,6 +198,7 @@ void PluginBridgeClient::stop()
         false);
     outputTimeline.clear();
     outputTimelineCapacity = 1;
+    wetOutputTimeline.assign(1, 0);
     responseMessage.clear();
     pluginLatencySamples.store(0, std::memory_order_relaxed);
     pluginTailSeconds.store(0.0, std::memory_order_relaxed);
@@ -326,6 +337,7 @@ void PluginBridgeClient::resetProcessing()
     if (sharedState != nullptr)
         sharedState->resetRequested.store(1, std::memory_order_release);
     outputTimeline.clear();
+    std::fill(wetOutputTimeline.begin(), wetOutputTimeline.end(), 0);
     outputMidiTimeline.clear();
     scratchMidi.clear();
     completedMidi.clear();
@@ -444,8 +456,11 @@ void PluginBridgeClient::processBlock(
     juce::AudioBuffer<float>& audio,
     juce::MidiBuffer& midi,
     const juce::AudioBuffer<float>* sidechain,
-    std::span<const PluginBridgeParameterEvent> parameterEvents) noexcept
+    std::span<const PluginBridgeParameterEvent> parameterEvents,
+    juce::AudioBuffer<float>* allOutputs) noexcept
 {
+    if (allOutputs != nullptr)
+        allOutputs->clear(0, std::min(audio.getNumSamples(), allOutputs->getNumSamples()));
     if (!isReady() || sharedState == nullptr)
     {
         audio.clear();
@@ -591,7 +606,7 @@ void PluginBridgeClient::processBlock(
 #endif
     fetchWorkerOutput();
     queueCompletedOutput();
-    readTimelineOutput(audio, midi);
+    readTimelineOutput(audio, midi, allOutputs);
     if (deviceBlockActive)
         deviceBlockInputSamples += samples;
     else if (inFlightSequence < 0
@@ -624,10 +639,9 @@ void PluginBridgeClient::fetchWorkerOutput() noexcept
     {
         for (int channel = 0; channel < PluginBridgeSharedState::maxChannels; ++channel)
         {
-            const auto sourceChannel =
-                PluginBridgeProtocol::outputSourceChannel(
-                    outputChannels,
-                    channel);
+            const auto sourceChannel = !buses.empty()
+                ? (channel < outputChannels ? channel : -1)
+                : PluginBridgeProtocol::outputSourceChannel(outputChannels, channel);
             auto& destination = completedOutput[static_cast<std::size_t>(channel)];
             if (sourceChannel >= 0)
                 std::copy_n(sharedState->output[static_cast<std::size_t>(sourceChannel)].begin(),
@@ -769,6 +783,47 @@ bool PluginBridgeClient::isolatesConcurrentTransportsForTesting()
         && second->sharedState->shutdownRequested.load(std::memory_order_acquire) == 0
         && second->sharedState->hostSequence.load(std::memory_order_acquire) == 84
         && second->sharedState->input[0][0] == 0.75f;
+}
+
+bool PluginBridgeClient::separatesAuxiliaryOutputTimelineForTesting()
+{
+    auto state = std::make_unique<PluginBridgeSharedState>();
+    auto client = std::make_unique<PluginBridgeClient>();
+    client->sharedState = state.get();
+    client->ready.store(true);
+    client->buses = { { "Main", 1, 0 }, { "Mono auxiliary", 1, 1 }, { "Stereo auxiliary", 2, 2 } };
+    client->prepareOutputTimeline(4);
+    juce::AudioBuffer<float> audio(2, 4), outputs(4, 4);
+    juce::MidiBuffer midi;
+    const auto fillInput = [&]
+    {
+        for (int sample = 0; sample < 4; ++sample)
+        {
+            audio.setSample(0, sample, 0.2f);
+            audio.setSample(1, sample, 0.8f);
+        }
+    };
+    fillInput();
+    client->processBlock(audio, midi, nullptr, {}, &outputs);
+    for (int channel = 0; channel < 4; ++channel)
+        std::fill_n(state->output[static_cast<std::size_t>(channel)].begin(), 4,
+            channel == 0 ? 0.1f : channel == 1 ? 0.05f : channel == 2 ? 0.15f : 0.1f);
+    state->numOutputChannels.store(4);
+    state->workerSequence.store(state->hostSequence.load(), std::memory_order_release);
+    fillInput();
+    client->processBlock(audio, midi, nullptr, {}, &outputs);
+    const auto wet = std::abs(audio.getSample(0, 0) - 0.1f) < 1e-6f
+        && std::abs(audio.getSample(1, 0) - 0.1f) < 1e-6f
+        && std::abs(outputs.getSample(1, 0) - 0.05f) < 1e-6f
+        && std::abs(outputs.getSample(2, 0) - 0.15f) < 1e-6f
+        && std::abs(outputs.getSample(3, 0) - 0.1f) < 1e-6f;
+    fillInput();
+    client->processBlock(audio, midi, nullptr, {}, &outputs);
+    const auto fallback = std::abs(audio.getSample(0, 0) - 0.2f) < 1e-6f
+        && std::abs(audio.getSample(1, 0) - 0.8f) < 1e-6f && outputs.getMagnitude(0, 4) == 0.0f;
+    client->sharedState = nullptr;
+    client->ready.store(false);
+    return wet && fallback;
 }
 
 bool PluginBridgeClient::assemblesDeviceBlockSlicesForTesting()
@@ -1256,6 +1311,7 @@ void PluginBridgeClient::prepareOutputTimeline(int blockSize)
         true,
         false);
     outputTimeline.clear();
+    wetOutputTimeline.assign(static_cast<std::size_t>(outputTimelineCapacity), 0);
     outputMidiTimeline.clear();
     streamSamplePosition = 0;
     midiTimelineOrigin = 0;
@@ -1284,6 +1340,7 @@ void PluginBridgeClient::queueDryInput(int samples, int inputOffset) noexcept
     {
         const auto position = static_cast<int>(
             (targetStart + sample) % outputTimelineCapacity);
+        wetOutputTimeline[static_cast<std::size_t>(position)] = 0;
         for (int channel = 0;
              channel < outputTimeline.getNumChannels();
              ++channel)
@@ -1338,6 +1395,7 @@ void PluginBridgeClient::queueCompletedOutput() noexcept
             continue;
         const auto position = static_cast<int>(
             absolutePosition % outputTimelineCapacity);
+        wetOutputTimeline[static_cast<std::size_t>(position)] = 1;
         for (int channel = 0;
              channel < outputTimeline.getNumChannels();
              ++channel)
@@ -1382,27 +1440,33 @@ void PluginBridgeClient::queueCompletedOutput() noexcept
 
 void PluginBridgeClient::readTimelineOutput(
     juce::AudioBuffer<float>& audio,
-    juce::MidiBuffer& midi) noexcept
+    juce::MidiBuffer& midi, juce::AudioBuffer<float>* allOutputs) noexcept
 {
     for (int sample = 0; sample < audio.getNumSamples(); ++sample)
     {
         const auto position = static_cast<int>(
             (streamSamplePosition + sample)
             % outputTimelineCapacity);
+        const auto wet = wetOutputTimeline[static_cast<std::size_t>(position)] != 0;
         for (int channel = 0; channel < audio.getNumChannels(); ++channel)
         {
-            const auto sourceChannel = std::min(
-                channel,
-                outputTimeline.getNumChannels() - 1);
+            const auto sourceChannel = wet && !buses.empty()
+                ? (buses.front().bufferChannelOffset >= 0
+                    ? PluginBridgeProtocol::outputSourceChannel(buses.front().channels, channel) : -1)
+                : std::min(channel, outputTimeline.getNumChannels() - 1);
             audio.setSample(
                 channel,
                 sample,
-                outputTimeline.getSample(sourceChannel, position));
+                sourceChannel >= 0 ? outputTimeline.getSample(sourceChannel, position) : 0.0f);
         }
+        if (allOutputs != nullptr && sample < allOutputs->getNumSamples())
+            for (int channel = 0; channel < std::min(allOutputs->getNumChannels(), outputTimeline.getNumChannels()); ++channel)
+                allOutputs->setSample(channel, sample, wet ? outputTimeline.getSample(channel, position) : 0.0f);
         for (int channel = 0;
              channel < outputTimeline.getNumChannels();
              ++channel)
             outputTimeline.setSample(channel, position, 0.0f);
+        wetOutputTimeline[static_cast<std::size_t>(position)] = 0;
     }
 
     const auto relativeStart =
