@@ -37,6 +37,7 @@ public:
     juce::Result resizeEditor(int width, int height);
     bool setParameter(int parameterIndex, float normalizedValue);
     void resetProcessing();
+    void setTransport(const PluginTransport& transport) noexcept;
     void beginDeviceBlock() noexcept;
     void endDeviceBlock() noexcept;
     void processBlock(
@@ -108,6 +109,8 @@ private:
     int deviceBlockInputSamples = 0;
     bool deviceBlockActive = false;
     bool deviceBlockFailed = false;
+    PluginTransport currentTransport;
+    PluginTransport packetTransport;
     int processingBlockSize = 512;
     int inputChannels = 0;
     int sidechainChannels = 0;

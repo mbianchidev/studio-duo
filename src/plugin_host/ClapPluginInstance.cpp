@@ -1,9 +1,11 @@
 #include "ClapPluginInstance.h"
 
 #include "logging/StudioLogger.h"
+#include "PluginTransport.h"
 
 #include <clap/clap.h>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <climits>
@@ -18,6 +20,92 @@ namespace studio
 {
 namespace
 {
+std::optional<std::int64_t> clapFixedTime(double value, double scale) noexcept
+{
+    const auto scaled = value * scale;
+    if (!std::isfinite(scaled)
+        || scaled >= static_cast<double>(std::numeric_limits<std::int64_t>::max())
+        || scaled < static_cast<double>(std::numeric_limits<std::int64_t>::min()))
+        return std::nullopt;
+    return static_cast<std::int64_t>(std::llround(scaled));
+}
+
+std::optional<clap_event_transport_t> clapTransport(const juce::AudioPlayHead* playHead)
+{
+    if (playHead == nullptr)
+        return std::nullopt;
+    const auto position = playHead->getPosition();
+    if (!position)
+        return std::nullopt;
+    clap_event_transport_t result {};
+    const auto* native = dynamic_cast<const PluginHostPlayHead*>(playHead);
+    const auto nativeState = native != nullptr ? native->transport() : std::nullopt;
+    result.header = { static_cast<std::uint32_t>(sizeof(result)), 0, CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_TRANSPORT, 0 };
+    if (const auto bpm = position->getBpm(); bpm && std::isfinite(*bpm) && *bpm > 0.0)
+    {
+        result.tempo = *bpm;
+        result.flags |= CLAP_TRANSPORT_HAS_TEMPO;
+        if (nativeState)
+            result.tempo_inc = nativeState->bpmIncrementPerSample;
+    }
+    if (const auto ppq = position->getPpqPosition())
+        if (const auto fixed = clapFixedTime(*ppq, CLAP_BEATTIME_FACTOR))
+        {
+            result.song_pos_beats = *fixed;
+            result.flags |= CLAP_TRANSPORT_HAS_BEATS_TIMELINE;
+        }
+    if (const auto seconds = position->getTimeInSeconds())
+        if (const auto fixed = clapFixedTime(*seconds, CLAP_SECTIME_FACTOR))
+        {
+            result.song_pos_seconds = *fixed;
+            result.flags |= CLAP_TRANSPORT_HAS_SECONDS_TIMELINE;
+        }
+    if (const auto meter = position->getTimeSignature();
+        meter && meter->numerator > 0 && meter->numerator <= UINT16_MAX
+            && meter->denominator > 0 && meter->denominator <= UINT16_MAX)
+    {
+        result.tsig_num = static_cast<std::uint16_t>(meter->numerator);
+        result.tsig_denom = static_cast<std::uint16_t>(meter->denominator);
+        result.flags |= CLAP_TRANSPORT_HAS_TIME_SIGNATURE;
+    }
+    if (const auto bar = position->getPpqPositionOfLastBarStart())
+        if (const auto fixed = clapFixedTime(*bar, CLAP_BEATTIME_FACTOR))
+            result.bar_start = *fixed;
+    if (const auto count = position->getBarCount())
+        result.bar_number = static_cast<std::int32_t>(
+            std::clamp<std::int64_t>(*count, INT32_MIN, INT32_MAX));
+    if (const auto loops = position->getLoopPoints())
+    {
+        const auto start = clapFixedTime(loops->ppqStart, CLAP_BEATTIME_FACTOR);
+        const auto end = clapFixedTime(loops->ppqEnd, CLAP_BEATTIME_FACTOR);
+        if (start && end)
+        {
+            result.loop_start_beats = *start;
+            result.loop_end_beats = *end;
+            if (position->getIsLooping())
+            {
+                result.flags |= CLAP_TRANSPORT_IS_LOOP_ACTIVE;
+                const auto secondsStart = nativeState
+                    ? clapFixedTime(nativeState->loopStartSeconds, CLAP_SECTIME_FACTOR) : std::nullopt;
+                const auto secondsEnd = nativeState
+                    ? clapFixedTime(nativeState->loopEndSeconds, CLAP_SECTIME_FACTOR) : std::nullopt;
+                if (secondsStart && secondsEnd && *secondsEnd > *secondsStart)
+                {
+                    result.loop_start_seconds = *secondsStart;
+                    result.loop_end_seconds = *secondsEnd;
+                }
+                else
+                    result.flags &= ~static_cast<std::uint32_t>(CLAP_TRANSPORT_HAS_SECONDS_TIMELINE);
+            }
+        }
+    }
+    if (position->getIsPlaying())
+        result.flags |= CLAP_TRANSPORT_IS_PLAYING;
+    if (position->getIsRecording())
+        result.flags |= CLAP_TRANSPORT_IS_RECORDING;
+    return result;
+}
+
 juce::String pluginFile(const juce::String& fileOrIdentifier)
 {
     return fileOrIdentifier.upToFirstOccurrenceOf("|", false, false);
@@ -1818,10 +1906,11 @@ void ClapPluginInstance::processBlock(juce::AudioBuffer<float>& audio,
         };
     }
 
+    const auto transport = clapTransport(getPlayHead());
     clap_process_t process {
         impl->steadyTime,
         static_cast<std::uint32_t>(audio.getNumSamples()),
-        nullptr,
+        transport ? &*transport : nullptr,
         impl->inputBuffers.data(),
         impl->outputBuffers.data(),
         static_cast<std::uint32_t>(inputCount),

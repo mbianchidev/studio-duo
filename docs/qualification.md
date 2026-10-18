@@ -280,7 +280,8 @@ determinism or assistive-technology matrix.
 `--exercise-sandbox-effect` additionally requires a stateful effect with an
 observable initial response and a reported automatable continuous control.
 It uses the real worker executable, exercises a non-quantum-aligned synthetic
-loop, changes that control, observes worker feedback, and requires a distinct
+loop, edits that named control through the actual generic native parameter
+panel with a complete non-drag gesture, observes worker feedback, and requires a distinct
 non-default state blob before saving the native package. It then terminates
 only that worker, checks visible failure and dry fallback, verifies failed state
 capture preserves the previous blob, reopens the package, and explicitly reloads

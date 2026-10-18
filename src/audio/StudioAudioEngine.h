@@ -603,6 +603,7 @@ private:
         std::shared_ptr<PluginBridgeClient> bridge;
         float routedOutputGain = 1.0f;
         std::shared_ptr<juce::AudioProcessor> inProcess;
+        PluginTransport transport;
         std::unique_ptr<AraDocumentHost> araDocument;
         juce::AudioBuffer<float> inProcessBuffer;
         juce::MidiBuffer midi;
@@ -793,12 +794,15 @@ private:
         const std::vector<RenderTrack::SidechainInput>* sidechains,
         const std::vector<RenderSource::PluginAutomation>* automation,
         std::int64_t timelineSample, std::vector<RenderTrack::Route>* outputRoutes,
-        std::vector<RenderSnapshot::RackDelay>& rackDelays) noexcept;
+        std::vector<RenderSnapshot::RackDelay>& rackDelays, const PluginTransport& transport) noexcept;
     void processRuntimeInsert(
         InsertRuntime& insert, juce::AudioBuffer<float>& buffer, juce::MidiBuffer* midi,
         const std::vector<RenderTrack::SidechainInput>* sidechains,
         const std::vector<RenderSource::PluginAutomation>* automation,
-        std::int64_t timelineSample, std::vector<RenderTrack::Route>* outputRoutes) noexcept;
+        std::int64_t timelineSample, std::vector<RenderTrack::Route>* outputRoutes,
+        const PluginTransport& transport) noexcept;
+    static PluginTransport pluginTransportAt(const RenderSnapshot&, std::int64_t sample,
+                                             bool playing, bool recording) noexcept;
     void mergeRackMidi(juce::MidiBuffer& destination, const juce::MidiBuffer& source) noexcept;
     static void prepareRackRequests(
         const Project& project, std::vector<PluginRuntimeRequest>& requests);

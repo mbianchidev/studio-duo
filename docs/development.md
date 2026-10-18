@@ -809,6 +809,21 @@ fallback. Overflow is counted rather than silently dropping later lanes.
 Loop-boundary slices of one device callback are assembled into one sandbox
 input packet, including sidechains, MIDI positions and automation ramp ends;
 they must not overwrite the single-slot bridge input before the worker can run.
+Ramp endpoints may be one sample past the block, preserving the original slope
+instead of reaching the endpoint a sample early.
+
+Bridge protocol 7 also carries the first slice's block-start transport snapshot:
+sample/second/quarter-note position, tempo and ramp increment, meter, bar start/
+count, loop bounds and play/record/loop flags. Trusted and bundled processors use
+an owned `PluginHostPlayHead`; its atomic-word snapshots are coherent and its
+lifetime includes deferred message-thread processor destruction. Workers install
+the same playhead before processing, and CLAP receives a typed transport event
+instead of a null pointer. Adaptive automation sub-blocks advance their clock;
+worker MIDI is rebased and reassembled with those sub-blocks, not replayed in
+every slice. Context describes the processing quantum's start, not a claim of
+sample-accurate within-quantum tempo/meter/loop transitions. The sliced bridge
+must retain its first clock, not silently substitute the post-wrap slice's time.
+
 CLAP activation refreshes clean parameter values while retaining pending host
 edits. Worker parameter changes publish refreshed metadata, including discrete
 step counts used by the generic editor's keyboard controls.

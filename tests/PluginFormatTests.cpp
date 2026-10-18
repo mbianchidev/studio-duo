@@ -1,5 +1,6 @@
 #include "TestHarness.h"
 #include "TestSuites.h"
+#include "ScopedTestEnvironment.h"
 
 #include "plugin_host/PluginFormats.h"
 #include "plugin_host/ClapPluginFormat.h"
@@ -175,10 +176,111 @@ void sandboxCrashRecoveryTests(
             *engine, insert.id,
             "Explicit reload restores a crashed sandbox runtime.");
 }
+
+void hostTransportTests(const juce::PluginDescription& description, const studio::AudioClip& clip)
+{
+    ScopedTestEnvironment mode("STUDIO_DUO_TEST_CLAP_TRANSPORT", "1");
+    expect(mode.status().wasOk(), "Transport diagnostics are confined to this fixture process and its owned worker.");
+    for (const auto bridgeMode : { studio::PluginBridgeMode::trustedInProcess, studio::PluginBridgeMode::sandboxed })
+    {
+        auto project = studio::Project::createDefault();
+        project.metronomeEnabled = false;
+        project.tempo = 150.0;
+        project.tempoChanges = { { 0.0, 150.0, false }, { 0.05, 210.0, false } };
+        project.timeSignatureNumerator = 7;
+        project.timeSignatureDenominator = 8;
+        project.meterChanges = { { 0.0, 7, 8 }, { 0.05, 3, 4 } };
+        project.loopEnabled = true;
+        project.loopEndSeconds = 0.125;
+        project.tracks.front().clips = { clip };
+        studio::PluginInsert insert;
+        insert.pluginIdentifier = description.createIdentifierString();
+        insert.name = "Synthetic transport receiver";
+        insert.format = "CLAP";
+        insert.bridgeMode = bridgeMode;
+        project.tracks.front().inserts.push_back(insert);
+        studio::StudioAudioEngine::PluginRuntimeRequest request;
+        request.trackId = project.tracks.front().id;
+        request.insertId = insert.id;
+        request.name = insert.name;
+        request.description = description;
+        request.bridgeMode = bridgeMode;
+        auto engine = std::make_unique<studio::StudioAudioEngine>(juce::File(STUDIO_DUO_BRIDGE_WORKER_PATH));
+        expect(engine->configureAudioForTesting(48000.0, 256).wasOk(), "Transport fixture uses its actual configured clock.");
+        const auto started = engine->updateProject(project, { request });
+        expect(started.wasOk(), started.getErrorMessage().toRawUTF8());
+        if (started.failed() || !expectSandboxReady(*engine, insert.id, "The transport receiver becomes ready"))
+            continue;
+        engine->play();
+        auto firstTempo = false, secondTempo = false, contextMatches = true;
+        for (int block = 0; block < 48; ++block)
+        {
+            const auto signal = engine->renderActiveBlockForTesting(256);
+            if (block >= 8 && signal.getSample(0, 0) > 0.0f)
+            {
+            const auto seconds = static_cast<double>(signal.getSample(0, 5)) * 10.0;
+            const auto bpm = static_cast<double>(signal.getSample(0, 0)) * 1000.0;
+            const auto ppq = static_cast<double>(signal.getSample(0, 4)) * 1024.0;
+            const auto meter = project.meterAt(seconds + 1e-8);
+            const auto musical = project.musicalPositionAt(seconds + 1e-8);
+            const auto barLength = static_cast<double>(meter.numerator) * 4.0 / meter.denominator;
+            const auto meterStart = project.beatsAt(meter.timeSeconds);
+            const auto barStart = meterStart + std::floor((ppq - meterStart + 1e-8) / barLength) * barLength;
+            contextMatches = contextMatches
+                && std::abs(bpm - project.tempoAt(seconds + 1e-8)) < 0.001
+                && std::abs(ppq - project.beatsAt(seconds)) < 0.00001
+                && std::abs(signal.getSample(0, 1) * 64.0f - static_cast<float>(meter.numerator)) < 1e-5f
+                && std::abs(signal.getSample(0, 2) * 64.0f - static_cast<float>(meter.denominator)) < 1e-5f
+                && std::abs(signal.getSample(0, 3) - 5.0f / 7.0f) < 1e-5f
+                && std::abs(signal.getSample(0, 6) * 1000.0f - static_cast<float>(musical.bar - 1)) < 1e-4f
+                && std::abs(static_cast<double>(signal.getSample(0, 7)) * 1024.0 - barStart) < 1e-5;
+            firstTempo = firstTempo || std::abs(bpm - 150.0) < 0.001;
+            secondTempo = secondTempo || std::abs(bpm - 210.0) < 0.001;
+            }
+            juce::MessageManager::getInstance()->runDispatchLoopUntil(20);
+        }
+        expect(firstTempo && secondTempo && contextMatches,
+               (juce::String("Actual ") + (bridgeMode == studio::PluginBridgeMode::sandboxed ? "worker" : "trusted")
+                + " CLAP processing receives the matching block-start tempo/meter/PPQ/seconds and loop/playing flags.").toRawUTF8());
+        engine->stop();
+        engine->shutdown();
+    }
+}
 }
 
 void pluginFormatTests()
 {
+    studio::PluginHostPlayHead hostClock;
+    expect(!hostClock.getPosition(), "An unpublished host clock reports unavailable rather than fabricated transport.");
+    studio::PluginTransport transport;
+    transport.flags = studio::PluginTransport::valid | studio::PluginTransport::playing;
+    transport.samples = 100;
+    transport.seconds = 100.0 / 48000.0;
+    transport.bpm = 120.0;
+    hostClock.setTransport(transport.advanced(24000));
+    const auto position = hostClock.getPosition();
+    expect(position && position->getTimeInSamples() && *position->getTimeInSamples() == 24100
+               && position->getPpqPosition() && std::abs(*position->getPpqPosition() - 1.0) < 1e-9,
+           "Automation sub-blocks advance sample/seconds/quarter-note context without resetting the plugin clock.");
+    std::atomic<bool> clockPublished { false };
+    auto coherentClock = true;
+    std::thread publisher([&]
+    {
+        for (int index = 0; index < 10000; ++index)
+        {
+            auto value = transport;
+            value.samples = index;
+            value.bpm = static_cast<double>(index) + 100.0;
+            hostClock.setTransport(value);
+        }
+        clockPublished.store(true, std::memory_order_release);
+    });
+    while (!clockPublished.load(std::memory_order_acquire))
+        if (const auto value = hostClock.transport())
+            coherentClock = coherentClock && (value->samples == 24100
+                || std::abs(value->bpm - static_cast<double>(value->samples) - 100.0) < 1e-9);
+    publisher.join();
+    expect(coherentClock, "Atomic host-clock readers cannot observe torn words from different transport snapshots.");
     const auto dispatched = std::make_shared<std::atomic<bool>>(false);
     const auto posted = juce::MessageManager::callAsync(
         [dispatched]
@@ -1032,6 +1134,7 @@ void pluginFormatTests()
                .toRawUTF8());
 
     sandboxCrashRecoveryTests(*descriptions[0], monoClip);
+    hostTransportTests(*descriptions[0], monoClip);
     monoSource.deleteFile();
 
     auto project = studio::Project::createDefault();

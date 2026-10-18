@@ -177,6 +177,7 @@ void PluginBridgeClient::stop()
     timelineResetPending = false;
     deviceBlockInputSamples = 0;
     deviceBlockActive = deviceBlockFailed = false;
+    currentTransport = packetTransport = {};
     outputTimeline.setSize(
         PluginBridgeSharedState::maxChannels,
         1,
@@ -314,6 +315,12 @@ void PluginBridgeClient::resetProcessing()
     timelineResetPending = true;
     deviceBlockInputSamples = 0;
     deviceBlockActive = deviceBlockFailed = false;
+    currentTransport = packetTransport = {};
+}
+
+void PluginBridgeClient::setTransport(const PluginTransport& transport) noexcept
+{
+    currentTransport = transport;
 }
 
 void PluginBridgeClient::beginDeviceBlock() noexcept
@@ -424,6 +431,8 @@ void PluginBridgeClient::processBlock(
     const auto samples = std::min(audio.getNumSamples(),
                                   PluginBridgeSharedState::maxBlockSize);
     const auto inputOffset = deviceBlockActive ? deviceBlockInputSamples : 0;
+    if (inputOffset == 0)
+        packetTransport = currentTransport;
     if (samples <= 0 || inputOffset > PluginBridgeSharedState::maxBlockSize - samples)
     {
         deviceBlockFailed = true;
@@ -474,7 +483,7 @@ void PluginBridgeClient::processBlock(
         {
             if ((sanitized.flags & PluginBridgeParameterEvent::rampFlag) != 0)
                 sanitized.rampEndOffset = static_cast<std::uint32_t>(inputOffset)
-                    + juce::jlimit(sanitized.sampleOffset, static_cast<std::uint32_t>(samples - 1),
+                    + juce::jlimit(sanitized.sampleOffset, static_cast<std::uint32_t>(samples),
                         sanitized.rampEndOffset);
             sanitized.sampleOffset += static_cast<std::uint32_t>(inputOffset);
         }
@@ -760,13 +769,22 @@ bool PluginBridgeClient::assemblesDeviceBlockSlicesForTesting()
     PluginBridgeParameterEvent firstEvent { 0, 1, 0.25f };
     PluginBridgeParameterEvent secondEvent { 1, 0, 0.75f };
     secondEvent.flags = PluginBridgeParameterEvent::rampFlag;
-    secondEvent.rampEndOffset = 1;
+    secondEvent.rampEndOffset = 2;
     secondEvent.rampEndValue = 1.0f;
+    PluginTransport firstTransport;
+    firstTransport.flags = PluginTransport::valid | PluginTransport::playing;
+    firstTransport.samples = 100;
+    firstTransport.bpm = 150.0;
     client->beginDeviceBlock();
+    client->setTransport(firstTransport);
     client->processBlock(first, firstMidi, &sidechain, std::span(&firstEvent, 1));
     const auto firstDeferred = state->hostSequence.load() == 0;
     sidechain.setSample(0, 0, 0.75f);
     sidechain.setSample(0, 1, 1.0f);
+    auto secondTransport = firstTransport;
+    secondTransport.samples = 0;
+    secondTransport.bpm = 210.0;
+    client->setTransport(secondTransport);
     client->processBlock(second, secondMidi, &sidechain, std::span(&secondEvent, 1));
     const auto secondDeferred = state->hostSequence.load() == 0;
     client->endDeviceBlock();
@@ -775,9 +793,10 @@ bool PluginBridgeClient::assemblesDeviceBlockSlicesForTesting()
         && state->sidechain[0][0] == 0.25f && state->sidechain[0][3] == 1.0f
         && state->parameterEventCount.load() == 2
         && state->parameterEvents[0].sampleOffset == 1 && state->parameterEvents[1].sampleOffset == 2
-        && state->parameterEvents[1].rampEndOffset == 3
+        && state->parameterEvents[1].rampEndOffset == 4
         && state->midiInputEventCount.load() == 2
-        && state->midiInputEvents[0].sampleOffset == 1 && state->midiInputEvents[1].sampleOffset == 2;
+        && state->midiInputEvents[0].sampleOffset == 1 && state->midiInputEvents[1].sampleOffset == 2
+        && state->transport.samples == 100 && std::abs(state->transport.bpm - 150.0) < 1e-9;
     for (int channel = 0; channel < 2; ++channel)
         for (int sample = 0; sample < 4; ++sample)
             state->output[static_cast<std::size_t>(channel)][static_cast<std::size_t>(sample)]
@@ -1134,6 +1153,7 @@ bool PluginBridgeClient::resetsProcessingTimelineForTesting()
 
 void PluginBridgeClient::publishInputBlock(int samples, std::int64_t startSample) noexcept
 {
+    sharedState->transport = packetTransport;
     const auto hostSequence = sharedState->hostSequence.load(std::memory_order_relaxed);
     for (int channel = 0; channel < PluginBridgeSharedState::maxChannels; ++channel)
         std::copy_n(inputAccumulator[static_cast<std::size_t>(channel)].begin(),
@@ -1214,6 +1234,7 @@ void PluginBridgeClient::prepareOutputTimeline(int blockSize)
     wetReplacementBlockedUntilSample = 0;
     deviceBlockInputSamples = 0;
     deviceBlockActive = deviceBlockFailed = false;
+    currentTransport = packetTransport = {};
 }
 
 void PluginBridgeClient::queueDryInput(int samples, int inputOffset) noexcept

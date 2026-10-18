@@ -139,23 +139,33 @@ juce::Result validateRecordingPlan(const RecordingPlan& plan)
 std::shared_ptr<juce::AudioProcessor> messageThreadOwnedProcessor(
     std::unique_ptr<juce::AudioProcessor> processor)
 {
+    if (processor == nullptr)
+        return {};
+    auto playHead = std::make_shared<PluginHostPlayHead>();
+    processor->setPlayHead(playHead.get());
     return {
         processor.release(),
-        [](juce::AudioProcessor* value)
+        [playHead](juce::AudioProcessor* value)
         {
             if (value == nullptr)
                 return;
+            auto destroy = [value, playHead]() mutable
+            {
+                delete value;
+                playHead.reset();
+            };
             const auto* messages =
                 juce::MessageManager::getInstanceWithoutCreating();
             if (messages == nullptr
                 || messages->isThisTheMessageThread())
             {
-                delete value;
+                destroy();
                 return;
             }
             if (!juce::MessageManager::callAsync(
-                    [value] { delete value; }))
+                    std::move(destroy)))
             {
+                value->setPlayHead(nullptr);
                 logError(
                     "plugin.runtime",
                     "Message thread unavailable during processor teardown.");
@@ -6025,17 +6035,24 @@ void StudioAudioEngine::processRuntimeChain(std::uint64_t key,
         ? readingSnapshotIndex : activeSnapshot.load(std::memory_order_acquire);
     auto& rackDelays = snapshots[static_cast<std::size_t>(snapshotIndex)].rackDelays;
     if (track != graph.tracks.end())
+    {
+        const auto transport = pluginTransportAt(snapshots[static_cast<std::size_t>(snapshotIndex)],
+            timelineSample, playing.load(std::memory_order_relaxed),
+            isRecording() || midiRecordingActive.load(std::memory_order_relaxed));
         for (auto& node : track->roots)
             processRackNode(node, *track, buffer, midi, sidechains, automation,
-                            timelineSample, outputRoutes, rackDelays);
+                            timelineSample, outputRoutes, rackDelays, transport);
+    }
 }
 
 void StudioAudioEngine::processRuntimeInsert(
     InsertRuntime& insert, juce::AudioBuffer<float>& buffer, juce::MidiBuffer* midi,
     const std::vector<RenderTrack::SidechainInput>* sidechains,
     const std::vector<RenderSource::PluginAutomation>* automation,
-    std::int64_t timelineSample, std::vector<RenderTrack::Route>* outputRoutes) noexcept
+    std::int64_t timelineSample, std::vector<RenderTrack::Route>* outputRoutes,
+    const PluginTransport& transport) noexcept
 {
+            insert.transport = transport;
             auto& runtimeMidi = midi != nullptr
                 ? *midi
                 : insert.midi;
@@ -6171,6 +6188,7 @@ void StudioAudioEngine::processRuntimeInsert(
 
             if (insert.bridge != nullptr && insert.bridge->isReady())
             {
+                insert.bridge->setTransport(transport);
                 const auto before = insert.bridge->lateBlockCount();
                 insert.bridge->processBlock(
                     buffer,
@@ -6393,7 +6411,7 @@ void StudioAudioEngine::processRackNode(
     juce::MidiBuffer* midi, const std::vector<RenderTrack::SidechainInput>* sidechains,
     const std::vector<RenderSource::PluginAutomation>* automation,
     std::int64_t timelineSample, std::vector<RenderTrack::Route>* outputRoutes,
-    std::vector<RenderSnapshot::RackDelay>& rackDelays) noexcept
+    std::vector<RenderSnapshot::RackDelay>& rackDelays, const PluginTransport& transport) noexcept
 {
     if (node.bypassed)
         return;
@@ -6401,13 +6419,13 @@ void StudioAudioEngine::processRackNode(
     {
         if (node.insertIndex >= 0)
             processRuntimeInsert(track.inserts[static_cast<std::size_t>(node.insertIndex)],
-                                 buffer, midi, sidechains, automation, timelineSample, outputRoutes);
+                                 buffer, midi, sidechains, automation, timelineSample, outputRoutes, transport);
     }
     else if (node.kind == PluginInsertKind::serialRack)
     {
         for (auto& child : node.children)
             processRackNode(child, track, buffer, midi, sidechains, automation,
-                            timelineSample, outputRoutes, rackDelays);
+                            timelineSample, outputRoutes, rackDelays, transport);
     }
     else
     {
@@ -6425,7 +6443,7 @@ void StudioAudioEngine::processRackNode(
                 mergeRackMidi(branch.branchMidi, *midi);
             processRackNode(branch, track, branchView,
                             midi != nullptr ? &branch.branchMidi : nullptr,
-                            sidechains, automation, timelineSample, outputRoutes, rackDelays);
+                            sidechains, automation, timelineSample, outputRoutes, rackDelays, transport);
             const auto delay = std::find_if(rackDelays.begin(), rackDelays.end(),
                 [&track, &branch](const auto& candidate)
                 { return candidate.runtimeKey == track.key && candidate.insertId == branch.insertId; });
@@ -6458,6 +6476,8 @@ bool StudioAudioEngine::processInProcessRuntime(
     int outputSampleOffset) noexcept
 {
     auto& processor = *insert.inProcess;
+    if (auto* playHead = dynamic_cast<PluginHostPlayHead*>(processor.getPlayHead()))
+        playHead->setTransport(insert.transport.advanced(sidechainSampleOffset));
     auto* automationTarget =
         dynamic_cast<SampleAccurateAutomationTarget*>(&processor);
     if (!automation.empty() && automationTarget == nullptr)
@@ -6682,6 +6702,59 @@ double StudioAudioEngine::beatsAt(const RenderSnapshot& snapshot,
             return beats;
     }
     return beats;
+}
+
+PluginTransport StudioAudioEngine::pluginTransportAt(
+    const RenderSnapshot& snapshot, std::int64_t sample, bool running, bool recording) noexcept
+{
+    PluginTransport result;
+    result.samples = sample;
+    result.sampleRate = snapshot.sampleRate;
+    result.seconds = static_cast<double>(sample) / snapshot.sampleRate;
+    result.bpm = tempoAt(snapshot, result.seconds);
+    result.ppq = sample >= 0 ? beatsAt(snapshot, result.seconds) : result.seconds * result.bpm / 60.0;
+    auto meter = RenderSnapshot::ClockMeterChange {
+        0.0, snapshot.timeSignatureNumerator, snapshot.timeSignatureDenominator
+    };
+    auto completedBars = std::int64_t { 0 };
+    for (const auto& change : snapshot.meterChanges)
+    {
+        if (change.timeSeconds <= meter.timeSeconds + 0.0000001)
+        {
+            meter = change;
+            continue;
+        }
+        if (change.timeSeconds > result.seconds)
+            break;
+        const auto quarterBeats = beatsAt(snapshot, change.timeSeconds) - beatsAt(snapshot, meter.timeSeconds);
+        const auto length = static_cast<double>(meter.numerator) * 4.0 / meter.denominator;
+        completedBars += static_cast<std::int64_t>(std::ceil(quarterBeats / length - 0.0000001));
+        meter = change;
+    }
+    result.numerator = static_cast<std::uint64_t>(meter.numerator);
+    result.denominator = static_cast<std::uint64_t>(meter.denominator);
+    const auto meterStart = beatsAt(snapshot, meter.timeSeconds);
+    const auto barLength = static_cast<double>(meter.numerator) * 4.0 / meter.denominator;
+    const auto within = static_cast<std::int64_t>(std::floor((result.ppq - meterStart) / barLength));
+    result.barCount = completedBars + within;
+    result.barStartPpq = meterStart + static_cast<double>(within) * barLength;
+    result.loopStartSeconds = static_cast<double>(snapshot.loopStartSample) / snapshot.sampleRate;
+    result.loopEndSeconds = static_cast<double>(snapshot.loopEndSample) / snapshot.sampleRate;
+    result.loopStartPpq = beatsAt(snapshot, result.loopStartSeconds);
+    result.loopEndPpq = beatsAt(snapshot, result.loopEndSeconds);
+    result.flags = PluginTransport::valid | (running ? PluginTransport::playing : 0)
+        | (running && recording ? PluginTransport::recording : 0)
+        | (snapshot.loopEnabled ? PluginTransport::looping : 0);
+    const auto next = std::upper_bound(snapshot.tempoChanges.begin(), snapshot.tempoChanges.end(), result.seconds,
+        [](double seconds, const auto& change) { return seconds < change.timeSeconds; });
+    if (next != snapshot.tempoChanges.begin() && next != snapshot.tempoChanges.end())
+    {
+        const auto& current = *std::prev(next);
+        const auto duration = next->timeSeconds - current.timeSeconds;
+        if (current.rampToNext && duration > 0.0)
+            result.bpmIncrementPerSample = (next->bpm - current.bpm) / duration / snapshot.sampleRate;
+    }
+    return result;
 }
 
 StudioAudioEngine::RenderSnapshot::ClockMeterChange StudioAudioEngine::meterAt(

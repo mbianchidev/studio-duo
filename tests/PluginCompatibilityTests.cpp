@@ -1,22 +1,24 @@
 #include "TestHarness.h"
 #include "TestSuites.h"
 #include "ReleaseFixtures.h"
+#include "ScopedTestEnvironment.h"
 
 #include "plugin_host/PluginCompatibilityValidator.h"
 #include "plugin_host/ScreamForgeValidation.h"
 #include "plugin_host/ClapPluginFormat.h"
 #include "plugin_host/ClapPluginInstance.h"
 #include "plugin_host/PluginFormats.h"
+#include "plugin_host/PluginTransport.h"
 #include "audio/StudioAudioEngine.h"
 #include "platform/Architecture.h"
 #include "plugin_host/PluginStateStore.h"
 #include "project_io/ProjectFile.h"
+#include "ui/PluginParameterPanel.h"
 
 #include <juce_cryptography/juce_cryptography.h>
 
 #include <iostream>
 #include <cmath>
-#include <cstdlib>
 
 namespace
 {
@@ -141,9 +143,37 @@ juce::Result sandboxEffectProbe(const juce::PluginDescription& description,
         if (continuous == before.front().parameters.end())
             return juce::Result::fail("This procedure requires a reported continuous control to prove non-default state restoration.");
         const auto editedParameter = *continuous;
+        const auto selectedPosition = static_cast<int>(std::distance(before.front().parameters.begin(), continuous));
         const auto targetValue = editedParameter.value < 0.5f ? 0.75f : 0.25f;
-        if (!engine->setPluginParameter(insert.id, editedParameter.index, targetValue, error))
-            return juce::Result::fail(error);
+        studio::PluginParameterPanel genericEditor(description.name, insert.id, before.front().parameters);
+        auto starts = 0, changes = 0, ends = 0;
+        auto editAccepted = false;
+        genericEditor.onGestureStarted = [&](const auto&, const auto&, const auto&, int, float) { ++starts; };
+        genericEditor.onGestureEnded = [&](const auto&, const auto&, const auto&, int, float) { ++ends; };
+        genericEditor.onValueChanged = [&](const auto& id, const auto& parameterId, const auto& parameterName, int index, float value)
+        {
+            ++changes;
+            editAccepted = id == insert.id && parameterId == editedParameter.id
+                && parameterName == editedParameter.name && index == editedParameter.index
+                && engine->setPluginParameter(id, index, value, error);
+        };
+        juce::ComboBox* parameterSelector = nullptr;
+        juce::Slider* parameterValue = nullptr;
+        for (auto* child : genericEditor.getChildren())
+        {
+            if (auto* selector = dynamic_cast<juce::ComboBox*>(child))
+                parameterSelector = selector;
+            if (auto* slider = dynamic_cast<juce::Slider*>(child))
+                parameterValue = slider;
+        }
+        if (parameterSelector != nullptr && parameterValue != nullptr)
+        {
+            parameterSelector->setSelectedId(selectedPosition + 1, juce::sendNotificationSync);
+            parameterValue->setValue(targetValue, juce::sendNotificationSync);
+        }
+        if (!check("sandbox-generic-editor", editAccepted && starts == 1 && changes == 1 && ends == 1,
+                "The real generic native editor applies a named non-drag edit with one complete host gesture."))
+            return juce::Result::fail("The generic editor could not apply the selected vendor control: " + error);
         const auto metadataDeadline = juce::Time::getMillisecondCounterHiRes() + 3000.0;
         auto valueObserved = false;
         while (juce::Time::getMillisecondCounterHiRes() < metadataDeadline)
@@ -401,30 +431,45 @@ void pluginCompatibilityTests()
            "Compatibility fixture can be discovered.");
     if (descriptions.isEmpty())
         return;
-    constexpr auto activationVariable = "STUDIO_DUO_TEST_CLAP_ACTIVATION_VALUES";
-#if JUCE_WINDOWS
-    char* environmentValue = nullptr;
-    std::size_t environmentSize = 0;
-    const auto environmentError = _dupenv_s(&environmentValue, &environmentSize, activationVariable);
-    const std::unique_ptr<char, decltype(&std::free)> previousStorage(environmentValue, &std::free);
-    expect(environmentError == 0, "The activation fixture can preserve its previous Windows environment.");
-    if (environmentError != 0)
-        return;
-    const auto* previousValue = previousStorage.get();
-#else
-    const auto* previousValue = std::getenv(activationVariable);
-#endif
-    const auto previous = previousValue != nullptr
-        ? std::optional<juce::String>(previousValue) : std::nullopt;
-    const auto setActivationEnvironment = [&](const char* value)
     {
-#if JUCE_WINDOWS
-        return _putenv_s(activationVariable, value != nullptr ? value : "") == 0;
-#else
-        return (value != nullptr ? setenv(activationVariable, value, 1) : unsetenv(activationVariable)) == 0;
-#endif
-    };
-    expect(setActivationEnvironment("1"), "The synthetic activation-value case can configure its child-only test environment.");
+        ScopedTestEnvironment transportMode("STUDIO_DUO_TEST_CLAP_TRANSPORT", "1");
+        expect(transportMode.status().wasOk(), "The synthetic transport fixture has a process-local configuration.");
+        studio::PluginHostPlayHead playHead;
+        studio::PluginTransport clock;
+        clock.samples = 12000;
+        clock.seconds = 0.25;
+        clock.bpm = 150.0;
+        clock.ppq = 1.5;
+        clock.numerator = 7;
+        clock.denominator = 8;
+        clock.loopEndPpq = 4.0;
+        clock.loopEndSeconds = 1.6;
+        clock.flags = studio::PluginTransport::valid | studio::PluginTransport::playing
+            | studio::PluginTransport::recording | studio::PluginTransport::looping;
+        playHead.setTransport(clock);
+        juce::String transportError;
+        auto processor = studio::ClapPluginInstance::create(*descriptions[0], 48000.0, 256, transportError);
+        expect(processor != nullptr, transportError.toRawUTF8());
+        if (processor != nullptr)
+        {
+            processor->setPlayHead(&playHead);
+            processor->prepareToPlay(48000.0, 256);
+            juce::AudioBuffer<float> signal(2, 256);
+            signal.clear();
+            juce::MidiBuffer midi;
+            processor->processBlock(signal, midi);
+            expect(std::abs(signal.getSample(0, 0) - 0.15f) < 1e-6f
+                       && std::abs(signal.getSample(0, 1) - 7.0f / 64.0f) < 1e-6f
+                       && std::abs(signal.getSample(0, 2) - 8.0f / 64.0f) < 1e-6f
+                       && std::abs(signal.getSample(0, 3) - 1.0f) < 1e-6f
+                       && std::abs(signal.getSample(0, 4) * 1024.0f - 1.5f) < 1e-6f
+                       && std::abs(signal.getSample(0, 5) * 10.0f - 0.25f) < 1e-6f,
+                   "CLAP process transport contains real host tempo, meter, state, PPQ and seconds rather than nullptr.");
+            processor->releaseResources();
+        }
+    }
+    ScopedTestEnvironment activationEnvironment("STUDIO_DUO_TEST_CLAP_ACTIVATION_VALUES", "1");
+    expect(activationEnvironment.status().wasOk(), "The synthetic activation-value case can configure its child-only test environment.");
     juce::String activationError;
     auto activated = studio::ClapPluginInstance::create(*descriptions[0], 48000.0, 256, activationError);
     auto pending = studio::ClapPluginInstance::create(*descriptions[0], 48000.0, 256, activationError);
@@ -435,7 +480,7 @@ void pluginCompatibilityTests()
         pending->getParameters()[0]->setValue(0.9f);
         pending->prepareToPlay(48000.0, 256);
     }
-    expect(setActivationEnvironment(previous ? previous->toRawUTF8() : nullptr),
+    expect(activationEnvironment.restore().wasOk(),
            "The activation case restores the previous process environment.");
     expect(activated != nullptr && !activated->getParameters().isEmpty()
                && std::abs(activated->getParameters()[0]->getValue() - 0.75f) < 1e-6f,

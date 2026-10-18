@@ -24,6 +24,7 @@ typedef struct test_plugin {
     bool latency_change_reported;
     bool metadata_rescan_requested;
     uint32_t metadata_epoch;
+    bool transport_diagnostics;
 } test_plugin_t;
 
 static const char* features[] = {
@@ -216,8 +217,32 @@ static clap_process_status plugin_process(const clap_plugin_t* plugin,
                         && channel < input->channel_count
                     ? input->data32[channel][frame]
                     : 0.0f;
-                output->data32[channel][frame] +=
-                    source * (float) instance->parameters[0];
+                if (instance->transport_diagnostics)
+                {
+                    const clap_event_transport_t* clock = process->transport;
+                    float value = -0.25f;
+                    if (clock != NULL)
+                    {
+                        switch (frame % 8)
+                        {
+                            case 0: value = (float) (clock->tempo / 1000.0); break;
+                            case 1: value = (float) clock->tsig_num / 64.0f; break;
+                            case 2: value = (float) clock->tsig_denom / 64.0f; break;
+                            case 3:
+                                value = (float) (((clock->flags & CLAP_TRANSPORT_IS_PLAYING) != 0 ? 1 : 0)
+                                    | ((clock->flags & CLAP_TRANSPORT_IS_RECORDING) != 0 ? 2 : 0)
+                                    | ((clock->flags & CLAP_TRANSPORT_IS_LOOP_ACTIVE) != 0 ? 4 : 0)) / 7.0f;
+                                break;
+                            case 4: value = (float) ((double) clock->song_pos_beats / CLAP_BEATTIME_FACTOR / 1024.0); break;
+                            case 5: value = (float) ((double) clock->song_pos_seconds / CLAP_SECTIME_FACTOR / 10.0); break;
+                            case 6: value = (float) clock->bar_number / 1000.0f; break;
+                            case 7: value = (float) ((double) clock->bar_start / CLAP_BEATTIME_FACTOR / 1024.0); break;
+                        }
+                    }
+                    output->data32[channel][frame] = value;
+                }
+                else
+                    output->data32[channel][frame] += source * (float) instance->parameters[0];
             }
         }
     }
@@ -654,6 +679,8 @@ static const clap_plugin_t* create_plugin(const clap_plugin_factory_t* factory,
     if (instance == NULL)
         return NULL;
     instance->host = host;
+    const char* transport_values = getenv("STUDIO_DUO_TEST_CLAP_TRANSPORT");
+    instance->transport_diagnostics = transport_values != NULL && strcmp(transport_values, "1") == 0;
     instance->thread_check =
         (const clap_host_thread_check_t*) host->get_extension(
             host,

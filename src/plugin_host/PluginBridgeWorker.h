@@ -51,10 +51,13 @@ private:
     std::unique_ptr<juce::MemoryMappedFile> mapping;
     PluginBridgeSharedState* sharedState = nullptr;
     juce::AudioPluginFormatManager formatManager;
+    PluginHostPlayHead playHead;
     std::unique_ptr<juce::AudioPluginInstance> plugin;
     std::unique_ptr<PluginEditorWindow> editorWindow;
     juce::AudioBuffer<float> processBuffer;
     juce::MidiBuffer midiBuffer;
+    juce::MidiBuffer midiInput;
+    juce::MidiBuffer midiSegment;
     std::vector<int> automationBoundaries;
     juce::WaitableEvent processingThreadStarted;
     std::mutex pluginMutex;

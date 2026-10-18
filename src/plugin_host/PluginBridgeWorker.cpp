@@ -19,6 +19,8 @@ PluginBridgeWorker::PluginBridgeWorker()
     PluginFormats::addSupportedFormats(formatManager);
     midiBuffer.ensureSize(
         PluginBridgeSharedState::maxMidiBytes);
+    midiInput.ensureSize(PluginBridgeSharedState::maxMidiBytes);
+    midiSegment.ensureSize(PluginBridgeSharedState::maxMidiBytes);
     automationBoundaries.reserve(
         static_cast<std::size_t>(
             PluginBridgeSharedState::maxParameterEvents * 2)
@@ -313,6 +315,8 @@ void PluginBridgeWorker::run()
         } processingScope { pluginAccessState };
 
         const std::lock_guard pluginLock(pluginMutex);
+        const auto transport = sharedState->transport;
+        playHead.setTransport(transport);
         const auto resetApplied =
             sharedState->resetRequested.exchange(
                 0,
@@ -407,6 +411,9 @@ void PluginBridgeWorker::run()
         }
         if (automationTarget == nullptr)
         {
+            midiInput.clear();
+            midiInput.addEvents(midiBuffer, 0, samples, 0);
+            midiBuffer.clear();
             automationBoundaries.clear();
             automationBoundaries.push_back(0);
             automationBoundaries.push_back(samples);
@@ -517,7 +524,11 @@ void PluginBridgeWorker::run()
                     processingChannels,
                     offset,
                     next - offset);
-                plugin->processBlock(view, midiBuffer);
+                midiSegment.clear();
+                midiSegment.addEvents(midiInput, offset, next - offset, -offset);
+                playHead.setTransport(transport.advanced(offset));
+                plugin->processBlock(view, midiSegment);
+                midiBuffer.addEvents(midiSegment, 0, next - offset, offset);
             }
         }
         auto midiOutputEventCount = 0;
@@ -628,6 +639,7 @@ void PluginBridgeWorker::startProcessing(std::unique_ptr<juce::AudioPluginInstan
             return;
         }
 
+        newPlugin->setPlayHead(&playHead);
         newPlugin->setRateAndBufferSizeDetails(sampleRate, blockSize);
         if (!state.isEmpty())
         {
