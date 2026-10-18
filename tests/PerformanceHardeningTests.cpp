@@ -1081,10 +1081,17 @@ int qualifyLongSession(const LongSessionProfile& profile, const juce::File& outp
 
     juce::AudioBuffer<float> offline;
     auto offlineEngine = std::make_unique<studio::StudioAudioEngine>();
+    if (const auto configured = offlineEngine->configureAudioForTesting(profile.sampleRate, profile.bufferSize);
+        configured.failed())
+        return finish("fail", configured.getErrorMessage());
     started = now();
     const auto rendered = offlineEngine->renderRangeToBuffer(project, offline, profile.sampleRate,
         { 0.0, static_cast<double>(profile.songs * profile.songSeconds), 0.0 }, requests);
     report->setProperty("offlineRenderMilliseconds", now() - started);
+    report->setProperty("offlineRestoredSampleRate", offlineEngine->activeSnapshotSampleRateForTesting());
+    if (!juce::exactlyEqual(offlineEngine->activeSnapshotSampleRateForTesting(),
+                           static_cast<double>(profile.sampleRate)))
+        blockers.add("The offline engine did not preserve the selected sample clock.");
     if (rendered.failed() || offline.getNumSamples() != totalSamples || offline.getNumChannels() != 2)
         return finish("fail", "Full-session offline render failed: " + rendered.getErrorMessage());
     auto nullError = 0.0f;
@@ -1223,6 +1230,8 @@ void longSessionQualificationTests()
     expect(static_cast<double>(report["maximumCallbackMilliseconds"]) < 100.0
                && static_cast<double>(report["playbackWallMilliseconds"]) < 10000.0,
            "The shared-runner smoke stays inside generous regression bounds, not physical audio deadlines.");
+    expect(static_cast<double>(report["offlineRestoredSampleRate"]) == 96000.0,
+           "The fresh offline engine must not rebuild an unrequested 48 kHz graph after a 96 kHz qualification render.");
     expect(report["physicalDevicesOpened"] == juce::var(false)
                && report["scope"].toString() == "synthetic-headless-characterisation"
                && static_cast<double>(report["sampleRate"]) == 96000.0
@@ -1264,6 +1273,7 @@ void longSessionQualificationTests()
             expect(caseReport["bufferCaseStatus"].toString() == (missed ? "fail" : "pass")
                        && item["status"].toString() == caseReport["bufferCaseStatus"].toString()
                        && static_cast<int>(caseReport["bufferSize"]) == static_cast<int>(item["bufferSize"])
+                       && static_cast<double>(caseReport["offlineRestoredSampleRate"]) == 96000.0
                        && static_cast<juce::int64>(caseReport["contentSamples"]) == 288000
                        && caseReport["maximumNullError"].isDouble()
                        && static_cast<double>(caseReport["maximumNullError"]) <= 1e-5

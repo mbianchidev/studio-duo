@@ -93,6 +93,12 @@ the measured interval excludes harness buffer allocation and CSV writing.
 The null uses the graph's **declared** output latency and captures that many
 extra live samples before comparison with the latency-trimmed offline range;
 it never estimates a convenient offset from the measured audio.
+The independent offline engine is configured to that same rate before rendering,
+and its restored rate is retained and checked. Otherwise a fresh engine's default
+48 kHz clock causes the render API to restore an unrequested second prepared
+graph after a 96 kHz export. Cross-rate export/restoration can retain both rates'
+PCM and requires separate memory measurements; it is not included in this
+same-rate fixture's preflight.
 
 The hosted CTest smoke verifies complete media, graph overlap, null accuracy,
 and the CLI's outcome contract, with separate generous regression limits of
