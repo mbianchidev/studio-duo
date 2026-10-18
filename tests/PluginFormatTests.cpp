@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <iostream>
 #include <memory>
 #include <thread>
 
@@ -486,6 +487,7 @@ void multipleOutputTests(const juce::PluginDescription& description, const studi
 
 void pluginFormatTests()
 {
+    std::cerr << "[plugin-format] coherent host clock" << std::endl;
     studio::PluginHostPlayHead hostClock;
     expect(!hostClock.getPosition(), "An unpublished host clock reports unavailable rather than fabricated transport.");
     studio::PluginTransport transport;
@@ -517,6 +519,7 @@ void pluginFormatTests()
                 || std::abs(value->bpm - static_cast<double>(value->samples) - 100.0) < 1e-9);
     publisher.join();
     expect(coherentClock, "Atomic host-clock readers cannot observe torn words from different transport snapshots.");
+    std::cerr << "[plugin-format] main-thread dispatch" << std::endl;
     const auto dispatched = std::make_shared<std::atomic<bool>>(false);
     const auto posted = juce::MessageManager::callAsync(
         [dispatched]
@@ -530,6 +533,7 @@ void pluginFormatTests()
                }),
            "Sandbox fixture waits dispatch queued JUCE callbacks.");
 
+    std::cerr << "[plugin-format] protocol and snapshot handoffs" << std::endl;
     juce::AudioPluginFormatManager manager;
     studio::PluginFormats::addSupportedFormats(manager);
 
@@ -643,6 +647,7 @@ void pluginFormatTests()
                < 0.0001f,
            "Destination delay progress merges a final source advance made after preparation but before publication.");
 
+    std::cerr << "[plugin-format] native CLAP creation" << std::endl;
     studio::ClapPluginFormat clapFormat;
     juce::OwnedArray<juce::PluginDescription> descriptions;
     clapFormat.findAllTypesForFile(descriptions,
@@ -668,6 +673,7 @@ void pluginFormatTests()
     expect(validatedState != nullptr,
            "CLAP instances expose validated state errors.");
 
+    std::cerr << "[plugin-format] native CLAP activation and DSP" << std::endl;
     instance->prepareToPlay(48000.0, 64);
     juce::AudioBuffer<float> audio(2, 64);
     for (int channel = 0; channel < audio.getNumChannels(); ++channel)
@@ -863,6 +869,7 @@ void pluginFormatTests()
                && std::abs(instance->getParameters()[1]->getValue() - 0.5f)
                       < 0.0001f,
            "CLAP timed automation converts normalized values to plain parameter ranges.");
+    std::cerr << "[plugin-format] native CLAP state round trips" << std::endl;
     juce::MemoryBlock state;
     instance->getStateInformation(state);
     instance->getParameters()[0]->setValueNotifyingHost(0.25f);
@@ -1043,6 +1050,7 @@ void pluginFormatTests()
                 : juce::String()))
             .toRawUTF8());
 
+    std::cerr << "[plugin-format] sandbox engine PDC and automation" << std::endl;
     const auto monoSource = juce::File::getSpecialLocation(
                                 juce::File::tempDirectory)
                                 .getNonexistentChildFile(
@@ -1383,12 +1391,19 @@ void pluginFormatTests()
             + ").")
                .toRawUTF8());
 
+    std::cerr << "[plugin-format] sandbox crash and reload" << std::endl;
     sandboxCrashRecoveryTests(*descriptions[0], monoClip);
+    std::cerr << "[plugin-format] native host transport" << std::endl;
     hostTransportTests(*descriptions[0], monoClip);
+    std::cerr << "[plugin-format] lifecycle admission" << std::endl;
     lifecycleAdmissionTests(*descriptions[0]);
+    std::cerr << "[plugin-format] completed offline DSP" << std::endl;
     sandboxOfflineWaitTests(*descriptions[0], monoClip);
+    std::cerr << "[plugin-format] native render modes" << std::endl;
     renderModeTests(*descriptions[0], monoClip);
+    std::cerr << "[plugin-format] native auxiliary outputs" << std::endl;
     multipleOutputTests(*descriptions[0], monoClip);
+    std::cerr << "[plugin-format] ARA policy" << std::endl;
     monoSource.deleteFile();
 
     auto project = studio::Project::createDefault();
