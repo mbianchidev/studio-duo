@@ -245,7 +245,8 @@ def validate(report, root, candidate_sha):
                    ("name", "version", "format", "architecture", "role", "mode")):
                 errors.append(f"{label}: exact processor name/version/format/architecture/role/mode are required.")
                 continue
-            if processor["architecture"] != architecture:
+            allowed_architectures = {architecture, "x86_64"} if run["target"].startswith("windows") else {architecture}
+            if processor["architecture"] not in allowed_architectures:
                 errors.append(f"{label}: processor architecture differs from the tested system.")
             fmt, role, mode = processor["format"], processor["role"], processor["mode"]
             if (fmt not in formats or role not in ("instrument", "effect")

@@ -273,7 +273,7 @@ std::optional<PluginValidationReport> PluginValidationReport::fromVar(
 }
 
 PluginValidationReport PluginCompatibilityValidator::validate(
-    const juce::PluginDescription& description)
+    const juce::PluginDescription& description, SupplementalTools tools)
 {
     PluginValidationReport report;
     report.pluginIdentifier = description.createIdentifierString();
@@ -508,7 +508,10 @@ PluginValidationReport PluginCompatibilityValidator::validate(
         addCheck(report, "ara2", "skip", "Plugin does not advertise ARA 2");
     }
 
-    report.checks.push_back(platformValidation(description));
+    report.checks.push_back(tools == SupplementalTools::run
+        ? platformValidation(description)
+        : PluginValidationCheck { "platform-validator", "skip",
+            "External platform tools explicitly omitted for an isolated plugin-only probe." });
 
     instance->releaseResources();
     araHost.reset();

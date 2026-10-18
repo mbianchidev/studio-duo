@@ -1,0 +1,13 @@
+diff --git a/modules/juce_core/native/juce_NamedPipe_posix.cpp b/modules/juce_core/native/juce_NamedPipe_posix.cpp
+--- a/modules/juce_core/native/juce_NamedPipe_posix.cpp
++++ b/modules/juce_core/native/juce_NamedPipe_posix.cpp
+@@ -282,6 +282,8 @@ bool NamedPipe::openInternal (const String& pipeName, bool createPipe, bool mustNotExist)
+     auto file = pipeName;
+ 
+     if (! File::isAbsolutePath (file))
+-        file = "/tmp/" + File::createLegalFileName (file);
++        file = File (SystemStats::getEnvironmentVariable ("TMPDIR", "/tmp"))
++                   .getChildFile (File::createLegalFileName (file))
++                   .getFullPathName();
+ 
+     pimpl.reset (new Pimpl (file, createPipe));

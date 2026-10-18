@@ -457,9 +457,10 @@ public:
 
         int getNumSteps() const override
         {
-            return isDiscrete()
-                ? static_cast<int>(info.max_value - info.min_value + 1.0)
-                : juce::AudioProcessor::getDefaultNumParameterSteps();
+            const auto count = info.max_value - info.min_value + 1.0;
+            const auto maximum = juce::AudioProcessor::getDefaultNumParameterSteps();
+            return isDiscrete() && std::isfinite(count) && count >= 2.0 && count < maximum
+                ? std::max(2, static_cast<int>(count)) : maximum;
         }
 
         juce::String getParameterID() const override
@@ -480,13 +481,15 @@ public:
                     * juce::jlimit(0.0f, 1.0f, normalized);
         }
 
-        void refresh()
+        bool refresh()
         {
             double value = info.default_value;
+            auto changed = false;
             if (params != nullptr
                 && params->get_value(pluginInstance, info.id, &value))
-                plainValue.store(value, std::memory_order_relaxed);
+                changed = !juce::exactlyEqual(plainValue.exchange(value, std::memory_order_relaxed), value);
             dirty.store(false, std::memory_order_release);
+            return changed;
         }
 
         [[nodiscard]] bool consumeDirty() noexcept
@@ -941,10 +944,13 @@ public:
         lifecycleChanging.store(false, std::memory_order_seq_cst);
     }
 
-    void refreshParameters()
+    bool refreshParameters(bool preservePendingChanges = false)
     {
+        auto changed = false;
         for (auto* parameter : parameters)
-            parameter->refresh();
+            if (!preservePendingChanges || !parameter->isDirty())
+                changed = parameter->refresh() || changed;
+        return changed;
     }
 
     void prepareAudioBuffers()
@@ -1168,6 +1174,7 @@ public:
                     true,
                     std::memory_order_release);
                 refreshLatency(owner);
+                refreshParameters(true);
             }
         }
         lifecycleChanging.store(false, std::memory_order_seq_cst);
@@ -1188,13 +1195,14 @@ public:
 
     void drainMainThread(ClapPluginInstance& owner)
     {
+        auto parameterValuesChanged = false;
         if (host->callbackRequested.exchange(
                 false,
                 std::memory_order_acq_rel)
             && plugin->on_main_thread != nullptr)
         {
             plugin->on_main_thread(plugin);
-            refreshParameters();
+            parameterValuesChanged = refreshParameters();
         }
 
         const auto restart = host->restartRequested.exchange(
@@ -1247,8 +1255,8 @@ public:
         else if ((rescanFlags & CLAP_PARAM_RESCAN_INFO) != 0)
             rebuildParameterMetadata(owner, false);
         else if ((rescanFlags & CLAP_PARAM_RESCAN_VALUES) != 0)
-            refreshParameters();
-        if ((rescanFlags & CLAP_PARAM_RESCAN_TEXT) != 0)
+            parameterValuesChanged = refreshParameters() || parameterValuesChanged;
+        if ((rescanFlags & CLAP_PARAM_RESCAN_TEXT) != 0 || parameterValuesChanged)
         {
             owner.updateHostDisplay(
                 juce::AudioProcessor::ChangeDetails {}
@@ -1503,6 +1511,7 @@ void ClapPluginInstance::prepareToPlay(double sampleRate, int maximumBlockSize)
                            sampleRate,
                            blockSize = std::max(1, maximumBlockSize)]
     {
+        auto parameterValuesChanged = false;
         impl->lifecycleChanging.store(true, std::memory_order_seq_cst);
         impl->waitForAudioCalls();
         impl->stopProcessingOnAudioThread();
@@ -1530,8 +1539,11 @@ void ClapPluginInstance::prepareToPlay(double sampleRate, int maximumBlockSize)
                 true,
                 std::memory_order_release);
             impl->refreshLatency(*this);
+            parameterValuesChanged = impl->refreshParameters(true);
         }
         impl->lifecycleChanging.store(false, std::memory_order_seq_cst);
+        if (parameterValuesChanged)
+            updateHostDisplay(juce::AudioProcessor::ChangeDetails {}.withParameterInfoChanged(true));
     };
     const auto* messages =
         juce::MessageManager::getInstanceWithoutCreating();

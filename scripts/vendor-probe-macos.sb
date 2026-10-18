@@ -1,0 +1,7 @@
+(version 1)
+(allow default)
+(deny network*)
+(deny appleevent-send)
+(deny file-write*)
+(allow file-write* (subpath (param "WORK_ROOT")))
+(allow file-write* (subpath (param "OUTPUT_ROOT")))

@@ -37,6 +37,8 @@ public:
     juce::Result resizeEditor(int width, int height);
     bool setParameter(int parameterIndex, float normalizedValue);
     void resetProcessing();
+    void beginDeviceBlock() noexcept;
+    void endDeviceBlock() noexcept;
     void processBlock(
         juce::AudioBuffer<float>& audio,
         const juce::AudioBuffer<float>* sidechain = nullptr,
@@ -59,6 +61,7 @@ public:
     static bool recoversLateFirstOutputForTesting();
     static bool resetsProcessingTimelineForTesting();
     static bool isolatesConcurrentTransportsForTesting();
+    static bool assemblesDeviceBlockSlicesForTesting();
 #endif
 
 private:
@@ -71,9 +74,9 @@ private:
                                const juce::MemoryBlock& state,
                                int sidechainChannels);
     void fetchWorkerOutput() noexcept;
-    void publishInputBlock(int samples) noexcept;
+    void publishInputBlock(int samples, std::int64_t startSample) noexcept;
     void prepareOutputTimeline(int blockSize);
-    void queueDryInput(int samples) noexcept;
+    void queueDryInput(int samples, int inputOffset) noexcept;
     void queueCompletedOutput() noexcept;
     void readTimelineOutput(juce::AudioBuffer<float>& audio,
                             juce::MidiBuffer& midi) noexcept;
@@ -102,6 +105,9 @@ private:
                PluginBridgeSharedState::maxMidiBytes> pendingMidiData {};
     int pendingMidiEventCount = 0;
     int pendingMidiByteCount = 0;
+    int deviceBlockInputSamples = 0;
+    bool deviceBlockActive = false;
+    bool deviceBlockFailed = false;
     int processingBlockSize = 512;
     int inputChannels = 0;
     int sidechainChannels = 0;

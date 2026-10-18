@@ -16,7 +16,8 @@ namespace
 void namedProductionControls()
 {
     studio::PluginParameterPanel parameters("Synthetic processor", "synthetic-insert",
-        { { 0, "gain", "Gain", 0.25f, true }, { 1, "meter", "Meter", 0.5f, false } });
+        { { 0, "gain", "Gain", 0.25f, true }, { 1, "meter", "Meter", 0.5f, false },
+          { 2, "mode", "Mode", 0.0f, true, 3 } });
     juce::Slider* slider = nullptr;
     juce::ComboBox* selector = nullptr;
     for (auto* child : parameters.getChildren())
@@ -43,6 +44,13 @@ void namedProductionControls()
         selector->setSelectedId(2, juce::sendNotificationSync);
         expect(slider->getTitle().contains("Meter") && !slider->isEnabled(),
                "Parameter selection updates its accessible identity and preserves read-only values.");
+        selector->setSelectedId(3, juce::sendNotificationSync);
+        juce::Component& sliderComponent = *slider;
+        expect(slider->getInterval() == 0.5
+                   && sliderComponent.keyPressed(juce::KeyPress(juce::KeyPress::rightKey))
+                   && std::abs(slider->getValue() - 0.5) < 1e-6
+                   && starts == 2 && changes == 2 && ends == 2,
+               "Keyboard editing moves a discrete plugin parameter by one real step, not an inaudible fractional increment.");
     }
     studio::PluginParameterPanel empty("Unavailable", "empty", {});
     for (auto* child : empty.getChildren())

@@ -115,6 +115,10 @@ if(NOT TARGET juce::juce_gui_extra)
         GIT_SHALLOW TRUE
     )
     FetchContent_MakeAvailable(JUCE)
+    studio_duo_apply_dependency_patch(
+        "${juce_SOURCE_DIR}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/third_party/juce/9.0.3-private-ipc.patch"
+    )
 endif()
 
 if(STUDIO_DUO_BUILD_TESTS OR STUDIO_DUO_AUDIO_EXPORT_TESTS_ONLY)
@@ -497,6 +501,8 @@ target_sources(
         src/update/UpdateSettingsComponent.h
         src/ui/MainComponent.cpp
         src/ui/MainComponent.h
+        src/platform/MediaFileRevision.cpp
+        src/platform/MediaFileRevision.h
         src/ui/StartupProgressComponent.cpp
         src/ui/StartupProgressComponent.h
         src/ui/StartupShellComponent.cpp
@@ -954,6 +960,8 @@ if(STUDIO_DUO_BUILD_TESTS)
             tests/ProjectExchangeTests.cpp
             tests/KeyboardAccessibilityTests.cpp
             tests/PerformanceHardeningTests.cpp
+            src/platform/MediaFileRevision.cpp
+            src/platform/MediaFileRevision.h
             tests/ReleaseFixtures.h
             tests/ProjectTemplateTests.cpp
             tests/WindowSizingTests.cpp

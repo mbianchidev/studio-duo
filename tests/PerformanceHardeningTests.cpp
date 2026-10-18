@@ -3,6 +3,7 @@
 
 #include "audio/StudioAudioEngine.h"
 #include "platform/Architecture.h"
+#include "platform/MediaFileRevision.h"
 #include "project_io/ProjectFile.h"
 #include "project_io/ProjectCollectionService.h"
 #include "ui/TimelineComponent.h"
@@ -11,6 +12,7 @@
 #include <cmath>
 #include <cstdint>
 #include <chrono>
+#include <map>
 #include <thread>
 
 #if JUCE_WINDOWS
@@ -143,11 +145,154 @@ bool waitForGraph(studio::StudioAudioEngine& engine)
         juce::MessageManager::getInstance()->runDispatchLoopUntil(1);
     }
 }
+
+void preparedMediaReuseCases()
+{
+    release_fixture::Directory directory;
+    const auto source = directory.file.getChildFile("revision.wav");
+    expect(release_fixture::writeMedia(source).wasOk(), "Synthetic cache-revision media can be created.");
+    auto project = studio::Project::createDefault();
+    project.metronomeEnabled = false;
+    studio::AudioClip clip;
+    clip.sourceFile = source;
+    clip.sourceLengthSeconds = 0.125;
+    clip.sourceRangeEndSeconds = 0.125;
+    clip.durationSeconds = 0.0625;
+    project.tracks.front().clips.push_back(clip);
+    auto& edited = project.tracks.front().clips.front();
+    auto engine = std::make_unique<studio::StudioAudioEngine>();
+    const auto publish = [&]
+    {
+        const auto result = engine->updateProject(project);
+        expect(result.wasOk() && waitForGraph(*engine), result.getErrorMessage().toRawUTF8());
+    };
+    const auto capture = [&]
+    {
+        engine->seekSeconds(edited.startSeconds);
+        engine->play();
+        const auto audio = engine->renderActiveBlockForTesting(256);
+        engine->stop();
+        return audio;
+    };
+    publish();
+    const auto original = capture();
+    juce::String error;
+    const auto revision = studio::readMediaFileRevision(source, error);
+    expect(revision.has_value(), error.toRawUTF8());
+    const auto initialReads = engine->sourceReadCountForTesting();
+    edited.name = "Metadata and envelope edit";
+    edited.startSeconds = 0.125;
+    edited.gainDecibels = -6.0f;
+    edited.polarityInverted = true;
+    publish();
+    const auto changed = capture();
+    expect(engine->sourceReadCountForTesting()
+               == initialReads + (revision && revision->reusable ? 0 : 1),
+           "Moving/renaming and gain/polarity edits do not reprepare unchanged PCM on reliable filesystems.");
+    float metadataError = 0.0f;
+    for (int channel = 0; channel < 2; ++channel)
+        for (int sample = 0; sample < original.getNumSamples(); ++sample)
+            metadataError = std::max(metadataError,
+                std::abs(changed.getSample(channel, sample)
+                    + original.getSample(channel, sample) * juce::Decibels::decibelsToGain(-6.0f)));
+    expect(metadataError < 1e-6f, "Shared prepared media still applies each clip's current gain and polarity.");
+    const auto readsBeforeFade = engine->sourceReadCountForTesting();
+    edited.fadeInSeconds = 0.01;
+    edited.fadeOutSeconds = 0.01;
+    edited.fadeInCurve = 0.25f;
+    publish();
+    const auto faded = capture();
+    float fadeError = 0.0f;
+    for (int channel = 0; channel < 2; ++channel)
+        for (int sample = 0; sample < faded.getNumSamples(); ++sample)
+            fadeError = std::max(fadeError,
+                std::abs(faded.getSample(channel, sample) - changed.getSample(channel, sample)
+                    * edited.envelopeGainAt(static_cast<double>(sample) / 48000.0)));
+    expect(fadeError < 1e-6f && engine->sourceReadCountForTesting()
+               == readsBeforeFade + (revision && revision->reusable ? 0 : 1),
+           "Fade edits keep their current envelope without duplicating prepared sample storage.");
+
+    const auto readsBeforeProcessingChange = engine->sourceReadCountForTesting();
+    edited.reversed = true;
+    publish();
+    expect(engine->sourceReadCountForTesting() == readsBeforeProcessingChange + 1,
+           "A changed source mapping cannot reuse a previously prepared clip.");
+    const auto beforeRewrite = capture();
+    const auto replacement = directory.file.getChildFile("replacement.wav");
+    expect(release_fixture::writeMedia(replacement, 0.0625f).wasOk(), "An in-place media replacement can be prepared.");
+    juce::MemoryBlock bytes;
+    expect(replacement.loadFileAsData(bytes), "Synthetic replacement bytes can be read.");
+    const auto originalId = source.getFileIdentifier();
+    const auto originalTime = source.getLastModificationTime();
+    const auto originalSize = source.getSize();
+    const auto readsBeforeRewrite = engine->sourceReadCountForTesting();
+    {
+        juce::FileOutputStream stream(source);
+        expect(stream.openedOk() && stream.setPosition(0)
+                   && stream.write(bytes.getData(), bytes.getSize()),
+               "Synthetic PCM can be overwritten without replacing its file identity.");
+        stream.flush();
+        expect(stream.getStatus().wasOk(), "The in-place synthetic overwrite is flushed.");
+#if JUCE_WINDOWS
+        const auto writingRevision = studio::readMediaFileRevision(source, error);
+        expect(writingRevision && !writingRevision->reusable,
+               "An open Windows writer disables cross-update reuse until its file times and journal update on close.");
+#endif
+    }
+    expect(source.setLastModificationTime(originalTime) && source.getSize() == originalSize
+               && source.getFileIdentifier() == originalId,
+           "The freshness test preserves file identity, size, and modification time.");
+    publish();
+    const auto afterRewrite = capture();
+    float rewriteError = 0.0f;
+    for (int channel = 0; channel < 2; ++channel)
+        for (int sample = 0; sample < beforeRewrite.getNumSamples(); ++sample)
+            rewriteError = std::max(rewriteError,
+                std::abs(afterRewrite.getSample(channel, sample) - beforeRewrite.getSample(channel, sample) * 0.5f));
+    expect(engine->sourceReadCountForTesting() == readsBeforeRewrite + 1 && rewriteError < 1e-6f,
+           "In-place, same-size/same-mtime replacement becomes audible instead of hitting a stale prepared cache.");
+
+    const auto readsBeforeRateChange = engine->sourceReadCountForTesting();
+    expect(engine->configureAudioForTesting(96000.0, 256).wasOk(), "The cache fixture can change its actual audio clock.");
+    publish();
+    expect(engine->activeSnapshotSampleRateForTesting() == 96000.0
+               && engine->sourceReadCountForTesting() == readsBeforeRateChange + 1,
+           "Prepared data is never reused at a different sample rate.");
+    const auto audibleBeforeFailure = capture();
+    engine->setMediaPreparationHookForTesting([&] { expect(source.deleteFile(), "The synthetic media race removes its own source."); });
+    const auto interrupted = engine->updateProject(project);
+    engine->setMediaPreparationHookForTesting({});
+    expect(interrupted.failed() && interrupted.getErrorMessage().isNotEmpty(),
+           "A source disappearing before publication rejects the new graph with an explicit error.");
+    const auto audibleAfterFailure = capture();
+    float failureError = 0.0f;
+    for (int channel = 0; channel < 2; ++channel)
+        for (int sample = 0; sample < audibleBeforeFailure.getNumSamples(); ++sample)
+            failureError = std::max(failureError,
+                std::abs(audibleBeforeFailure.getSample(channel, sample) - audibleAfterFailure.getSample(channel, sample)));
+    expect(audibleBeforeFailure.getMagnitude(0, audibleBeforeFailure.getNumSamples()) > 0.001f
+               && failureError < 1e-6f,
+           "Rejected media preparation leaves the previous immutable graph audible and unchanged.");
+    expect(release_fixture::writeMedia(source).wasOk(), "The isolated media race can restore its source.");
+    publish();
+    const auto readsBeforeWarp = engine->sourceReadCountForTesting();
+    edited.warpMarkers = { { edited.durationSeconds * 0.5,
+                             edited.sourceOffsetSeconds + edited.durationSeconds * 0.5 } };
+    publish();
+    expect(engine->sourceReadCountForTesting() == readsBeforeWarp + 1,
+           "Warp-point changes are part of the lossless prepared-media key.");
+    project.tracks.front().clips.clear();
+    for (int publication = 0; publication < 4; ++publication)
+        publish();
+    expect(engine->preparedAudioStorageForTesting().distinctBuffers == 0,
+           "A weak prepared cache does not retain removed PCM after its snapshot generations retire.");
+}
 }
 
 void performanceHardeningTests()
 {
     const auto initialFailures = failures;
+    preparedMediaReuseCases();
     release_fixture::Directory directory;
     const auto source = directory.file.getChildFile("synthetic.wav");
     const auto mediaResult = release_fixture::writeMedia(source);
@@ -187,6 +332,11 @@ void performanceHardeningTests()
            "A graph update decodes shared media once rather than once per edited clip.");
     if (!graphReady)
         return;
+    const auto storage = engine->preparedAudioStorageForTesting();
+    expect(storage.references >= 2048 && storage.distinctBuffers == 1 && storage.bytes == 24000,
+           "Identical prepared PCM is shared immutably across clips and published snapshot generations.");
+    const auto revision = studio::readMediaFileRevision(source, error);
+    expect(revision.has_value(), error.toRawUTF8());
     ProcessStatistics before;
     if (const auto result = processStatistics(before); result.failed())
     {
@@ -272,8 +422,9 @@ void performanceHardeningTests()
     const auto refreshReady = refreshed.wasOk() && waitForGraph(*engine);
     const auto refreshMs = now() - started;
     expect(refreshReady && refreshMs < 5000.0
-               && engine->sourceReadCountForTesting() == readsBeforeRefresh + 1,
-           "A mixer edit republishes the graph with one fresh shared-source read.");
+               && engine->sourceReadCountForTesting()
+                   == readsBeforeRefresh + (revision && revision->reusable ? 0 : 1),
+           "Mixer-only edits reuse unchanged prepared media only with a reliable native change revision.");
     engine->seekSeconds(0.0);
     engine->play();
     const auto beforeMediaChange = engine->renderActiveBlockForTesting(blockSize);
@@ -335,6 +486,9 @@ void performanceHardeningTests()
     report->setProperty("peakMemoryBytes", static_cast<juce::int64>(after.peakMemoryBytes));
     report->setProperty("packageBytes", diskBytes);
     report->setProperty("maximumNullError", static_cast<double>(nullError));
+    const auto retained = engine->preparedAudioStorageForTesting();
+    report->setProperty("retainedPreparedSampleBytes", static_cast<juce::int64>(retained.bytes));
+    report->setProperty("distinctPreparedBuffers", static_cast<juce::int64>(retained.distinctBuffers));
     const auto reportJson = juce::JSON::toString(juce::var(report.get()), true);
     const auto reportPath = juce::SystemStats::getEnvironmentVariable("STUDIO_DUO_HARDENING_REPORT", {});
     if (reportPath.isNotEmpty())
@@ -358,6 +512,7 @@ struct LongSessionProfile
     int bufferSize = 256;
     int memoryBudgetMiB = 16384;
     bool paced = false;
+    bool bufferMatrix = false;
 };
 
 juce::Result parseLongSessionProfile(const juce::StringArray& arguments,
@@ -376,6 +531,11 @@ juce::Result parseLongSessionProfile(const juce::StringArray& arguments,
         if (argument == "--paced")
         {
             profile.paced = true;
+            continue;
+        }
+        if (argument == "--buffer-matrix")
+        {
+            profile.bufferMatrix = true;
             continue;
         }
         if (key == "--qualification-output" && text.isNotEmpty())
@@ -555,8 +715,23 @@ struct CallbackMeasurement
     bool graphEditInProgress = false;
 };
 
-int qualifyLongSession(const LongSessionProfile& profile, const juce::File& output)
+struct LongSessionFixture
 {
+    studio::Project project;
+    std::vector<studio::StudioAudioEngine::PluginRuntimeRequest> requests;
+    std::map<juce::String, juce::var> measurements;
+};
+
+int qualifyLongSession(const LongSessionProfile& profile, const juce::File& output,
+                       const LongSessionFixture* sharedFixture = nullptr)
+{
+    juce::InterProcessLock reservation("StudioDuoQualification-"
+        + juce::SHA256(output.getFullPathName().toLowerCase().toUTF8()).toHexString());
+    if (!reservation.enter(0))
+    {
+        std::cerr << "Another process owns this qualification output directory.\n";
+        return 2;
+    }
     if (output.exists())
     {
         std::cerr << "Qualification output must be a new directory; existing evidence is never overwritten.\n";
@@ -581,6 +756,8 @@ int qualifyLongSession(const LongSessionProfile& profile, const juce::File& outp
     report->setProperty("ramMiB", juce::SystemStats::getMemorySizeInMegabytes());
     report->setProperty("physicalDevicesOpened", false);
     report->setProperty("paced", profile.paced);
+    report->setProperty("bufferMatrixRequested", profile.bufferMatrix);
+    report->setProperty("sharedRateFixture", sharedFixture != nullptr);
     report->setProperty("cachePolicy", "Uncontrolled OS cache; first/repeated reads are not cold-cache certification.");
     report->setProperty("audioTracks", profile.tracks);
     report->setProperty("songs", profile.songs);
@@ -657,60 +834,79 @@ int qualifyLongSession(const LongSessionProfile& profile, const juce::File& outp
     const auto decodedBytes = static_cast<juce::int64>(profile.tracks)
         * profile.songs * profile.songSeconds * profile.sampleRate * stereoFrameBytes;
     const auto preparedBytes = decodedBytes + decodedBytes / profile.songs / profile.clipsPerSong;
-    const auto estimatedPeakBytes = preparedBytes * 6
-        + totalSamples * stereoFrameBytes * 2 + 512LL * 1024 * 1024;
+    const auto largestSourceBytes = static_cast<juce::int64>(profile.songSeconds)
+        * profile.sampleRate * stereoFrameBytes;
+    const auto estimatedPeakBytes = preparedBytes + largestSourceBytes * 2
+        + largestSourceBytes / profile.clipsPerSong + totalSamples * stereoFrameBytes * 2
+        + 64LL * 1024 * 1024 + 512LL * 1024 * 1024;
     report->setProperty("decodedMediaBytes", decodedBytes);
     report->setProperty("preparedMediaBytesUpperBound", preparedBytes);
-    report->setProperty("estimatedPreparedGenerations", 6);
+    report->setProperty("estimatedPreparedGenerations", 1);
+    report->setProperty("snapshotAudioOwnership", "Shared immutable PCM; graph edits in this profile change metadata only.");
     report->setProperty("estimatedPeakBytes", estimatedPeakBytes);
     if (totalSamples > std::numeric_limits<int>::max() - studio::PluginBridgeSharedState::maxSupportedLatencySamples
         || estimatedPeakBytes > static_cast<juce::int64>(profile.memoryBudgetMiB) * 1024 * 1024)
         return finish("blocked", "Whole-file decoded/prepared buffers exceed the selected preflight memory budget.");
-    if (output.getBytesFreeOnVolume() < decodedBytes * 2 + 512LL * 1024 * 1024)
+    if (sharedFixture == nullptr
+        && output.getBytesFreeOnVolume() < decodedBytes * 2 + 512LL * 1024 * 1024)
         return finish("blocked", "Insufficient free storage for unique long media and a validated portable copy.");
     if (!observe("baseline") || workload.createDirectory().failed())
         return finish("fail", "Cannot establish a bounded synthetic workload.");
 
-    studio::Project project;
-    std::vector<studio::StudioAudioEngine::PluginRuntimeRequest> requests;
+    auto project = sharedFixture != nullptr ? sharedFixture->project : studio::Project {};
+    auto requests = sharedFixture != nullptr ? sharedFixture->requests
+        : std::vector<studio::StudioAudioEngine::PluginRuntimeRequest> {};
     auto started = now();
-    if (const auto result = makeLongProject(profile, workload, project, requests); result.failed())
-        return finish("fail", result.getErrorMessage());
-    report->setProperty("mediaWriteMilliseconds", now() - started);
-    juce::int64 sourceBytes = 0;
-    for (const auto& file : workload.findChildFiles(juce::File::findFiles, false, "*.wav"))
-        sourceBytes += file.getSize();
-    report->setProperty("sourceFileBytes", sourceBytes);
-    const auto package = workload.getChildFile("long.studioduo");
-    started = now();
-    if (const auto result = studio::ProjectFile::save(project, package); result.failed())
-        return finish("fail", result.getErrorMessage());
-    const auto saveMs = now() - started;
-    report->setProperty("saveMilliseconds", saveMs);
-    juce::String error;
-    for (int pass = 0; pass < 2; ++pass)
+    if (sharedFixture == nullptr)
     {
+        if (const auto result = makeLongProject(profile, workload, project, requests); result.failed())
+            return finish("fail", result.getErrorMessage());
+        report->setProperty("mediaWriteMilliseconds", now() - started);
+        juce::int64 sourceBytes = 0;
+        for (const auto& file : workload.findChildFiles(juce::File::findFiles, false, "*.wav"))
+            sourceBytes += file.getSize();
+        report->setProperty("sourceFileBytes", sourceBytes);
+        const auto package = workload.getChildFile("long.studioduo");
         started = now();
-        const auto loaded = studio::ProjectFile::load(package, error);
-        const auto loadMs = now() - started;
-        if (!loaded || release_fixture::snapshot(*loaded) != release_fixture::snapshot(project))
-            return finish("fail", "Long-session native round trip failed: " + error);
-        report->setProperty(pass == 0 ? "firstLoadMilliseconds" : "repeatedLoadMilliseconds", loadMs);
-        if (loadMs > 10000.0)
-            blockers.add("Native load exceeds 10 seconds.");
+        if (const auto result = studio::ProjectFile::save(project, package); result.failed())
+            return finish("fail", result.getErrorMessage());
+        const auto saveMs = now() - started;
+        report->setProperty("saveMilliseconds", saveMs);
+        juce::String error;
+        for (int pass = 0; pass < 2; ++pass)
+        {
+            started = now();
+            const auto loaded = studio::ProjectFile::load(package, error);
+            const auto loadMs = now() - started;
+            if (!loaded || release_fixture::snapshot(*loaded) != release_fixture::snapshot(project))
+                return finish("fail", "Long-session native round trip failed: " + error);
+            report->setProperty(pass == 0 ? "firstLoadMilliseconds" : "repeatedLoadMilliseconds", loadMs);
+            if (loadMs > 10000.0)
+                blockers.add("Native load exceeds 10 seconds.");
+        }
+        if (saveMs > 10000.0)
+            blockers.add("Native save exceeds 10 seconds.");
+        started = now();
+        const auto portable = studio::ProjectCollectionService::savePortableCopy(
+            project, package, workload.getChildFile("portable.studioduo"), error);
+        report->setProperty("portableCopyMilliseconds", now() - started);
+        const auto verified = portable ? studio::ProjectCollectionService::validatePortableCopy(
+            workload.getChildFile("portable.studioduo"), error) : std::nullopt;
+        if (!portable || !verified || verified->missingResources != 0 || verified->invalidResources != 0)
+            return finish("fail", "Full-length portable media validation failed: " + error);
+        if (!observe("media-save-portable"))
+            return finish("fail", "Resource budget exceeded before graph construction.");
     }
-    if (saveMs > 10000.0)
-        blockers.add("Native save exceeds 10 seconds.");
-    started = now();
-    const auto portable = studio::ProjectCollectionService::savePortableCopy(
-        project, package, workload.getChildFile("portable.studioduo"), error);
-    report->setProperty("portableCopyMilliseconds", now() - started);
-    const auto verified = portable ? studio::ProjectCollectionService::validatePortableCopy(
-        workload.getChildFile("portable.studioduo"), error) : std::nullopt;
-    if (!portable || !verified || verified->missingResources != 0 || verified->invalidResources != 0)
-        return finish("fail", "Full-length portable media validation failed: " + error);
-    if (!observe("media-save-portable"))
-        return finish("fail", "Resource budget exceeded before graph construction.");
+    else
+    {
+        for (const auto& [name, value] : sharedFixture->measurements)
+            report->setProperty(juce::Identifier(name), value);
+        report->setProperty("fixtureMeasurementScope", "Source generation/save/load/portable measurements shared across buffers at this rate.");
+    }
+    LongSessionFixture fixture { project, requests, {} };
+    for (const auto* name : { "mediaWriteMilliseconds", "sourceFileBytes", "saveMilliseconds",
+                             "firstLoadMilliseconds", "repeatedLoadMilliseconds", "portableCopyMilliseconds" })
+        fixture.measurements.emplace(name, report->getProperty(name));
 
     auto engine = std::make_unique<studio::StudioAudioEngine>();
     if (const auto result = engine->configureAudioForTesting(profile.sampleRate, profile.bufferSize); result.failed())
@@ -873,6 +1069,9 @@ int qualifyLongSession(const LongSessionProfile& profile, const juce::File& outp
     if (engine->pluginLateBlockCount() != 0 || engine->pluginAutomationEventDropCount() != 0)
         blockers.add("Processor deadlines or automation event delivery failed.");
     report->setProperty("sourceDecodeCalls", static_cast<juce::int64>(engine->sourceReadCountForTesting()));
+    const auto preparedStorage = engine->preparedAudioStorageForTesting();
+    report->setProperty("retainedPreparedSampleBytes", static_cast<juce::int64>(preparedStorage.bytes));
+    report->setProperty("distinctPreparedBuffers", static_cast<juce::int64>(preparedStorage.distinctBuffers));
     if (incompletePlayback)
         return finish("fail", "Playback stopped at a resource bound; completed callback measurements are retained.");
     if (!observe("playback"))
@@ -923,6 +1122,39 @@ int qualifyLongSession(const LongSessionProfile& profile, const juce::File& outp
         return finish("fail", "Offline render peak memory exceeds its budget.");
     offlineEngine->shutdown();
     offlineEngine.reset();
+    report->setProperty("bufferCaseStatus", blockers.isEmpty() ? "pass" : "fail");
+    if (profile.bufferMatrix)
+    {
+        live.setSize(0, 0);
+        offline.setSize(0, 0);
+        juce::Array<juce::var> cases;
+        for (const auto buffer : { 64, 128, 256, 512, 1024 })
+        {
+            auto item = std::make_unique<juce::DynamicObject>();
+            item->setProperty("bufferSize", buffer);
+            if (buffer == profile.bufferSize)
+            {
+                item->setProperty("status", report->getProperty("bufferCaseStatus"));
+                item->setProperty("report", "report.json");
+            }
+            else
+            {
+                auto childProfile = profile;
+                childProfile.bufferSize = buffer;
+                childProfile.bufferMatrix = false;
+                const auto child = output.getChildFile("buffer-" + juce::String(buffer));
+                const auto outcome = qualifyLongSession(childProfile, child, &fixture);
+                const auto childReport = juce::JSON::parse(child.getChildFile("report.json"));
+                const auto status = childReport["status"].toString();
+                item->setProperty("status", status.isNotEmpty() ? status : "fail");
+                item->setProperty("report", child.getFileName() + "/report.json");
+                if (outcome != 0 || status != "pass")
+                    blockers.add("Buffer " + juce::String(buffer) + " failed or was blocked; see its retained report.");
+            }
+            cases.add(juce::var(item.release()));
+        }
+        report->setProperty("bufferMatrix", cases);
+    }
     return finish(blockers.isEmpty() ? "pass" : "fail",
         "Computational characterisation only; no device, vendor, assistive-technology, or release sign-off.");
 }
@@ -930,7 +1162,8 @@ int qualifyLongSession(const LongSessionProfile& profile, const juce::File& outp
 
 std::optional<int> runLongSessionQualification(const juce::StringArray& arguments)
 {
-    if (!arguments.contains("--qualify-long-session"))
+    if (std::none_of(arguments.begin(), arguments.end(),
+            [](const auto& argument) { return argument.startsWith("--qualify-long-session"); }))
         return std::nullopt;
     LongSessionProfile profile;
     juce::String output;
@@ -945,6 +1178,8 @@ std::optional<int> runLongSessionQualification(const juce::StringArray& argument
 
 void longSessionQualificationTests()
 {
+    expect(runLongSessionQualification({ "--qualify-long-session=unexpected" }) == std::optional<int>(2),
+           "A malformed qualification mode cannot silently launch unrelated native suites.");
     LongSessionProfile profile;
     juce::String output;
     expect(parseLongSessionProfile({ "--tracks=0", "--qualification-output=relative" }, profile, output).failed(),
@@ -957,14 +1192,16 @@ void longSessionQualificationTests()
            "Unknown qualification settings fail instead of changing the measurement implicitly.");
     release_fixture::Directory directory;
     profile = {};
+    profile.songSeconds = 600;
+    profile.sampleRate = 96000;
     const auto boundedDestination = directory.file.getChildFile("memory-preflight");
     expect(qualifyLongSession(profile, boundedDestination) == 2,
-           "The full-length default profile is rejected before allocation when graph generations exceed 16 GiB.");
+           "A 30-minute 96 kHz profile is rejected before allocation when its shared PCM and render buffers exceed 16 GiB.");
     const auto preflight = juce::JSON::parse(boundedDestination.getChildFile("report.json"));
     expect(preflight["status"].toString() == "blocked"
-               && static_cast<juce::int64>(preflight["estimatedPeakBytes"]) == 22517030912LL
+               && static_cast<juce::int64>(preflight["estimatedPeakBytes"]) == 28367179776LL
                && !boundedDestination.getChildFile("synthetic-workload").exists(),
-           "The preflight includes alternate-take preparation and six concurrent graph generations, not just source PCM.");
+           "The preflight includes shared PCM, decode/processing scratch, and both full render buffers.");
     profile = {};
     profile.tracks = 2;
     profile.songSeconds = 1;
@@ -1007,6 +1244,37 @@ void longSessionQualificationTests()
     }
     expect(qualifyLongSession(profile, destination) == 2,
            "Qualification cannot overwrite an existing evidence directory.");
+    profile.bufferMatrix = true;
+    const auto matrixDirectory = directory.file.getChildFile("buffer-matrix");
+    const auto matrixOutcome = qualifyLongSession(profile, matrixDirectory);
+    const auto matrixReport = juce::JSON::parse(matrixDirectory.getChildFile("report.json"));
+    const auto* cases = matrixReport["bufferMatrix"].getArray();
+    expect(cases != nullptr && cases->size() == 5,
+           "The buffer matrix retains a separate complete report for every supported buffer size.");
+    auto anyDeadlineFailure = false;
+    if (cases != nullptr)
+        for (const auto& item : *cases)
+        {
+            const auto caseReport = item["report"].toString() == "report.json" ? matrixReport
+                : juce::JSON::parse(matrixDirectory.getChildFile(item["report"].toString()));
+            const auto missed = static_cast<int>(caseReport["callbackDeadlineMisses"]) > 0
+                || static_cast<double>(caseReport["p99CallbackMilliseconds"])
+                    > static_cast<double>(caseReport["callbackDeadlineMilliseconds"]) * 0.7;
+            anyDeadlineFailure = anyDeadlineFailure || missed;
+            expect(caseReport["bufferCaseStatus"].toString() == (missed ? "fail" : "pass")
+                       && item["status"].toString() == caseReport["bufferCaseStatus"].toString()
+                       && static_cast<int>(caseReport["bufferSize"]) == static_cast<int>(item["bufferSize"])
+                       && static_cast<juce::int64>(caseReport["contentSamples"]) == 288000
+                       && caseReport["maximumNullError"].isDouble()
+                       && static_cast<double>(caseReport["maximumNullError"]) <= 1e-5
+                       && static_cast<double>(caseReport["maximumCallbackMilliseconds"]) < 100.0
+                       && static_cast<double>(caseReport["playbackWallMilliseconds"]) < 10000.0,
+                   "Every matrix case preserves its actual buffer clock, strict outcome, complete audio, and null accuracy.");
+        }
+    expect(matrixOutcome == (anyDeadlineFailure ? 1 : 0)
+               && matrixReport["status"].toString() == (anyDeadlineFailure ? "fail" : "pass")
+               && !matrixDirectory.getChildFile("synthetic-workload").exists(),
+           "A matrix never hides a failing case and removes its owned synthetic dataset after all cases finish.");
     auto engine = std::make_unique<studio::StudioAudioEngine>();
     expect(engine->configureAudioForTesting(0.0, 256).failed()
                && engine->configureAudioForTesting(96000.0, 128).wasOk(),

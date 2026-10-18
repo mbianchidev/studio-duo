@@ -1571,6 +1571,8 @@ int main(int argc, char* argv[])
         return *result;
     if (const auto result = runLongSessionQualification(arguments))
         return *result;
+    if (const auto result = runVendorPluginQualification(arguments))
+        return *result;
     if (const auto result = runAudioDeviceProbeFixture(arguments))
         return *result;
 #if JUCE_WINDOWS

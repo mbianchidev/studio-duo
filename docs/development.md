@@ -31,6 +31,12 @@ is added, correcting its policy-version range and selecting modern MSVC runtime
 handling. The patches apply on clean sources and verify already-patched cached
 sources; a mismatched custom dependency source fails with an actionable error.
 For a customized LAME source override, retain/apply the portability fixes too.
+Source-built JUCE 9.0.3 also receives a checked private-IPC patch: relative POSIX
+named pipes use the inherited `TMPDIR`, falling back to `/tmp` only when that
+environment setting is absent. Parent/worker probes can therefore keep their
+FIFOs in an owned private directory instead of granting vendor code writes to
+global `/tmp` pipe patterns. An installed JUCE package is not modified; its
+private-probe compatibility must be verified separately.
 Phase 4 MIDI/editor workflows and bundled drum/guitar/bass devices are
 implemented. The dedicated DAWproject 1.0 translation, schema-validation, ZIP,
 scene, and compatibility-report layer is also implemented without runtime
@@ -568,9 +574,19 @@ before replacement, and reject unsupported capabilities/versions without
 recovery bypass. A corrupt manifest requires Save As. Legacy output-route IDs
 are deterministic across repeated migration and platform exchange.
 
-Graph construction reuses decoded source buffers within one snapshot, capped
-at 64 MiB of additional cached audio; no cache survives a rebuild. Thus edits to
-same-size/same-mtime media are observed. Timeline painting starts its grid at
+Graph construction shares immutable prepared PCM across clips and snapshot
+publications. A weak cache keys every source-mapping/stretch input and the exact
+sample-rate bits, not clip IDs, timeline positions, gain, polarity, or fades
+(those remain per-clip render metadata). Local APFS identity/nanosecond change
+time and local NTFS identity/change-time/USN revisions permit cross-update reuse;
+unavailable or coarse/remote filesystem revisions disable that optimization.
+Before publication all observed revisions are checked again. Media disappearing
+or changing during preparation rejects the new graph while the previous one stays
+audible. Native identities are in-memory cache keys, never diagnostic fields.
+Tests cover shared ownership, mixer/move/envelope edits, replacement and in-place
+same-size/same-mtime changes, rate changes, failed publication, and retired data.
+Decode scratch retains at most 64 MiB of small sources and one large source;
+equal-rate input avoids an unnecessary resampling copy. Timeline painting starts its grid at
 the visible meter anchor and culls offscreen rows/clips/automation/previews.
 Prepared audio storage still needs realistic long-file evaluation; the short
 synthetic performance fixture is not a streaming or hardware-capacity guarantee.
@@ -746,6 +762,12 @@ uses compact breakpoint/ramp descriptors. CLAP expands them to exact timed
 events inside one `process()` call, bundled gain applies processor-native
 per-sample ramps, and unsupported JUCE formats use an adaptive bounded split
 fallback. Overflow is counted rather than silently dropping later lanes.
+Loop-boundary slices of one device callback are assembled into one sandbox
+input packet, including sidechains, MIDI positions and automation ramp ends;
+they must not overwrite the single-slot bridge input before the worker can run.
+CLAP activation refreshes clean parameter values while retaining pending host
+edits. Worker parameter changes publish refreshed metadata, including discrete
+step counts used by the generic editor's keyboard controls.
 Control gestures retain their start and end transport positions, including
 plugin parameters, VCA gain, sends, master controls, and control-room
 volume/pan/mute/polarity/dim processing. Touch restores the prior lane, latch

@@ -159,6 +159,14 @@ public:
     juce::Result configureAudioForTesting(double rate, int blockSize);
     void renderActiveBlockForTesting(juce::AudioBuffer<float>& output);
     [[nodiscard]] std::uint64_t sourceReadCountForTesting() const noexcept;
+    struct PreparedAudioStorageForTesting
+    {
+        std::size_t references = 0;
+        std::size_t distinctBuffers = 0;
+        std::uint64_t bytes = 0;
+    };
+    [[nodiscard]] PreparedAudioStorageForTesting preparedAudioStorageForTesting() const;
+    void setMediaPreparationHookForTesting(std::function<void()> hook);
     struct MidiEventForTesting
     {
         std::uint64_t runtimeKey = 0;
@@ -282,7 +290,7 @@ private:
         double sampleRate = 48000.0;
         float gain = 1.0f;
         AudioClip processing;
-        juce::AudioBuffer<float> samples;
+        std::shared_ptr<const juce::AudioBuffer<float>> samples;
     };
 
     struct RenderSource
@@ -815,6 +823,7 @@ private:
     void requestMidiNoteTermination() noexcept;
 #if defined(STUDIO_DUO_TESTING)
     std::atomic<std::uint64_t> testingSourceReadCount { 0 };
+    std::function<void()> testingMediaPreparationHook;
     void recordMidiEventsForTesting(
         std::uint64_t runtimeKey,
         const juce::MidiBuffer& midi) noexcept;
@@ -872,6 +881,8 @@ private:
 
     juce::AudioDeviceManager* deviceManager = nullptr;
     juce::AudioFormatManager formatManager;
+    juce::CriticalSection preparedClipCacheLock;
+    std::map<juce::String, std::weak_ptr<const juce::AudioBuffer<float>>> preparedClipCache;
     juce::File pluginBridgeWorkerExecutable;
     std::array<RenderSnapshot, 3> snapshots;
     std::atomic<std::uint64_t> activeRenderPair { 0 };

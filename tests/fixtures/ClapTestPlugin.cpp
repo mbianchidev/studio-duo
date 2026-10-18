@@ -87,6 +87,9 @@ static bool plugin_activate(const clap_plugin_t* plugin,
     expect_main_thread(plugin);
     instance->active = true;
     ++instance->activation_count;
+    const char* activation_values = getenv("STUDIO_DUO_TEST_CLAP_ACTIVATION_VALUES");
+    if (activation_values != NULL && strcmp(activation_values, "1") == 0)
+        instance->parameters[0] = 0.75;
     return sample_rate > 0.0 && min_frames > 0
         && max_frames >= min_frames;
 }

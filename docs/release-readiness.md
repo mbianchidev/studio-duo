@@ -101,11 +101,20 @@ The pixel/CPU fixture uses an explicit software image so Windows Direct2D
 deferred GPU submission cannot turn an immediate pixel read into a false blank
 frame. Native accelerated presentation remains part of hands-on UI qualification.
 
-Snapshot construction shares decoded media only within that build, with a
-64 MiB additional cache budget. It does not cache between graph updates or
-trust file size/mtime to identify unchanged content. A same-size, same-timestamp
-media replacement must become audible after graph publication. Prepared clip
-storage and whole-file decoding still require long-session resource evaluation.
+Prepared PCM is immutable and shared across clips and published snapshots,
+instead of being copied into every publication/template. Metadata-only updates
+can reuse it on local APFS using file identity and nanosecond change time, or
+local NTFS using identity, change time, and the file's USN journal record.
+Size/mtime alone never authorize reuse. Other filesystems decode freshly on
+each update. Preparation rechecks source revisions before publishing and rejects
+observed changes without replacing the active graph. Both replaced and in-place
+same-size/same-mtime mutations have regression coverage.
+
+The cache holds weak references only; retired/removed PCM is not kept alive by
+the cache. Decode scratch is limited to 64 MiB of small sources plus the most
+recent large source. Whole-file preparation remains, so this is not a streaming
+guarantee or a fixed minimum RAM claim. The opt-in buffer matrix retains separate
+complete callback/null results for all five buffer sizes at each selected rate.
 
 ## Candidate compatibility matrix and blockers
 

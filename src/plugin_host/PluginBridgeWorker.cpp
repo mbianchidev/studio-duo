@@ -81,7 +81,7 @@ void PluginBridgeWorker::handleMessageFromCoordinator(const juce::MemoryBlock& m
                             < plugin->getParameters().size())
                     {
                         plugin->getParameters()[
-                            parameterIndex]->setValue(value);
+                            parameterIndex]->setValueNotifyingHost(value);
                     }
                 });
         }
@@ -717,6 +717,8 @@ juce::String PluginBridgeWorker::parameterMetadata() const
             object->setProperty(
                 "automatable",
                 parameter->isAutomatable());
+            object->setProperty("steps", parameter->isDiscrete()
+                ? std::max(2, parameter->getNumSteps()) : 0);
             parameterValues.add(juce::var(object.release()));
         }
     }
@@ -734,6 +736,7 @@ void PluginBridgeWorker::audioProcessorParameterChanged(
     int,
     float)
 {
+    metadataReportPending.store(true, std::memory_order_release);
 }
 
 void PluginBridgeWorker::audioProcessorChanged(

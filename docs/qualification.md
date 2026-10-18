@@ -63,7 +63,7 @@ audible output:
   --qualify-long-session \
   "--qualification-output=$PWD/build/qualification/long-48k-256" \
   --tracks=16 --songs=3 --song-seconds=180 --clips-per-song=4 \
-  --sample-rate=48000 --buffer-size=256 --memory-budget-mib=24576
+  --sample-rate=48000 --buffer-size=256 --memory-budget-mib=16384
 ```
 
 Use the `.exe` on Windows and an absolute, **new** output directory for every
@@ -71,6 +71,14 @@ run. Repeat at 96 kHz and 64/128/256/512/1024 samples. Profile arguments are
 validated; unknown/duplicate settings fail. A low-memory dry preflight can be
 obtained by selecting a smaller memory budget; the resulting `blocked` report
 is useful evidence, not a successful playback run.
+
+Add `--buffer-matrix` to run **64, 128, 256, 512, and 1024** samples against the
+same generated fixture at the selected rate. Repeat the command at 96 kHz with
+a fresh output directory. Source creation, native save/load and portable-copy
+measurements are shared explicitly across cases at that rate; each case builds
+its own engine and records complete playback, graph edits, callbacks and offline
+null in a separate report/CSV. Any failing or blocked case fails the matrix.
+PCM/packages are removed only after every case finishes; raw results remain.
 
 The default is nine minutes of actual, unique stereo media per track, three
 songs, split edits, one alternate take lane per track, gain inserts, a latent
@@ -114,16 +122,24 @@ session, on a dedicated qualification system with adequate capacity. Add longer
 passes/repeated manual edits for a multi-hour soak. Do not increase the memory
 budget beyond the testing system's available headroom.
 
-Current playback prepares whole files/clips in memory. The preflight includes
-alternate-take preparation and allows six simultaneous prepared generations
-for publication slots, templates and in-progress/retired builds, plus stereo
-render buffers and 512 MiB overhead. Three generations underestimated measured
-full-media graph-edit peaks; do not revert to counting source PCM alone.
+Current playback prepares whole files/clips in memory. Immutable PCM is now
+shared across clips/publication slots; the metadata-only edits in this fixture
+do not create six duplicate full-media generations. Reliable local APFS or
+NTFS/USN change revisions permit prepared-data reuse without trusting size/mtime.
+An open Windows writer disables cross-update reuse until it closes.
+Unsupported filesystems decode freshly rather than silently accepting stale
+audio. Source changes observed before publication reject the new graph.
+
+The preflight includes a prepared-data upper bound including alternate takes,
+two large-source decode buffers, clip-processing scratch, 64 MiB of small-source
+cache, both full stereo render buffers and 512 MiB overhead. It is specific to
+this generated workload's metadata edits; destructive changes to all source
+content can require simultaneous old/new prepared versions and still need the
+manual repeated-edit qualification.
 Phase checks stop further work after a measured budget
 overrun. This is an estimate/soft guard, not a hard allocator or OS memory limit.
-The default 16-track/nine-minute profile already exceeds the default 16 GiB
-preflight budget at 48 kHz; the example explicitly selects 24 GiB of available
-headroom. A thirty-minute or 96 kHz profile needs still more memory.
+A thirty-minute or 96 kHz profile needs more memory than the default nine-minute
+48 kHz example; select only headroom actually available on the testing system.
 That result is a resource blocker for
 that configuration, **not** a streaming guarantee. The exact point depends on
 edits, takes, transient processing allocations, graph generations, and plugins.
@@ -229,6 +245,49 @@ separate-process public-standard probe, not this entire vendor workflow.
 Retain its actual checks/skips, not just its aggregate pass. Probe logs may
 contain plugin paths; review/redact them before sharing.
 
+For legally available processors held in an isolated test directory, the native
+test executable also accepts an explicit source without scanning or changing
+the user's persistent catalog:
+
+```sh
+./build/StudioDuoTests_artefacts/Release/StudioDuoTests \
+  "--qualify-plugin=/absolute/isolated/processor.vst3" \
+  "--qualification-output=$PWD/build/qualification/vendor-probe"
+```
+
+Use a `.clap` path or a registered `AudioUnit:` identifier for those formats.
+Run each invocation in a bounded subprocess and isolate filesystem/network
+access before loading third-party code. Never install a test processor into an
+existing user's global plugin folders or use audible device output. Reports
+retain exact processor version, manufacturer, architecture, role and every
+standard check/skip, but always say `qualificationStatus: not-qualified`.
+This command creates no host audio-device manager; processor code is still
+third-party code, not a permission boundary. Its basic instantiation/state/
+processing/editor probe is not the complete vendor/mode, crash-containment,
+determinism or assistive-technology matrix.
+
+`--exercise-sandbox-effect` additionally requires a stateful effect with an
+observable initial response and a reported automatable continuous control.
+It uses the real worker executable, exercises a non-quantum-aligned synthetic
+loop, changes that control, observes worker feedback, and requires a distinct
+non-default state blob before saving the native package. It then terminates
+only that worker, checks visible failure and dry fallback, verifies failed state
+capture preserves the previous blob, reopens the package, and explicitly reloads
+the edited state. Resumed processing and saved automatable parameter IDs/values
+must survive; reloading only initial defaults is not a pass. Calls are paced at
+30 ms per 256 samples to test exchange/recovery, **not** physical deadlines.
+It does not simulate a vendor hang inside state capture or certify every mode.
+
+On macOS, `scripts/vendor-probe-macos.sb` denies network access, Apple events,
+and writes outside explicit work/output roots. Supply those parameters to
+`sandbox-exec`, set a private child `HOME` and `TMPDIR`, and bound the executable
+with a subprocess timeout. Source-built JUCE uses the inherited private
+`TMPDIR` for its worker FIFOs. Do not weaken the profile to allow arbitrary
+global pipe/user-directory writes. Some external tools, notably `auval -a`,
+cannot complete inside that restricted context: `--omit-platform-tools` records
+an **explicit skip**, and the independent registry/tool check must be retained
+separately. The normal validator still runs supplemental tools by default.
+
 Crash/hang tests use disposable synthetic sessions. For **sandboxed** instances,
 exercise playback and state capture: the DAW must stay open/responsive, show
 failure, preserve the prior valid package/state, and restore that saved state
@@ -279,7 +338,8 @@ versions. Native component tests are source contracts, not those runs.
 | Themes and display | All four themes/custom validation, magnification/high DPI, non-color-only mute/solo/arm/error/selection states |
 
 Component regression coverage now includes named generic parameter and
-automation controls, parameter-change automation gestures without dragging,
+automation controls, discrete parameter keyboard steps, parameter-change
+automation gestures without dragging,
 a native **Routing EDIT** action for all existing routes, named mastering
 song rows, opaque custom-color/text/focus contrast validation, and linear/rotary
 slider focus outlines. Keep those contracts while auditing the rest.

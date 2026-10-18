@@ -18,6 +18,7 @@ struct PluginParameterDescriptor
     juce::String name;
     float value = 0.0f;
     bool automatable = false;
+    int steps = -1; // Unknown, continuous (0), or discrete (>= 2).
 };
 
 struct PluginBridgeParameterEvent

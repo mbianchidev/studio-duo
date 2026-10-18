@@ -207,6 +207,9 @@ void pluginFormatTests()
     expect(names.contains("CLAP"),
            "Supported plugin formats include CLAP.");
     expect(
+        studio::PluginBridgeClient::assemblesDeviceBlockSlicesForTesting(),
+        "Loop/automation slices publish once per device callback with exact audio, sidechain, MIDI and ramp offsets.");
+    expect(
         studio::PluginBridgeClient::recoversLateFirstOutputForTesting(),
         "Sandbox bridges recover the first valid result after a missed deadline.");
     expect(

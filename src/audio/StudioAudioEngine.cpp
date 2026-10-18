@@ -9,21 +9,48 @@
 #include "plugin_host/PluginFormats.h"
 #include "plugin_host/ClapPluginInstance.h"
 #include "devices/DeviceRegistry.h"
+#include "platform/MediaFileRevision.h"
 
 #include <signalsmith-stretch/signalsmith-stretch.h>
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <condition_variable>
 #include <limits>
 #include <mutex>
 #include <span>
+#include <set>
 #include <thread>
 
 namespace studio
 {
 namespace
 {
+juce::String preparedClipKey(const AudioClip& clip, double rate, const MediaFileRevision& revision)
+{
+    const auto path = clip.sourceFile.getFullPathName();
+    auto key = juce::String(path.length()) + ":" + path + ":" + revision.key;
+    const auto append = [&key](double value)
+    {
+        key << ":" << juce::String::toHexString(std::bit_cast<juce::int64>(value));
+    };
+    append(rate);
+    append(clip.durationSeconds);
+    append(clip.sourceOffsetSeconds);
+    append(clip.sourceLengthSeconds);
+    append(clip.sourceRangeStartSeconds);
+    append(clip.sourceRangeEndSeconds);
+    append(clip.playbackRate);
+    key << ":" << static_cast<int>(clip.stretchMode) << ":" << (clip.reversed ? 1 : 0);
+    for (const auto& marker : clip.warpMarkers)
+    {
+        append(marker.timelineOffsetSeconds);
+        append(marker.sourceSeconds);
+    }
+    return key;
+}
+
 juce::AudioFormatWriterOptions writerOptions(double sampleRate, int channels)
 {
     return juce::AudioFormatWriterOptions {}
@@ -1117,6 +1144,40 @@ std::uint64_t StudioAudioEngine::sourceReadCountForTesting() const noexcept
     return testingSourceReadCount.load(std::memory_order_relaxed);
 }
 
+void StudioAudioEngine::setMediaPreparationHookForTesting(std::function<void()> hook)
+{
+    testingMediaPreparationHook = std::move(hook);
+}
+
+StudioAudioEngine::PreparedAudioStorageForTesting
+StudioAudioEngine::preparedAudioStorageForTesting() const
+{
+    const juce::ScopedLock lock(pluginRequestLock);
+    PreparedAudioStorageForTesting result;
+    std::set<const float*> buffers;
+    const auto inspect = [&](const RenderSnapshot& snapshot)
+    {
+        for (const auto& track : snapshot.tracks)
+            for (const auto& source : track.sources)
+                for (const auto& clip : source.clips)
+                {
+                    ++result.references;
+                    if (clip.samples != nullptr && clip.samples->getNumChannels() > 0
+                        && buffers.insert(clip.samples->getReadPointer(0)).second)
+                    {
+                        ++result.distinctBuffers;
+                        result.bytes += static_cast<std::uint64_t>(clip.samples->getNumChannels())
+                            * static_cast<std::uint64_t>(clip.samples->getNumSamples()) * sizeof(float);
+                    }
+                }
+    };
+    for (const auto& snapshot : snapshots)
+        inspect(snapshot);
+    if (activeSnapshotTemplate != nullptr)
+        inspect(*activeSnapshotTemplate);
+    return result;
+}
+
 void StudioAudioEngine::processActiveBlockForTesting(int samples)
 {
     juce::ignoreUnused(renderActiveBlockForTesting(samples));
@@ -1516,7 +1577,8 @@ StudioAudioEngine::pluginRuntimeStatuses()
             if (previous[index].index != current[index].index
                 || previous[index].id != current[index].id
                 || previous[index].automatable
-                    != current[index].automatable)
+                    != current[index].automatable
+                || previous[index].steps != current[index].steps)
                 return true;
         }
         return false;
@@ -1598,7 +1660,8 @@ StudioAudioEngine::pluginRuntimeStatuses()
                                 : juce::String(index),
                             parameter->getName(128),
                             parameter->getValue(),
-                            parameter->isAutomatable()
+                            parameter->isAutomatable(),
+                            parameter->isDiscrete() ? std::max(2, parameter->getNumSteps()) : 0
                         });
                     }
                     parameterLayoutChanged =
@@ -2935,7 +2998,7 @@ juce::Result StudioAudioEngine::renderClipToWav(const AudioClip& clip,
     renderClip.processing.playbackRate = 1.0;
     renderClip.processing.reversed = false;
     renderClip.processing.warpMarkers.clear();
-    renderClip.samples = std::move(*processed);
+    renderClip.samples = std::make_shared<const juce::AudioBuffer<float>>(std::move(*processed));
 
     juce::AudioBuffer<float> block(2, 2048);
     std::int64_t position = 0;
@@ -3565,7 +3628,16 @@ std::optional<StudioAudioEngine::RenderSnapshot> StudioAudioEngine::buildSnapsho
     constexpr std::size_t maximumDecodedCacheBytes = 64 * 1024 * 1024;
     std::size_t decodedCacheBytes = 0;
     std::map<juce::String, juce::AudioBuffer<float>> decodedSources;
-    const auto buildClips = [this, targetSampleRate, &error, &decodedSources, &decodedCacheBytes](
+    juce::String largeSourcePath;
+    std::optional<juce::AudioBuffer<float>> largeSource;
+    std::map<juce::String, MediaFileRevision> sourceRevisions;
+    std::map<juce::String, std::shared_ptr<const juce::AudioBuffer<float>>> preparedForBuild;
+    {
+        const juce::ScopedLock lock(preparedClipCacheLock);
+        std::erase_if(preparedClipCache, [](const auto& entry) { return entry.second.expired(); });
+    }
+    const auto buildClips = [this, targetSampleRate, &error, &decodedSources, &decodedCacheBytes,
+                            &largeSource, &largeSourcePath, &sourceRevisions, &preparedForBuild](
                                 const Track& track,
                                 const std::vector<CompRegion>* compRegions)
         -> std::optional<std::vector<RenderClip>>
@@ -3578,33 +3650,63 @@ std::optional<StudioAudioEngine::RenderSnapshot> StudioAudioEngine::buildSnapsho
                 continue;
 
             const auto sourcePath = clip.sourceFile.getFullPathName();
-            auto cached = decodedSources.find(sourcePath);
-            std::optional<juce::AudioBuffer<float>> decoded;
-            const juce::AudioBuffer<float>* audio = nullptr;
-            if (cached != decodedSources.end())
-                audio = &cached->second;
-            else
+            auto revision = sourceRevisions.find(sourcePath);
+            if (revision == sourceRevisions.end())
             {
-                decoded = readAndResample(clip.sourceFile, targetSampleRate, error);
-                if (!decoded)
+                const auto observed = readMediaFileRevision(clip.sourceFile, error);
+                if (!observed)
                     return std::nullopt;
-                const auto bytes = static_cast<std::size_t>(decoded->getNumChannels())
-                    * static_cast<std::size_t>(decoded->getNumSamples()) * sizeof(float);
-                if (bytes <= maximumDecodedCacheBytes - decodedCacheBytes)
-                {
-                    decodedCacheBytes += bytes;
-                    cached = decodedSources.emplace(sourcePath, std::move(*decoded)).first;
-                    audio = &cached->second;
-                }
-                else
-                    audio = &*decoded;
+                revision = sourceRevisions.emplace(sourcePath, *observed).first;
             }
-            auto processed = processClipAudio(clip,
-                                              *audio,
-                                              targetSampleRate,
-                                              error);
-            if (!processed.has_value())
-                return std::nullopt;
+            const auto key = preparedClipKey(clip, targetSampleRate, revision->second);
+            std::shared_ptr<const juce::AudioBuffer<float>> prepared;
+            if (const auto existing = preparedForBuild.find(key); existing != preparedForBuild.end())
+                prepared = existing->second;
+            else if (revision->second.reusable)
+            {
+                const juce::ScopedLock lock(preparedClipCacheLock);
+                if (const auto cachedPrepared = preparedClipCache.find(key); cachedPrepared != preparedClipCache.end())
+                    prepared = cachedPrepared->second.lock();
+            }
+            if (prepared == nullptr)
+            {
+                auto cached = decodedSources.find(sourcePath);
+                const juce::AudioBuffer<float>* audio = nullptr;
+                if (cached != decodedSources.end())
+                    audio = &cached->second;
+                else if (largeSource && largeSourcePath == sourcePath)
+                    audio = &*largeSource;
+                else
+                {
+                    auto decoded = readAndResample(clip.sourceFile, targetSampleRate, error);
+                    if (!decoded)
+                        return std::nullopt;
+                    const auto bytes = static_cast<std::size_t>(decoded->getNumChannels())
+                        * static_cast<std::size_t>(decoded->getNumSamples()) * sizeof(float);
+                    if (bytes <= maximumDecodedCacheBytes - decodedCacheBytes)
+                    {
+                        decodedCacheBytes += bytes;
+                        cached = decodedSources.emplace(sourcePath, std::move(*decoded)).first;
+                        audio = &cached->second;
+                    }
+                    else
+                    {
+                        largeSource = std::move(*decoded);
+                        largeSourcePath = sourcePath;
+                        audio = &*largeSource;
+                    }
+                }
+                auto processed = processClipAudio(clip, *audio, targetSampleRate, error);
+                if (!processed)
+                    return std::nullopt;
+                prepared = std::make_shared<const juce::AudioBuffer<float>>(std::move(*processed));
+                if (revision->second.reusable)
+                {
+                    const juce::ScopedLock lock(preparedClipCacheLock);
+                    preparedClipCache[key] = prepared;
+                }
+            }
+            preparedForBuild.emplace(key, prepared);
             auto preparedClip = clip;
             preparedClip.sourceOffsetSeconds = 0.0;
             preparedClip.sourceLengthSeconds = clip.durationSeconds;
@@ -3632,7 +3734,7 @@ std::optional<StudioAudioEngine::RenderSnapshot> StudioAudioEngine::buildSnapsho
                 renderClip.sampleRate = targetSampleRate;
                 renderClip.gain = juce::Decibels::decibelsToGain(clip.gainDecibels);
                 renderClip.processing = preparedClip;
-                renderClip.samples = *processed;
+                renderClip.samples = prepared;
                 if (renderClip.lengthSamples > 0)
                     clips.push_back(std::move(renderClip));
             };
@@ -4470,6 +4572,22 @@ std::optional<StudioAudioEngine::RenderSnapshot> StudioAudioEngine::buildSnapsho
 
     configureRuntimeTiming(snapshot, pluginRequests);
 
+#if defined(STUDIO_DUO_TESTING)
+    if (testingMediaPreparationHook)
+        testingMediaPreparationHook();
+#endif
+    for (const auto& [path, revision] : sourceRevisions)
+    {
+        const auto current = readMediaFileRevision(juce::File(path), error);
+        if (!current)
+            return std::nullopt;
+        if (*current != revision)
+        {
+            error = "Media changed while preparing playback. Retry the edit: "
+                + juce::File(path).getFileName();
+            return std::nullopt;
+        }
+    }
     return snapshot;
 }
 
@@ -4949,6 +5067,8 @@ std::optional<juce::AudioBuffer<float>> StudioAudioEngine::readAndResample(
         error = "Could not read audio samples from " + source.getFileName() + ".";
         return std::nullopt;
     }
+    if (juce::exactlyEqual(reader->sampleRate, targetSampleRate))
+        return sourceBuffer;
 
     const auto targetLength = juce::jmax(
         1,
@@ -5534,34 +5654,36 @@ bool StudioAudioEngine::readRenderClipSample(const RenderClip& clip,
                                              float& left,
                                              float& right) noexcept
 {
+    jassert(clip.samples != nullptr);
+    const auto& samples = *clip.samples;
     const auto timelineOffsetSeconds = clip.timelineOffsetBaseSeconds
         + static_cast<double>(relativeSample) / clip.sampleRate;
     const auto sourceSample = clip.processing.sourceSecondsAt(
         timelineOffsetSeconds)
         * clip.sampleRate;
     if (sourceSample < 0.0
-        || sourceSample >= static_cast<double>(clip.samples.getNumSamples()))
+        || sourceSample >= static_cast<double>(samples.getNumSamples()))
         return false;
 
     const auto firstIndex = static_cast<int>(std::floor(sourceSample));
     const auto secondIndex = std::min(firstIndex + 1,
-                                      clip.samples.getNumSamples() - 1);
+                                      samples.getNumSamples() - 1);
     const auto fraction = static_cast<float>(
         sourceSample - static_cast<double>(firstIndex));
     const auto preserveAttack = clip.processing.stretchMode == StretchMode::drums;
-    const auto sampleChannel = [&clip, firstIndex, secondIndex, fraction](int channel)
+    const auto sampleChannel = [&samples, firstIndex, secondIndex, fraction](int channel)
     {
-        const auto first = clip.samples.getSample(channel, firstIndex);
-        const auto second = clip.samples.getSample(channel, secondIndex);
+        const auto first = samples.getSample(channel, firstIndex);
+        const auto second = samples.getSample(channel, secondIndex);
         return first + (second - first) * fraction;
     };
     const auto nearestIndex = fraction < 0.5f ? firstIndex : secondIndex;
     left = preserveAttack
-        ? clip.samples.getSample(0, nearestIndex)
+        ? samples.getSample(0, nearestIndex)
         : sampleChannel(0);
-    right = clip.samples.getNumChannels() > 1
+    right = samples.getNumChannels() > 1
         ? preserveAttack
-            ? clip.samples.getSample(1, nearestIndex)
+            ? samples.getSample(1, nearestIndex)
             : sampleChannel(1)
         : left;
     auto gain = clip.gain
@@ -7443,7 +7565,8 @@ void StudioAudioEngine::runPluginRuntimeBuilder()
                                 : juce::String(index),
                             parameter->getName(128),
                             parameter->getValue(),
-                            parameter->isAutomatable()
+                            parameter->isAutomatable(),
+                            parameter->isDiscrete() ? std::max(2, parameter->getNumSteps()) : 0
                         });
                     }
                 }
@@ -8042,6 +8165,31 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
                 static_cast<std::size_t>(runtimeIndex)],
             readingSnapshot,
             readingPluginRuntime
+        };
+        struct BridgeDeviceBlockScope
+        {
+            BridgeDeviceBlockScope(PluginRuntimeGraph& value, bool shouldBatch)
+                : graph(value), enabled(shouldBatch)
+            {
+                if (enabled)
+                    for (auto& track : graph.tracks)
+                        for (auto& insert : track.inserts)
+                            if (insert.bridge != nullptr)
+                                insert.bridge->beginDeviceBlock();
+            }
+            ~BridgeDeviceBlockScope()
+            {
+                if (enabled)
+                    for (auto& track : graph.tracks)
+                        for (auto& insert : track.inserts)
+                            if (insert.bridge != nullptr)
+                                insert.bridge->endDeviceBlock();
+            }
+            PluginRuntimeGraph& graph;
+            bool enabled;
+        } bridgeDeviceBlockScope {
+            pluginRuntimeGraphs[static_cast<std::size_t>(runtimeIndex)],
+            numSamples <= PluginBridgeSharedState::maxBlockSize
         };
 
         auto& snapshot = snapshots[static_cast<std::size_t>(snapshotIndex)];

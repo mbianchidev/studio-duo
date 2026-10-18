@@ -98,6 +98,8 @@ void PluginParameterPanel::selectParameter()
         return;
     rebuilding = true;
     const auto& descriptor = descriptors[static_cast<std::size_t>(index)];
+    value.setRange(0.0, 1.0, descriptor.steps > 1
+        ? 1.0 / static_cast<double>(descriptor.steps - 1) : 0.0001);
     value.setTitle(name + " / " + descriptor.name + " normalized value");
     value.setDescription("Normalized range 0 to 1. Use arrow keys or enter a value.");
     value.setValue(descriptor.value,

@@ -164,6 +164,14 @@ class QualificationTests(unittest.TestCase):
         run["processors"][0]["approved"] = False
         self.assertTrue(self.issues(report))
 
+    def test_native_windows_architecture_label_is_accepted(self):
+        report = self.completed_report()
+        for run in report["runs"]:
+            if run["area"] == "vendors" and run["target"].startswith("windows"):
+                for processor in run["processors"]:
+                    processor["architecture"] = "x86_64"
+        self.assertEqual(self.issues(report), [])
+
     def test_extreme_untrusted_ram_metadata_does_not_overflow(self):
         report = self.completed_report()
         report["systems"][0]["ram_gib"] = 10**400
