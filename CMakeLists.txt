@@ -656,6 +656,10 @@ target_link_libraries(
         juce::juce_recommended_lto_flags
         juce::juce_recommended_warning_flags
 )
+set_target_properties(StudioDuo PROPERTIES
+    C_VISIBILITY_PRESET hidden
+    CXX_VISIBILITY_PRESET hidden
+    VISIBILITY_INLINES_HIDDEN TRUE)
 
 if(APPLE)
     add_custom_target(
@@ -930,6 +934,10 @@ if(STUDIO_DUO_BUILD_TESTS)
     endif()
 
     juce_add_console_app(StudioDuoTests PRODUCT_NAME "Studio Duo Tests")
+    set_target_properties(StudioDuoTests PROPERTIES
+        C_VISIBILITY_PRESET hidden
+        CXX_VISIBILITY_PRESET hidden
+        VISIBILITY_INLINES_HIDDEN TRUE)
     if(APPLE)
         add_dependencies(StudioDuoTests StudioDuoDevelopmentSignature)
     endif()

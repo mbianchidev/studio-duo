@@ -20,7 +20,8 @@ inline juce::Result configurePluginAudioBuses(juce::AudioProcessor& processor, i
 {
     const auto count = processor.getBusCount(false);
     if (count > 128 || lastOutputBus < 0 || (lastOutputBus > 0 && lastOutputBus >= count))
-        return juce::Result::fail("The requested processor output bus is unavailable.");
+        return juce::Result::fail("The requested processor output bus is unavailable (requested "
+            + juce::String(lastOutputBus) + ", advertised " + juce::String(count) + ").");
     if (sidechainChannels < 0 || sidechainChannels > 2
         || (sidechainChannels > 0 && processor.getBusCount(true) <= 1))
         return juce::Result::fail("The requested mono/stereo processor sidechain is unavailable.");

@@ -851,6 +851,10 @@ mono/stereo auxiliary buses retain independent offsets and the same declared
 latency. A per-frame wet marker keeps aligned stereo dry fallback separate from
 auxiliary outputs; a missed worker cannot feed the source's right input into a
 mono auxiliary bus. Invalid or unsupported layouts fail explicitly.
+The application and native test host also hide C/C++ and inline implementation
+symbols. Vendor JUCE implementations must not coalesce with the host's JUCE
+classes; hiding only Studio Duo's own CLAP modules does not protect against
+externally supplied JUCE-based processors.
 
 CLAP activation refreshes clean parameter values while retaining pending host
 edits. Worker parameter changes publish refreshed metadata, including discrete
