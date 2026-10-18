@@ -73,9 +73,10 @@ def extract_plugins(path, destination):
     total = 0
     with ZipFile(path) as archive:
         for entry in archive.infolist():
-            parts = entry.filename.rstrip("/").split("/")
+            raw_name = entry.orig_filename
+            parts = raw_name.rstrip("/").split("/")
             if (not parts or any(part in ("", ".", "..") or ":" in part for part in parts)
-                    or "\\" in entry.filename or PurePosixPath(entry.filename).is_absolute()
+                    or "\\" in raw_name or "\0" in raw_name or PurePosixPath(raw_name).is_absolute()
                     or stat.S_ISLNK(entry.external_attr >> 16)):
                 raise ProbeError("The vendor archive contains an unsafe path or symbolic link.")
             relative = PurePosixPath(*parts)
@@ -180,8 +181,13 @@ def validate_probe(report, expected_sha=None):
     if not isinstance(processors, list) or len(processors) != 1:
         return errors + ["Each explicit source must report exactly one processor."]
     processor = processors[0]
-    if not isinstance(processor, dict) or processor.get("status") != "pass":
+    if not isinstance(processor, dict):
         return errors + ["The selected processor did not pass its requested checks."]
+    if processor.get("status") != "pass":
+        checks = processor.get("checks")
+        details = [str(check.get("name")) + ": " + str(check.get("message")) for check in checks
+                   if isinstance(check, dict) and check.get("status") == "fail"] if isinstance(checks, list) else []
+        return errors + ["The selected processor did not pass its requested checks."] + details
     required = set(REQUIRED_CHECKS)
     if processor.get("role") == "instrument":
         required.add("workflow-midi-instrument")
@@ -345,6 +351,8 @@ def main(argv=None):
                 matrix["cases"].append(result)
                 write_json(evidence / "matrix.json", matrix)
                 print(name + ": " + result["status"], flush=True)
+                for problem in result["problems"]:
+                    print("  " + problem[:2048], flush=True)
         matrix["status"] = "pass" if all(case["status"] == "pass" for case in matrix["cases"]) else "fail"
         write_json(evidence / "matrix.json", matrix)
         return 0 if matrix["status"] == "pass" else 1

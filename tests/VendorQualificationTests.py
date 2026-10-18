@@ -32,7 +32,12 @@ class VendorQualificationTests(unittest.TestCase):
                 output.writestr(target, b"Synthetic bytes; never a real processor.")
             output.writestr("Surge XT.exe", b"Must never be extracted or executed.")
             if bad:
-                output.writestr(*bad)
+                name, data = bad
+                if isinstance(name, str):
+                    entry = ZipInfo("synthetic-invalid-entry")
+                    entry.filename = entry.orig_filename = name
+                    name = entry
+                output.writestr(name, data)
         return path
 
     def report(self):
