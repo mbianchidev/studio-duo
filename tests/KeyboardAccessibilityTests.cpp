@@ -11,6 +11,7 @@
 #include "plugin_host/PluginIsolationPolicy.h"
 
 #include <cmath>
+#include <limits>
 
 namespace
 {
@@ -85,6 +86,24 @@ void clipProcessingControls()
             }
         }
         editor.setLookAndFeel(nullptr);
+    }
+    studio::AudioClip precise;
+    precise.gainDecibels = 3.25f;
+    precise.durationSeconds = precise.fadeInSeconds = 2.0 / 48000.0;
+    precise.fadeInCurve = 0.12345678f;
+    for (const auto mode : { Mode::gain, Mode::fadeIn })
+    {
+        studio::ClipProcessingEditorComponent editor(precise, mode);
+        auto retained = false;
+        editor.onApply = [&](double number, float shape)
+        {
+            const auto expected = mode == Mode::gain ? static_cast<double>(precise.gainDecibels) : precise.fadeInSeconds;
+            retained = std::abs(number - expected) < std::numeric_limits<double>::epsilon()
+                && (mode == Mode::gain || std::abs(shape - precise.fadeInCurve) < std::numeric_limits<float>::epsilon());
+            return juce::Result::ok();
+        };
+        expect(editor.applyChanges().wasOk() && retained,
+               "Opening and applying precise gain or a sample-length fade preserves its existing value without decimal rounding or a false duration-bound error.");
     }
 }
 

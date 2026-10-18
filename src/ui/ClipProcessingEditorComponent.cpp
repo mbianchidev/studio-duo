@@ -35,12 +35,13 @@ ClipProcessingEditorComponent::ClipProcessingEditorComponent(const AudioClip& cl
         addAndMakeVisible(editor);
     };
     initialise(value, valueLabel, "clip-edit.value", gain ? "Clip gain (dB)" : "Fade duration (seconds)");
-    value.setText(juce::String(gain ? static_cast<double>(clip.gainDecibels)
-        : fadeIn ? clip.fadeInSeconds : clip.fadeOutSeconds, gain ? 1 : 9), false);
+    value.setText(juce::JSON::toString(juce::var(gain ? static_cast<double>(clip.gainDecibels)
+        : fadeIn ? clip.fadeInSeconds : clip.fadeOutSeconds), true), false);
     value.setDescription(gain ? "Enter a gain from -60 to +24 decibels."
         : "Enter a fade duration from zero to " + juce::String(duration, 9) + " seconds.");
     initialise(curve, curveLabel, "clip-edit.curve", "Fade curve (-1 to +1; 0 is linear)");
-    curve.setText(juce::String(fadeIn ? clip.fadeInCurve : clip.fadeOutCurve, 6), false);
+    curve.setText(juce::JSON::toString(juce::var(
+        static_cast<double>(fadeIn ? clip.fadeInCurve : clip.fadeOutCurve)), true), false);
     curve.setDescription("Enter a curve between -1 and +1. Zero is linear.");
     curve.setVisible(!gain);
     curveLabel.setVisible(!gain);
