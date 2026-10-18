@@ -2,6 +2,7 @@
 
 #include "audio/StudioAudioEngine.h"
 #include "plugin_host/ClapPluginInstance.h"
+#include "plugin_host/PluginAudioBuses.h"
 #include "plugin_host/PluginFormats.h"
 #include "plugin_host/ValidatedPluginStateTarget.h"
 
@@ -104,7 +105,7 @@ juce::Result exerciseVendorWorkflows(
     metrics->setProperty("sampleRate", rate);
     metrics->setProperty("bufferSize", quantum);
     metrics->setProperty("contentSamples", contentSamples);
-    metrics->setProperty("livePacingMilliseconds", 25);
+    metrics->setProperty("liveExchangeScheduling", "bounded-owned-worker-completion-barrier");
     metrics->setProperty("nullTolerance", 1e-5);
     metrics->setProperty("transportGranularity", "processing-quantum-start");
     const auto check = [&](const char* name, bool passed, juce::String detail)
@@ -275,6 +276,7 @@ juce::Result exerciseVendorWorkflows(
         insert.name = description.name;
         insert.format = description.pluginFormatName;
         insert.bridgeMode = studio::PluginBridgeMode::sandboxed;
+        insert.outputBusNames = studio::pluginOutputBusNames(studio::pluginOutputBuses(*first));
         track.inserts.push_back(insert);
         studio::StudioAudioEngine::PluginRuntimeRequest request;
         request.trackId = track.id;
@@ -312,6 +314,19 @@ juce::Result exerciseVendorWorkflows(
             return output.getNumChannels() == 2 && output.getNumSamples() == contentSamples && finite(output)
                 ? juce::Result::ok() : juce::Result::fail("Vendor workflow produced invalid or incomplete audio.");
         };
+        metrics->setProperty("referenceBackend", "trusted-in-process-inside-disposable-probe");
+        const auto renderTrustedReference = [&](studio::Project model,
+                                                std::vector<studio::StudioAudioEngine::PluginRuntimeRequest> requests,
+                                                juce::AudioBuffer<float>& output, const char* label)
+        {
+            for (auto& referenceTrack : model.tracks)
+                for (auto& referenceInsert : referenceTrack.inserts)
+                    if (!referenceInsert.isContainer() && !referenceInsert.bundledDevice)
+                        referenceInsert.bridgeMode = studio::PluginBridgeMode::trustedInProcess;
+            for (auto& referenceRequest : requests)
+                referenceRequest.bridgeMode = studio::PluginBridgeMode::trustedInProcess;
+            return render(model, requests, output, label);
+        };
         juce::AudioBuffer<float> flat, repeated;
         if (const auto rendered = render(project, { request }, flat, "flatRenderMilliseconds"); rendered.failed())
             return rendered;
@@ -323,30 +338,21 @@ juce::Result exerciseVendorWorkflows(
             return rendered;
         const auto repeatError = difference(flat, repeated);
         metrics->setProperty("repeatMaximumNullError", static_cast<double>(repeatError));
-        auto firstDifference = -1, lastDifference = -1;
-        juce::Array<juce::var> blockErrors;
-        for (int blockStart = 0; blockStart < contentSamples; blockStart += quantum)
-        {
-            auto maximum = 0.0f;
-            for (int sample = blockStart; sample < std::min(contentSamples, blockStart + quantum); ++sample)
-                for (int channel = 0; channel < 2; ++channel)
-                {
-                    const auto delta = std::abs(flat.getSample(channel, sample) - repeated.getSample(channel, sample));
-                    maximum = std::max(maximum, delta);
-                    if (delta > 1e-5f)
-                    {
-                        if (firstDifference < 0)
-                            firstDifference = sample;
-                        lastDifference = sample;
-                    }
-                }
-            blockErrors.add(static_cast<double>(maximum));
-        }
-        metrics->setProperty("repeatFirstDifferenceSample", firstDifference);
-        metrics->setProperty("repeatLastDifferenceSample", lastDifference);
-        metrics->setProperty("repeatBlockMaximumErrors", blockErrors);
+        const auto repeatSpans = differenceSpans(flat, repeated);
+        metrics->setProperty("repeatFirstDifferenceSample", repeatSpans["first"]);
+        metrics->setProperty("repeatLastDifferenceSample", repeatSpans["last"]);
+        metrics->setProperty("repeatBlockMaximumErrors", repeatSpans["blocks"]);
         const auto deterministic = check("workflow-repeat-null", repeatError <= 1e-5f,
             "Independent fresh workers render identical state/tempo/step-automation within 1e-5; observed " + juce::String(repeatError, 9));
+        juce::AudioBuffer<float> trustedAudio;
+        if (const auto rendered = renderTrustedReference(project, { request }, trustedAudio, "trustedReferenceMilliseconds"); rendered.failed())
+            return rendered;
+        const auto trustedError = difference(flat, trustedAudio);
+        metrics->setProperty("sandboxTrustedMaximumNullError", static_cast<double>(trustedError));
+        metrics->setProperty("sandboxTrustedDifferenceSpans", differenceSpans(flat, trustedAudio));
+        const auto trustedMatches = check("workflow-sandbox-trusted-null", trustedError <= 1e-5f,
+            "The explicit in-process reference inside this disposable probe matches sandboxed state, tempo and parameter steps; observed "
+                + juce::String(trustedError, 9) + ". This is not crash containment or release approval.");
 
         auto liveEngine = std::make_unique<studio::StudioAudioEngine>(juce::File(STUDIO_DUO_BRIDGE_WORKER_PATH));
         if (const auto configured = liveEngine->configureAudioForTesting(rate, quantum); configured.failed())
@@ -375,10 +381,12 @@ juce::Result exerciseVendorWorkflows(
         for (int position = 0; position < capture.getNumSamples(); position += quantum)
         {
             liveEngine->renderActiveBlockForTesting(block);
+            if (const auto completed = liveEngine->waitForSandboxDspForTesting(); completed.failed())
+                return completed;
             const auto count = std::min(quantum, capture.getNumSamples() - position);
             for (int channel = 0; channel < 2; ++channel)
                 capture.copyFrom(channel, position, block, channel, 0, count);
-            juce::MessageManager::getInstance()->runDispatchLoopUntil(25);
+            juce::MessageManager::getInstance()->runDispatchLoopUntil(5);
         }
         liveEngine->stop();
         if (liveEngine->pluginLateBlockCount() != 0 || liveEngine->pluginAutomationEventDropCount() != 0)
@@ -425,13 +433,141 @@ juce::Result exerciseVendorWorkflows(
         metrics->setProperty("bypassMaximumNullError", static_cast<double>(bypassError));
         const auto bypassMatches = check("workflow-parent-bypass", bypassError <= 1e-5f,
             "Bypassing the containing rack yields the explicit dry/no-instrument reference; observed " + juce::String(bypassError, 9));
-        checks.push_back({ "workflow-sidechain", "skip", first->getBusCount(true) > 1
-            ? "An advertised sidechain still requires an explicit configured route qualification."
-            : "This exact processor advertises no auxiliary input bus." });
-        checks.push_back({ "workflow-multi-output", "skip", first->getBusCount(false) > 1
-            ? "Advertised auxiliary outputs still require explicit per-bus route qualification."
-            : "This exact processor advertises only its main output bus." });
-        return deterministic && liveMatches && nestedMatches && bypassMatches
+        auto alternative = project;
+        alternative.automationLanes.front().points[0].value = targetValue;
+        alternative.automationLanes.front().points[1].value = 0.61;
+        alternative.automationLanes.front().points[2].value = 0.19;
+        auto alternateRequest = request;
+        alternateRequest.state = editedState;
+        juce::AudioBuffer<float> alternateAudio;
+        if (const auto rendered = render(alternative, { alternateRequest }, alternateAudio, "alternateStateRenderMilliseconds"); rendered.failed())
+            return rendered;
+        auto simultaneous = project;
+        auto secondTrack = simultaneous.tracks.front();
+        secondTrack.id = juce::Uuid().toString();
+        secondTrack.name = "Synthetic independent vendor worker";
+        secondTrack.inserts.front().id = juce::Uuid().toString();
+        for (auto& clip : secondTrack.clips)
+            clip.id = juce::Uuid().toString();
+        for (auto& clip : secondTrack.midiClips)
+        {
+            clip.id = juce::Uuid().toString();
+            for (auto& note : clip.notes)
+                note.id = juce::Uuid().toString();
+        }
+        constexpr auto mixDecibels = -6.0206f;
+        simultaneous.tracks.front().volumeDecibels = secondTrack.volumeDecibels = mixDecibels;
+        alternateRequest.trackId = secondTrack.id;
+        alternateRequest.insertId = secondTrack.inserts.front().id;
+        auto secondLane = alternative.automationLanes.front();
+        secondLane.id = juce::Uuid().toString();
+        secondLane.target.trackId = alternateRequest.trackId;
+        secondLane.target.insertId = alternateRequest.insertId;
+        for (auto& point : secondLane.points)
+            point.id = juce::Uuid().toString();
+        simultaneous.automationLanes.push_back(secondLane);
+        simultaneous.tracks.insert(simultaneous.tracks.end() - 1, secondTrack);
+        juce::AudioBuffer<float> combined;
+        if (const auto rendered = render(simultaneous, { request, alternateRequest }, combined, "simultaneousRenderMilliseconds"); rendered.failed())
+            return rendered;
+        auto expectedMix = flat;
+        for (int channel = 0; channel < 2; ++channel)
+            expectedMix.addFrom(channel, 0, alternateAudio, channel, 0, contentSamples);
+        expectedMix.applyGain(juce::Decibels::decibelsToGain(mixDecibels));
+        const auto simultaneousError = difference(combined, expectedMix);
+        metrics->setProperty("simultaneousMaximumNullError", static_cast<double>(simultaneousError));
+        const auto simultaneousMatches = check("workflow-simultaneous-workers", simultaneousError <= 1e-5f,
+            "Two concurrent project workers retain distinct saved state, MIDI/audio and automation; their mix matches separate renders within 1e-5; observed "
+                + juce::String(simultaneousError, 9));
+        auto sidechainMatches = true;
+        if (first->getBusCount(true) > 1)
+        {
+            auto sidechainProject = project;
+            studio::Track sourceTrack;
+            sourceTrack.name = "Synthetic sidechain source";
+            sourceTrack.volumeDecibels = -60.0f;
+            studio::AudioClip clip;
+            clip.sourceFile = source;
+            clip.durationSeconds = clip.sourceLengthSeconds = clip.sourceRangeEndSeconds = 0.5;
+            sourceTrack.clips.push_back(clip);
+            sidechainProject.tracks.insert(sidechainProject.tracks.end() - 1, sourceTrack);
+            studio::RoutingConnection route;
+            route.name = "Synthetic explicit vendor sidechain";
+            route.kind = studio::RouteKind::sidechain;
+            route.tap = studio::RouteTap::preFader;
+            route.sourceTrackId = sourceTrack.id;
+            route.destination.type = studio::RouteEndpointType::pluginSidechain;
+            route.destination.trackId = request.trackId;
+            route.destination.insertId = request.insertId;
+            sidechainProject.routingConnections.push_back(route);
+            auto sidechainRequest = request;
+            sidechainRequest.sidechainChannels = 2;
+            juce::AudioBuffer<float> routedAudio, routedReference, noSidechain;
+            if (const auto rendered = render(sidechainProject, { sidechainRequest }, routedAudio, "sidechainRenderMilliseconds"); rendered.failed())
+                return rendered;
+            if (const auto rendered = renderTrustedReference(sidechainProject, { sidechainRequest }, routedReference, "sidechainReferenceMilliseconds");
+                rendered.failed())
+                return rendered;
+            const auto sidechainError = difference(routedAudio, routedReference);
+            metrics->setProperty("sidechainMaximumNullError", static_cast<double>(sidechainError));
+            sidechainMatches = check("workflow-sidechain-route-null", sidechainError <= 1e-5f,
+                "A typed pre-fader auxiliary-input route matches the separate native reference within 1e-5; observed " + juce::String(sidechainError, 9));
+            sidechainProject.routingConnections.back().enabled = false;
+            if (const auto rendered = render(sidechainProject, { sidechainRequest }, noSidechain, "sidechainDisabledMilliseconds"); rendered.failed())
+                return rendered;
+            const auto influence = difference(routedAudio, noSidechain);
+            metrics->setProperty("configuredSidechainMaximumInfluence", static_cast<double>(influence));
+            checks.push_back({ "workflow-sidechain", influence > 1e-5f ? "pass" : "skip",
+                influence > 1e-5f ? "The configured vendor state measurably responds to its actual auxiliary input."
+                    : "The bus route matches the native reference, but this exact state does not measurably use the sidechain. Effect-specific sidechain response remains unqualified." });
+        }
+        else
+            checks.push_back({ "workflow-sidechain", "skip", "This exact processor advertises no auxiliary input bus." });
+        auto auxiliaryMatches = true;
+        if (first->getBusCount(false) > 1)
+        {
+            auto maximum = 0.0f;
+            juce::Array<juce::var> buses;
+            for (int bus = 1; bus < first->getBusCount(false); ++bus)
+            {
+                auto routed = project;
+                routed.tracks.front().volumeDecibels = -60.0f;
+                studio::Track destination;
+                destination.type = studio::TrackType::aux;
+                destination.name = "Synthetic vendor bus " + juce::String(bus);
+                routed.tracks.insert(routed.tracks.end() - 1, destination);
+                studio::RoutingConnection route;
+                route.name = destination.name;
+                route.kind = studio::RouteKind::send;
+                route.tap = studio::RouteTap::preFader;
+                route.sourceTrackId = request.trackId;
+                route.sourceInsertId = request.insertId;
+                route.sourceBusIndex = bus;
+                route.destination.trackId = destination.id;
+                routed.routingConnections.push_back(route);
+                juce::AudioBuffer<float> output, referenceOutput;
+                if (const auto rendered = render(routed, { request }, output, "auxiliaryRenderMilliseconds"); rendered.failed())
+                    return rendered;
+                if (const auto rendered = renderTrustedReference(routed, { request }, referenceOutput, "auxiliaryReferenceMilliseconds"); rendered.failed())
+                    return rendered;
+                const auto busError = difference(output, referenceOutput);
+                auto busResult = std::make_unique<juce::DynamicObject>();
+                busResult->setProperty("index", bus);
+                busResult->setProperty("name", insert.outputBusNames[bus]);
+                busResult->setProperty("maximumNullError", static_cast<double>(busError));
+                busResult->setProperty("peak", static_cast<double>(output.getMagnitude(0, contentSamples)));
+                buses.add(juce::var(busResult.release()));
+                maximum = std::max(maximum, busError);
+            }
+            metrics->setProperty("auxiliaryOutputBuses", buses);
+            auxiliaryMatches = check("workflow-multi-output", maximum <= 1e-5f,
+                "Every advertised auxiliary bus is activated and routed to an aux track; complete windows match the native reference within 1e-5; maximum "
+                    + juce::String(maximum, 9) + ". A silent preset bus is not an audible-content certification.");
+        }
+        else
+            checks.push_back({ "workflow-multi-output", "skip", "This exact processor advertises only its main output bus." });
+        return deterministic && trustedMatches && liveMatches && nestedMatches && bypassMatches
+            && simultaneousMatches && sidechainMatches && auxiliaryMatches
             ? juce::Result::ok() : juce::Result::fail("One or more configured vendor workflow/null checks failed.");
     };
     const auto result = run();

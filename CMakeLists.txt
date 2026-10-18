@@ -1259,6 +1259,10 @@ if(STUDIO_DUO_BUILD_TESTS)
         COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/QualificationTests.py")
     set_tests_properties(StudioDuoQualificationEvidence PROPERTIES
         LABELS "hardening;qualification" TIMEOUT 30)
+    add_test(NAME StudioDuoVendorQualificationContracts
+        COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/VendorQualificationTests.py")
+    set_tests_properties(StudioDuoVendorQualificationContracts PROPERTIES
+        LABELS "hardening;qualification" TIMEOUT 30)
     if(APPLE OR WIN32)
         add_test(NAME StudioDuoStartup COMMAND StudioDuo --startup-self-test)
         set_tests_properties(

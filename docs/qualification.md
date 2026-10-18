@@ -293,11 +293,21 @@ It does not simulate a vendor hang inside state capture or certify every mode.
 `--exercise-workflows` runs independent editable instances, actual MIDI-instrument
 or stereo-effect audio, complete repeated/live-offline nulls, two nested serial
 racks, parent bypass, tempo changes and parameter steps through real workers.
-It uses the graph's declared latency; paced exchange is not physical deadline
-qualification. Every null keeps the `1e-5` maximum-error gate. Per-case timings,
+Two simultaneous project workers with different saved state/automation must
+match the gain-adjusted sum of their separate renders. An explicitly selected
+trusted-in-process reference inside the disposable probe must also match;
+that reference is not sandbox containment or approval of reduced-isolation
+release policy.
+It uses the graph's declared latency; the live-mode software exchange waits
+outside callbacks for owned-worker completion rather than depending on a fixed
+sleep. It is not physical deadline qualification. Every null keeps the `1e-5` maximum-error gate. Per-case timings,
 public parameter metadata and mismatch spans remain in `workflowMeasurements`.
-Unavailable bus-specific exercises remain explicit skips, not compatibility
-passes.
+Advertised auxiliary outputs are individually activated and routed against the
+separate native reference, with each bus's null/peak retained. Advertised
+sidechains receive a typed source route and native-reference comparison.
+Sidechain response remains an explicit skip if the configured state does not
+measurably use that input; a routed but ignored input cannot certify a compressor
+or vocoder mode. Unsupported buses remain explicit skips.
 
 For a processor needing an explicit deterministic setup, add
 `--workflow-profile=/absolute/profile.json`. Schema 1 profiles identify the exact
@@ -308,6 +318,38 @@ silently substitutes another preset or raises the null tolerance. The
 `tests/vendor-profiles/` Surge XT 1.3.4 recipes enable oscillator retrigger and
 use separate VST3/CLAP ID namespaces. Unconfigured stochastic failures remain
 failed evidence.
+
+Run the pinned public reference matrix without installing anything globally:
+
+```sh
+python3 -B scripts/qualify-vendors.py \
+  --test-binary "$PWD/build/StudioDuoTests_artefacts/Release/StudioDuoTests" \
+  --work-root "$PWD/build/vendor-qualification" \
+  --expected-sha "$(git rev-parse HEAD)" \
+  --approve-public-surge
+```
+
+Start from a clean, reconfigured candidate and a new work root. The standard-library
+runner downloads the official Surge XT 1.3.4 plugin-only ZIP, checks its pinned
+size/SHA-256, rejects unsafe archive paths/links and extracts only the four
+VST3/CLAP targets. It never executes bundled standalone applications. Supply
+`--vendor-archive` to reuse a local copy with the same checks. macOS adds the
+registered Apple AUBandpass and applies the seatbelt profile below to every case.
+Windows execution requires both `--disposable-windows-host` and a disposable
+GitHub Actions environment; it is not an OS capability sandbox and must not run
+against a normal user's installation.
+
+Each case has a private home/temp directory and bounded subprocess; timeout
+termination targets only that owned process tree. Temporary vendor binaries and
+private files are removed. Only redacted reports/log tails and provenance remain
+under `evidence/`; truncated logs are marked. The runner checks actual null
+measurements, bus-route coverage and the requested clean candidate, not only pass
+labels. Without `--expected-sha` it explicitly labels the matrix a trial.
+CI runs this software matrix natively on ARM64 macOS, Intel macOS and Windows x64,
+retaining `vendor-software-<OS>-<architecture>` artifacts. Hosted Windows Server
+is not Windows 10/11 device evidence. All matrix reports remain **not-qualified**:
+real interfaces, screen readers, licensed ARA, hang-during-capture and human
+release-policy decisions are separate gates.
 
 On macOS, `scripts/vendor-probe-macos.sb` denies network access, Apple events,
 and writes outside explicit work/output roots. Supply those parameters to

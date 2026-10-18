@@ -163,6 +163,7 @@ public:
 #if defined(STUDIO_DUO_TESTING)
     juce::Result configureAudioForTesting(double rate, int blockSize);
     void renderActiveBlockForTesting(juce::AudioBuffer<float>& output);
+    juce::Result waitForSandboxDspForTesting();
     [[nodiscard]] std::uint64_t sourceReadCountForTesting() const noexcept;
     struct PreparedAudioStorageForTesting
     {

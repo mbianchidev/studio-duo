@@ -1016,6 +1016,18 @@ juce::Result StudioAudioEngine::configureAudioForTesting(double rate, int blockS
     return juce::Result::ok();
 }
 
+juce::Result StudioAudioEngine::waitForSandboxDspForTesting()
+{
+    const juce::ScopedLock lock(pluginRequestLock);
+    const auto& graph = pluginRuntimeGraphs[static_cast<std::size_t>(activePluginRuntime.load(std::memory_order_acquire))];
+    for (const auto& track : graph.tracks)
+        for (const auto& insert : track.inserts)
+            if (insert.bridge != nullptr)
+                if (const auto completed = insert.bridge->waitForPendingOutput(std::chrono::seconds(5)); completed.failed())
+                    return juce::Result::fail(insert.name + ": " + completed.getErrorMessage());
+    return juce::Result::ok();
+}
+
 void StudioAudioEngine::renderActiveBlockForTesting(juce::AudioBuffer<float>& output)
 {
     juce::AudioIODeviceCallbackContext context;
