@@ -26,7 +26,9 @@ bundle_version="$(plutil -extract CFBundleShortVersionString raw -o - "$app/Cont
 [[ "$bundle_version" == "$version" ]] || fail "The application version does not match the package version."
 codesign --verify --deep --strict "$app"
 if [[ "$require_universal" == --universal ]]; then
-    lipo -verify_arch arm64 x86_64 "$executable"
+    for architecture in arm64 x86_64; do
+        lipo "$executable" -verify_arch "$architecture"
+    done
     architecture_label=universal
 else
     architecture_label="$(lipo -archs "$executable")"
