@@ -154,6 +154,20 @@ settings contracts. Its physical model/firmware mappings and feedback remain
 unqualified. HUI, MIDI learn and extender/layer support are not implemented;
 ordinary musical note/CC routing still cannot substitute for surface testing.
 
+The pinned public Surge XT VST3/CLAP software matrix now runs on native ARM64
+macOS, Intel macOS and hosted Windows x64, with Apple AUBandpass on macOS.
+It retains independent-state/concurrent-worker, declared-latency null,
+trusted-reference, nested-rack, auxiliary-route and effect recovery results.
+Per-state sidechain response skips remain explicit. These driver-free artifacts
+do not establish physical deadlines, Windows 10/11 device compatibility,
+licensed ARA workflows, vendor hangs during state capture, or a human release
+disposition.
+
+Native keyboard contracts include precise gain/fade editing, take/comp menu
+actions, current track/clip state values, track-name validation and a scrollable
+200-message status history with stable selection. They do not establish actual
+VoiceOver/NVDA behavior or completion of the manual production journey.
+
 For blocker triage, attach a minimal synthetic reproducer and candidate evidence,
 classify data-loss/crash, unusable primary workflow, deadline/resource, or
 compatibility failure, and link its focused fix and rerun. A missing device,

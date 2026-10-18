@@ -1752,6 +1752,12 @@ void ClapPluginInstance::processBlock(juce::AudioBuffer<float>& audio,
         audio.clear();
         return;
     }
+    if (audio.getNumChannels() < std::max(getTotalNumInputChannels(), getTotalNumOutputChannels()))
+    {
+        impl->suppressedProcessBlocks.fetch_add(1, std::memory_order_relaxed);
+        audio.clear();
+        return;
+    }
 
     Impl::Host::AudioThreadScope audioThread;
     impl->lastProcessTimeMilliseconds.store(

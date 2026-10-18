@@ -415,7 +415,18 @@ automation controls, discrete parameter keyboard steps, parameter-change
 automation gestures without dragging,
 a native **Routing EDIT** action for all existing routes, named mastering
 song rows, opaque custom-color/text/focus contrast validation, and linear/rotary
-slider focus outlines. Keep those contracts while auditing the rest.
+slider focus outlines. Timeline contracts also cover current mute/solo/arm and
+take/comp/edit values, Escape selection behavior, coarse/fine gain keys, actual
+take/comp context actions and precise native gain/fade forms. Those forms keep
+invalid values open with text errors, dispatch ordinary project callbacks, and
+provide Return/Escape behavior without dragging. Track-name editing has an
+explicit native name and a visible validation error. Keep these contracts while
+auditing actual focus restoration and assistive announcements on each OS.
+The current status/error message also exposes a native button/value and explicit
+error text. Its history uses a native, scrollable keyboard list for all 200
+retained messages, preserves selection by message ID when updates arrive, and
+supports Delete or the selected-message/all-message controls. Painted rows beyond
+the old popup bounds are no longer the only route to older errors.
 
 No source-only review can certify modal focus restoration, native accelerated
 focus rendering, assistive announcements, magnification, or third-party dialogs.

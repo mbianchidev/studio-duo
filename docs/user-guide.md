@@ -76,6 +76,8 @@ DAWproject exchange, and Phase 5 mastering and release workflows.
 | Seek by the edit grid / seek project boundaries | `Alt+Left/Right` / `Home/End` |
 | Open selected track or clip actions | `Shift+F10` |
 | Mute / solo / arm selected timeline track | `Alt+M` / `Alt+S` / `Alt+R` |
+| Adjust selected audio clip gain by 1 dB / 0.1 dB | `Alt+Up/Down` / `Alt+Shift+Up/Down` |
+| Clear selected clip while keeping its track | `Escape` |
 | Open | `Command/Ctrl+O` |
 | Import audio | `Command/Ctrl+I` |
 | Create MIDI clip at playhead | `Command/Ctrl+Shift+N` |
@@ -107,6 +109,18 @@ into view. Shift+F10 uses the existing context actions without changing the
 playhead; fade/warp actions use its current position. Musical nudges respect the
 chosen edit grid, tempo map, and existing linked-edit protections. Tab always
 leaves the timeline. The lower MIDI editor retains its own note-editing keys.
+The native timeline selection value includes mute/solo/arm, track level,
+take/comp and linked-edit state, plus selected clip timing, gain and fades.
+State changes do not rely on color or an unchanged selection name.
+The status strip exposes its current message and error state to native
+accessibility clients. Press Return or Space on **Status history** to open the
+message list; use the arrows to reach every retained message and Delete or
+**Clear selected message** to remove one. **Clear all messages** empties the
+history. New messages preserve the selected message instead of moving its target.
+
+For keyboard comping, clear the clip selection and use **Shift+F10 > Expand
+versions**, select a take with the arrows, then use its clip actions to choose
+the playlist or comp range. Existing trim/split and linked-edit rules still apply.
 
 Mastering metadata/timing fields have distinct accessible names; its add,
 analyze, export, DDP, portable-copy, and repair controls are keyboard-focusable.
@@ -363,6 +377,12 @@ linear fade length, then drag the point in the middle of the fade vertically to
 shape it: upward is logarithmic and downward is a sharper inverse-exponential
 curve. Right-click a clip to mute or unmute that individual piece without
 muting its take lane.
+With keyboard focus, **Shift+F10 > Edit clip gain...**, **Edit fade in...** and
+**Edit fade out...** provide exact numeric alternatives to the gain, fade-length
+and fade-curve handles. Fade curves accept -1 through +1, with zero linear.
+Return applies one ordinary edit; Escape cancels and returns to the timeline.
+Invalid values keep the editor open with an explicit error rather than silently
+clamping them. Fade edits retain the existing linked-track behavior.
 
 Trimmed audio remains visible as a dashed waveform ghost and can be restored.
 After a split, each half keeps independent source boundaries and cannot expand

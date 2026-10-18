@@ -46,7 +46,8 @@ TimelineComponent::TimelineComponent()
     setTitle("Timeline");
     setDescription("Arrangement");
     setHelpText("Up/Down select tracks. Left/Right select clips. Shift+arrows move clips. "
-                "Alt+Left/Right move the playhead. Shift+F10 opens actions. Tab leaves the timeline.");
+                "Alt+Left/Right move the playhead. Alt+Up/Down change clip gain; add Shift for 0.1 dB. "
+                "Shift+F10 opens actions. Escape clears the clip selection. Tab leaves the timeline.");
     setMouseCursor(juce::MouseCursor::NormalCursor);
 }
 
@@ -163,17 +164,50 @@ int TimelineComponent::preferredHeight(int minimumHeight) const
 void TimelineComponent::updateAccessibleSelection()
 {
     auto title = juce::String("Timeline");
+    auto value = juce::String();
     if (project != nullptr)
     {
         if (const auto* track = project->findTrack(selectedTrackId))
+        {
             title += ": " + track->name;
+            value = (track->muted ? "Muted" : "Not muted") + juce::String(track->solo ? "; solo" : "; not solo")
+                + (track->armed ? "; record armed" : "; not record armed")
+                + "; track level " + juce::String(track->volumeDecibels, 1) + " dB";
+            if (track->parentTrackId.isNotEmpty())
+                value += project->activeTakeTrackId(track->parentTrackId) == track->id ? "; active take" : "; inactive take";
+            else if (std::any_of(project->tracks.cbegin(), project->tracks.cend(),
+                         [track](const auto& candidate) { return candidate.parentTrackId == track->id; }))
+                value += track->versionsCollapsed ? "; takes collapsed" : "; takes expanded";
+            if (!track->compRegions.empty())
+                value += "; comp regions " + juce::String(static_cast<int>(track->compRegions.size()));
+            if (const auto* group = project->editGroupForTrack(track->parentTrackId.isEmpty() ? track->id : track->parentTrackId);
+                group != nullptr && group->enabled)
+                value += "; linked edits enabled";
+        }
         if (const auto* clip = project->findClip(selectedClipId))
+        {
             title += " / " + clip->name;
+            value += "; start " + juce::String(clip->startSeconds, 3) + " seconds; length "
+                + juce::String(clip->durationSeconds, 3) + " seconds; clip gain " + juce::String(clip->gainDecibels, 1)
+                + " dB; fade in " + juce::String(clip->fadeInSeconds, 3) + " seconds, curve "
+                + juce::String(clip->fadeInCurve, 2) + "; fade out "
+                + juce::String(clip->fadeOutSeconds, 3) + " seconds, curve " + juce::String(clip->fadeOutCurve, 2);
+            if (clip->muted) value += "; clip muted";
+            if (clip->polarityInverted) value += "; polarity inverted";
+            if (clip->reversed) value += "; reversed";
+        }
         else if (const auto* midi = project->findMidiClip(selectedClipId))
+        {
             title += " / " + midi->name;
+            value += "; MIDI start " + juce::String(midi->startBeats, 3) + " beats; length "
+                + juce::String(midi->durationBeats, 3) + " beats; notes " + juce::String(static_cast<int>(midi->notes.size()));
+            if (midi->muted) value += "; clip muted";
+        }
     }
-    if (getTitle() == title)
+    value = title + (value.isEmpty() ? "; no selection" : "; " + value);
+    if (getTitle() == title && accessibleSelectionValue == value)
         return;
+    accessibleSelectionValue = std::move(value);
     setTitle(title);
     if (auto* handler = getAccessibilityHandler())
         handler->notifyAccessibilityEvent(juce::AccessibilityEvent::valueChanged);
@@ -186,7 +220,7 @@ std::unique_ptr<juce::AccessibilityHandler> TimelineComponent::createAccessibili
     public:
         explicit SelectionValue(TimelineComponent& component) : owner(component) {}
         bool isReadOnly() const override { return true; }
-        juce::String getCurrentValueAsString() const override { return owner.getTitle(); }
+        juce::String getCurrentValueAsString() const override { return owner.accessibleSelectionValue; }
         void setValueAsString(const juce::String&) override {}
     private:
         TimelineComponent& owner;
@@ -253,6 +287,23 @@ void TimelineComponent::focusLost(FocusChangeType)
     repaint();
 }
 
+juce::Point<float> TimelineComponent::keyboardContextPosition() const
+{
+    auto position = juce::Point<float>(static_cast<float>(viewportPositionX + trackHeaderWidth / 2),
+        trackY(selectedTrackId) + trackHeight * 0.5f);
+    for (const auto& hit : clipHits({ 0.0f, trackY(selectedTrackId), static_cast<float>(getWidth()), static_cast<float>(trackHeight) }))
+        if (hit.clipId == selectedClipId)
+        {
+            auto bounds = hit.bounds;
+            if (const auto* viewport = findParentComponentOfClass<juce::Viewport>())
+                bounds = bounds.getIntersection(viewport->getViewArea().toFloat().withTrimmedLeft(trackHeaderWidth));
+            if (!bounds.isEmpty())
+                position = bounds.getCentre();
+            break;
+        }
+    return position;
+}
+
 bool TimelineComponent::keyPressed(const juce::KeyPress& key)
 {
     if (project == nullptr || key.getModifiers().isCommandDown()
@@ -289,6 +340,20 @@ bool TimelineComponent::keyPressed(const juce::KeyPress& key)
     if (index < 0)
         return false;
     const auto* track = tracks[static_cast<std::size_t>(index)];
+    if (!alt && !shift && code == juce::KeyPress::escapeKey && selectedClipId.isNotEmpty())
+    {
+        selectForKeyboard(track->id);
+        return true;
+    }
+    if (alt && vertical && onClipGainChanged)
+        if (const auto* clip = project->findClip(selectedClipId))
+        {
+            const auto gain = juce::jlimit(-60.0f, 24.0f,
+                clip->gainDecibels + (code == juce::KeyPress::upKey ? 1.0f : -1.0f) * (shift ? 0.1f : 1.0f));
+            if (!juce::approximatelyEqual(gain, clip->gainDecibels))
+                onClipGainChanged(clip->id, gain);
+            return true;
+        }
     if (alt && !shift)
     {
         if (code == 'M' && onTrackMute)
@@ -358,17 +423,7 @@ bool TimelineComponent::keyPressed(const juce::KeyPress& key)
     if (shift && code == juce::KeyPress::F10Key)
     {
         ensureSelectionVisible();
-        auto position = juce::Point<float>(static_cast<float>(viewportPositionX + trackHeaderWidth / 2),
-                                           trackY(track->id) + trackHeight * 0.5f);
-        if (clip != hits.end())
-        {
-            auto bounds = clip->bounds;
-            if (const auto* viewport = findParentComponentOfClass<juce::Viewport>())
-                bounds = bounds.getIntersection(viewport->getViewArea().toFloat().withTrimmedLeft(trackHeaderWidth));
-            if (!bounds.isEmpty())
-                position = bounds.getCentre();
-        }
-        showContextMenu(position, false);
+        showContextMenu(keyboardContextPosition(), false);
         return true;
     }
     if (!shift && code == juce::KeyPress::returnKey)
@@ -2488,10 +2543,10 @@ void TimelineComponent::mouseMagnify(const juce::MouseEvent& event,
     }
 }
 
-void TimelineComponent::showContextMenu(juce::Point<float> position, bool selectFromPosition)
+juce::PopupMenu TimelineComponent::createContextMenu(juce::Point<float> position, bool selectFromPosition)
 {
     if (project == nullptr)
-        return;
+        return {};
     const auto actionSeconds = selectFromPosition ? xToSeconds(position.x) : playheadSeconds;
 
     const auto inTrackHeader = position.x >= static_cast<float>(viewportPositionX)
@@ -2560,14 +2615,7 @@ void TimelineComponent::showContextMenu(juce::Point<float> position, bool select
                         safeThis->onAddSectionRequested(seconds);
                 });
         }
-        const auto screenPosition = localPointToGlobal(position).toInt();
-        menu.showMenuAsync(juce::PopupMenu::Options()
-                               .withTargetComponent(this)
-                               .withTargetScreenArea({ screenPosition.x,
-                                                       screenPosition.y,
-                                                       1,
-                                                       1 }));
-        return;
+        return menu;
     }
 
     const auto tracks = visibleTracks();
@@ -2801,6 +2849,16 @@ void TimelineComponent::showContextMenu(juce::Point<float> position, bool select
         if (selectedClip != nullptr)
         {
             menu.addSectionHeader("Audio processing");
+            const auto safeThis = juce::Component::SafePointer<TimelineComponent>(this);
+            for (const auto& [label, mode] : {
+                     std::pair { "Edit clip gain...", ClipProcessingEditorComponent::Mode::gain },
+                     std::pair { "Edit fade in...", ClipProcessingEditorComponent::Mode::fadeIn },
+                     std::pair { "Edit fade out...", ClipProcessingEditorComponent::Mode::fadeOut } })
+                menu.addItem(label, [safeThis, clipId = selectedClipId, mode, position]
+                {
+                    if (safeThis != nullptr)
+                        safeThis->showClipProcessingEditor(clipId, mode, position);
+                });
             menu.addItem(
                 selectedClip->muted ? "Unmute clip" : "Mute clip",
                 true,
@@ -2937,6 +2995,16 @@ void TimelineComponent::showContextMenu(juce::Point<float> position, bool select
         menu.addItem(std::move(remove));
     }
 
+    updateAccessibleSelection();
+    repaint();
+    return menu;
+}
+
+void TimelineComponent::showContextMenu(juce::Point<float> position, bool selectFromPosition)
+{
+    auto menu = createContextMenu(position, selectFromPosition);
+    if (menu.getNumItems() == 0)
+        return;
     const auto screenPosition = localPointToGlobal(position).toInt();
     menu.showMenuAsync(juce::PopupMenu::Options()
                            .withTargetComponent(this)
@@ -2944,7 +3012,54 @@ void TimelineComponent::showContextMenu(juce::Point<float> position, bool select
                                                    screenPosition.y,
                                                    1,
                                                    1 }));
-    repaint();
+}
+
+void TimelineComponent::showClipProcessingEditor(const juce::String& clipId,
+                                                ClipProcessingEditorComponent::Mode mode,
+                                                juce::Point<float> position)
+{
+    const auto* clip = project != nullptr ? project->findClip(clipId) : nullptr;
+    if (clip == nullptr)
+        return;
+    auto editor = std::make_unique<ClipProcessingEditorComponent>(*clip, mode);
+    const auto safeThis = juce::Component::SafePointer<TimelineComponent>(this);
+    const auto safeEditor = juce::Component::SafePointer<ClipProcessingEditorComponent>(editor.get());
+    editor->onApply = [safeThis, clipId, mode](double number, float curve)
+    {
+        const auto* current = safeThis != nullptr && safeThis->project != nullptr
+            ? safeThis->project->findClip(clipId) : nullptr;
+        if (current == nullptr)
+            return juce::Result::fail("This clip is no longer available. Close the editor and select it again.");
+        if (mode == ClipProcessingEditorComponent::Mode::gain && safeThis->onClipGainChanged)
+            safeThis->onClipGainChanged(clipId, static_cast<float>(number));
+        else if (mode != ClipProcessingEditorComponent::Mode::gain && safeThis->onClipFadeChanged)
+        {
+            if (number > current->durationSeconds)
+                return juce::Result::fail("The clip duration changed. Reopen the editor before setting this fade.");
+            safeThis->onClipFadeChanged(clipId, mode == ClipProcessingEditorComponent::Mode::fadeIn, number, curve);
+        }
+        else
+            return juce::Result::fail("Clip editing is unavailable. Close and reopen this editor.");
+        return juce::Result::ok();
+    };
+    editor->onClose = [safeThis, safeEditor]
+    {
+        if (safeEditor != nullptr)
+            if (auto* callout = safeEditor->findParentComponentOfClass<juce::CallOutBox>())
+                callout->dismiss();
+        juce::MessageManager::callAsync([safeThis]
+        {
+            if (safeThis != nullptr && safeThis->isShowing())
+                safeThis->grabKeyboardFocus();
+        });
+    };
+    const auto screen = localPointToGlobal(position).toInt();
+    juce::CallOutBox::launchAsynchronously(std::move(editor), { screen.x, screen.y, 1, 1 }, nullptr);
+    juce::MessageManager::callAsync([safeEditor]
+    {
+        if (safeEditor != nullptr && safeEditor->isShowing())
+            safeEditor->focusValue();
+    });
 }
 
 juce::String TimelineComponent::markerIdAt(

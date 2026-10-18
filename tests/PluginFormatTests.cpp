@@ -359,6 +359,19 @@ void renderModeTests(const juce::PluginDescription& description, const studio::A
         processor->releaseResources();
     }
     processor.reset();
+    auto undersized = studio::ClapPluginInstance::create(description, 48000.0, 64, error);
+    expect(undersized != nullptr, error.toRawUTF8());
+    if (undersized)
+    {
+        undersized->prepareToPlay(48000.0, 64);
+        juce::AudioBuffer<float> audio(1, 64);
+        audio.clear();
+        juce::MidiBuffer events;
+        undersized->processBlock(audio, events);
+        expect(undersized->suppressedProcessBlockCount() == 1 && audio.getMagnitude(0, 64) == 0.0f,
+               "A changed or undersized host channel layout fails closed before native CLAP buffer pointers can escape their allocation.");
+        undersized->releaseResources();
+    }
     for (const auto* policy : { "hard-realtime", "reject-offline", "reject-activation" })
     {
         ScopedTestEnvironment configuredPolicy("STUDIO_DUO_TEST_CLAP_RENDER_POLICY", policy);

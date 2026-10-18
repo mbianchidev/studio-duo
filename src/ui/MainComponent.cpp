@@ -277,6 +277,10 @@ public:
           apply(std::move(applyCallback))
     {
         nameEditor.setText(std::move(currentName), false);
+        nameEditor.setTitle("Track name");
+        nameEditor.setName("Track name");
+        nameEditor.setDescription("Enter a non-empty track name, then apply or press Return.");
+        nameEditor.setWantsKeyboardFocus(true);
         nameEditor.setSelectAllWhenFocused(true);
         nameEditor.setColour(juce::TextEditor::backgroundColourId,
                              juce::Colour(StudioColours::panel));
@@ -287,13 +291,22 @@ public:
         nameEditor.onReturnKey = [this] { applyAndClose(); };
         nameEditor.onEscapeKey = [this] { close(); };
         addAndMakeVisible(nameEditor);
+        nameError.setTitle("Track name validation");
+        nameError.setColour(juce::Label::textColourId, juce::Colour(StudioColours::text));
+        nameError.setFont(juce::FontOptions(13.0f));
+        nameError.setBorderSize({});
+        addAndMakeVisible(nameError);
 
+        colourSelector.setTitle("Track colour");
+        colourSelector.setName("Track colour");
         colourSelector.setCurrentColour(currentColour,
                                         juce::dontSendNotification);
         addAndMakeVisible(colourSelector);
 
         applyButton.onClick = [this] { applyAndClose(); };
         cancelButton.onClick = [this] { close(); };
+        applyButton.setTitle("Apply track name and colour");
+        cancelButton.setTitle("Cancel track appearance edit");
         addAndMakeVisible(applyButton);
         addAndMakeVisible(cancelButton);
         setSize(340, 430);
@@ -309,6 +322,7 @@ public:
     {
         auto bounds = getLocalBounds().reduced(12);
         nameEditor.setBounds(bounds.removeFromTop(34));
+        nameError.setBounds(bounds.removeFromTop(26));
         bounds.removeFromTop(8);
         auto buttons = bounds.removeFromBottom(34);
         cancelButton.setBounds(buttons.removeFromRight(92).reduced(2));
@@ -323,6 +337,9 @@ private:
         const auto name = nameEditor.getText().trim();
         if (name.isEmpty())
         {
+            nameError.setText("Error: Enter a track name before applying.", juce::dontSendNotification);
+            if (auto* handler = nameError.getAccessibilityHandler())
+                handler->notifyAccessibilityEvent(juce::AccessibilityEvent::valueChanged);
             nameEditor.setColour(juce::TextEditor::outlineColourId,
                                  juce::Colour(StudioColours::orange));
             nameEditor.grabKeyboardFocus();
@@ -340,6 +357,7 @@ private:
     }
 
     juce::TextEditor nameEditor;
+    juce::Label nameError;
     juce::ColourSelector colourSelector;
     juce::TextButton applyButton { "APPLY" };
     juce::TextButton cancelButton { "CANCEL" };

@@ -556,6 +556,8 @@ target_sources(
         src/ui/StudioTheme.h
         src/ui/TimelineComponent.cpp
         src/ui/TimelineComponent.h
+        src/ui/ClipProcessingEditorComponent.cpp
+        src/ui/ClipProcessingEditorComponent.h
         ${STUDIO_DUO_MODEL_SOURCES}
         ${STUDIO_DUO_PLUGIN_SOURCES}
         ${STUDIO_DUO_STARTUP_SOURCES}
@@ -1011,6 +1013,8 @@ if(STUDIO_DUO_BUILD_TESTS)
             src/ui/StudioPanControl.h
             src/ui/TimelineComponent.cpp
             src/ui/TimelineComponent.h
+            src/ui/ClipProcessingEditorComponent.cpp
+            src/ui/ClipProcessingEditorComponent.h
             src/ui/MasteringWorkspaceComponent.cpp
             src/ui/MasteringWorkspaceComponent.h
             src/ui/AutomationPanel.cpp
@@ -1213,7 +1217,7 @@ if(STUDIO_DUO_BUILD_TESTS)
 
     foreach(STUDIO_DUO_HARDENING_SUITE IN ITEMS
         projectHardeningTests saveInterruptionTests projectExchangeTests
-        keyboardAccessibilityTests performanceHardeningTests longSessionQualificationTests
+        keyboardAccessibilityTests infoPanelTests performanceHardeningTests longSessionQualificationTests
         projectMigrationTests packagePersistence projectRecovery startupTests
         pluginFormatTests pluginRecoveryTests pluginCompatibilityTests pluginRackEngineTests
         routingEngineTests routingModelTests automationTests renderEngineTests controlSurfaceTests

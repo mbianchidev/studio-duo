@@ -7,12 +7,87 @@
 #include "ui/PluginParameterPanel.h"
 #include "ui/RoutingPanel.h"
 #include "ui/StudioTheme.h"
+#include "ui/ClipProcessingEditorComponent.h"
 #include "plugin_host/PluginIsolationPolicy.h"
 
 #include <cmath>
 
 namespace
 {
+void clipProcessingControls()
+{
+    studio::AudioClip clip;
+    clip.name = "Synthetic clip";
+    clip.durationSeconds = 2.0;
+    clip.gainDecibels = -4.0f;
+    clip.fadeInSeconds = 0.25;
+    clip.fadeOutSeconds = 0.5;
+    studio::StudioTheme theme;
+    using Mode = studio::ClipProcessingEditorComponent::Mode;
+    for (const auto mode : { Mode::gain, Mode::fadeIn, Mode::fadeOut })
+    {
+        studio::ClipProcessingEditorComponent editor(clip, mode);
+        editor.setLookAndFeel(&theme);
+        auto* value = dynamic_cast<juce::TextEditor*>(editor.findChildWithID("clip-edit.value"));
+        auto* curve = dynamic_cast<juce::TextEditor*>(editor.findChildWithID("clip-edit.curve"));
+        auto* status = dynamic_cast<juce::Label*>(editor.findChildWithID("clip-edit.status"));
+        expect(value != nullptr && curve != nullptr && status != nullptr,
+               "The non-drag clip editor uses real native value, curve and error controls.");
+        if (value == nullptr || curve == nullptr || status == nullptr)
+            continue;
+        for (auto* control : { value, curve })
+            expect(control->getTitle().isNotEmpty() && control->getWantsKeyboardFocus()
+                       && editor.getLocalBounds().contains(control->getBounds()),
+                   "Every clip edit field has a native name, keyboard focus and on-surface bounds.");
+        auto changes = 0, closes = 0;
+        double appliedValue = 0.0;
+        float appliedCurve = 0.0f;
+        editor.onApply = [&](double number, float shape)
+        {
+            ++changes;
+            appliedValue = number;
+            appliedCurve = shape;
+            return juce::Result::ok();
+        };
+        editor.onClose = [&] { ++closes; };
+        value->setText("nan", false);
+        expect(editor.applyChanges().failed() && changes == 0 && closes == 0 && status->getText().contains("Error:"),
+               "Invalid clip values remain open with a visible, non-color-only error and no partial edit.");
+        value->setText(mode == Mode::gain ? "25" : "2.1", false);
+        expect(editor.applyChanges().failed() && changes == 0, "Clip gain and fade duration bounds are enforced before dispatch.");
+        value->setText(mode == Mode::gain ? "+3.25 dB" : "0.375", false);
+        curve->setText("1.1", false);
+        if (mode != Mode::gain)
+            expect(editor.applyChanges().failed() && changes == 0, "Invalid fade curves cannot be silently clamped into a successful edit.");
+        curve->setText("-0.5", false);
+        expect(editor.keyPressed(juce::KeyPress(juce::KeyPress::returnKey)) && changes == 1 && closes == 1
+                   && std::abs(appliedValue - (mode == Mode::gain ? 3.25 : 0.375)) < 1e-9
+                   && (mode == Mode::gain || std::abs(appliedCurve + 0.5f) < 1e-6f),
+               "Return applies one complete precise gain/fade edit through the ordinary callback.");
+        expect(editor.keyPressed(juce::KeyPress(juce::KeyPress::escapeKey)) && changes == 1 && closes == 2
+                   && !editor.keyPressed(juce::KeyPress(juce::KeyPress::tabKey)),
+               "Escape closes without another mutation; Tab is not trapped.");
+        if (mode == Mode::gain)
+            expect(!curve->isVisible(), "Gain editing does not expose an unrelated fade control.");
+        if (mode == Mode::fadeIn)
+        {
+            juce::Image image(juce::Image::ARGB, editor.getWidth(), editor.getHeight(), true, juce::SoftwareImageType());
+            juce::Graphics graphics(image);
+            editor.paintEntireComponent(graphics, true);
+            expect(image.getPixelAt(2, 2).getARGB() == studio::StudioColours::panel,
+                   "The precise clip editor renders through the native offscreen software path.");
+            const auto destination = juce::SystemStats::getEnvironmentVariable("STUDIO_DUO_CLIP_EDIT_IMAGE", {});
+            if (destination.isNotEmpty())
+            {
+                const auto stream = juce::File(destination).createOutputStream();
+                expect(stream != nullptr && juce::PNGImageFormat().writeImageToStream(image, *stream),
+                       "A synthetic clip editor preview can be retained without capturing or operating the desktop.");
+            }
+        }
+        editor.setLookAndFeel(nullptr);
+    }
+}
+
 void namedProductionControls()
 {
     studio::PluginParameterPanel parameters("Synthetic processor", "synthetic-insert",
@@ -168,6 +243,7 @@ void masteringKeyboardControls()
 
 void keyboardAccessibilityTests()
 {
+    clipProcessingControls();
     namedProductionControls();
     isolationConsentPolicy();
     themeContrastContracts();
@@ -303,6 +379,76 @@ void keyboardAccessibilityTests()
            "Alt+S reaches solo without splitting the selected clip.");
     expect(timeline.keyPressed(juce::KeyPress('R', juce::ModifierKeys::altModifier, 0)) && armRequests == 1,
            "Alt+R reaches record arming.");
+    project.tracks.front().muted = project.tracks.front().solo = project.tracks.front().armed = true;
+    auto& announcedClip = project.tracks.front().clips[1];
+    announcedClip.gainDecibels = -4.0f;
+    announcedClip.fadeInSeconds = 0.125;
+    timeline.setProject(&project);
+    const auto announced = timeline.getAccessibilityHandler()->getValueInterface()->getCurrentValueAsString();
+    expect(announced.containsIgnoreCase("muted") && announced.containsIgnoreCase("solo")
+               && announced.containsIgnoreCase("armed") && announced.contains("-4.0 dB")
+               && announced.contains("0.125"),
+           "The native selection value announces current track/clip states and edit values, not just names or color.");
+    float keyboardGain = -100.0f;
+    timeline.onClipGainChanged = [&](const auto& id, float value)
+    {
+        expect(id == early.id, "A keyboard gain edit preserves the selected audio clip.");
+        keyboardGain = value;
+    };
+    expect(timeline.keyPressed(juce::KeyPress(juce::KeyPress::upKey, juce::ModifierKeys::altModifier, 0))
+               && std::abs(keyboardGain + 3.0f) < 1e-5f,
+           "Alt+Up edits clip gain through the same callback as the drag gesture.");
+    expect(timeline.keyPressed(juce::KeyPress(juce::KeyPress::downKey,
+               juce::ModifierKeys::altModifier | juce::ModifierKeys::shiftModifier, 0))
+               && std::abs(keyboardGain + 4.1f) < 1e-5f,
+           "Alt+Shift+Down supplies precise non-drag clip gain steps.");
+    expect(timeline.keyPressed(juce::KeyPress(juce::KeyPress::escapeKey)) && trackId == first.id && clipId.isEmpty(),
+           "Escape clears clip selection without abandoning its track or trapping focus.");
+    const auto activateMenuAction = [](const juce::PopupMenu& menu, const juce::String& title)
+    {
+        for (juce::PopupMenu::MenuItemIterator item(menu, true); item.next();)
+            if (item.getItem().text == title && item.getItem().isEnabled && item.getItem().action)
+            {
+                item.getItem().action();
+                return true;
+            }
+        return false;
+    };
+    timeline.onToggleTrackVersions = [&](const auto& id)
+    {
+        expect(id == first.id, "The keyboard version action targets the selected parent.");
+        project.tracks.front().versionsCollapsed = false;
+        timeline.setProject(&project);
+    };
+    expect(activateMenuAction(timeline.keyboardContextMenuForTesting(), "Expand versions")
+               && !project.tracks.front().versionsCollapsed,
+           "The actual keyboard context menu expands take lanes without a mouse.");
+    studio::AudioClip takeClip;
+    takeClip.id = "keyboard-take-clip";
+    takeClip.name = "Keyboard take clip";
+    project.tracks[1].clips = { takeClip };
+    studio::CompRegion comp;
+    comp.sourceTrackId = hidden.id;
+    comp.durationSeconds = 0.5;
+    project.tracks.front().compRegions.push_back(comp);
+    timeline.setProject(&project);
+    timeline.setSelection(hidden.id, takeClip.id);
+    juce::String usedTake, compClip, clearedComp;
+    timeline.onUseTake = [&](const auto& id) { usedTake = id; };
+    timeline.onUseClipForComp = [&](const auto& id) { compClip = id; };
+    timeline.onClearComp = [&](const auto& id) { clearedComp = id; };
+    const auto takeMenu = timeline.keyboardContextMenuForTesting();
+    expect(activateMenuAction(takeMenu, "Use this take as playlist")
+               && activateMenuAction(takeMenu, "Use this clip range in comp")
+               && activateMenuAction(takeMenu, "Clear parent comp")
+               && usedTake == hidden.id && compClip == takeClip.id && clearedComp == first.id,
+           "Keyboard take/comp actions dispatch the selected take, clip range and parent through their ordinary project callbacks.");
+    auto preciseEditors = 0;
+    for (juce::PopupMenu::MenuItemIterator item(takeMenu, true); item.next();)
+        if (item.getItem().text == "Edit clip gain..." || item.getItem().text == "Edit fade in..."
+            || item.getItem().text == "Edit fade out...")
+            preciseEditors += item.getItem().isEnabled && static_cast<bool>(item.getItem().action) ? 1 : 0;
+    expect(preciseEditors == 3, "The same keyboard menu exposes precise native gain and both fade-shape editors.");
     expect(!timeline.keyPressed(juce::KeyPress(juce::KeyPress::tabKey)),
            "The timeline does not trap Tab navigation.");
     expect(!timeline.keyPressed(juce::KeyPress(juce::KeyPress::rightKey, juce::ModifierKeys::commandModifier, 0)),
