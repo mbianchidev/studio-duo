@@ -402,7 +402,18 @@ void pluginCompatibilityTests()
     if (descriptions.isEmpty())
         return;
     constexpr auto activationVariable = "STUDIO_DUO_TEST_CLAP_ACTIVATION_VALUES";
+#if JUCE_WINDOWS
+    char* environmentValue = nullptr;
+    std::size_t environmentSize = 0;
+    const auto environmentError = _dupenv_s(&environmentValue, &environmentSize, activationVariable);
+    const std::unique_ptr<char, decltype(&std::free)> previousStorage(environmentValue, &std::free);
+    expect(environmentError == 0, "The activation fixture can preserve its previous Windows environment.");
+    if (environmentError != 0)
+        return;
+    const auto* previousValue = previousStorage.get();
+#else
     const auto* previousValue = std::getenv(activationVariable);
+#endif
     const auto previous = previousValue != nullptr
         ? std::optional<juce::String>(previousValue) : std::nullopt;
     const auto setActivationEnvironment = [&](const char* value)
