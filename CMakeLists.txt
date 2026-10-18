@@ -119,6 +119,10 @@ if(NOT TARGET juce::juce_gui_extra)
         "${juce_SOURCE_DIR}"
         "${CMAKE_CURRENT_SOURCE_DIR}/third_party/juce/9.0.3-private-ipc.patch"
     )
+    studio_duo_apply_dependency_patch(
+        "${juce_SOURCE_DIR}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/third_party/juce/9.0.3-framed-ipc.patch"
+    )
 endif()
 
 if(STUDIO_DUO_BUILD_TESTS OR STUDIO_DUO_AUDIO_EXPORT_TESTS_ONLY)
@@ -1244,6 +1248,7 @@ if(STUDIO_DUO_BUILD_TESTS)
     foreach(
         STUDIO_DUO_HOST_SUITE
         IN ITEMS
+            pluginBridgeProtocol
             audioDeviceProbeTests
             startupTests
             windowsCrashHandlerTests

@@ -132,8 +132,8 @@ def probe_environment(home, temporary):
     }
     environment = {key: value for key, value in os.environ.items() if key.upper() in allowed}
     environment.update(HOME=str(home), USERPROFILE=str(home), TMPDIR=str(temporary) + os.sep,
-                       TEMP=str(temporary), TMP=str(temporary), APPDATA=str(home / "AppData"),
-                       LOCALAPPDATA=str(home / "LocalAppData"))
+                       TEMP=str(temporary), TMP=str(temporary), APPDATA=str(home / "AppData/Roaming"),
+                       LOCALAPPDATA=str(home / "AppData/Local"))
     return environment
 
 
@@ -314,6 +314,9 @@ def main(argv=None):
                 case_root = private / ("case-" + str(index))
                 home, temporary, output = case_root / "home", case_root / "tmp", case_root / "result"
                 home.mkdir(parents=True)
+                (home / "Documents").mkdir()
+                (home / "AppData/Roaming").mkdir(parents=True)
+                (home / "AppData/Local").mkdir()
                 temporary.mkdir()
                 environment = probe_environment(home, temporary)
                 command = [str(executable), "--qualify-plugin=" + source, "--qualification-output=" + str(output),

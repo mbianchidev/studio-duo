@@ -141,6 +141,7 @@ private:
     std::uint32_t lastOutputSequence = 0;
     std::atomic<bool> ready { false };
     std::atomic<bool> connectionLost { false };
+    std::atomic<int> startupStage { 0 };
     std::atomic<std::uint64_t> lateBlocks { 0 };
     std::atomic<int> pluginLatencySamples { 0 };
     std::atomic<double> pluginTailSeconds { 0.0 };

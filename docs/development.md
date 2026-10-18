@@ -855,6 +855,14 @@ The application and native test host also hide C/C++ and inline implementation
 symbols. Vendor JUCE implementations must not coalesce with the host's JUCE
 classes; hiding only Studio Duo's own CLAP modules does not protect against
 externally supplied JUCE-based processors.
+The checked JUCE framed-IPC patch serializes complete control-message writes:
+its child-process heartbeat thread otherwise writes concurrently with large
+state/parameter payloads, interleaving messages larger than a pipe's atomic-write
+limit. Truncated frames are rejected, not delivered as zero-padded startup/state
+data. This locking is outside realtime DSP. Native pipe regressions cover mixed
+large/heartbeat-size concurrent sends and incomplete payload rejection. Startup
+diagnostics retain typed stages 1-8 (mapping, creation, created, state, buses,
+prepare, metadata and processing thread) when a worker disconnects.
 
 CLAP activation refreshes clean parameter values while retaining pending host
 edits. Worker parameter changes publish refreshed metadata, including discrete

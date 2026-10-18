@@ -107,6 +107,18 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      - name: Prepare disposable Windows known folders
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $documents = [Environment]::GetFolderPath(
+            [Environment+SpecialFolder]::MyDocuments,
+            [Environment+SpecialFolderOption]::Create
+          )
+          if ([string]::IsNullOrWhiteSpace($documents) -or !(Test-Path -LiteralPath $documents)) {
+            throw "The disposable Windows host cannot create its Documents known folder."
+          }
+
       - name: Exercise checksum-pinned public vendor workflows
         timeout-minutes: 15
         run: >

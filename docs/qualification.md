@@ -338,6 +338,10 @@ registered Apple AUBandpass and applies the seatbelt profile below to every case
 Windows execution requires both `--disposable-windows-host` and a disposable
 GitHub Actions environment; it is not an OS capability sandbox and must not run
 against a normal user's installation.
+That disposable Windows host creates its missing Documents known folder before
+loading vendors. Every private child home also contains Documents and the
+standard AppData Roaming/Local directories; creating these does not configure an
+audio/MIDI device or globally install a processor.
 
 Each case has a private home/temp directory and bounded subprocess; timeout
 termination targets only that owned process tree. Temporary vendor binaries and

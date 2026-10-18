@@ -62,6 +62,7 @@ juce::Result PluginBridgeClient::startInternal(const juce::PluginDescription* de
         return result;
 
     connectionLost.store(false, std::memory_order_release);
+    startupStage.store(0, std::memory_order_release);
     const auto executable = workerExecutable.existsAsFile()
         ? workerExecutable
         : juce::File::getSpecialLocation(
@@ -111,7 +112,7 @@ juce::Result PluginBridgeClient::startInternal(const juce::PluginDescription* de
     if (responseParts.isEmpty() || responseParts[0] != "ready")
     {
         const auto error = responseMessage.isNotEmpty() ? responseMessage
-                                                        : "worker disconnected";
+            : "worker disconnected (startup stage " + juce::String(startupStage.load(std::memory_order_acquire)) + ")";
         stop();
         return juce::Result::fail("Plugin bridge setup failed: " + error);
     }
@@ -1537,6 +1538,19 @@ juce::String PluginBridgeClient::diagnosticState() const
 void PluginBridgeClient::handleMessageFromWorker(const juce::MemoryBlock& message)
 {
     const auto text = message.toString();
+    if (text.startsWith("startup|"))
+    {
+        const auto stage = text.fromFirstOccurrenceOf("|", false, false).getIntValue();
+        if (stage >= 1 && stage <= 8)
+            startupStage.store(stage, std::memory_order_release);
+        else
+        {
+            const std::lock_guard lock(responseMutex);
+            responseMessage = "error:invalid-startup-stage";
+            responseCondition.notify_one();
+        }
+        return;
+    }
     if (text.startsWith("latency|"))
     {
         const auto parts = juce::StringArray::fromTokens(

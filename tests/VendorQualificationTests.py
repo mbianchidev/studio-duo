@@ -167,6 +167,8 @@ class VendorQualificationTests(unittest.TestCase):
             environment = vendors.probe_environment(self.root / "home", self.root / "tmp")
         self.assertEqual(environment["PATH"], "mock-runtime")
         self.assertEqual(environment["HOME"], str(self.root / "home"))
+        self.assertEqual(environment["APPDATA"], str(self.root / "home/AppData/Roaming"))
+        self.assertEqual(environment["LOCALAPPDATA"], str(self.root / "home/AppData/Local"))
         self.assertNotIn("GH_TOKEN", environment)
         self.assertNotIn("UNRELATED_PRIVATE_SETTING", environment)
 

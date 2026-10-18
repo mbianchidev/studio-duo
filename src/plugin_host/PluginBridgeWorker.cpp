@@ -145,6 +145,7 @@ void PluginBridgeWorker::handleMessageFromCoordinator(const juce::MemoryBlock& m
 
     mapping = std::move(newMapping);
     sharedState = state;
+    sendStatus("startup|1");
 
     juce::MemoryBlock pluginState;
     if (stateBase64.isNotEmpty() && !pluginState.fromBase64Encoding(stateBase64))
@@ -171,6 +172,7 @@ void PluginBridgeWorker::handleMessageFromCoordinator(const juce::MemoryBlock& m
         return;
     }
 
+    sendStatus("startup|2");
     formatManager.createPluginInstanceAsync(
         description,
         sampleRate,
@@ -191,6 +193,7 @@ void PluginBridgeWorker::handleMessageFromCoordinator(const juce::MemoryBlock& m
                 return;
             }
 
+            sendStatus("startup|3");
             startProcessing(std::move(instance),
                             pluginState,
                             sampleRate,
@@ -612,6 +615,7 @@ void PluginBridgeWorker::startProcessing(std::unique_ptr<juce::AudioPluginInstan
     editorWindow.reset();
     if (newPlugin != nullptr)
     {
+        sendStatus("startup|4");
         newPlugin->setNonRealtime(nonRealtime);
         if (auto* clap = dynamic_cast<ClapPluginInstance*>(newPlugin.get()))
             clap->setIsolatedWorkerProcessing(true);
@@ -642,6 +646,7 @@ void PluginBridgeWorker::startProcessing(std::unique_ptr<juce::AudioPluginInstan
                     static_cast<int>(state.getSize()));
             }
         }
+        sendStatus("startup|5");
         if (const auto configured = configurePluginAudioBuses(*newPlugin, requestedSidechainChannels, lastOutputBus);
             configured.failed())
         {
@@ -662,6 +667,7 @@ void PluginBridgeWorker::startProcessing(std::unique_ptr<juce::AudioPluginInstan
             sendStatus("error:unsupported-channel-layout");
             return;
         }
+        sendStatus("startup|6");
         newPlugin->prepareToPlay(sampleRate, blockSize);
         if (const auto* clap = dynamic_cast<const ClapPluginInstance*>(newPlugin.get()))
             if (const auto prepared = clap->preparationResult(); prepared.failed())
@@ -682,6 +688,7 @@ void PluginBridgeWorker::startProcessing(std::unique_ptr<juce::AudioPluginInstan
                           true,
                           false);
     processBuffer.clear();
+    sendStatus("startup|7");
     const auto readyStatus =
         "ready|"
         + juce::String(plugin != nullptr ? plugin->getLatencySamples() : 0)
@@ -694,6 +701,7 @@ void PluginBridgeWorker::startProcessing(std::unique_ptr<juce::AudioPluginInstan
         + "|" + encodePluginOutputBuses(plugin != nullptr ? pluginOutputBuses(*plugin)
             : std::vector<PluginOutputBus> { { "Main", 2, 0 } });
     processingThreadStarted.reset();
+    sendStatus("startup|8");
     if (!startThread(juce::Thread::Priority::high))
     {
         sendStatus("error:processing-thread-start-failed");
