@@ -589,8 +589,11 @@ their path early. Seek and Stop rebuild the pipeline before playback resumes.
 
 Processor-inclusive export uses the same runtime graph. Bundled and trusted
 processors run offline; sandboxed third-party processors keep their one-block
-pipeline and use a paced real-time fallback. Processing is never silently
-omitted.
+pipeline, but export waits outside the audio callback for each submitted worker
+quantum instead of sleeping for its nominal audio duration. Slow valid DSP cannot
+silently become dry fallback in an export. Disconnect, explicit fallback and a
+five-second per-quantum timeout fail the render and retain the existing live
+restoration path. This completion wait never runs in normal realtime callbacks.
 
 Run the transport and installed-plugin activation diagnostics with:
 

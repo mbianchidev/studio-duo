@@ -218,24 +218,24 @@ void hostTransportTests(const juce::PluginDescription& description, const studio
             const auto signal = engine->renderActiveBlockForTesting(256);
             if (block >= 8 && signal.getSample(0, 0) > 0.0f)
             {
-            const auto seconds = static_cast<double>(signal.getSample(0, 5)) * 10.0;
-            const auto bpm = static_cast<double>(signal.getSample(0, 0)) * 1000.0;
-            const auto ppq = static_cast<double>(signal.getSample(0, 4)) * 1024.0;
-            const auto meter = project.meterAt(seconds + 1e-8);
-            const auto musical = project.musicalPositionAt(seconds + 1e-8);
-            const auto barLength = static_cast<double>(meter.numerator) * 4.0 / meter.denominator;
-            const auto meterStart = project.beatsAt(meter.timeSeconds);
-            const auto barStart = meterStart + std::floor((ppq - meterStart + 1e-8) / barLength) * barLength;
-            contextMatches = contextMatches
-                && std::abs(bpm - project.tempoAt(seconds + 1e-8)) < 0.001
-                && std::abs(ppq - project.beatsAt(seconds)) < 0.00001
-                && std::abs(signal.getSample(0, 1) * 64.0f - static_cast<float>(meter.numerator)) < 1e-5f
-                && std::abs(signal.getSample(0, 2) * 64.0f - static_cast<float>(meter.denominator)) < 1e-5f
-                && std::abs(signal.getSample(0, 3) - 5.0f / 7.0f) < 1e-5f
-                && std::abs(signal.getSample(0, 6) * 1000.0f - static_cast<float>(musical.bar - 1)) < 1e-4f
-                && std::abs(static_cast<double>(signal.getSample(0, 7)) * 1024.0 - barStart) < 1e-5;
-            firstTempo = firstTempo || std::abs(bpm - 150.0) < 0.001;
-            secondTempo = secondTempo || std::abs(bpm - 210.0) < 0.001;
+                const auto seconds = static_cast<double>(signal.getSample(0, 5)) * 10.0;
+                const auto bpm = static_cast<double>(signal.getSample(0, 0)) * 1000.0;
+                const auto ppq = static_cast<double>(signal.getSample(0, 4)) * 1024.0;
+                const auto meter = project.meterAt(seconds + 1e-8);
+                const auto musical = project.musicalPositionAt(seconds + 1e-8);
+                const auto barLength = static_cast<double>(meter.numerator) * 4.0 / meter.denominator;
+                const auto meterStart = project.beatsAt(meter.timeSeconds);
+                const auto barStart = meterStart + std::floor((ppq - meterStart + 1e-8) / barLength) * barLength;
+                contextMatches = contextMatches
+                    && std::abs(bpm - project.tempoAt(seconds + 1e-8)) < 0.001
+                    && std::abs(ppq - project.beatsAt(seconds)) < 0.00001
+                    && std::abs(signal.getSample(0, 1) * 64.0f - static_cast<float>(meter.numerator)) < 1e-5f
+                    && std::abs(signal.getSample(0, 2) * 64.0f - static_cast<float>(meter.denominator)) < 1e-5f
+                    && std::abs(signal.getSample(0, 3) - 5.0f / 7.0f) < 1e-5f
+                    && std::abs(signal.getSample(0, 6) * 1000.0f - static_cast<float>(musical.bar - 1)) < 1e-4f
+                    && std::abs(static_cast<double>(signal.getSample(0, 7)) * 1024.0 - barStart) < 1e-5;
+                firstTempo = firstTempo || std::abs(bpm - 150.0) < 0.001;
+                secondTempo = secondTempo || std::abs(bpm - 210.0) < 0.001;
             }
             juce::MessageManager::getInstance()->runDispatchLoopUntil(20);
         }
@@ -245,6 +245,38 @@ void hostTransportTests(const juce::PluginDescription& description, const studio
         engine->stop();
         engine->shutdown();
     }
+}
+
+void sandboxOfflineWaitTests(const juce::PluginDescription& description, const studio::AudioClip& clip)
+{
+    ScopedTestEnvironment delay("STUDIO_DUO_TEST_CLAP_PROCESS_DELAY_MS", "30");
+    expect(delay.status().wasOk(), "A bounded synthetic DSP delay can be configured in the owned worker.");
+    auto project = studio::Project::createDefault();
+    project.metronomeEnabled = false;
+    project.tracks.front().clips = { clip };
+    studio::PluginInsert insert;
+    insert.pluginIdentifier = description.createIdentifierString();
+    insert.name = "Synthetic slow offline worker";
+    insert.format = "CLAP";
+    insert.bridgeMode = studio::PluginBridgeMode::sandboxed;
+    project.tracks.front().inserts.push_back(insert);
+    studio::StudioAudioEngine::PluginRuntimeRequest request;
+    request.trackId = project.tracks.front().id;
+    request.insertId = insert.id;
+    request.name = insert.name;
+    request.description = description;
+    request.bridgeMode = insert.bridgeMode;
+    auto engine = std::make_unique<studio::StudioAudioEngine>(juce::File(STUDIO_DUO_BRIDGE_WORKER_PATH));
+    expect(engine->configureAudioForTesting(48000.0, 256).wasOk(), "Offline worker qualification retains the selected clock.");
+    juce::AudioBuffer<float> rendered;
+    const auto result = engine->renderRangeToBuffer(project, rendered, 48000.0,
+        { 0.0, clip.durationSeconds, 0.0 }, { request });
+    expect(result.wasOk() && rendered.getNumSamples() == 64
+               && std::abs(rendered.getSample(0, 0) - 0.1f) < 1e-5f
+               && std::abs(rendered.getSample(1, 0) - 0.1f) < 1e-5f
+               && engine->pluginLateBlockCount() == 0,
+           ("Offline sandbox export waits for actual wet DSP, not fixed sleep followed by dry fallback: "
+            + result.getErrorMessage()).toRawUTF8());
 }
 }
 
@@ -1135,6 +1167,7 @@ void pluginFormatTests()
 
     sandboxCrashRecoveryTests(*descriptions[0], monoClip);
     hostTransportTests(*descriptions[0], monoClip);
+    sandboxOfflineWaitTests(*descriptions[0], monoClip);
     monoSource.deleteFile();
 
     auto project = studio::Project::createDefault();

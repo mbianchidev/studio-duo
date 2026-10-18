@@ -3478,14 +3478,14 @@ juce::Result StudioAudioEngine::renderToBufferInternal(
             offset += samples;
             if (realtime)
             {
-                juce::Thread::sleep(
-                    std::max(
-                        1,
-                        static_cast<int>(
-                            std::ceil(
-                                static_cast<double>(samples)
-                                * 1000.0
-                                / renderSampleRate))));
+                const auto runtimeIndex = activePluginRuntime.load(std::memory_order_acquire);
+                for (const auto& track : pluginRuntimeGraphs[static_cast<std::size_t>(runtimeIndex)].tracks)
+                    for (const auto& insert : track.inserts)
+                        if (insert.bridge != nullptr)
+                            if (const auto completed = insert.bridge->waitForPendingOutput(std::chrono::seconds(5));
+                                completed.failed())
+                                return restoreAfterFailure(juce::Result::fail(
+                                    insert.name + ": " + completed.getErrorMessage()), true);
             }
         }
         for (const auto& status : pluginRuntimeStatuses())

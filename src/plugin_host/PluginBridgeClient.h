@@ -31,6 +31,7 @@ public:
     void stop();
     juce::Result requestState(juce::MemoryBlock& state,
                               std::chrono::milliseconds timeout);
+    [[nodiscard]] juce::Result waitForPendingOutput(std::chrono::milliseconds timeout) const;
     juce::Result showEditor();
     juce::Result hideEditor();
     juce::Result focusEditor();

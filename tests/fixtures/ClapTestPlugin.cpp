@@ -4,6 +4,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <chrono>
+#include <thread>
 
 typedef struct test_plugin {
     clap_plugin_t plugin;
@@ -25,6 +27,7 @@ typedef struct test_plugin {
     bool metadata_rescan_requested;
     uint32_t metadata_epoch;
     bool transport_diagnostics;
+    uint32_t process_delay_milliseconds;
 } test_plugin_t;
 
 static const char* features[] = {
@@ -129,6 +132,8 @@ static clap_process_status plugin_process(const clap_plugin_t* plugin,
 {
     test_plugin_t* instance = self(plugin);
     expect_audio_thread(plugin);
+    if (instance->process_delay_milliseconds > 0)
+        std::this_thread::sleep_for(std::chrono::milliseconds(instance->process_delay_milliseconds));
     if (!instance->requested_host_actions)
     {
         instance->requested_host_actions = true;
@@ -681,6 +686,13 @@ static const clap_plugin_t* create_plugin(const clap_plugin_factory_t* factory,
     instance->host = host;
     const char* transport_values = getenv("STUDIO_DUO_TEST_CLAP_TRANSPORT");
     instance->transport_diagnostics = transport_values != NULL && strcmp(transport_values, "1") == 0;
+    const char* process_delay = getenv("STUDIO_DUO_TEST_CLAP_PROCESS_DELAY_MS");
+    if (process_delay != NULL)
+    {
+        const int milliseconds = atoi(process_delay);
+        if (milliseconds > 0 && milliseconds <= 1000)
+            instance->process_delay_milliseconds = (uint32_t) milliseconds;
+    }
     instance->thread_check =
         (const clap_host_thread_check_t*) host->get_extension(
             host,

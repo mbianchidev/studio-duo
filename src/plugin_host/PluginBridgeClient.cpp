@@ -296,6 +296,29 @@ bool PluginBridgeClient::setParameter(int parameterIndex,
     return sendMessageToWorker(request);
 }
 
+juce::Result PluginBridgeClient::waitForPendingOutput(std::chrono::milliseconds timeout) const
+{
+    if (timeout.count() <= 0)
+        return juce::Result::fail("Offline worker wait requires a positive timeout.");
+    if (inFlightSequence < 0)
+        return juce::Result::ok();
+    if (sharedState == nullptr || !isReady())
+        return juce::Result::fail("The sandbox worker disconnected during offline rendering.");
+    const auto expected = sharedState->hostSequence.load(std::memory_order_acquire);
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (sharedState->workerSequence.load(std::memory_order_acquire) != expected)
+    {
+        if (!isReady())
+            return juce::Result::fail("The sandbox worker failed during offline rendering.");
+        if (std::chrono::steady_clock::now() >= deadline)
+            return juce::Result::fail("Timed out waiting for sandbox DSP during offline rendering.");
+        juce::Thread::sleep(1);
+    }
+    if ((sharedState->outputFlags.load(std::memory_order_acquire) & PluginBridgeSharedState::bypassOutputFlag) != 0)
+        return juce::Result::fail("The sandbox worker returned fallback instead of completed offline DSP.");
+    return juce::Result::ok();
+}
+
 void PluginBridgeClient::resetProcessing()
 {
     if (sharedState != nullptr)
@@ -797,6 +820,7 @@ bool PluginBridgeClient::assemblesDeviceBlockSlicesForTesting()
         && state->midiInputEventCount.load() == 2
         && state->midiInputEvents[0].sampleOffset == 1 && state->midiInputEvents[1].sampleOffset == 2
         && state->transport.samples == 100 && std::abs(state->transport.bpm - 150.0) < 1e-9;
+    const auto timeoutReported = client->waitForPendingOutput(std::chrono::milliseconds(1)).failed();
     for (int channel = 0; channel < 2; ++channel)
         for (int sample = 0; sample < 4; ++sample)
             state->output[static_cast<std::size_t>(channel)][static_cast<std::size_t>(sample)]
@@ -807,6 +831,10 @@ bool PluginBridgeClient::assemblesDeviceBlockSlicesForTesting()
     std::copy_n(state->midiInputEvents.begin(), 2, state->midiOutputEvents.begin());
     std::copy_n(state->midiInputData.begin(), state->midiInputByteCount.load(), state->midiOutputData.begin());
     state->workerSequence.store(state->hostSequence.load(), std::memory_order_release);
+    state->outputFlags.store(PluginBridgeSharedState::bypassOutputFlag);
+    const auto fallbackRejected = client->waitForPendingOutput(std::chrono::milliseconds(1)).failed();
+    state->outputFlags.store(0);
+    const auto completedAccepted = client->waitForPendingOutput(std::chrono::milliseconds(1)).wasOk();
     first.clear();
     second.clear();
     firstMidi.clear();
@@ -821,7 +849,7 @@ bool PluginBridgeClient::assemblesDeviceBlockSlicesForTesting()
         && (*firstMidi.begin()).samplePosition == 1 && (*secondMidi.begin()).samplePosition == 0
         && client->inFlightStartSample == 4 && client->lateBlockCount() == 0;
     client->sharedState = nullptr;
-    return assembled && output;
+    return assembled && output && timeoutReported && fallbackRejected && completedAccepted;
 }
 
 bool PluginBridgeClient::recoversLateFirstOutputForTesting()
