@@ -102,8 +102,10 @@ void clipProcessingControls()
                 && (mode == Mode::gain || std::abs(shape - precise.fadeInCurve) < std::numeric_limits<float>::epsilon());
             return juce::Result::ok();
         };
-        expect(editor.applyChanges().wasOk() && retained,
-               "Opening and applying precise gain or a sample-length fade preserves its existing value without decimal rounding or a false duration-bound error.");
+        const auto result = editor.applyChanges();
+        expect(result.wasOk() && retained,
+               ("Opening and applying precise gain or a sample-length fade preserves its existing value without decimal rounding or a false duration-bound error (mode "
+                + juce::String(static_cast<int>(mode)) + "): " + result.getErrorMessage()).toRawUTF8());
     }
 }
 
