@@ -500,10 +500,14 @@ void UpdateService::performCheck()
         return;
     }
 
+    bool downloadAutomatically = false;
     {
         const juce::ScopedLock lock(stateLock);
         availableRelease = *release;
-        state.phase = UpdatePhase::available;
+        downloadAutomatically = automaticDownloads.load();
+        if (downloadAutomatically)
+            downloadCancellation.store(false);
+        state.phase = downloadAutomatically ? UpdatePhase::downloading : UpdatePhase::available;
         state.availableVersion = release->version;
         state.releaseNotesUrl = release->releaseNotesUrl;
         state.message =
@@ -519,11 +523,8 @@ void UpdateService::performCheck()
             + " is available.");
     triggerAsyncUpdate();
 
-    if (automaticDownloads.load())
-    {
-        downloadCancellation.store(false);
+    if (downloadAutomatically)
         performDownload(*release);
-    }
 }
 
 void UpdateService::performDownload(const UpdateRelease& release)

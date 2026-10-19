@@ -284,7 +284,16 @@ void packageDownloadPreservation()
         return result;
     };
     const auto bytes = static_cast<juce::int64>(payload.getSize());
-    auto result = run(bytes, bytes, hash, false);
+    juce::MemoryInputStream freshInput(payload, false);
+    auto result = studio::downloadUpdatePackage(
+        freshInput, target, bytes, hash, [] { return true; }, [](double) {});
+    expect(result.status == Status::cancelled && !target.exists() && freshInput.getPosition() == 0,
+           "Cancellation before transfer reads no bytes and publishes no package.");
+    result = studio::downloadUpdatePackage(
+        freshInput, target, bytes, hash, [] { return false; }, [](double) {});
+    expect(result.status == Status::complete && juce::SHA256(target).toHexString() == hash,
+           "A first download publishes a verified package when no previous destination exists.");
+    result = run(bytes, bytes, hash, false);
     expect(result.status == Status::complete && juce::SHA256(target).toHexString() == hash,
            "Only a complete size/hash-verified package replaces the previous package.");
     const auto expectPreserved = [&](juce::int64 inputBytes, juce::int64 expectedBytes,
@@ -309,6 +318,19 @@ void packageDownloadPreservation()
     expect(result.status == Status::failed && result.message.isNotEmpty()
                && blocker.loadFileAsString() == "preserve me",
            "A non-directory destination parent fails visibly without modifying existing data.");
+    const auto collision = root.getChildFile("publication-collision.zip");
+    juce::MemoryInputStream collisionInput(payload, false);
+    result = studio::downloadUpdatePackage(
+        collisionInput, collision, bytes, hash, [] { return false; }, [&](double)
+        {
+            expect(collision.createDirectory().wasOk()
+                       && collision.getChildFile("sentinel").replaceWithText("preserved"),
+                   "A synthetic destination collision can be introduced before publication.");
+        });
+    expect(result.status == Status::failed && result.message.isNotEmpty()
+               && collision.getChildFile("sentinel").loadFileAsString() == "preserved"
+               && root.findChildFiles(juce::File::findFiles, false, "*.part-*").isEmpty(),
+           "Failed final publication preserves the conflicting destination and removes its partial file.");
 }
 }
 
