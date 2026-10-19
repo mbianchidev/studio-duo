@@ -74,4 +74,17 @@ check_object "an ARM-only header change"
     $1 == "cache_miss" { misses += $2 }
     END { exit !(hits >= 1 && misses >= 3) }
 ' || fail "The probe must record both cache reuse and architecture-specific misses."
+if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+    c_compiler="$(xcrun --find clang)"
+    {
+        printf '%s\n' "$c_compiler" "$compiler"
+        xcrun --show-sdk-path
+        shasum -a 256 "$c_compiler" "$compiler"
+    } > "$work/toolchain.txt"
+    fingerprint="$(shasum -a 256 "$work/toolchain.txt" | awk '{ print $1 }')"
+    [[ "$fingerprint" =~ ^[0-9a-f]{64}$ ]] || fail "Could not fingerprint the selected toolchain."
+    printf 'toolchain=%s\n' "$fingerprint" >> "$GITHUB_OUTPUT"
+elif [[ "${GITHUB_ACTIONS:-}" == true ]]; then
+    fail "GitHub Actions did not provide its output file."
+fi
 printf 'Verified universal compiler cache reuse and independent Intel/ARM header invalidation.\n'

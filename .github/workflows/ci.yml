@@ -52,12 +52,6 @@ jobs:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Cache dependencies
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: build/_deps
-          key: dependencies-${{ runner.os }}-${{ runner.arch }}-v2-${{ hashFiles('CMakeLists.txt', 'cmake/*.cmake', 'third_party/**/*.patch') }}
-
       - name: Install macOS compiler cache
         if: runner.os == 'macOS'
         run: HOMEBREW_NO_AUTO_UPDATE=1 brew install ccache
@@ -72,9 +66,16 @@ jobs:
             compilation-macOS-${{ runner.arch }}-ccache-
 
       - name: Verify macOS compiler cache
+        id: compiler-cache
         if: runner.os == 'macOS'
         timeout-minutes: 2
         run: ./scripts/check-macos-compiler-cache.sh
+
+      - name: Cache dependencies
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: build/_deps
+          key: dependencies-${{ runner.os }}-${{ runner.arch }}-v3-${{ steps.compiler-cache.outputs.toolchain || 'native' }}-${{ hashFiles('CMakeLists.txt', 'cmake/*.cmake', 'third_party/**/*.patch') }}
 
       - name: Configure
         run: >

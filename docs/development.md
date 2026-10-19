@@ -82,13 +82,16 @@ Release configuration. This exercises the release build and universal packaging
 on pull requests and lets tagged builds reuse matching completed compilation
 results from `main`.
 The dependency cache is shared between those workflows and includes dependency
-patches in its key. Compiled objects use a separate, size-bounded ccache directory
+patches plus the resolved compiler/SDK fingerprint in its key. This prevents
+cached JUCE helper build trees from retaining another toolchain's compiler paths.
+Compiled objects use a separate, size-bounded ccache directory
 saved through GitHub Actions cache, with commit-specific keys and restore prefixes.
 ccache hashes the compiler's contents and preprocesses each architecture
 separately before reusing universal objects.
 
 For the same configuration locally, install Ninja and ccache, then use a fresh
-build directory if the existing one uses another generator:
+build directory if the existing one uses another generator or compiler.
+`cmake --fresh` alone does not clear JUCE's nested VST3 helper build trees.
 
 ```sh
 export CMAKE_BUILD_PARALLEL_LEVEL=2
