@@ -79,7 +79,8 @@ Makefiles build and leaves later-copied resources outside the seal.
 
 macOS CI and releases use Ninja, two build workers, and the same universal
 Release configuration. This exercises the release build and universal packaging
-on pull requests and lets tagged builds reuse compilation results from `main`.
+on pull requests and lets tagged builds reuse matching completed compilation
+results from `main`.
 The dependency cache is shared between those workflows and includes dependency
 patches in its key. Compiled objects use sccache 0.18.0's GitHub Actions backend,
 not the dependency-source cache.
@@ -113,6 +114,12 @@ anyway. The application and every shipped bundled plugin retain both
 architectures, and all test suites still run. This option defaults to `OFF`;
 normal developer builds continue to inherit `CMAKE_OSX_ARCHITECTURES` for tests.
 Two workers bound memory use on hosted runners instead of unbounded parallelism.
+
+The release workflow requests `StudioDuoDevelopmentSignature`, `StudioDuoTests`,
+and `StudioDuoAudioExportTests`, including their fixture dependencies. It does
+not rebuild standalone VST3/AU exports that are not included in release archives.
+CI still builds all standalone plugin targets, and normal developer builds
+continue to build every target.
 
 ## Test
 

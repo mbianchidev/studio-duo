@@ -72,7 +72,9 @@ jobs:
           -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
 
       - name: Build
-        run: cmake --build build --config Release --parallel 2
+        run: >
+          cmake --build build --config Release --parallel 2
+          --target StudioDuoDevelopmentSignature StudioDuoTests StudioDuoAudioExportTests
 
       - name: Test
         run: >
