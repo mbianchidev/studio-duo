@@ -100,6 +100,8 @@ cmake -S . -B build -G Ninja \
   -DSTUDIO_DUO_NATIVE_TESTS=ON \
   -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
   -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0 \
+  -DCMAKE_C_COMPILER="$(xcrun --find clang)" \
+  -DCMAKE_CXX_COMPILER="$(xcrun --find clang++)" \
   -DCMAKE_C_COMPILER_LAUNCHER=ccache \
   -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 cmake --build build --config Release --parallel 2
@@ -107,6 +109,8 @@ ccache --show-stats
 ```
 
 Ninja supports CMake's compiler launchers directly, unlike the Xcode generator.
+Resolve the real Clang executables with `xcrun` so the cache fingerprints the
+selected toolchain, not macOS's `/usr/bin` compiler dispatchers.
 The revision macro is limited to the diagnostic/progress sources that use it,
 so a new Git revision does not invalidate every application and test object.
 

@@ -31,6 +31,8 @@ jobs:
               -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
               -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0
               -DSTUDIO_DUO_NATIVE_TESTS=ON
+              -DCMAKE_C_COMPILER="$(xcrun --find clang)"
+              -DCMAKE_CXX_COMPILER="$(xcrun --find clang++)"
               -DCMAKE_C_COMPILER_LAUNCHER=ccache
               -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
           - os: windows-latest
