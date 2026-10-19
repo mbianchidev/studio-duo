@@ -50,8 +50,8 @@ Inno Setup 7.1.0 remain the latest stable releases for their respective
 dependencies. Windows packages download the current signed Visual C++ runtime
 from Microsoft's release channel and verify its signature and version.
 GitHub Actions are pinned to exact release commits for checkout 7.0.1, cache
-6.1.0, upload-artifact 7.0.2, download-artifact 8.0.2, and sccache-action
-0.0.11; Dependabot maintains those pins.
+6.1.0, upload-artifact 7.0.2, and download-artifact 8.0.2; Dependabot maintains
+those pins.
 
 ## Prerequisites
 
@@ -81,6 +81,74 @@ this finalization too. To build just the signed app, use
 `cmake --build build --config Release --target StudioDuoDevelopmentSignature`;
 signing inside the executable's `POST_BUILD` command runs too early for a clean
 Makefiles build and leaves later-copied resources outside the seal.
+
+### Universal macOS builds and compilation caching
+
+Primary macOS CI and releases use Ninja, two build workers, and the same universal
+Release configuration. This exercises the release build and universal packaging
+on pull requests and lets tagged builds reuse matching completed compilation
+results from `main`.
+The separate Intel CI job builds native x86_64 binaries with the same compiler
+cache checks and runs the full native regression and public-vendor software
+matrix; its results do not substitute for physical interface qualification.
+The dependency cache is shared between those workflows and includes dependency
+patches plus the resolved compiler/SDK fingerprint in its key. This prevents
+cached JUCE helper build trees from retaining another toolchain's compiler paths.
+Compiled objects use a separate, size-bounded ccache directory
+saved through GitHub Actions cache, with commit-specific keys and restore prefixes.
+ccache hashes the compiler's contents and preprocesses each architecture
+separately before reusing universal objects.
+
+For the same configuration locally, install Ninja and ccache, then use a fresh
+build directory if the existing one uses another generator or compiler.
+`cmake --fresh` alone does not clear JUCE's nested VST3 helper build trees.
+
+```sh
+export CMAKE_BUILD_PARALLEL_LEVEL=2
+export CCACHE_DIR="$PWD/.cache/ccache"
+export CCACHE_COMPILERCHECK=content
+export CCACHE_MAXSIZE=1G
+cmake -S . -B build -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release -DSTUDIO_DUO_BUILD_TESTS=ON \
+  -DSTUDIO_DUO_NATIVE_TESTS=ON \
+  -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
+  -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0 \
+  -DCMAKE_C_COMPILER="$(xcrun --find clang)" \
+  -DCMAKE_CXX_COMPILER="$(xcrun --find clang++)" \
+  -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+  -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+cmake --build build --config Release --parallel 2
+ccache --show-stats
+```
+
+Ninja supports CMake's compiler launchers directly, unlike the Xcode generator.
+Resolve the real Clang executables with `xcrun` so the cache fingerprints the
+selected toolchain, not macOS's `/usr/bin` compiler dispatchers.
+The revision macro is limited to the diagnostic/progress sources and two
+qualification-report sources that use it. Those report sources also retain the
+full candidate SHA, so evidence stays candidate-specific without invalidating
+every application and test object when the Git revision changes.
+
+`scripts/check-macos-compiler-cache.sh` checks real cache reuse in an isolated
+temporary cache, then changes Intel-only and ARM-only headers independently.
+Each resulting universal object must match an uncached build. CI and releases
+run this check before building: a cache hit alone does not prove that both
+architectures' dependencies were tracked. The older sccache multi-architecture
+opt-in can return stale objects for architecture-specific headers and must not
+be substituted without passing this check.
+
+`STUDIO_DUO_NATIVE_TESTS=ON` builds test executables and their private plugin
+fixtures only for the build host. Universal tests would execute only that slice
+anyway. The application and every shipped bundled plugin retain both
+architectures, and all test suites still run. This option defaults to `OFF`;
+normal developer builds continue to inherit `CMAKE_OSX_ARCHITECTURES` for tests.
+Two workers bound memory use on hosted runners instead of unbounded parallelism.
+
+The release workflow requests `StudioDuoDevelopmentSignature`, `StudioDuoTests`,
+and `StudioDuoAudioExportTests`, including their fixture dependencies. It does
+not rebuild standalone VST3/AU exports that are not included in release archives.
+CI still builds all standalone plugin targets, and normal developer builds
+continue to build every target.
 
 ## Test
 

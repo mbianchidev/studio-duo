@@ -33,8 +33,11 @@ sample, rather than merely checking that a file exists. No driver or vendor
 plugin is loaded by the exchange verifier.
 
 Tagged publication depends on both platform builds **and** both cross-platform
-exchange readers. Windows release signing uses the production trust check;
-only disposable CI packages use an explicitly untrusted ephemeral certificate.
+exchange readers. Windows release signing verifies signature integrity and the
+configured signer, temporarily trusting only that public certificate on the
+disposable runner. CI uses an ephemeral certificate through the same verification
+path and checks that temporary trust is removed. These checks do not establish
+public-CA trust or SmartScreen reputation.
 
 ## Reproduce the gate
 

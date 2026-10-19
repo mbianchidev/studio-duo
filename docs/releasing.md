@@ -8,6 +8,7 @@ application before publishing:
 - a universal macOS ZIP used only by the in-app updater
 - a signed Windows x64 Inno Setup installer
 - a portable Windows x64 ZIP containing the signed `Studio Duo.exe`
+- a Windows x64 symbols ZIP for crash diagnostics
 - `SHA256SUMS.txt` for download verification
 - `update-manifest.json` for in-app discovery and verified downloads
 
@@ -22,8 +23,8 @@ The release maintainer needs:
 Before the first signed Windows release, configure these GitHub Actions
 repository secrets:
 
-- `WINDOWS_SIGNING_CERTIFICATE_BASE64`: the Base64-encoded contents of a trusted
-  Authenticode code-signing certificate in PFX format
+- `WINDOWS_SIGNING_CERTIFICATE_BASE64`: the Base64-encoded contents of a
+  self-signed or publicly trusted Authenticode code-signing certificate in PFX format
 - `WINDOWS_SIGNING_CERTIFICATE_PASSWORD`: the PFX password
 
 For example, encode the PFX without line breaks:
@@ -88,11 +89,36 @@ The workflow rejects a tag when:
 - the tagged commit is not reachable from `origin/main`
 
 Both platform builds must pass the complete test suite before the GitHub Release
-is published. Windows publication also requires successful Authenticode signing
-and production trust verification of both `Studio Duo.exe` and the installer.
-The release workflow no longer bypasses the trust check; an untrusted publisher
-certificate blocks publication. Disposable CI packages explicitly use an
-ephemeral test certificate instead.
+is published. The macOS build uses the same two-worker Ninja configuration and
+architecture-aware ccache configuration as CI, so default-branch compilation can be
+reused by tags. The application and standalone plugins remain universal; test-only
+executables and fixtures are native to the runner, matching the architecture
+that actually executes the complete suite. See
+[universal build configuration](development.md#universal-macos-builds-and-compilation-caching).
+The release build requests only the signed app and complete test targets,
+including their fixture dependencies. Standalone VST3/AU exports are not in the
+release archives and remain covered by CI's full build instead.
+An isolated compiler-cache check verifies independent Intel/ARM header changes
+before cached universal objects can be used.
+Windows publication also requires successful Authenticode signing,
+`signtool verify /pa /v`, and an exact signer-thumbprint match for both
+`Studio Duo.exe` and the installer. CI exercises the same verification path
+with an ephemeral test certificate.
+
+The hosted Windows workflows explicitly pass `-TrustSigningCertificate` to
+temporarily trust the configured certificate in the disposable runner's
+LocalMachine Root store. Hosted Windows runners are elevated; this store avoids
+the protected CurrentUser Root confirmation dialog in headless sessions.
+Only the public certificate enters that store; the private key
+remains ephemeral. Packaging preserves any pre-existing trust entry and removes
+only the entry it added, including on failure. The switch is rejected outside
+disposable GitHub-hosted runners; local packaging uses normal Windows trust.
+This supports the existing self-signed publisher while still checking signature
+integrity and signer identity. It does not establish public-CA trust or
+SmartScreen reputation, and no certificate is installed on end-user machines.
+Native packaging tools retain their bounded deadlines and report stdout/stderr
+in the workflow log so signing and verification failures include their cause.
+
 Both native readers must also open the synthetic packages produced by both
 platforms before tagged publication. JUnit and numeric hardening evidence are
 retained in workflow artifacts. The signed installer is installed into a
@@ -108,6 +134,12 @@ runtime is older. The publication job generates `update-manifest.json` from the
 finished macOS updater ZIP and Windows installer, including their exact release
 URLs, byte sizes, and SHA-256 checksums. GitHub automatically generates release
 notes from the merged changes since the previous tag.
+
+Publication downloads only artifacts matching `*-release` and uploads an explicit
+list of the five versioned packages plus `SHA256SUMS.txt` and
+`update-manifest.json`. Every listed asset must be a regular file before
+publication starts. Test logs, hardening evidence, and native exchange fixtures
+remain in workflow artifacts and are not uploaded to the GitHub Release.
 
 macOS packaging shares `packaging/macos/build-release-packages.sh` between CI
 and releases. It verifies the bundle version/development signature, packages

@@ -41,29 +41,62 @@ jobs:
     needs: validate
     runs-on: macos-latest
     timeout-minutes: 120
+    env:
+      CMAKE_BUILD_PARALLEL_LEVEL: "2"
+      CCACHE_DIR: ${{ github.workspace }}/.cache/ccache
+      CCACHE_COMPILERCHECK: content
+      CCACHE_MAXSIZE: 1G
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install macOS compiler cache
+        run: HOMEBREW_NO_AUTO_UPDATE=1 brew install ccache
+
+      - name: Cache macOS compilation
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .cache/ccache
+          key: compilation-macOS-${{ runner.arch }}-ccache-${{ github.sha }}
+          restore-keys: |
+            compilation-macOS-${{ runner.arch }}-ccache-
+
+      - name: Verify macOS compiler cache
+        id: compiler-cache
+        timeout-minutes: 2
+        run: ./scripts/check-macos-compiler-cache.sh
 
       - name: Cache dependencies
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: build/_deps
-          key: release-macos-${{ hashFiles('CMakeLists.txt') }}
+          key: dependencies-${{ runner.os }}-${{ runner.arch }}-v3-${{ steps.compiler-cache.outputs.toolchain }}-${{ hashFiles('CMakeLists.txt', 'cmake/*.cmake', 'third_party/**/*.patch') }}
 
       - name: Configure universal build
         run: >
-          cmake -S . -B build -G Xcode
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
           -DSTUDIO_DUO_BUILD_TESTS=ON
+          -DSTUDIO_DUO_NATIVE_TESTS=ON
           -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
           -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0
+          -DCMAKE_C_COMPILER="$(xcrun --find clang)"
+          -DCMAKE_CXX_COMPILER="$(xcrun --find clang++)"
+          -DCMAKE_C_COMPILER_LAUNCHER=ccache
+          -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
       - name: Build
-        run: cmake --build build --config Release --parallel 1
+        run: >
+          cmake --build build --config Release --parallel 2
+          --target StudioDuoDevelopmentSignature StudioDuoTests StudioDuoAudioExportTests
+
+      - name: Report macOS compilation cache
+        if: always()
+        run: ccache --show-stats
 
       - name: Test
         run: >
-          ctest --test-dir build --build-config Release --output-on-failure --no-tests=error
+          ctest --test-dir build --build-config Release --parallel 2 --output-on-failure --no-tests=error
           --output-junit "${{ github.workspace }}/build/Testing/phase6-junit.xml"
 
       - name: Create native exchange fixture
@@ -189,7 +222,8 @@ jobs:
             -Executable "build/StudioDuo_artefacts/Release/Studio Duo.exe" `
             -OutputDirectory (Get-Location).Path `
             -CertificateBase64 $env:CERTIFICATE_BASE64 `
-            -CertificatePassword $env:CERTIFICATE_PASSWORD
+            -CertificatePassword $env:CERTIFICATE_PASSWORD `
+            -TrustSigningCertificate
           & ./packaging/windows/test-installed-startup.ps1 `
             -Installer "Studio-Duo-$env:VERSION-Windows-x64-Setup.exe"
           $pdb = "build/StudioDuo_artefacts/Release/Studio Duo.pdb"
@@ -227,6 +261,7 @@ jobs:
       - name: Download release artifacts
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
+          pattern: "*-release"
           path: dist
           merge-multiple: true
 
@@ -296,12 +331,27 @@ jobs:
           VERSION: ${{ needs.validate.outputs.version }}
         run: |
           set -euo pipefail
+          assets=(
+            "dist/Studio-Duo-${VERSION}-macOS-universal.dmg"
+            "dist/Studio-Duo-${VERSION}-macOS-universal.zip"
+            "dist/Studio-Duo-${VERSION}-Windows-x64.zip"
+            "dist/Studio-Duo-${VERSION}-Windows-x64-Setup.exe"
+            "dist/Studio-Duo-${VERSION}-Windows-x64-symbols.zip"
+            "dist/SHA256SUMS.txt"
+            "dist/update-manifest.json"
+          )
+          for asset in "${assets[@]}"; do
+            if [[ ! -f "$asset" ]]; then
+              printf 'Release asset is missing or not a regular file: %s\n' "$asset" >&2
+              exit 1
+            fi
+          done
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$TAG" dist/* \
+            gh release upload "$TAG" "${assets[@]}" \
               --repo "$GITHUB_REPOSITORY" \
               --clobber
           else
-            gh release create "$TAG" dist/* \
+            gh release create "$TAG" "${assets[@]}" \
               --repo "$GITHUB_REPOSITORY" \
               --verify-tag \
               --generate-notes \
