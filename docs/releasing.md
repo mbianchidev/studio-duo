@@ -8,6 +8,7 @@ application before publishing:
 - a universal macOS ZIP used only by the in-app updater
 - a signed Windows x64 Inno Setup installer
 - a portable Windows x64 ZIP containing the signed `Studio Duo.exe`
+- a Windows x64 symbols ZIP for crash diagnostics
 - `SHA256SUMS.txt` for download verification
 - `update-manifest.json` for in-app discovery and verified downloads
 
@@ -122,6 +123,12 @@ runtime is older. The publication job generates `update-manifest.json` from the
 finished macOS updater ZIP and Windows installer, including their exact release
 URLs, byte sizes, and SHA-256 checksums. GitHub automatically generates release
 notes from the merged changes since the previous tag.
+
+Publication downloads only artifacts matching `*-release` and uploads an explicit
+list of the five versioned packages plus `SHA256SUMS.txt` and
+`update-manifest.json`. Every listed asset must be a regular file before
+publication starts. Test logs, hardening evidence, and native exchange fixtures
+remain in workflow artifacts and are not uploaded to the GitHub Release.
 
 macOS packaging shares `packaging/macos/build-release-packages.sh` between CI
 and releases. It verifies the bundle version/development signature, packages
