@@ -1098,6 +1098,10 @@ and must match the release manifest's filename, byte size, and SHA-256 checksum.
 The current app keeps running after the download. Choose **Restart and Update**
 only when convenient; Studio Duo then quits, installs the staged version, and
 reopens.
+During a download, the **Download** button becomes **Cancel Download**.
+Cancellation interrupts the network request, removes its partial package and
+leaves the installed application unchanged. Choose **Download** to retry;
+cancelling one attempt does not change the automatic-download preference.
 
 Open **Help > User Guide** in the top application bar to read the documentation
 inside Studio Duo. A persistent contents index separates the guide into focused
@@ -1110,8 +1114,19 @@ offline.
 
 On macOS, the updater accepts the project's normal ad-hoc-signed application
 bundle and does not require notarization or an Apple update-signing key. The
-installed `.app` and its parent folder must be writable by the current user. On
-Windows, the updater runs the release installer silently and uses its existing
+installed `.app` and its parent folder must be writable by the current user.
+Replacement exchanges the verified staged and installed directories
+atomically, without a missing-application interval. A handled failure or
+interruption restores the previous directory before attempting to reopen it.
+If an untrappable termination leaves recovery data, the installed directory
+still contains a complete generation; further updates stop at the retained
+installation lock. Preserve `Updates/install-update.log` in the Studio Duo
+application-data directory and the `.studio-duo-update.*` recovery directory
+beside the application before resolving that lock. Do not delete a retained
+previous generation without verifying the installed version.
+The helper abandons a restart request if the app has not quit within two minutes.
+
+On Windows, the updater runs the release installer silently and uses its existing
 upgrade identity; it adds no updater-specific certificate, key, service, or
 background process. The portable Windows ZIP remains a manually replaced
 standalone copy; install Studio Duo with Setup to enable in-app updates.

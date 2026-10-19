@@ -31,6 +31,9 @@ regression coverage from still-required hardware, vendor, accessibility,
 long-session, and clean-machine qualification; a `1.x` tag is not that sign-off.
 The [qualification runbook](docs/qualification.md) provides full-length synthetic
 characterisation, safe manual procedures, and a candidate-specific evidence gate.
+The gate includes distribution and independent mastering references; native CI
+also compares synthetic mono/stereo metrology against FFmpeg and exercises
+atomic macOS update replacement without opening the desktop.
 The pinned public-vendor software matrix runs on native ARM64/Intel macOS and
 Windows CI, retaining measured results and explicit skips without claiming
 physical hardware, screen-reader, or ARA qualification.

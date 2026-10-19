@@ -27,6 +27,7 @@ class QualificationTests(unittest.TestCase):
 
     def completed_report(self):
         report = copy.deepcopy(self.report)
+        report["candidate_version"] = "2.4.1"
         raw = self.root / "synthetic-evidence.txt"
         raw.write_text("Synthetic test evidence, not a real qualification.", encoding="utf-8")
         digest = hashlib.sha256(raw.read_bytes()).hexdigest()
@@ -82,11 +83,50 @@ class QualificationTests(unittest.TestCase):
                     reamp_residual_samples=0, dropped_audio_samples=0, duplicated_audio_samples=0,
                     dropped_midi_events=0, duplicated_midi_events=0,
                 )
+            if run["area"] == "distribution":
+                run.update(
+                    package_sha256="3" * 64,
+                    signing_policy=("ad-hoc-user-approved" if run["target"].startswith("macos")
+                                    else "authenticode"),
+                    signer_thumbprint="4" * 40,
+                    signature_trusted=True, signature_timestamped=True,
+                    os_coverage=[
+                        dict(coverage=coverage, os_version="Synthetic OS " + coverage)
+                        for coverage in ("minimum", "current")
+                    ],
+                    upgrades=[dict(
+                        from_version="2.4.0", to_version="2.4.1",
+                        preserved_data={
+                            name: dict(before_sha256="5" * 64, after_sha256="5" * 64)
+                            for name in ("projects", "media", "preferences",
+                                         "processor_state", "recent_projects")
+                        },
+                    )],
+                )
+            if run["area"] == "references":
+                run["measurements"] = [
+                    dict(
+                        kind=kind, sample_rate_hz=rate, channels=channels,
+                        source_sha256="6" * 64, reference_tool="Synthetic independent meter",
+                        reference_version="1", provenance="Synthetic reference procedure",
+                        actual_lufs=None if kind == "silence" else -23.0,
+                        reference_lufs=None if kind == "silence" else -23.0,
+                        actual_lra=None if kind == "silence" else 6.0,
+                        reference_lra=None if kind == "silence" else 6.0,
+                        actual_dbtp=None if kind == "silence" else -3.0,
+                        reference_dbtp=None if kind == "silence" else -3.0,
+                    )
+                    for rate in (44100, 48000, 96000) for channels in (1, 2)
+                    for kind in ("steady", "gated", "dynamic", "intersample", "silence", "tail-transient")
+                ]
         return report
 
     def test_template_is_explicitly_incomplete_on_every_target(self):
         self.assertEqual(len(self.report["systems"]), 4)
-        self.assertEqual(len(self.report["runs"]), 16)
+        self.assertEqual(len(self.report["runs"]), 24)
+        self.assertEqual(self.report["schema_version"], 2)
+        self.assertEqual({r["area"] for r in self.report["runs"]},
+                         {"performance", "hardware", "vendors", "accessibility", "distribution", "references"})
         self.assertTrue(all(c["status"] == "not_run" for r in self.report["runs"] for c in r["checks"]))
         self.assertTrue(self.issues())
 
@@ -187,6 +227,59 @@ class QualificationTests(unittest.TestCase):
         for text in ('{"candidate_sha":"a","candidate_sha":"b"}', '{"value":NaN}'):
             with self.assertRaises(ValueError):
                 qualify.read_json(text)
+
+    def test_old_four_area_reports_cannot_pass_the_complete_gate(self):
+        report = self.completed_report()
+        report["schema_version"] = 1
+        report["runs"] = [r for r in report["runs"] if r["area"] not in ("distribution", "references")]
+        self.assertTrue(self.issues(report))
+
+    def test_distribution_requires_different_versions_and_preserved_data(self):
+        report = self.completed_report()
+        run = next(r for r in report["runs"] if r["area"] == "distribution")
+        for field, value in (
+                ("from_version", "2.4.1"), ("from_version", "2.5.0"),
+                ("from_version", "01.2.3"), ("to_version", "2.4.2")):
+            with self.subTest(field=field, value=value):
+                changed = copy.deepcopy(report)
+                target = next(r for r in changed["runs"] if r["area"] == "distribution")
+                target["upgrades"][0][field] = value
+                self.assertTrue(self.issues(changed))
+        run["upgrades"][0]["preserved_data"]["projects"]["after_sha256"] = "7" * 64
+        self.assertTrue(self.issues(report))
+
+    def test_distribution_requires_each_os_boundary_and_windows_trust(self):
+        for field, value in (("os_coverage", []), ("upgrades", []), ("package_sha256", ""),
+                             ("signature_trusted", False), ("signature_timestamped", False),
+                             ("signer_thumbprint", ""), ("signing_policy", "test-certificate")):
+            with self.subTest(field=field):
+                report = self.completed_report()
+                run = next(r for r in report["runs"]
+                           if r["area"] == "distribution" and r["target"].startswith("windows"))
+                run[field] = value
+                self.assertTrue(self.issues(report))
+
+    def test_reference_measurements_enforce_coverage_provenance_and_fixed_tolerances(self):
+        for field, value in (("actual_lufs", -22.89), ("actual_lra", 7.01),
+                             ("actual_dbtp", -2.69), ("reference_lufs", float("nan")),
+                             ("actual_lufs", None), ("reference_tool", ""),
+                             ("source_sha256", "invalid")):
+            with self.subTest(field=field):
+                report = self.completed_report()
+                run = next(r for r in report["runs"] if r["area"] == "references")
+                run["measurements"][0][field] = value
+                self.assertTrue(self.issues(report))
+        report = self.completed_report()
+        run = next(r for r in report["runs"] if r["area"] == "references")
+        run["measurements"][-1] = copy.deepcopy(run["measurements"][0])
+        self.assertTrue(self.issues(report))
+
+    def test_reference_silence_does_not_accept_fabricated_finite_loudness(self):
+        report = self.completed_report()
+        run = next(r for r in report["runs"] if r["area"] == "references")
+        row = next(m for m in run["measurements"] if m["kind"] == "silence")
+        row["actual_lufs"] = -70.0
+        self.assertTrue(self.issues(report))
 
 
 if __name__ == "__main__":

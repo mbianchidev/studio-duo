@@ -45,7 +45,7 @@ set_property(
         STUDIO_DUO_BUILD_REVISION="${STUDIO_DUO_BUILD_REVISION}"
 )
 set_property(
-    SOURCE tests/PerformanceHardeningTests.cpp tests/PluginCompatibilityTests.cpp
+    SOURCE tests/PerformanceHardeningTests.cpp tests/PluginCompatibilityTests.cpp tests/MasteringQualification.cpp
     APPEND PROPERTY COMPILE_DEFINITIONS
         STUDIO_DUO_BUILD_COMMIT="${STUDIO_DUO_BUILD_COMMIT}"
         STUDIO_DUO_BUILD_REVISION="${STUDIO_DUO_BUILD_REVISION}"
@@ -54,6 +54,11 @@ set_property(
 option(STUDIO_DUO_BUILD_TESTS "Build Studio Duo tests" ON)
 option(STUDIO_DUO_AUDIO_EXPORT_TESTS_ONLY "Build only the headless audio export regression tests" OFF)
 option(STUDIO_DUO_NATIVE_TESTS "Build macOS tests and fixtures for the host architecture only" OFF)
+option(STUDIO_DUO_MASTERING_REFERENCE_TESTS "Run independent FFmpeg mastering reference comparisons" OFF)
+if(STUDIO_DUO_MASTERING_REFERENCE_TESTS AND
+   (NOT STUDIO_DUO_BUILD_TESTS OR STUDIO_DUO_AUDIO_EXPORT_TESTS_ONLY))
+    message(FATAL_ERROR "Independent mastering reference comparisons require the full native test build.")
+endif()
 set(STUDIO_DUO_BUNDLE_ID "dev.mbianchi.studioduo")
 
 include(FetchContent)
@@ -259,6 +264,17 @@ juce_add_binary_data(
     SOURCES
         docs/user-guide.md
 )
+
+if(APPLE)
+    juce_add_binary_data(
+        StudioDuoUpdateData
+        HEADER_NAME StudioDuoUpdateData.h
+        NAMESPACE studio_update
+        SOURCES packaging/macos/install-update.sh
+    )
+    add_executable(StudioDuoUpdateSwap src/update/MacUpdateSwap.cpp)
+    set_target_properties(StudioDuoUpdateSwap PROPERTIES OUTPUT_NAME studio-duo-update-swap)
+endif()
 
 juce_add_binary_data(
     StudioDuoDawProjectSchemaData
@@ -517,6 +533,8 @@ target_sources(
         src/render/RenderEngine.cpp
         src/render/RenderEngine.h
         src/update/UpdateInstaller.h
+        src/update/UpdateDownload.cpp
+        src/update/UpdateDownload.h
         src/update/UpdateManifest.cpp
         src/update/UpdateManifest.h
         src/update/StudioPreferences.cpp
@@ -683,6 +701,18 @@ set_target_properties(StudioDuo PROPERTIES
     VISIBILITY_INLINES_HIDDEN TRUE)
 
 if(APPLE)
+    target_link_libraries(StudioDuo PRIVATE StudioDuoUpdateData)
+    add_custom_target(
+        StudioDuoUpdateHelperBundle
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_BUNDLE_DIR:StudioDuo>/Contents/Helpers"
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "$<TARGET_FILE:StudioDuoUpdateSwap>"
+            "$<TARGET_BUNDLE_DIR:StudioDuo>/Contents/Helpers/studio-duo-update-swap"
+        COMMAND /usr/bin/codesign --force --sign -
+            "$<TARGET_BUNDLE_DIR:StudioDuo>/Contents/Helpers/studio-duo-update-swap"
+        DEPENDS StudioDuo StudioDuoUpdateSwap
+        VERBATIM
+    )
     add_custom_target(
         StudioDuoDevelopmentSignature ALL
         COMMAND /usr/bin/codesign
@@ -692,7 +722,7 @@ if(APPLE)
             --identifier "${STUDIO_DUO_BUNDLE_ID}"
             --requirements "=designated => identifier \"${STUDIO_DUO_BUNDLE_ID}\""
             "$<TARGET_BUNDLE_DIR:StudioDuo>"
-        DEPENDS StudioDuo
+        DEPENDS StudioDuo StudioDuoUpdateHelperBundle
         COMMENT "Applying stable development signature to Studio Duo"
         VERBATIM
     )
@@ -1010,6 +1040,7 @@ if(STUDIO_DUO_BUILD_TESTS)
             tests/AudioExportOptionsTests.cpp
             tests/AudioExportTests.cpp
             tests/MasteringTests.cpp
+            tests/MasteringQualification.cpp
             tests/PluginCompatibilityTests.cpp
             tests/VendorWorkflowProbe.cpp
             tests/VendorWorkflowProbe.h
@@ -1127,6 +1158,8 @@ if(STUDIO_DUO_BUILD_TESTS)
             src/render/RenderEngine.h
             src/update/UpdateManifest.cpp
             src/update/UpdateManifest.h
+            src/update/UpdateDownload.cpp
+            src/update/UpdateDownload.h
             ${STUDIO_DUO_MODEL_SOURCES}
     )
 
@@ -1308,6 +1341,29 @@ if(STUDIO_DUO_BUILD_TESTS)
         COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/VendorQualificationTests.py")
     set_tests_properties(StudioDuoVendorQualificationContracts PROPERTIES
         LABELS "hardening;qualification" TIMEOUT 30)
+    add_test(NAME StudioDuoMasteringQualificationContracts
+        COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/MasteringQualificationTests.py")
+    set_tests_properties(StudioDuoMasteringQualificationContracts PROPERTIES
+        LABELS "hardening;qualification" TIMEOUT 30)
+    if(APPLE)
+        add_test(NAME StudioDuoMacUpdateInstaller
+            COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/MacUpdateInstallerTests.py"
+                "--swap-helper=$<TARGET_FILE:StudioDuoUpdateSwap>")
+        set_tests_properties(StudioDuoMacUpdateInstaller PROPERTIES
+            LABELS "hardening;qualification;updates" TIMEOUT 120)
+    endif()
+    if(STUDIO_DUO_MASTERING_REFERENCE_TESTS)
+        find_program(STUDIO_DUO_FFMPEG_EXECUTABLE ffmpeg
+            HINTS ENV STUDIO_DUO_FFMPEG_DIRECTORY REQUIRED)
+        add_test(NAME StudioDuoMasteringReferences
+            COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/scripts/qualify-mastering.py"
+                "--test-binary=$<TARGET_FILE:StudioDuoTests>"
+                "--ffmpeg=${STUDIO_DUO_FFMPEG_EXECUTABLE}"
+                "--evidence-root=${CMAKE_CURRENT_BINARY_DIR}/Testing/mastering-references"
+                "--expected-sha=${STUDIO_DUO_BUILD_COMMIT}")
+        set_tests_properties(StudioDuoMasteringReferences PROPERTIES
+            LABELS "hardening;qualification" TIMEOUT 600)
+    endif()
     if(APPLE OR WIN32)
         add_test(NAME StudioDuoStartup COMMAND StudioDuo --startup-self-test)
         set_tests_properties(

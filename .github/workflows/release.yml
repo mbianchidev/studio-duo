@@ -50,8 +50,8 @@ jobs:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Install macOS compiler cache
-        run: HOMEBREW_NO_AUTO_UPDATE=1 brew install ccache
+      - name: Install macOS compiler cache and reference meter
+        run: HOMEBREW_NO_AUTO_UPDATE=1 brew install ccache ffmpeg
 
       - name: Cache macOS compilation
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -77,6 +77,7 @@ jobs:
           cmake -S . -B build -G Ninja
           -DCMAKE_BUILD_TYPE=Release
           -DSTUDIO_DUO_BUILD_TESTS=ON
+          -DSTUDIO_DUO_MASTERING_REFERENCE_TESTS=ON
           -DSTUDIO_DUO_NATIVE_TESTS=ON
           -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
           -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0
@@ -124,6 +125,7 @@ jobs:
             build/Testing/phase6-performance.json
             build/Testing/phase6-long-session-smoke.json
             build/Testing/phase6-long-session-smoke.csv
+            build/Testing/mastering-references
             build/Testing/Temporary/LastTest.log
           if-no-files-found: ignore
           retention-days: 7
@@ -158,6 +160,20 @@ jobs:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - name: Install Windows reference meter
+        shell: pwsh
+        run: |
+          choco install ffmpeg --yes --no-progress --limit-output
+          if ($LASTEXITCODE -notin @(0, 3010)) {
+            throw "FFmpeg installation failed with exit code $LASTEXITCODE."
+          }
+          $meters = @(Get-ChildItem -LiteralPath "$env:ChocolateyInstall/lib/ffmpeg" -Filter ffmpeg.exe -Recurse -File)
+          if ($meters.Count -ne 1) {
+            throw "Expected one actual FFmpeg executable, not a Chocolatey launcher shim."
+          }
+          "STUDIO_DUO_FFMPEG_DIRECTORY=$($meters[0].DirectoryName)" >> $env:GITHUB_ENV
+          & $meters[0].FullName -version
+
       - name: Cache dependencies
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -165,7 +181,7 @@ jobs:
           key: release-windows-${{ hashFiles('CMakeLists.txt') }}
 
       - name: Configure
-        run: cmake -S . -B build -A x64 -DSTUDIO_DUO_BUILD_TESTS=ON
+        run: cmake -S . -B build -A x64 -DSTUDIO_DUO_BUILD_TESTS=ON -DSTUDIO_DUO_MASTERING_REFERENCE_TESTS=ON
 
       - name: Build
         run: cmake --build build --config Release --parallel 4
@@ -200,6 +216,7 @@ jobs:
             build/Testing/phase6-performance.json
             build/Testing/phase6-long-session-smoke.json
             build/Testing/phase6-long-session-smoke.csv
+            build/Testing/mastering-references
             build/Testing/Temporary/LastTest.log
           if-no-files-found: ignore
           retention-days: 7

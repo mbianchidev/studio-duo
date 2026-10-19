@@ -1,4 +1,5 @@
 #include "UpdateInstaller.h"
+#include "StudioDuoUpdateData.h"
 
 #import <Foundation/Foundation.h>
 
@@ -25,64 +26,6 @@ NSString* nsString(const juce::String& value)
 {
     return [NSString stringWithUTF8String:value.toRawUTF8()];
 }
-
-const char* installerScript = R"SCRIPT(#!/bin/sh
-set -eu
-
-pid="$1"
-archive="$2"
-target="$3"
-log_file="$4"
-expected_version="$5"
-expected_bundle_id="$6"
-
-exec >>"$log_file" 2>&1
-echo "Applying Studio Duo $expected_version update"
-
-while /bin/kill -0 "$pid" 2>/dev/null; do
-    /bin/sleep 0.2
-done
-
-parent=$(/usr/bin/dirname "$target")
-stage=$(/usr/bin/mktemp -d "$parent/.studio-duo-update.XXXXXX")
-backup="$parent/.Studio Duo.previous"
-update_complete=0
-
-cleanup() {
-    if [ ! -d "$target" ] && [ -d "$backup" ]; then
-        /bin/mv "$backup" "$target"
-    fi
-    /bin/rm -rf "$stage"
-    if [ "$update_complete" -eq 0 ] && [ -d "$target" ]; then
-        /usr/bin/open "$target"
-    fi
-}
-trap cleanup EXIT
-trap 'exit 1' HUP INT TERM
-
-/usr/bin/ditto -x -k "$archive" "$stage"
-candidate="$stage/Studio Duo.app"
-test -d "$candidate"
-
-actual_version=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$candidate/Contents/Info.plist")
-actual_bundle_id=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$candidate/Contents/Info.plist")
-test "$actual_version" = "$expected_version"
-test "$actual_bundle_id" = "$expected_bundle_id"
-/usr/bin/codesign --verify --deep --strict "$candidate"
-
-/bin/rm -rf "$backup"
-/bin/mv "$target" "$backup"
-if /bin/mv "$candidate" "$target"; then
-    /bin/rm -rf "$backup"
-    /bin/rm -f "$archive"
-    update_complete=1
-    /usr/bin/open "$target"
-    /bin/rm -f "$0"
-else
-    /bin/mv "$backup" "$target"
-    exit 1
-fi
-)SCRIPT";
 }
 
 juce::Result launchUpdateInstaller(
@@ -106,25 +49,45 @@ juce::Result launchUpdateInstaller(
             "Move it to a writable Applications folder and try again.");
     }
 
-    const auto helper = package.getSiblingFile(
-        "install-studio-duo-" + version + ".sh");
+    if (bundle.getParentDirectory().getChildFile(".studio-duo-update.lock").exists())
+        return juce::Result::fail(
+            "Another update or interrupted-update recovery owns this installation. "
+            "Preserve the update log and recovery directories before retrying.");
+    const auto attempt = "install-studio-duo-" + version + "-" + juce::Uuid().toString();
+    const auto helper = package.getSiblingFile(attempt + ".sh");
+    const auto swapHelper = package.getSiblingFile(attempt + "-swap");
+    const auto fail = [&](juce::String message)
+    {
+        for (const auto& file : { helper, swapHelper })
+            if (file.exists() && !file.deleteFile())
+                message += " Could not remove the unused update helper " + file.getFileName() + ".";
+        return juce::Result::fail(message);
+    };
+    const auto bundledSwap = bundle.getChildFile("Contents/Helpers/studio-duo-update-swap");
+    if (!bundledSwap.existsAsFile() || !bundledSwap.copyFileTo(swapHelper)
+        || !swapHelper.setExecutePermission(true))
+    {
+        return fail("Studio Duo could not prepare its atomic application-exchange helper.");
+    }
     const auto logFile = package.getSiblingFile("install-update.log");
     if (!helper.replaceWithText(
-            installerScript,
+            juce::String::fromUTF8(studio_update::installupdate_sh, studio_update::installupdate_shSize),
             false,
             false,
             "\n"))
     {
-        return juce::Result::fail(
+        return fail(
             "Studio Duo could not create the macOS update helper.");
     }
     if (!logFile.existsAsFile())
     {
         const auto result = logFile.create();
         if (result.failed())
-            return juce::Result::fail(
+        {
+            return fail(
                 "Studio Duo could not create the update log: "
                 + result.getErrorMessage());
+        }
     }
 
     @autoreleasepool
@@ -139,7 +102,8 @@ juce::Result launchUpdateInstaller(
             nsString(bundle.getFullPathName()),
             nsString(logFile.getFullPathName()),
             nsString(version),
-            @"dev.mbianchi.studioduo"
+            @"dev.mbianchi.studioduo",
+            nsString(swapHelper.getFullPathName())
         ];
 
         NSError* launchError = nil;
@@ -147,7 +111,7 @@ juce::Result launchUpdateInstaller(
         [task release];
         if (!launched)
         {
-            return juce::Result::fail(
+            return fail(
                 "Studio Duo could not launch the macOS update helper: "
                 + juce::String(
                     launchError != nil

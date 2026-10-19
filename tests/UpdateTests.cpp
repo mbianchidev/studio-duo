@@ -1,7 +1,10 @@
 #include "update/UpdateManifest.h"
+#include "update/UpdateDownload.h"
 #include "update/StudioPreferences.h"
 #include "TestHarness.h"
 #include "TestSuites.h"
+
+#include <juce_cryptography/juce_cryptography.h>
 
 namespace
 {
@@ -256,6 +259,57 @@ void preferencePersistence()
     }
     directory.deleteRecursively();
 }
+
+void packageDownloadPreservation()
+{
+    juce::TemporaryFile fixture(".studio-duo-download-test");
+    const auto root = fixture.getFile();
+    expect(root.createDirectory().wasOk(), "The synthetic download directory can be created.");
+    const auto target = root.getChildFile("update.zip");
+    juce::MemoryBlock payload(192 * 1024, true);
+    const auto hash = juce::SHA256(payload).toHexString();
+    using Status = studio::UpdateDownloadResult::Status;
+    const auto run = [&](juce::int64 inputBytes, juce::int64 expectedBytes,
+                         const juce::String& expectedHash, bool cancelAfterProgress)
+    {
+        expect(target.replaceWithText("previous verified package"),
+               "The previous synthetic package can be retained.");
+        juce::MemoryInputStream input(payload.getData(), static_cast<std::size_t>(inputBytes), false);
+        bool cancelled = false;
+        const auto result = studio::downloadUpdatePackage(
+            input, target, expectedBytes, expectedHash, [&] { return cancelled; },
+            [&](double) { cancelled = cancelAfterProgress; });
+        expect(root.findChildFiles(juce::File::findFiles, false, "*.part-*").isEmpty(),
+               "Finished, cancelled and failed downloads clean their owned partial files.");
+        return result;
+    };
+    const auto bytes = static_cast<juce::int64>(payload.getSize());
+    auto result = run(bytes, bytes, hash, false);
+    expect(result.status == Status::complete && juce::SHA256(target).toHexString() == hash,
+           "Only a complete size/hash-verified package replaces the previous package.");
+    const auto expectPreserved = [&](juce::int64 inputBytes, juce::int64 expectedBytes,
+                                     const juce::String& expectedHash, bool cancel)
+    {
+        const auto failure = run(inputBytes, expectedBytes, expectedHash, cancel);
+        expect(failure.status != Status::complete && failure.message.isNotEmpty()
+                   && target.loadFileAsString() == "previous verified package",
+               "Truncation, excess bytes, integrity failure and cancellation preserve the old package.");
+    };
+    expectPreserved(bytes - 1, bytes, hash, false);
+    expectPreserved(bytes, bytes - 1, hash, false);
+    expectPreserved(bytes, bytes, juce::String::repeatedString("0", 64), false);
+    expectPreserved(bytes, bytes, hash, true);
+    result = run(bytes, bytes, hash, true);
+    expect(result.status == Status::cancelled, "User cancellation is distinct from an update failure.");
+    juce::MemoryInputStream input(payload, false);
+    const auto blocker = root.getChildFile("not-a-directory");
+    expect(blocker.replaceWithText("preserve me"), "A synthetic unwritable-parent condition can be created.");
+    result = studio::downloadUpdatePackage(
+        input, blocker.getChildFile("update.zip"), bytes, hash, [] { return false; }, [](double) {});
+    expect(result.status == Status::failed && result.message.isNotEmpty()
+               && blocker.loadFileAsString() == "preserve me",
+           "A non-directory destination parent fails visibly without modifying existing data.");
+}
 }
 
 void updateTests()
@@ -263,4 +317,5 @@ void updateTests()
     semanticVersionComparison();
     manifestParsing();
     preferencePersistence();
+    packageDownloadPreservation();
 }

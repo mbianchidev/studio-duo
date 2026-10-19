@@ -20,9 +20,10 @@ The `hardening` CTest label selects the release-critical coverage:
 | Native exchange | Each platform creates the same complete synthetic package; both native readers open both packages in a separate dependent CI job |
 | Keyboard/accessibility | Native timeline focus, selection role/value, chronological audio/MIDI clip navigation, musical nudges, offscreen-selection reveal, button activation, and named mastering controls |
 | Engine/processing | Routing, linked edits, recording, automation, latency/racks, deterministic live/offline renders, sandbox crash/reload, and public-standard plugin fixtures |
-| Qualification tooling | Full-media one-second smoke at 96 kHz, concurrent graph/callback work, complete live/offline null, portable validation, raw callback CSV, and fail-closed evidence matrix contracts |
-| Interchange/mastering | Official embedded DAWproject schemas, transactional failures, compatibility reports, portable/missing-resource checks, analytical loudness/true-peak fixtures, and multi-song delivery |
+| Qualification tooling | Full-media one-second smoke at 96 kHz, concurrent graph/callback work, complete live/offline null, portable validation, raw callback CSV, and fail-closed six-area evidence matrix contracts |
+| Interchange/mastering | Official embedded DAWproject schemas, transactional failures, compatibility reports, portable/missing-resource checks, analytical fixtures, independent FFmpeg mono/stereo metrology and multi-song delivery |
 | Packaging | macOS DMG/updater ZIP signatures, binary equality, license/source material, private install/startup/removal; disposable Windows signed install, same-version replacement, startup, and user-data-preserving uninstall |
+| Update failure handling | Verified/cancellable download publication; actual embedded macOS payload against signed synthetic versions, atomic directory exchange, signal rollback and generation preservation after an untrappable kill |
 
 The exchange package contains stable identities, Unicode text, audio edits,
 take/comp data, bus/send routing, automation, MIDI expressions and a full-width
@@ -147,7 +148,10 @@ unqualified crash-containment criterion remains blocked until that decision.
 
 The [qualification runbook](qualification.md) defines repeatable procedures,
 provisional workstation budgets, and the `scripts/qualify.py` evidence gate for
-issues #59, #58, #55, and #60. Its generated matrix starts entirely **not run**.
+issues #59, #58, #55, #60, #56 and #57. Its schema-version-2 matrix has all 24
+target/area runs, each initially **not run**. Different-version preservation,
+minimum/current OS records, production trust and independent numerical reference
+coverage are required; historical four-area reports cannot pass the complete gate.
 The opt-in long-media command is driver-free computational characterisation,
 not a physical deadline or vendor pass. Whole-file decoding/prepared storage
 remains a resource risk; the preflight estimate and phase peaks expose it rather
@@ -170,6 +174,15 @@ Native keyboard contracts include precise gain/fade editing, take/comp menu
 actions, current track/clip state values, track-name validation and a scrollable
 200-message status history with stable selection. They do not establish actual
 VoiceOver/NVDA behavior or completion of the manual production journey.
+
+Native CI separately retains 36 independent FFmpeg metrology comparisons at
+44.1/48/96 kHz with fixed 0.1 LU integrated, 1.0 LU LRA and 0.3 dBTP tolerances.
+Original PCM, exact source/tool/test-binary hashes and both programme/peak raw
+logs stay with the candidate. This does not replace licensed DDP verification,
+external-DAW acceptance, encoded-delivery checks or human release approval.
+Synthetic macOS updater fixtures do not establish actual released-app upgrades,
+clean-machine Gatekeeper behavior, production Windows trust or a complete
+post-restart workflow.
 
 For blocker triage, attach a minimal synthetic reproducer and candidate evidence,
 classify data-loss/crash, unusable primary workflow, deadline/resource, or

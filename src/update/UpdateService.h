@@ -17,6 +17,7 @@ enum class UpdatePhase
     upToDate,
     available,
     downloading,
+    cancelling,
     ready,
     failed,
     unsupported
@@ -58,6 +59,7 @@ public:
     void removeListener(Listener* listener);
     void checkForUpdates();
     void downloadUpdate();
+    void cancelDownload();
     [[nodiscard]] juce::Result setAutomaticDownloads(bool enabled);
     [[nodiscard]] juce::Result launchReadyUpdate();
 
@@ -112,6 +114,7 @@ private:
     juce::ListenerList<Listener> listeners;
     std::atomic<Operation> requestedOperation { Operation::none };
     std::atomic<bool> automaticDownloads { true };
+    std::atomic<bool> downloadCancellation { false };
     juce::WebInputStream* activeWebStream = nullptr;
     bool ownsProcessLock = false;
     bool threadStarted = false;
