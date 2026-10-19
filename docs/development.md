@@ -895,6 +895,12 @@ every slice. Context describes the processing quantum's start, not a claim of
 sample-accurate within-quantum tempo/meter/loop transitions. The sliced bridge
 must retain its first clock, not silently substitute the post-wrap slice's time.
 
+Runtime publication swaps retired graphs out while holding the request lock,
+then destroys them after releasing it: native CLAP teardown may synchronously
+dispatch to the message thread, whose transition polling also needs that lock.
+Bridge startup likewise releases its response lock before stopping a timed-out
+worker, allowing its control callback thread to finish during teardown.
+
 Offline requests carry a transient non-realtime processing context through the
 runtime identity and worker startup; restoring the live graph restores its
 original context. The CLAP render extension receives the matching mode on the

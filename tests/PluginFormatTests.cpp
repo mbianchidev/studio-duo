@@ -463,6 +463,9 @@ void multipleOutputTests(const juce::PluginDescription& description, const studi
         auto engine = std::make_unique<studio::StudioAudioEngine>(juce::File(STUDIO_DUO_BRIDGE_WORKER_PATH));
         expect(engine->configureAudioForTesting(48000.0, 64).wasOk(), "Auxiliary routing retains its selected sample clock.");
         juce::AudioBuffer<float> rendered;
+        std::cerr << "[plugin-format] auxiliary "
+                  << (mode == studio::PluginBridgeMode::sandboxed ? "sandbox" : "trusted")
+                  << " render" << std::endl;
         const auto result = engine->renderRangeToBuffer(project, rendered, 48000.0,
             { 0.0, clip.durationSeconds, 0.0 }, { request });
         expect(result.wasOk() && rendered.getNumSamples() == 64
@@ -476,11 +479,13 @@ void multipleOutputTests(const juce::PluginDescription& description, const studi
         for (auto& route : project.routingConnections)
             if (route.sourceInsertId == insert.id && route.sourceBusIndex == 1)
                 route.sourceBusIndex = 3;
+        std::cerr << "[plugin-format] auxiliary stale-bus rejection" << std::endl;
         const auto stale = engine->renderRangeToBuffer(project, rendered, 48000.0,
             { 0.0, clip.durationSeconds, 0.0 }, { request });
         expect(stale.failed() && stale.getErrorMessage().contains("output bus"),
                ("Cached bus names cannot authorize a native output bus absent from this exact processor: "
                 + stale.getErrorMessage()).toRawUTF8());
+        std::cerr << "[plugin-format] auxiliary cleanup" << std::endl;
     }
 }
 }

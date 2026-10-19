@@ -7850,7 +7850,8 @@ void StudioAudioEngine::runPluginRuntimeBuilder()
             ++activeSnapshotRevision;
             ++pluginSnapshotRefreshRevision;
             pluginSnapshotRefreshPending = false;
-            pluginRuntimeGraphs[static_cast<std::size_t>(runtimeDestination)] = std::move(graph);
+            // Retired processors may dispatch to the message thread during destruction.
+            std::swap(pluginRuntimeGraphs[static_cast<std::size_t>(runtimeDestination)], graph);
             snapshots[static_cast<std::size_t>(snapshotDestination)]
                 = std::move(*pendingPluginSnapshot);
             pendingPluginSnapshot.reset();

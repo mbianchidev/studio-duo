@@ -93,25 +93,29 @@ juce::Result PluginBridgeClient::startInternal(const juce::PluginDescription* de
         return juce::Result::fail("Could not configure the plugin bridge worker.");
     }
 
+    auto responded = false;
+    juce::String response;
     {
         std::unique_lock lock(responseMutex);
-        if (!responseCondition.wait_for(lock,
-                                        std::chrono::seconds(5),
-                                        [this]
-                                        {
-                                            return responseMessage.isNotEmpty()
-                                                || connectionLost.load(std::memory_order_acquire);
-                                        }))
-        {
-            stop();
-            return juce::Result::fail("Plugin bridge worker did not respond.");
-        }
+        responded = responseCondition.wait_for(lock,
+                                              std::chrono::seconds(5),
+                                              [this]
+                                              {
+                                                  return responseMessage.isNotEmpty()
+                                                      || connectionLost.load(std::memory_order_acquire);
+                                              });
+        response = responseMessage;
+    }
+    if (!responded)
+    {
+        stop();
+        return juce::Result::fail("Plugin bridge worker did not respond.");
     }
 
-    const auto responseParts = juce::StringArray::fromTokens(responseMessage, "|", "");
+    const auto responseParts = juce::StringArray::fromTokens(response, "|", "");
     if (responseParts.isEmpty() || responseParts[0] != "ready")
     {
-        const auto error = responseMessage.isNotEmpty() ? responseMessage
+        const auto error = response.isNotEmpty() ? response
             : "worker disconnected (startup stage " + juce::String(startupStage.load(std::memory_order_acquire)) + ")";
         stop();
         return juce::Result::fail("Plugin bridge setup failed: " + error);
