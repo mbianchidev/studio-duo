@@ -88,6 +88,7 @@ For the same configuration locally, install Ninja and sccache, then use a fresh
 build directory if the existing one uses another generator:
 
 ```sh
+export CMAKE_BUILD_PARALLEL_LEVEL=2
 export SCCACHE_CACHE_MULTIARCH=1
 cmake -S . -B build -G Ninja \
   -DCMAKE_BUILD_TYPE=Release -DSTUDIO_DUO_BUILD_TESTS=ON \

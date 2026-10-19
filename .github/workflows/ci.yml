@@ -43,6 +43,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     env:
+      CMAKE_BUILD_PARALLEL_LEVEL: ${{ matrix.build_parallel }}
       SCCACHE_GHA_ENABLED: ${{ matrix.sccache_enabled }}
       SCCACHE_CACHE_MULTIARCH: "1"
 
