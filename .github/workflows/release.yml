@@ -41,6 +41,9 @@ jobs:
     needs: validate
     runs-on: macos-latest
     timeout-minutes: 120
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_CACHE_MULTIARCH: "1"
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -49,21 +52,30 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: build/_deps
-          key: release-macos-${{ hashFiles('CMakeLists.txt') }}
+          key: dependencies-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('CMakeLists.txt', 'cmake/*.cmake', 'third_party/**/*.patch') }}
+
+      - name: Cache macOS compilation
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: v0.18.0
 
       - name: Configure universal build
         run: >
-          cmake -S . -B build -G Xcode
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
           -DSTUDIO_DUO_BUILD_TESTS=ON
+          -DSTUDIO_DUO_NATIVE_TESTS=ON
           -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
           -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0
+          -DCMAKE_C_COMPILER_LAUNCHER=sccache
+          -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
 
       - name: Build
-        run: cmake --build build --config Release --parallel 1
+        run: cmake --build build --config Release --parallel 2
 
       - name: Test
         run: >
-          ctest --test-dir build --build-config Release --output-on-failure --no-tests=error
+          ctest --test-dir build --build-config Release --parallel 2 --output-on-failure --no-tests=error
           --output-junit "${{ github.workspace }}/build/Testing/phase6-junit.xml"
 
       - name: Create native exchange fixture

@@ -23,10 +23,14 @@ jobs:
         include:
           - os: macos-latest
             test_executable: StudioDuoTests
-            build_parallel: 1
+            build_parallel: 2
             test_parallel: 2
             configure_args: >-
+              -G Ninja
               -DCMAKE_BUILD_TYPE=Release
+              -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+              -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0
+              -DSTUDIO_DUO_NATIVE_TESTS=ON
               -DCMAKE_C_COMPILER_LAUNCHER=sccache
               -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
             sccache_enabled: "true"
@@ -40,6 +44,7 @@ jobs:
     timeout-minutes: 90
     env:
       SCCACHE_GHA_ENABLED: ${{ matrix.sccache_enabled }}
+      SCCACHE_CACHE_MULTIARCH: "1"
 
     steps:
       - name: Check out source
@@ -49,11 +54,13 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: build/_deps
-          key: dependencies-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}
+          key: dependencies-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('CMakeLists.txt', 'cmake/*.cmake', 'third_party/**/*.patch') }}
 
       - name: Cache macOS compilation
         if: runner.os == 'macOS'
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: v0.18.0
         env:
           SCCACHE_GHA_ENABLED: "true"
 
@@ -111,7 +118,7 @@ jobs:
           ./packaging/macos/build-release-packages.sh \
             "$version" \
             "build/StudioDuo_artefacts/Release/Studio Duo.app" \
-            build/phase6-packages
+            build/phase6-packages --universal
 
       - name: Upload macOS test packages
         if: always() && runner.os == 'macOS'

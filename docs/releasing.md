@@ -89,7 +89,13 @@ The workflow rejects a tag when:
 - the tagged commit is not reachable from `origin/main`
 
 Both platform builds must pass the complete test suite before the GitHub Release
-is published. Windows publication also requires successful Authenticode signing,
+is published. The macOS build uses the same two-worker Ninja configuration and
+architecture-aware sccache backend as CI, so default-branch compilation can be
+reused by tags. The application and shipped plugins remain universal; test-only
+executables and fixtures are native to the runner, matching the architecture
+that actually executes the complete suite. See
+[universal build configuration](development.md#universal-macos-builds-and-compilation-caching).
+Windows publication also requires successful Authenticode signing,
 `signtool verify /pa /v`, and an exact signer-thumbprint match for both
 `Studio Duo.exe` and the installer. CI exercises the same verification path
 with an ephemeral test certificate.

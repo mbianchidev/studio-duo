@@ -75,6 +75,44 @@ this finalization too. To build just the signed app, use
 signing inside the executable's `POST_BUILD` command runs too early for a clean
 Makefiles build and leaves later-copied resources outside the seal.
 
+### Universal macOS builds and compilation caching
+
+macOS CI and releases use Ninja, two build workers, and the same universal
+Release configuration. This exercises the release build and universal packaging
+on pull requests and lets tagged builds reuse compilation results from `main`.
+The dependency cache is shared between those workflows and includes dependency
+patches in its key. Compiled objects use sccache 0.18.0's GitHub Actions backend,
+not the dependency-source cache.
+
+For the same configuration locally, install Ninja and sccache, then use a fresh
+build directory if the existing one uses another generator:
+
+```sh
+export SCCACHE_CACHE_MULTIARCH=1
+cmake -S . -B build -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release -DSTUDIO_DUO_BUILD_TESTS=ON \
+  -DSTUDIO_DUO_NATIVE_TESTS=ON \
+  -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
+  -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0 \
+  -DCMAKE_C_COMPILER_LAUNCHER=sccache \
+  -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+cmake --build build --config Release --parallel 2
+sccache --show-stats
+```
+
+`SCCACHE_CACHE_MULTIARCH=1` enables architecture-aware caching of universal
+compiler invocations; without it, sccache does not cache multiple `-arch` flags.
+Ninja supports CMake's compiler launchers directly, unlike the Xcode generator.
+The revision macro is limited to the diagnostic/progress sources that use it,
+so a new Git revision does not invalidate every application and test object.
+
+`STUDIO_DUO_NATIVE_TESTS=ON` builds test executables and their private plugin
+fixtures only for the build host. Universal tests would execute only that slice
+anyway. The application and every shipped bundled plugin retain both
+architectures, and all test suites still run. This option defaults to `OFF`;
+normal developer builds continue to inherit `CMAKE_OSX_ARCHITECTURES` for tests.
+Two workers bound memory use on hosted runners instead of unbounded parallelism.
+
 ## Test
 
 ```sh
