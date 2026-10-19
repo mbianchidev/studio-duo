@@ -44,8 +44,8 @@ Inno Setup 7.1.0 remain the latest stable releases for their respective
 dependencies. Windows packages download the current signed Visual C++ runtime
 from Microsoft's release channel and verify its signature and version.
 GitHub Actions are pinned to exact release commits for checkout 7.0.1, cache
-6.1.0, upload-artifact 7.0.2, download-artifact 8.0.2, and sccache-action
-0.0.11; Dependabot maintains those pins.
+6.1.0, upload-artifact 7.0.2, and download-artifact 8.0.2; Dependabot maintains
+those pins.
 
 ## Prerequisites
 
@@ -82,31 +82,41 @@ Release configuration. This exercises the release build and universal packaging
 on pull requests and lets tagged builds reuse matching completed compilation
 results from `main`.
 The dependency cache is shared between those workflows and includes dependency
-patches in its key. Compiled objects use sccache 0.18.0's GitHub Actions backend,
-not the dependency-source cache.
+patches in its key. Compiled objects use a separate, size-bounded ccache directory
+saved through GitHub Actions cache, with commit-specific keys and restore prefixes.
+ccache hashes the compiler's contents and preprocesses each architecture
+separately before reusing universal objects.
 
-For the same configuration locally, install Ninja and sccache, then use a fresh
+For the same configuration locally, install Ninja and ccache, then use a fresh
 build directory if the existing one uses another generator:
 
 ```sh
 export CMAKE_BUILD_PARALLEL_LEVEL=2
-export SCCACHE_CACHE_MULTIARCH=1
+export CCACHE_DIR="$PWD/.cache/ccache"
+export CCACHE_COMPILERCHECK=content
+export CCACHE_MAXSIZE=1G
 cmake -S . -B build -G Ninja \
   -DCMAKE_BUILD_TYPE=Release -DSTUDIO_DUO_BUILD_TESTS=ON \
   -DSTUDIO_DUO_NATIVE_TESTS=ON \
   -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
   -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0 \
-  -DCMAKE_C_COMPILER_LAUNCHER=sccache \
-  -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+  -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+  -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 cmake --build build --config Release --parallel 2
-sccache --show-stats
+ccache --show-stats
 ```
 
-`SCCACHE_CACHE_MULTIARCH=1` enables architecture-aware caching of universal
-compiler invocations; without it, sccache does not cache multiple `-arch` flags.
 Ninja supports CMake's compiler launchers directly, unlike the Xcode generator.
 The revision macro is limited to the diagnostic/progress sources that use it,
 so a new Git revision does not invalidate every application and test object.
+
+`scripts/check-macos-compiler-cache.sh` checks real cache reuse in an isolated
+temporary cache, then changes Intel-only and ARM-only headers independently.
+Each resulting universal object must match an uncached build. CI and releases
+run this check before building: a cache hit alone does not prove that both
+architectures' dependencies were tracked. The older sccache multi-architecture
+opt-in can return stale objects for architecture-specific headers and must not
+be substituted without passing this check.
 
 `STUDIO_DUO_NATIVE_TESTS=ON` builds test executables and their private plugin
 fixtures only for the build host. Universal tests would execute only that slice

@@ -43,8 +43,9 @@ jobs:
     timeout-minutes: 120
     env:
       CMAKE_BUILD_PARALLEL_LEVEL: "2"
-      SCCACHE_GHA_ENABLED: "true"
-      SCCACHE_CACHE_MULTIARCH: "1"
+      CCACHE_DIR: ${{ github.workspace }}/.cache/ccache
+      CCACHE_COMPILERCHECK: content
+      CCACHE_MAXSIZE: 1G
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -53,12 +54,22 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: build/_deps
-          key: dependencies-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('CMakeLists.txt', 'cmake/*.cmake', 'third_party/**/*.patch') }}
+          key: dependencies-${{ runner.os }}-${{ runner.arch }}-v2-${{ hashFiles('CMakeLists.txt', 'cmake/*.cmake', 'third_party/**/*.patch') }}
+
+      - name: Install macOS compiler cache
+        run: HOMEBREW_NO_AUTO_UPDATE=1 brew install ccache
 
       - name: Cache macOS compilation
-        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          version: v0.18.0
+          path: .cache/ccache
+          key: compilation-macOS-${{ runner.arch }}-ccache-${{ github.sha }}
+          restore-keys: |
+            compilation-macOS-${{ runner.arch }}-ccache-
+
+      - name: Verify macOS compiler cache
+        timeout-minutes: 2
+        run: ./scripts/check-macos-compiler-cache.sh
 
       - name: Configure universal build
         run: >
@@ -68,13 +79,17 @@ jobs:
           -DSTUDIO_DUO_NATIVE_TESTS=ON
           -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
           -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0
-          -DCMAKE_C_COMPILER_LAUNCHER=sccache
-          -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+          -DCMAKE_C_COMPILER_LAUNCHER=ccache
+          -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
       - name: Build
         run: >
           cmake --build build --config Release --parallel 2
           --target StudioDuoDevelopmentSignature StudioDuoTests StudioDuoAudioExportTests
+
+      - name: Report macOS compilation cache
+        if: always()
+        run: ccache --show-stats
 
       - name: Test
         run: >
