@@ -29,6 +29,11 @@ hardening remains before the complete DAW described in the
 The [release-readiness gate](docs/release-readiness.md) separates automated
 regression coverage from still-required hardware, vendor, accessibility,
 long-session, and clean-machine qualification; a `1.x` tag is not that sign-off.
+The [qualification runbook](docs/qualification.md) provides full-length synthetic
+characterisation, safe manual procedures, and a candidate-specific evidence gate.
+The pinned public-vendor software matrix runs on native ARM64/Intel macOS and
+Windows CI, retaining measured results and explicit skips without claiming
+physical hardware, screen-reader, or ARA qualification.
 
 ## Highlights
 
@@ -104,13 +109,22 @@ using CoreAudio. ASIO-compatible interfaces are supported on Windows; ASIO is
 not the macOS audio backend. RAM, storage, and CPU needs depend on project media,
 track count, and plug-ins; fixed performance minima have not been validated.
 
+An optional eight-strip **Mackie Control** profile is available in
+**Settings > Controls**, disabled by default. It uses explicitly selected,
+dedicated MIDI ports for transport, mix controls, bank selection and feedback;
+it never treats ordinary musical MIDI routing as a control-surface mapping.
+See [control-surface setup and limits](docs/user-guide.md#mackie-control-surfaces).
+Physical model/firmware qualification is still required.
+
 **Linux is unsupported.** Covering audio-driver integrations and different
 distributions is beyond the available time of the one-person development team.
 
 ## Build
 
 Requirements: CMake 3.25+, Git, a C++20 compiler, and either macOS with Xcode
-command-line tools or Windows with Visual Studio 2022.
+command-line tools or Windows with Visual Studio 2022. Building the test suite
+and using the qualification evidence tools also require Python 3.9 or newer;
+the application itself has no Python runtime dependency.
 
 ```sh
 git clone https://github.com/mbianchidev/studio-duo.git
@@ -159,6 +173,7 @@ a privacy-safe JSON report. See [startup troubleshooting and logs](docs/user-gui
 - [Contributing](docs/contributing.md)
 - [Releasing](docs/releasing.md)
 - [Release readiness and compatibility matrix](docs/release-readiness.md)
+- [Candidate qualification procedures and evidence](docs/qualification.md)
 
 ## Website
 

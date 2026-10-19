@@ -22,6 +22,8 @@ jobs:
       matrix:
         include:
           - os: macos-latest
+            primary: true
+            python: python3
             test_executable: StudioDuoTests
             build_parallel: 2
             test_parallel: 2
@@ -35,11 +37,32 @@ jobs:
               -DCMAKE_CXX_COMPILER="$(xcrun --find clang++)"
               -DCMAKE_C_COMPILER_LAUNCHER=ccache
               -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+            vendor_args: ""
+          - os: macos-26-intel
+            primary: false
+            python: python3
+            test_executable: StudioDuoTests
+            build_parallel: 2
+            test_parallel: 2
+            configure_args: >-
+              -G Ninja
+              -DCMAKE_BUILD_TYPE=Release
+              -DCMAKE_OSX_ARCHITECTURES=x86_64
+              -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0
+              -DSTUDIO_DUO_NATIVE_TESTS=ON
+              -DCMAKE_C_COMPILER="$(xcrun --find clang)"
+              -DCMAKE_CXX_COMPILER="$(xcrun --find clang++)"
+              -DCMAKE_C_COMPILER_LAUNCHER=ccache
+              -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+            vendor_args: ""
           - os: windows-latest
+            primary: true
+            python: python
             test_executable: StudioDuoTests.exe
             build_parallel: 4
             test_parallel: 4
             configure_args: ""
+            vendor_args: "--disposable-windows-host"
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     env:
@@ -103,15 +126,48 @@ jobs:
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: release-hardening-${{ runner.os }}
+          name: release-hardening-${{ runner.os }}-${{ runner.arch }}
           path: |
             build/Testing/phase6-junit.xml
             build/Testing/phase6-performance.json
+            build/Testing/phase6-long-session-smoke.json
+            build/Testing/phase6-long-session-smoke.csv
             build/Testing/Temporary/LastTest.log
           if-no-files-found: ignore
           retention-days: 7
 
+      - name: Prepare disposable Windows known folders
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $documents = [Environment]::GetFolderPath(
+            [Environment+SpecialFolder]::MyDocuments,
+            [Environment+SpecialFolderOption]::Create
+          )
+          if ([string]::IsNullOrWhiteSpace($documents) -or !(Test-Path -LiteralPath $documents)) {
+            throw "The disposable Windows host cannot create its Documents known folder."
+          }
+
+      - name: Exercise checksum-pinned public vendor workflows
+        timeout-minutes: 15
+        run: >
+          ${{ matrix.python }} -B scripts/qualify-vendors.py
+          "--test-binary=${{ github.workspace }}/build/StudioDuoTests_artefacts/Release/${{ matrix.test_executable }}"
+          "--work-root=${{ github.workspace }}/build/vendor-qualification"
+          "--expected-sha=${{ github.sha }}"
+          --approve-public-surge ${{ matrix.vendor_args }}
+
+      - name: Upload public vendor software evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: vendor-software-${{ runner.os }}-${{ runner.arch }}
+          path: build/vendor-qualification/evidence
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Create native exchange fixture
+        if: matrix.primary
         run: >
           cmake
           "-DTEST_BINARY=${{ github.workspace }}/build/StudioDuoTests_artefacts/Release/${{ matrix.test_executable }}"
@@ -119,6 +175,7 @@ jobs:
           -P cmake/StudioDuoExchangeFixture.cmake
 
       - name: Upload native exchange fixture
+        if: matrix.primary
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: native-exchange-${{ runner.os }}
@@ -127,7 +184,7 @@ jobs:
           retention-days: 7
 
       - name: Validate macOS packages and installed startup
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && matrix.primary
         shell: bash
         timeout-minutes: 10
         run: |
@@ -138,7 +195,7 @@ jobs:
             build/phase6-packages --universal
 
       - name: Upload macOS test packages
-        if: always() && runner.os == 'macOS'
+        if: always() && runner.os == 'macOS' && matrix.primary
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: macos-test-packages

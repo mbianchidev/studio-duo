@@ -39,6 +39,7 @@ private:
     void showAddMenu(
         juce::Rectangle<int> targetScreenArea = {});
     void showTrackMenu();
+    void showConnectionsMenu();
     void showRouteMenu(const RoutingConnection& route);
 
     const Project* project = nullptr;
@@ -50,5 +51,6 @@ private:
         "Add a MIDI, send, sidechain, or direct hardware route"
     };
     juce::TextButton trackButton { "TRACK" };
+    juce::TextButton editButton { "EDIT" };
 };
 }

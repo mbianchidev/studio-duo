@@ -10,7 +10,9 @@
 
 namespace studio
 {
-class InfoPanelComponent final : public juce::Component
+class InfoPanelComponent final : public juce::Component,
+                                 public juce::ChangeBroadcaster,
+                                 public juce::SettableTooltipClient
 {
 public:
     struct Entry
@@ -31,6 +33,7 @@ public:
     [[nodiscard]] const std::vector<Entry>& history() const noexcept;
     void removeEntry(std::uint64_t id);
     void clearHistory();
+    [[nodiscard]] std::unique_ptr<juce::Component> createHistoryView();
 
     void paint(juce::Graphics& graphics) override;
     void mouseDown(const juce::MouseEvent&) override;
@@ -38,6 +41,9 @@ public:
 
 private:
     void showHistory();
+    void updateAccessibleValue();
+    [[nodiscard]] juce::String accessibleValue() const;
+    std::unique_ptr<juce::AccessibilityHandler> createAccessibilityHandler() override;
 
     std::vector<Entry> entries;
     juce::String displayedMessage;

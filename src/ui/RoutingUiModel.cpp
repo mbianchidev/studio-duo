@@ -6,6 +6,17 @@
 
 namespace studio
 {
+juce::StringArray RoutingUiModel::processorOutputBusNames(const PluginInsert& insert)
+{
+    if (!insert.bundledDevice)
+        return insert.outputBusNames;
+    juce::StringArray result;
+    if (const auto* descriptor = DeviceRegistry::descriptor(insert.pluginIdentifier))
+        for (const auto& name : descriptor->outputBuses)
+            result.add(name);
+    return result;
+}
+
 std::vector<RoutingDestinationItem> RoutingUiModel::sendDestinations(
     const Project& project,
     const juce::String& sourceTrackId)
@@ -209,22 +220,14 @@ juce::String RoutingUiModel::summary(
                           == connection.sourceInsertId;
                   })
             : std::vector<PluginInsert>::const_iterator {};
-        const auto* descriptor =
-            source != nullptr && insert != source->inserts.cend()
-            ? DeviceRegistry::descriptor(insert->pluginIdentifier)
-            : nullptr;
+        const auto buses = source != nullptr && insert != source->inserts.cend()
+            ? processorOutputBusNames(*insert) : juce::StringArray();
         const auto sourceName =
             source != nullptr && insert != source->inserts.cend()
             ? insert->name
             : juce::String("Missing processor");
-        const auto busName = descriptor != nullptr
-                && connection.sourceBusIndex >= 0
-                && connection.sourceBusIndex
-                    < static_cast<int>(
-                        descriptor->outputBuses.size())
-            ? descriptor->outputBuses[
-                  static_cast<std::size_t>(
-                      connection.sourceBusIndex)]
+        const auto busName = connection.sourceBusIndex >= 0 && connection.sourceBusIndex < buses.size()
+            ? buses[connection.sourceBusIndex]
             : "Output " + juce::String(connection.sourceBusIndex + 1);
         return sourceName
             + " / "

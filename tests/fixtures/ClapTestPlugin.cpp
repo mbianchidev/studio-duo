@@ -4,6 +4,29 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <chrono>
+#include <string>
+#include <thread>
+
+static std::string test_environment(const char* name)
+{
+#if defined(_WIN32)
+    char* value = NULL;
+    size_t size = 0;
+    if (_dupenv_s(&value, &size, name) != 0)
+    {
+        fprintf(stderr, "Cannot read synthetic CLAP fixture configuration: %s\n", name);
+        free(value);
+        abort();
+    }
+    const std::string result = value != NULL ? value : "";
+    free(value);
+    return result;
+#else
+    const char* value = getenv(name);
+    return value != NULL ? value : "";
+#endif
+}
 
 typedef struct test_plugin {
     clap_plugin_t plugin;
@@ -24,6 +47,16 @@ typedef struct test_plugin {
     bool latency_change_reported;
     bool metadata_rescan_requested;
     uint32_t metadata_epoch;
+    bool transport_diagnostics;
+    bool render_diagnostics;
+    bool hard_realtime;
+    bool reject_offline_mode;
+    bool reject_activation;
+    clap_plugin_render_mode render_mode;
+    uint32_t reset_count;
+    bool multiple_audio_buses;
+    uint32_t process_delay_milliseconds;
+    uint32_t activation_delay_milliseconds;
 } test_plugin_t;
 
 static const char* features[] = {
@@ -85,10 +118,15 @@ static bool plugin_activate(const clap_plugin_t* plugin,
 {
     test_plugin_t* instance = self(plugin);
     expect_main_thread(plugin);
-    instance->active = true;
+    instance->active = sample_rate > 0.0 && min_frames > 0 && max_frames >= min_frames
+        && !instance->reject_activation;
+    instance->reset_count = 0;
     ++instance->activation_count;
-    return sample_rate > 0.0 && min_frames > 0
-        && max_frames >= min_frames;
+    if (instance->activation_count > 1 && instance->activation_delay_milliseconds > 0)
+        std::this_thread::sleep_for(std::chrono::milliseconds(instance->activation_delay_milliseconds));
+    if (test_environment("STUDIO_DUO_TEST_CLAP_ACTIVATION_VALUES") == "1")
+        instance->parameters[0] = 0.75;
+    return instance->active;
 }
 
 static void plugin_deactivate(const clap_plugin_t* plugin)
@@ -113,6 +151,7 @@ static void plugin_stop_processing(const clap_plugin_t* plugin)
 static void plugin_reset(const clap_plugin_t* plugin)
 {
     expect_audio_thread(plugin);
+    ++self(plugin)->reset_count;
 }
 
 static uint32_t input_event_count(const clap_input_events_t* events)
@@ -125,6 +164,8 @@ static clap_process_status plugin_process(const clap_plugin_t* plugin,
 {
     test_plugin_t* instance = self(plugin);
     expect_audio_thread(plugin);
+    if (instance->process_delay_milliseconds > 0)
+        std::this_thread::sleep_for(std::chrono::milliseconds(instance->process_delay_milliseconds));
     if (!instance->requested_host_actions)
     {
         instance->requested_host_actions = true;
@@ -213,8 +254,43 @@ static clap_process_status plugin_process(const clap_plugin_t* plugin,
                         && channel < input->channel_count
                     ? input->data32[channel][frame]
                     : 0.0f;
-                output->data32[channel][frame] +=
-                    source * (float) instance->parameters[0];
+                if (instance->render_diagnostics)
+                    output->data32[channel][frame] = (instance->render_mode == CLAP_RENDER_OFFLINE ? 0.75f : 0.25f)
+                        + (float) instance->reset_count / 1000.0f;
+                else if (instance->transport_diagnostics)
+                {
+                    const clap_event_transport_t* clock = process->transport;
+                    float value = -0.25f;
+                    if (clock != NULL)
+                    {
+                        switch (frame % 8)
+                        {
+                            case 0: value = (float) (clock->tempo / 1000.0); break;
+                            case 1: value = (float) clock->tsig_num / 64.0f; break;
+                            case 2: value = (float) clock->tsig_denom / 64.0f; break;
+                            case 3:
+                                value = (float) (((clock->flags & CLAP_TRANSPORT_IS_PLAYING) != 0 ? 1 : 0)
+                                    | ((clock->flags & CLAP_TRANSPORT_IS_RECORDING) != 0 ? 2 : 0)
+                                    | ((clock->flags & CLAP_TRANSPORT_IS_LOOP_ACTIVE) != 0 ? 4 : 0)) / 7.0f;
+                                break;
+                            case 4: value = (float) ((double) clock->song_pos_beats / CLAP_BEATTIME_FACTOR / 1024.0); break;
+                            case 5: value = (float) ((double) clock->song_pos_seconds / CLAP_SECTIME_FACTOR / 10.0); break;
+                            case 6: value = (float) clock->bar_number / 1000.0f; break;
+                            case 7: value = (float) ((double) clock->bar_start / CLAP_BEATTIME_FACTOR / 1024.0); break;
+                        }
+                    }
+                    output->data32[channel][frame] = value;
+                }
+                else if (instance->multiple_audio_buses && port > 0)
+                {
+                    const auto* main = process->audio_inputs_count > 0 ? &process->audio_inputs[0] : NULL;
+                    const auto source_channel = port == 2 && channel == 1 ? 1u : 0u;
+                    const float main_source = main != NULL && main->data32 != NULL && source_channel < main->channel_count
+                        ? main->data32[source_channel][frame] : 0.0f;
+                    output->data32[channel][frame] = main_source * (port == 1 ? 0.25f : channel == 0 ? 0.75f : 0.125f);
+                }
+                else
+                    output->data32[channel][frame] += source * (float) instance->parameters[0];
             }
         }
     }
@@ -224,8 +300,7 @@ static clap_process_status plugin_process(const clap_plugin_t* plugin,
 static uint32_t audio_ports_count(const clap_plugin_t* plugin, bool is_input)
 {
     expect_main_thread(plugin);
-    (void) is_input;
-    return 1;
+    return self(plugin)->multiple_audio_buses ? is_input ? 2u : 3u : 1u;
 }
 
 static bool audio_ports_get(const clap_plugin_t* plugin,
@@ -234,14 +309,15 @@ static bool audio_ports_get(const clap_plugin_t* plugin,
                             clap_audio_port_info_t* info)
 {
     expect_main_thread(plugin);
-    if (index != 0 || info == NULL)
+    if (index >= audio_ports_count(plugin, is_input) || info == NULL)
         return false;
     memset(info, 0, sizeof(*info));
-    info->id = is_input ? 10 : 20;
-    snprintf(info->name, sizeof(info->name), "%s", is_input ? "Input" : "Output");
-    info->flags = CLAP_AUDIO_PORT_IS_MAIN;
-    info->channel_count = is_input ? 2 : 1;
-    info->port_type = is_input ? CLAP_PORT_STEREO : CLAP_PORT_MONO;
+    info->id = (is_input ? 10 : 20) + index;
+    snprintf(info->name, sizeof(info->name), "%s", is_input ? index == 0 ? "Input" : "Sidechain"
+        : index == 0 ? "Output" : index == 1 ? "Mono auxiliary" : "Stereo auxiliary");
+    info->flags = index == 0 ? CLAP_AUDIO_PORT_IS_MAIN : 0;
+    info->channel_count = is_input || index == 2 ? 2u : 1u;
+    info->port_type = info->channel_count == 2 ? CLAP_PORT_STEREO : CLAP_PORT_MONO;
     info->in_place_pair = CLAP_INVALID_ID;
     return true;
 }
@@ -588,6 +664,28 @@ static const clap_plugin_tail_t tail = {
     .get = tail_get
 };
 
+static bool render_requires_realtime(const clap_plugin_t* plugin)
+{
+    expect_main_thread(plugin);
+    return self(plugin)->hard_realtime;
+}
+
+static bool render_set(const clap_plugin_t* plugin, clap_plugin_render_mode mode)
+{
+    expect_main_thread(plugin);
+    test_plugin_t* instance = self(plugin);
+    if (instance->active || (mode != CLAP_RENDER_REALTIME && mode != CLAP_RENDER_OFFLINE)
+        || (mode == CLAP_RENDER_OFFLINE && instance->reject_offline_mode))
+        return false;
+    instance->render_mode = mode;
+    return true;
+}
+
+static const clap_plugin_render_t rendering = {
+    .has_hard_realtime_requirement = render_requires_realtime,
+    .set = render_set
+};
+
 static const void* plugin_get_extension(const clap_plugin_t* plugin,
                                         const char* id)
 {
@@ -604,6 +702,8 @@ static const void* plugin_get_extension(const clap_plugin_t* plugin,
         return &latency;
     if (strcmp(id, CLAP_EXT_TAIL) == 0)
         return &tail;
+    if (strcmp(id, CLAP_EXT_RENDER) == 0)
+        return &rendering;
     return NULL;
 }
 
@@ -651,6 +751,27 @@ static const clap_plugin_t* create_plugin(const clap_plugin_factory_t* factory,
     if (instance == NULL)
         return NULL;
     instance->host = host;
+    instance->transport_diagnostics = test_environment("STUDIO_DUO_TEST_CLAP_TRANSPORT") == "1";
+    instance->render_diagnostics = test_environment("STUDIO_DUO_TEST_CLAP_RENDER_DIAGNOSTICS") == "1";
+    instance->multiple_audio_buses = test_environment("STUDIO_DUO_TEST_CLAP_MULTIBUS") == "1";
+    const auto render_policy = test_environment("STUDIO_DUO_TEST_CLAP_RENDER_POLICY");
+    instance->hard_realtime = render_policy == "hard-realtime";
+    instance->reject_offline_mode = render_policy == "reject-offline";
+    instance->reject_activation = render_policy == "reject-activation";
+    const auto process_delay = test_environment("STUDIO_DUO_TEST_CLAP_PROCESS_DELAY_MS");
+    if (!process_delay.empty())
+    {
+        const int milliseconds = atoi(process_delay.c_str());
+        if (milliseconds > 0 && milliseconds <= 1000)
+            instance->process_delay_milliseconds = (uint32_t) milliseconds;
+    }
+    const auto activation_delay = test_environment("STUDIO_DUO_TEST_CLAP_ACTIVATE_DELAY_MS");
+    if (!activation_delay.empty())
+    {
+        const int milliseconds = atoi(activation_delay.c_str());
+        if (milliseconds > 0 && milliseconds <= 1000)
+            instance->activation_delay_milliseconds = (uint32_t) milliseconds;
+    }
     instance->thread_check =
         (const clap_host_thread_check_t*) host->get_extension(
             host,

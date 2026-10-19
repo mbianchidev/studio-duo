@@ -583,6 +583,13 @@ juce::var PluginInsert::toVar() const
                                         : "plugin");
     object->setProperty("containerId", containerId);
     object->setProperty("gainDecibels", gainDecibels);
+    if (!outputBusNames.isEmpty())
+    {
+        juce::Array<juce::var> names;
+        for (const auto& bus : outputBusNames)
+            names.add(bus);
+        object->setProperty("outputBusNames", names);
+    }
     return juce::var(object.release());
 }
 
@@ -607,6 +614,25 @@ std::optional<PluginInsert> PluginInsert::fromVar(const juce::var& value, juce::
         return std::nullopt;
     }
     insert.containerId = object->getProperty("containerId").toString();
+    const auto outputBusNames = object->getProperty("outputBusNames");
+    if (!outputBusNames.isVoid())
+    {
+        const auto* names = outputBusNames.getArray();
+        if (names == nullptr || names->size() > 128 || insert.isContainer())
+        {
+            error = "Processor output-bus names must be a bounded list on a plugin insert.";
+            return std::nullopt;
+        }
+        for (const auto& name : *names)
+        {
+            if (!name.isString() || name.toString().trim().isEmpty() || name.toString().length() > 256)
+            {
+                error = "Processor output-bus names must be non-empty strings of at most 256 characters.";
+                return std::nullopt;
+            }
+            insert.outputBusNames.add(name.toString());
+        }
+    }
     const auto gain = object->getProperty("gainDecibels");
     if (!gain.isVoid()
         && (!gain.isInt() && !gain.isInt64() && !gain.isDouble()))

@@ -41,7 +41,14 @@ struct PluginValidationReport
 class PluginCompatibilityValidator
 {
 public:
+    enum class SupplementalTools
+    {
+        run,
+        omitForIsolatedProbe
+    };
+
     static PluginValidationReport validate(
-        const juce::PluginDescription& description);
+        const juce::PluginDescription& description,
+        SupplementalTools tools = SupplementalTools::run);
 };
 }

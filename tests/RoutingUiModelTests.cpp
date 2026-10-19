@@ -73,4 +73,29 @@ void routingUiModelTests()
                    return destination.trackId == instrumentId;
                }),
            "Routing UI offers instrument tracks as MIDI destinations.");
+
+    studio::PluginInsert vendor;
+    vendor.pluginIdentifier = "synthetic-vendor-multi-output";
+    vendor.name = "Synthetic vendor instrument";
+    vendor.outputBusNames = { "Main", "Scene A", "Scene B" };
+    project.findTrack(sourceId)->inserts.push_back(vendor);
+    auto processorRoute = route;
+    processorRoute.sourceInsertId = vendor.id;
+    processorRoute.sourceBusIndex = 1;
+    expect(studio::RoutingUiModel::processorOutputBusNames(vendor) == vendor.outputBusNames
+               && !studio::RoutingUiModel::processorOutputDestinations(project, sourceId, vendor.id, 1).empty()
+               && studio::RoutingUiModel::summary(project, processorRoute).contains("Scene A"),
+           "External processors expose their actual named auxiliary buses in the existing keyboard-native routing menu.");
+    project.routingConnections.push_back(processorRoute);
+    juce::String error;
+    const auto decoded = studio::Project::fromVar(project.toVar(), error);
+    expect(decoded.has_value() && decoded->findTrack(sourceId)->inserts.front().outputBusNames == vendor.outputBusNames,
+           ("External bus names and stable per-bus routes survive a native project round trip: " + error).toRawUTF8());
+    auto invalidNames = vendor.toVar();
+    invalidNames.getDynamicObject()->setProperty("outputBusNames", juce::Array<juce::var> { "Main", 42 });
+    expect(!studio::PluginInsert::fromVar(invalidNames, error).has_value(),
+           "Native processor bus caches reject non-string entries rather than silently substituting names.");
+    invalidNames.getDynamicObject()->setProperty("outputBusNames", juce::String("not-an-array"));
+    expect(!studio::PluginInsert::fromVar(invalidNames, error).has_value(),
+           "Native processor bus caches reject malformed list shapes.");
 }

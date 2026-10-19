@@ -160,6 +160,25 @@ StudioPreferences::status() const noexcept
     return statusMessage;
 }
 
+const ControlSurfaceSettings& StudioPreferences::controlSurfaceSettings() const noexcept
+{
+    return controlSurface;
+}
+
+juce::Result StudioPreferences::setControlSurfaceSettings(const ControlSurfaceSettings& settings)
+{
+    if (const auto valid = settings.validate(); valid.failed())
+        return valid;
+    const auto previous = controlSurface;
+    controlSurface = settings;
+    const auto result = save();
+    if (result.failed())
+        controlSurface = previous;
+    else
+        statusMessage = "Control-surface settings saved.";
+    return result;
+}
+
 juce::Result StudioPreferences::setAutosaveEnabled(
     bool enabled)
 {
@@ -341,6 +360,26 @@ void StudioPreferences::load()
     }
 
     auto hadInvalidOptionalData = false;
+    if (object->hasProperty("controlSurface"))
+    {
+        const auto* surface = object->getProperty("controlSurface").getDynamicObject();
+        if (surface != nullptr && surface->getProperty("protocol").isString()
+            && surface->getProperty("inputDeviceId").isString() && surface->getProperty("outputDeviceId").isString())
+        {
+            const auto protocol = surface->getProperty("protocol").toString();
+            ControlSurfaceSettings restored;
+            restored.protocol = protocol == "mackie-control"
+                ? ControlSurfaceProtocol::mackieControl : ControlSurfaceProtocol::disabled;
+            restored.inputDeviceId = surface->getProperty("inputDeviceId").toString();
+            restored.outputDeviceId = surface->getProperty("outputDeviceId").toString();
+            if ((protocol == "disabled" || protocol == "mackie-control") && restored.validate().wasOk())
+                controlSurface = std::move(restored);
+            else
+                hadInvalidOptionalData = true;
+        }
+        else
+            hadInvalidOptionalData = true;
+    }
     if (object->hasProperty("themePreset"))
     {
         const auto preset =
@@ -444,13 +483,18 @@ juce::Result StudioPreferences::save()
 
     auto object =
         std::make_unique<juce::DynamicObject>();
-    object->setProperty("schemaVersion", 2);
+    object->setProperty("schemaVersion", 3);
     object->setProperty(
         "autosaveEnabled",
         autosave);
     object->setProperty(
         "scanPluginsAtStartup",
         scanAtStartup);
+    auto surface = std::make_unique<juce::DynamicObject>();
+    surface->setProperty("protocol", controlSurface.enabled() ? "mackie-control" : "disabled");
+    surface->setProperty("inputDeviceId", controlSurface.inputDeviceId);
+    surface->setProperty("outputDeviceId", controlSurface.outputDeviceId);
+    object->setProperty("controlSurface", juce::var(surface.release()));
     object->setProperty(
         "themePreset",
         selectedThemePreset);

@@ -1,6 +1,5 @@
 #include "RoutingPanel.h"
 
-#include "devices/DeviceRegistry.h"
 #include "NumericInput.h"
 #include "StudioTheme.h"
 
@@ -13,7 +12,15 @@ RoutingPanel::RoutingPanel()
 {
     addAndMakeVisible(addButton);
     addAndMakeVisible(trackButton);
+    addAndMakeVisible(editButton);
+    trackButton.setTitle("Configure track routing");
+    trackButton.setWantsKeyboardFocus(true);
     trackButton.setTooltip("Configure routing for the selected track");
+    editButton.setTitle("Edit existing routes");
+    editButton.setTooltip("Choose any MIDI, send, sidechain, or hardware route to edit");
+    editButton.setWantsKeyboardFocus(true);
+    editButton.setEnabled(false);
+    editButton.onClick = [this] { showConnectionsMenu(); };
     addButton.onClick = [this] { showAddMenu(); };
     trackButton.onClick = [this] { showTrackMenu(); };
 }
@@ -21,12 +28,14 @@ RoutingPanel::RoutingPanel()
 void RoutingPanel::setProject(const Project* value)
 {
     project = value;
+    editButton.setEnabled(!displayedRoutes().empty());
     repaint();
 }
 
 void RoutingPanel::setTrack(const juce::String& value)
 {
     trackId = value;
+    editButton.setEnabled(!displayedRoutes().empty());
     repaint();
 }
 
@@ -87,7 +96,7 @@ void RoutingPanel::paint(juce::Graphics& graphics)
     graphics.fillAll(juce::Colour(StudioColours::panel));
     graphics.setColour(juce::Colour(StudioColours::secondaryText));
     graphics.setFont(juce::Font(juce::FontOptions(10.5f, juce::Font::bold)));
-    graphics.drawText("ROUTING", 0, 0, getWidth() - 94, 24,
+    graphics.drawText("ROUTING", 0, 0, getWidth() - 138, 24,
                       juce::Justification::centredLeft);
 
     const auto routes = displayedRoutes();
@@ -131,7 +140,24 @@ void RoutingPanel::resized()
 {
     auto header = getLocalBounds().removeFromTop(24);
     trackButton.setBounds(header.removeFromRight(56).reduced(2));
+    editButton.setBounds(header.removeFromRight(44).reduced(2));
     addButton.setBounds(header.removeFromRight(34).reduced(2));
+}
+
+void RoutingPanel::showConnectionsMenu()
+{
+    if (project == nullptr)
+        return;
+    juce::PopupMenu menu;
+    const juce::Component::SafePointer<RoutingPanel> safe(this);
+    for (const auto* route : displayedRoutes())
+        menu.addItem(RoutingUiModel::summary(*project, *route),
+            [safe, id = route->id]
+            {
+                if (safe != nullptr)
+                    safe->editConnection(id);
+            });
+    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(editButton));
 }
 
 void RoutingPanel::mouseDown(const juce::MouseEvent& event)
@@ -233,16 +259,11 @@ void RoutingPanel::showAddMenu(
     juce::PopupMenu processorOutputs;
     for (const auto& insert : source->inserts)
     {
-        if (!insert.bundledDevice)
-            continue;
-        const auto* descriptor =
-            DeviceRegistry::descriptor(insert.pluginIdentifier);
-        if (descriptor == nullptr
-            || descriptor->outputBuses.size() <= 1)
+        const auto buses = RoutingUiModel::processorOutputBusNames(insert);
+        if (buses.size() <= 1)
             continue;
         for (int bus = 1;
-             bus < static_cast<int>(
-                 descriptor->outputBuses.size());
+             bus < buses.size();
              ++bus)
         {
             juce::PopupMenu destinations;
@@ -259,8 +280,7 @@ void RoutingPanel::showAddMenu(
                      destination,
                      insertId = insert.id,
                      bus,
-                     name = descriptor->outputBuses[
-                         static_cast<std::size_t>(bus)]]
+                     name = buses[bus]]
                     {
                         RoutingConnection route;
                         route.name = name;
@@ -288,8 +308,7 @@ void RoutingPanel::showAddMenu(
             processorOutputs.addSubMenu(
                 insert.name
                     + " / "
-                    + descriptor->outputBuses[
-                        static_cast<std::size_t>(bus)],
+                    + buses[bus],
                 destinations);
         }
     }

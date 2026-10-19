@@ -1,8 +1,10 @@
 #include "TestHarness.h"
 #include "TestSuites.h"
+#include "ScopedTestEnvironment.h"
 
 #include "plugin_host/PluginFormats.h"
 #include "plugin_host/ClapPluginFormat.h"
+#include "plugin_host/ClapPluginInstance.h"
 #include "plugin_host/PluginBridgeClient.h"
 #include "plugin_host/ValidatedPluginStateTarget.h"
 #include "model/ProjectCommands.h"
@@ -11,6 +13,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <iostream>
 #include <memory>
 #include <thread>
 
@@ -175,10 +178,353 @@ void sandboxCrashRecoveryTests(
             *engine, insert.id,
             "Explicit reload restores a crashed sandbox runtime.");
 }
+
+void hostTransportTests(const juce::PluginDescription& description, const studio::AudioClip& clip)
+{
+    ScopedTestEnvironment mode("STUDIO_DUO_TEST_CLAP_TRANSPORT", "1");
+    expect(mode.status().wasOk(), "Transport diagnostics are confined to this fixture process and its owned worker.");
+    for (const auto bridgeMode : { studio::PluginBridgeMode::trustedInProcess, studio::PluginBridgeMode::sandboxed })
+    {
+        auto project = studio::Project::createDefault();
+        project.metronomeEnabled = false;
+        project.tempo = 150.0;
+        project.tempoChanges = { { 0.0, 150.0, false }, { 0.05, 210.0, false } };
+        project.timeSignatureNumerator = 7;
+        project.timeSignatureDenominator = 8;
+        project.meterChanges = { { 0.0, 7, 8 }, { 0.05, 3, 4 } };
+        project.loopEnabled = true;
+        project.loopEndSeconds = 0.125;
+        project.tracks.front().clips = { clip };
+        studio::PluginInsert insert;
+        insert.pluginIdentifier = description.createIdentifierString();
+        insert.name = "Synthetic transport receiver";
+        insert.format = "CLAP";
+        insert.bridgeMode = bridgeMode;
+        project.tracks.front().inserts.push_back(insert);
+        studio::StudioAudioEngine::PluginRuntimeRequest request;
+        request.trackId = project.tracks.front().id;
+        request.insertId = insert.id;
+        request.name = insert.name;
+        request.description = description;
+        request.bridgeMode = bridgeMode;
+        auto engine = std::make_unique<studio::StudioAudioEngine>(juce::File(STUDIO_DUO_BRIDGE_WORKER_PATH));
+        expect(engine->configureAudioForTesting(48000.0, 256).wasOk(), "Transport fixture uses its actual configured clock.");
+        const auto started = engine->updateProject(project, { request });
+        expect(started.wasOk(), started.getErrorMessage().toRawUTF8());
+        if (started.failed() || !expectSandboxReady(*engine, insert.id, "The transport receiver becomes ready"))
+            continue;
+        engine->play();
+        auto firstTempo = false, secondTempo = false, contextMatches = true;
+        for (int block = 0; block < 48; ++block)
+        {
+            const auto signal = engine->renderActiveBlockForTesting(256);
+            if (block >= 8 && signal.getSample(0, 0) > 0.0f)
+            {
+                const auto seconds = static_cast<double>(signal.getSample(0, 5)) * 10.0;
+                const auto bpm = static_cast<double>(signal.getSample(0, 0)) * 1000.0;
+                const auto ppq = static_cast<double>(signal.getSample(0, 4)) * 1024.0;
+                const auto meter = project.meterAt(seconds + 1e-8);
+                const auto musical = project.musicalPositionAt(seconds + 1e-8);
+                const auto barLength = static_cast<double>(meter.numerator) * 4.0 / meter.denominator;
+                const auto meterStart = project.beatsAt(meter.timeSeconds);
+                const auto barStart = meterStart + std::floor((ppq - meterStart + 1e-8) / barLength) * barLength;
+                contextMatches = contextMatches
+                    && std::abs(bpm - project.tempoAt(seconds + 1e-8)) < 0.001
+                    && std::abs(ppq - project.beatsAt(seconds)) < 0.00001
+                    && std::abs(signal.getSample(0, 1) * 64.0f - static_cast<float>(meter.numerator)) < 1e-5f
+                    && std::abs(signal.getSample(0, 2) * 64.0f - static_cast<float>(meter.denominator)) < 1e-5f
+                    && std::abs(signal.getSample(0, 3) - 5.0f / 7.0f) < 1e-5f
+                    && std::abs(signal.getSample(0, 6) * 1000.0f - static_cast<float>(musical.bar - 1)) < 1e-4f
+                    && std::abs(static_cast<double>(signal.getSample(0, 7)) * 1024.0 - barStart) < 1e-5;
+                firstTempo = firstTempo || std::abs(bpm - 150.0) < 0.001;
+                secondTempo = secondTempo || std::abs(bpm - 210.0) < 0.001;
+            }
+            juce::MessageManager::getInstance()->runDispatchLoopUntil(20);
+        }
+        expect(firstTempo && secondTempo && contextMatches,
+               (juce::String("Actual ") + (bridgeMode == studio::PluginBridgeMode::sandboxed ? "worker" : "trusted")
+                + " CLAP processing receives the matching block-start tempo/meter/PPQ/seconds and loop/playing flags.").toRawUTF8());
+        engine->stop();
+        engine->shutdown();
+    }
+}
+
+void lifecycleAdmissionTests(const juce::PluginDescription& description)
+{
+    ScopedTestEnvironment delay("STUDIO_DUO_TEST_CLAP_ACTIVATE_DELAY_MS", "30");
+    expect(delay.status().wasOk(), "The lifecycle fixture uses a bounded native activation delay.");
+    for (int context = 0; context < 3; ++context)
+    {
+        juce::String error;
+        auto processor = studio::ClapPluginInstance::create(description, 48000.0, 64, error);
+        expect(processor != nullptr, error.toRawUTF8());
+        if (!processor)
+            continue;
+        processor->setNonRealtime(context == 1);
+        processor->setIsolatedWorkerProcessing(context == 2);
+        processor->prepareToPlay(48000.0, 64);
+        std::atomic<bool> running { true };
+        std::atomic<int> calls { 0 }, silent { 0 };
+        std::thread audio([&]
+        {
+            juce::AudioBuffer<float> buffer(2, 64);
+            juce::MidiBuffer events;
+            while (running.load(std::memory_order_acquire))
+            {
+                for (int channel = 0; channel < 2; ++channel)
+                    for (int sample = 0; sample < 64; ++sample)
+                        buffer.setSample(channel, sample, 0.2f);
+                events.clear();
+                processor->processBlockWithAutomation(buffer, events, {});
+                if (buffer.getMagnitude(0, 64) < 0.05f)
+                    silent.fetch_add(1, std::memory_order_relaxed);
+                calls.fetch_add(1, std::memory_order_release);
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+        });
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while (calls.load(std::memory_order_acquire) < 5 && std::chrono::steady_clock::now() < deadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        processor->prepareToPlay(48000.0, 64);
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        running.store(false, std::memory_order_release);
+        audio.join();
+        expect(calls.load() >= 5, "Lifecycle admission proof includes actual native DSP calls.");
+        if (context == 0)
+            expect(processor->suppressedProcessBlockCount() > 0 && silent.load() > 0,
+                   "A true in-process realtime caller stays nonblocking during native lifecycle changes.");
+        else
+            expect(processor->suppressedProcessBlockCount() == 0 && silent.load() == 0,
+                   "Offline and isolated-worker callers wait for native lifecycle admission instead of publishing silence.");
+        processor->releaseResources();
+    }
+}
+
+void sandboxOfflineWaitTests(const juce::PluginDescription& description, const studio::AudioClip& clip)
+{
+    ScopedTestEnvironment delay("STUDIO_DUO_TEST_CLAP_PROCESS_DELAY_MS", "30");
+    expect(delay.status().wasOk(), "A bounded synthetic DSP delay can be configured in the owned worker.");
+    auto project = studio::Project::createDefault();
+    project.metronomeEnabled = false;
+    project.tracks.front().clips = { clip };
+    studio::PluginInsert insert;
+    insert.pluginIdentifier = description.createIdentifierString();
+    insert.name = "Synthetic slow offline worker";
+    insert.format = "CLAP";
+    insert.bridgeMode = studio::PluginBridgeMode::sandboxed;
+    project.tracks.front().inserts.push_back(insert);
+    studio::StudioAudioEngine::PluginRuntimeRequest request;
+    request.trackId = project.tracks.front().id;
+    request.insertId = insert.id;
+    request.name = insert.name;
+    request.description = description;
+    request.bridgeMode = insert.bridgeMode;
+    auto engine = std::make_unique<studio::StudioAudioEngine>(juce::File(STUDIO_DUO_BRIDGE_WORKER_PATH));
+    expect(engine->configureAudioForTesting(48000.0, 256).wasOk(), "Offline worker qualification retains the selected clock.");
+    juce::AudioBuffer<float> rendered;
+    const auto result = engine->renderRangeToBuffer(project, rendered, 48000.0,
+        { 0.0, clip.durationSeconds, 0.0 }, { request });
+    expect(result.wasOk() && rendered.getNumSamples() == 64
+               && std::abs(rendered.getSample(0, 0) - 0.1f) < 1e-5f
+               && std::abs(rendered.getSample(1, 0) - 0.1f) < 1e-5f
+               && engine->pluginLateBlockCount() == 0,
+           ("Offline sandbox export waits for actual wet DSP, not fixed sleep followed by dry fallback: "
+            + result.getErrorMessage()).toRawUTF8());
+}
+
+void renderModeTests(const juce::PluginDescription& description, const studio::AudioClip& clip)
+{
+    ScopedTestEnvironment diagnostics("STUDIO_DUO_TEST_CLAP_RENDER_DIAGNOSTICS", "1");
+    expect(diagnostics.status().wasOk(), "The render-mode fixture is confined to its own process and workers.");
+    juce::String error;
+    auto processor = studio::ClapPluginInstance::create(description, 48000.0, 64, error);
+    expect(processor != nullptr, error.toRawUTF8());
+    if (!processor)
+        return;
+    for (const auto nonRealtime : { true, false })
+    {
+        processor->setNonRealtime(nonRealtime);
+        processor->prepareToPlay(48000.0, 64);
+        juce::AudioBuffer<float> signal(2, 64);
+        signal.clear();
+        juce::MidiBuffer midi;
+        processor->processBlock(signal, midi);
+        expect(processor->preparationResult().wasOk()
+                    && std::abs(signal.getSample(0, 0) - (nonRealtime ? 0.75f : 0.25f)) < 1e-6f,
+                "The actual CLAP render extension receives offline mode and restores realtime mode before activation.");
+        processor->reset();
+        signal.clear();
+        processor->processBlock(signal, midi);
+        expect(std::abs(signal.getSample(0, 0) - (nonRealtime ? 0.751f : 0.251f)) < 1e-6f,
+                "A host seek/reset calls the actual CLAP reset on its next admitted audio thread block.");
+        processor->releaseResources();
+    }
+    processor.reset();
+    auto undersized = studio::ClapPluginInstance::create(description, 48000.0, 64, error);
+    expect(undersized != nullptr, error.toRawUTF8());
+    if (undersized)
+    {
+        undersized->prepareToPlay(48000.0, 64);
+        juce::AudioBuffer<float> audio(1, 64);
+        audio.clear();
+        juce::MidiBuffer events;
+        undersized->processBlock(audio, events);
+        expect(undersized->suppressedProcessBlockCount() == 1 && audio.getMagnitude(0, 64) == 0.0f,
+               "A changed or undersized host channel layout fails closed before native CLAP buffer pointers can escape their allocation.");
+        undersized->releaseResources();
+    }
+    for (const auto* policy : { "hard-realtime", "reject-offline", "reject-activation" })
+    {
+        ScopedTestEnvironment configuredPolicy("STUDIO_DUO_TEST_CLAP_RENDER_POLICY", policy);
+        expect(configuredPolicy.status().wasOk(), "The fixture render rejection policy is process-local.");
+        auto rejected = studio::ClapPluginInstance::create(description, 48000.0, 64, error);
+        expect(rejected != nullptr, error.toRawUTF8());
+        if (rejected)
+        {
+             rejected->setNonRealtime(true);
+             rejected->prepareToPlay(48000.0, 64);
+             expect(rejected->preparationResult().failed(),
+                    "Rejected render modes, hard-realtime requirements and activation failures cannot report prepared.");
+        }
+        if (juce::String(policy) != "hard-realtime")
+             continue;
+        for (const auto mode : { studio::PluginBridgeMode::trustedInProcess, studio::PluginBridgeMode::sandboxed })
+        {
+             auto project = studio::Project::createDefault();
+             project.metronomeEnabled = false;
+             project.tracks.front().clips = { clip };
+             studio::PluginInsert insert;
+             insert.pluginIdentifier = description.createIdentifierString();
+             insert.name = "Synthetic hard-realtime processor";
+             insert.format = "CLAP";
+             insert.bridgeMode = mode;
+             project.tracks.front().inserts.push_back(insert);
+             studio::StudioAudioEngine::PluginRuntimeRequest request;
+             request.trackId = project.tracks.front().id;
+             request.insertId = insert.id;
+             request.name = insert.name;
+             request.description = description;
+             request.bridgeMode = mode;
+             auto engine = std::make_unique<studio::StudioAudioEngine>(juce::File(STUDIO_DUO_BRIDGE_WORKER_PATH));
+             expect(engine->configureAudioForTesting(48000.0, 64).wasOk(), "Render-mode rejection uses the configured clock.");
+             juce::AudioBuffer<float> rendered;
+             const auto result = engine->renderRangeToBuffer(project, rendered, 48000.0,
+                 { 0.0, clip.durationSeconds, 0.0 }, { request });
+             expect(result.failed() && result.getErrorMessage().contains("requires real-time"),
+                    ("Trusted and sandboxed offline export surface actual hard-realtime CLAP requirements: "
+                     + result.getErrorMessage()).toRawUTF8());
+        }
+    }
+}
+
+void multipleOutputTests(const juce::PluginDescription& description, const studio::AudioClip& clip)
+{
+    ScopedTestEnvironment buses("STUDIO_DUO_TEST_CLAP_MULTIBUS", "1");
+    expect(buses.status().wasOk(), "The multi-bus fixture uses only owned synthetic configuration.");
+    for (const auto mode : { studio::PluginBridgeMode::trustedInProcess, studio::PluginBridgeMode::sandboxed })
+    {
+        auto project = studio::Project::createDefault();
+        project.metronomeEnabled = false;
+        auto& source = project.tracks.front();
+        source.clips = { clip };
+        source.volumeDecibels = -60.0f;
+        studio::PluginInsert insert;
+        insert.pluginIdentifier = description.createIdentifierString();
+        insert.name = "Synthetic multibus effect";
+        insert.format = "CLAP";
+        insert.bridgeMode = mode;
+        insert.outputBusNames = { "Output", "Mono auxiliary", "Stereo auxiliary" };
+        source.inserts.push_back(insert);
+        const auto sourceId = source.id;
+        studio::Track mono, stereo;
+        mono.type = stereo.type = studio::TrackType::aux;
+        mono.name = "Synthetic mono return";
+        stereo.name = "Synthetic stereo return";
+        project.tracks.insert(project.tracks.end() - 1, mono);
+        project.tracks.insert(project.tracks.end() - 1, stereo);
+        for (int bus = 1; bus <= 2; ++bus)
+        {
+            studio::RoutingConnection route;
+            route.name = "Synthetic auxiliary route";
+            route.kind = studio::RouteKind::send;
+            route.tap = studio::RouteTap::preFader;
+            route.sourceTrackId = sourceId;
+            route.sourceInsertId = insert.id;
+            route.sourceBusIndex = bus;
+            route.destination.trackId = bus == 1 ? mono.id : stereo.id;
+            project.routingConnections.push_back(route);
+        }
+        studio::StudioAudioEngine::PluginRuntimeRequest request;
+        request.trackId = sourceId;
+        request.insertId = insert.id;
+        request.name = insert.name;
+        request.description = description;
+        request.bridgeMode = mode;
+        auto engine = std::make_unique<studio::StudioAudioEngine>(juce::File(STUDIO_DUO_BRIDGE_WORKER_PATH));
+        expect(engine->configureAudioForTesting(48000.0, 64).wasOk(), "Auxiliary routing retains its selected sample clock.");
+        juce::AudioBuffer<float> rendered;
+        std::cerr << "[plugin-format] auxiliary "
+                  << (mode == studio::PluginBridgeMode::sandboxed ? "sandbox" : "trusted")
+                  << " render" << std::endl;
+        const auto result = engine->renderRangeToBuffer(project, rendered, 48000.0,
+            { 0.0, clip.durationSeconds, 0.0 }, { request });
+        expect(result.wasOk() && rendered.getNumSamples() == 64
+                   && std::abs(rendered.getSample(0, 17) - 0.2001f) < 2e-6f
+                   && std::abs(rendered.getSample(1, 17) - 0.1501f) < 2e-6f,
+               ("Native mono/stereo auxiliary outputs retain independent offsets and gain in trusted and sandboxed renders: "
+                + result.getErrorMessage() + "; samples " + juce::String(rendered.getNumSamples())
+                + (rendered.getNumSamples() > 17 ? "; L " + juce::String(rendered.getSample(0, 17), 8)
+                    + "; R " + juce::String(rendered.getSample(1, 17), 8) : juce::String())).toRawUTF8());
+        project.findTrack(sourceId)->inserts.front().outputBusNames.add("Absent stale output");
+        for (auto& route : project.routingConnections)
+            if (route.sourceInsertId == insert.id && route.sourceBusIndex == 1)
+                route.sourceBusIndex = 3;
+        std::cerr << "[plugin-format] auxiliary stale-bus rejection" << std::endl;
+        const auto stale = engine->renderRangeToBuffer(project, rendered, 48000.0,
+            { 0.0, clip.durationSeconds, 0.0 }, { request });
+        expect(stale.failed() && stale.getErrorMessage().contains("output bus"),
+               ("Cached bus names cannot authorize a native output bus absent from this exact processor: "
+                + stale.getErrorMessage()).toRawUTF8());
+        std::cerr << "[plugin-format] auxiliary cleanup" << std::endl;
+    }
+}
 }
 
 void pluginFormatTests()
 {
+    std::cerr << "[plugin-format] coherent host clock" << std::endl;
+    studio::PluginHostPlayHead hostClock;
+    expect(!hostClock.getPosition(), "An unpublished host clock reports unavailable rather than fabricated transport.");
+    studio::PluginTransport transport;
+    transport.flags = studio::PluginTransport::valid | studio::PluginTransport::playing;
+    transport.samples = 100;
+    transport.seconds = 100.0 / 48000.0;
+    transport.bpm = 120.0;
+    hostClock.setTransport(transport.advanced(24000));
+    const auto position = hostClock.getPosition();
+    expect(position && position->getTimeInSamples() && *position->getTimeInSamples() == 24100
+               && position->getPpqPosition() && std::abs(*position->getPpqPosition() - 1.0) < 1e-9,
+           "Automation sub-blocks advance sample/seconds/quarter-note context without resetting the plugin clock.");
+    std::atomic<bool> clockPublished { false };
+    auto coherentClock = true;
+    std::thread publisher([&]
+    {
+        for (int index = 0; index < 10000; ++index)
+        {
+            auto value = transport;
+            value.samples = index;
+            value.bpm = static_cast<double>(index) + 100.0;
+            hostClock.setTransport(value);
+        }
+        clockPublished.store(true, std::memory_order_release);
+    });
+    while (!clockPublished.load(std::memory_order_acquire))
+        if (const auto value = hostClock.transport())
+            coherentClock = coherentClock && (value->samples == 24100
+                || std::abs(value->bpm - static_cast<double>(value->samples) - 100.0) < 1e-9);
+    publisher.join();
+    expect(coherentClock, "Atomic host-clock readers cannot observe torn words from different transport snapshots.");
+    std::cerr << "[plugin-format] main-thread dispatch" << std::endl;
     const auto dispatched = std::make_shared<std::atomic<bool>>(false);
     const auto posted = juce::MessageManager::callAsync(
         [dispatched]
@@ -192,6 +538,7 @@ void pluginFormatTests()
                }),
            "Sandbox fixture waits dispatch queued JUCE callbacks.");
 
+    std::cerr << "[plugin-format] protocol and snapshot handoffs" << std::endl;
     juce::AudioPluginFormatManager manager;
     studio::PluginFormats::addSupportedFormats(manager);
 
@@ -206,6 +553,23 @@ void pluginFormatTests()
 #endif
     expect(names.contains("CLAP"),
            "Supported plugin formats include CLAP.");
+    expect(
+        studio::PluginBridgeClient::assemblesDeviceBlockSlicesForTesting(),
+        "Loop/automation slices publish once per device callback with exact audio, sidechain, MIDI and ramp offsets.");
+    expect(studio::PluginBridgeClient::separatesAuxiliaryOutputTimelineForTesting(),
+           "Wet mono/stereo buses remain separate; deadline fallback preserves stereo dry audio without leaking it into auxiliary outputs.");
+    std::vector<studio::PluginOutputBus> decodedBuses;
+    expect(studio::decodePluginOutputBuses(studio::encodePluginOutputBuses(
+               { { "Main | mono", 1, 0 }, { "Auxiliary", 2, 1 }, { "Disabled", 2, -1 } }), decodedBuses).wasOk()
+               && decodedBuses.size() == 3 && decodedBuses[0].name == "Main | mono"
+               && decodedBuses[1].bufferChannelOffset == 1 && decodedBuses[2].bufferChannelOffset == -1,
+           "Bounded bus metadata retains names and active/disabled channel offsets without delimiter ambiguity.");
+    expect(studio::decodePluginOutputBuses(studio::encodePluginOutputBuses(
+               { { "Main", 2, 0 }, { "Overlapping", 2, 1 } }), decodedBuses).failed()
+               && studio::decodePluginOutputBuses(studio::encodePluginOutputBuses(
+                   { { "Too wide", studio::PluginBridgeSharedState::maxChannels + 1, 0 } }), decodedBuses).failed()
+               && studio::decodePluginOutputBuses("invalid", decodedBuses).failed(),
+           "Overlapping, oversized and malformed worker bus maps fail before publication.");
     expect(
         studio::PluginBridgeClient::recoversLateFirstOutputForTesting(),
         "Sandbox bridges recover the first valid result after a missed deadline.");
@@ -288,6 +652,7 @@ void pluginFormatTests()
                < 0.0001f,
            "Destination delay progress merges a final source advance made after preparation but before publication.");
 
+    std::cerr << "[plugin-format] native CLAP creation" << std::endl;
     studio::ClapPluginFormat clapFormat;
     juce::OwnedArray<juce::PluginDescription> descriptions;
     clapFormat.findAllTypesForFile(descriptions,
@@ -313,6 +678,7 @@ void pluginFormatTests()
     expect(validatedState != nullptr,
            "CLAP instances expose validated state errors.");
 
+    std::cerr << "[plugin-format] native CLAP activation and DSP" << std::endl;
     instance->prepareToPlay(48000.0, 64);
     juce::AudioBuffer<float> audio(2, 64);
     for (int channel = 0; channel < audio.getNumChannels(); ++channel)
@@ -508,6 +874,7 @@ void pluginFormatTests()
                && std::abs(instance->getParameters()[1]->getValue() - 0.5f)
                       < 0.0001f,
            "CLAP timed automation converts normalized values to plain parameter ranges.");
+    std::cerr << "[plugin-format] native CLAP state round trips" << std::endl;
     juce::MemoryBlock state;
     instance->getStateInformation(state);
     instance->getParameters()[0]->setValueNotifyingHost(0.25f);
@@ -688,6 +1055,7 @@ void pluginFormatTests()
                 : juce::String()))
             .toRawUTF8());
 
+    std::cerr << "[plugin-format] sandbox engine PDC and automation" << std::endl;
     const auto monoSource = juce::File::getSpecialLocation(
                                 juce::File::tempDirectory)
                                 .getNonexistentChildFile(
@@ -1028,7 +1396,19 @@ void pluginFormatTests()
             + ").")
                .toRawUTF8());
 
+    std::cerr << "[plugin-format] sandbox crash and reload" << std::endl;
     sandboxCrashRecoveryTests(*descriptions[0], monoClip);
+    std::cerr << "[plugin-format] native host transport" << std::endl;
+    hostTransportTests(*descriptions[0], monoClip);
+    std::cerr << "[plugin-format] lifecycle admission" << std::endl;
+    lifecycleAdmissionTests(*descriptions[0]);
+    std::cerr << "[plugin-format] completed offline DSP" << std::endl;
+    sandboxOfflineWaitTests(*descriptions[0], monoClip);
+    std::cerr << "[plugin-format] native render modes" << std::endl;
+    renderModeTests(*descriptions[0], monoClip);
+    std::cerr << "[plugin-format] native auxiliary outputs" << std::endl;
+    multipleOutputTests(*descriptions[0], monoClip);
+    std::cerr << "[plugin-format] ARA policy" << std::endl;
     monoSource.deleteFile();
 
     auto project = studio::Project::createDefault();

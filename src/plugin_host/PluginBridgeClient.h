@@ -1,6 +1,6 @@
 #pragma once
 
-#include "PluginBridgeProtocol.h"
+#include "PluginAudioBuses.h"
 
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_events/juce_events.h>
@@ -27,16 +27,22 @@ public:
                              double sampleRate,
                              int blockSize,
                              const juce::MemoryBlock& state = {},
-                             int sidechainChannels = 0);
+                             int sidechainChannels = 0,
+                             bool nonRealtime = false,
+                             int lastOutputBus = 0);
     void stop();
     juce::Result requestState(juce::MemoryBlock& state,
                               std::chrono::milliseconds timeout);
+    [[nodiscard]] juce::Result waitForPendingOutput(std::chrono::milliseconds timeout) const;
     juce::Result showEditor();
     juce::Result hideEditor();
     juce::Result focusEditor();
     juce::Result resizeEditor(int width, int height);
     bool setParameter(int parameterIndex, float normalizedValue);
     void resetProcessing();
+    void setTransport(const PluginTransport& transport) noexcept;
+    void beginDeviceBlock() noexcept;
+    void endDeviceBlock() noexcept;
     void processBlock(
         juce::AudioBuffer<float>& audio,
         const juce::AudioBuffer<float>* sidechain = nullptr,
@@ -45,12 +51,14 @@ public:
         juce::AudioBuffer<float>& audio,
         juce::MidiBuffer& midi,
         const juce::AudioBuffer<float>* sidechain = nullptr,
-        std::span<const PluginBridgeParameterEvent> parameterEvents = {}) noexcept;
+        std::span<const PluginBridgeParameterEvent> parameterEvents = {},
+        juce::AudioBuffer<float>* allOutputs = nullptr) noexcept;
 
     [[nodiscard]] bool isReady() const noexcept;
     [[nodiscard]] std::uint64_t lateBlockCount() const noexcept;
     [[nodiscard]] int reportedLatencySamples() const noexcept;
     [[nodiscard]] double reportedTailSeconds() const noexcept;
+    [[nodiscard]] const std::vector<PluginOutputBus>& outputBuses() const noexcept { return buses; }
     [[nodiscard]] std::vector<PluginParameterDescriptor>
         parameterDescriptors() const;
     [[nodiscard]] juce::String diagnosticState() const;
@@ -59,6 +67,8 @@ public:
     static bool recoversLateFirstOutputForTesting();
     static bool resetsProcessingTimelineForTesting();
     static bool isolatesConcurrentTransportsForTesting();
+    static bool assemblesDeviceBlockSlicesForTesting();
+    static bool separatesAuxiliaryOutputTimelineForTesting();
 #endif
 
 private:
@@ -69,14 +79,14 @@ private:
                                double sampleRate,
                                int blockSize,
                                const juce::MemoryBlock& state,
-                               int sidechainChannels);
+                               int sidechainChannels, bool nonRealtime, int lastOutputBus);
     void fetchWorkerOutput() noexcept;
-    void publishInputBlock(int samples) noexcept;
+    void publishInputBlock(int samples, std::int64_t startSample) noexcept;
     void prepareOutputTimeline(int blockSize);
-    void queueDryInput(int samples) noexcept;
+    void queueDryInput(int samples, int inputOffset) noexcept;
     void queueCompletedOutput() noexcept;
     void readTimelineOutput(juce::AudioBuffer<float>& audio,
-                            juce::MidiBuffer& midi) noexcept;
+                            juce::MidiBuffer& midi, juce::AudioBuffer<float>* allOutputs) noexcept;
     juce::Result sendEditorCommand(const juce::String& command,
                                   int width = 0,
                                   int height = 0);
@@ -93,6 +103,7 @@ private:
     std::array<std::array<float, PluginBridgeSharedState::maxBlockSize>,
                PluginBridgeSharedState::maxChannels> completedOutput {};
     juce::AudioBuffer<float> outputTimeline;
+    std::vector<std::uint8_t> wetOutputTimeline;
     juce::MidiBuffer scratchMidi;
     juce::MidiBuffer completedMidi;
     juce::MidiBuffer outputMidiTimeline;
@@ -102,6 +113,11 @@ private:
                PluginBridgeSharedState::maxMidiBytes> pendingMidiData {};
     int pendingMidiEventCount = 0;
     int pendingMidiByteCount = 0;
+    int deviceBlockInputSamples = 0;
+    bool deviceBlockActive = false;
+    bool deviceBlockFailed = false;
+    PluginTransport currentTransport;
+    PluginTransport packetTransport;
     int processingBlockSize = 512;
     int inputChannels = 0;
     int sidechainChannels = 0;
@@ -125,10 +141,12 @@ private:
     std::uint32_t lastOutputSequence = 0;
     std::atomic<bool> ready { false };
     std::atomic<bool> connectionLost { false };
+    std::atomic<int> startupStage { 0 };
     std::atomic<std::uint64_t> lateBlocks { 0 };
     std::atomic<int> pluginLatencySamples { 0 };
     std::atomic<double> pluginTailSeconds { 0.0 };
     std::vector<PluginParameterDescriptor> parameters;
+    std::vector<PluginOutputBus> buses;
     mutable std::mutex parameterMutex;
     std::mutex commandMutex;
     std::mutex responseMutex;

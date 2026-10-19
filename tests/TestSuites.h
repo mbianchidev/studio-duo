@@ -6,11 +6,14 @@
 std::optional<int> runAudioDeviceProbeFixture(const juce::StringArray& arguments);
 std::optional<int> runProjectSaveFixture(const juce::StringArray& arguments);
 std::optional<int> runProjectExchangeFixture(const juce::StringArray& arguments);
+std::optional<int> runLongSessionQualification(const juce::StringArray& arguments);
+std::optional<int> runVendorPluginQualification(const juce::StringArray& arguments);
 void projectHardeningTests();
 void saveInterruptionTests();
 void projectExchangeTests();
 void keyboardAccessibilityTests();
 void performanceHardeningTests();
+void longSessionQualificationTests();
 void audioDeviceProbeTests();
 #if JUCE_WINDOWS
 std::optional<int> runWindowsCrashHandlerFixture(const juce::StringArray& arguments);
@@ -44,6 +47,7 @@ void sectionTransportTests();
 void transportSettingsTests();
 void updateTests();
 void midiTests();
+void controlSurfaceTests();
 void dawProjectTests();
 void studioOneProjectTests();
 void masteringTests();

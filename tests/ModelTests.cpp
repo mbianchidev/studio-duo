@@ -11,8 +11,12 @@
 #include "TestSuites.h"
 
 #include <array>
+#include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cmath>
 #include <iostream>
+#include <thread>
 
 namespace
 {
@@ -1365,6 +1369,83 @@ void pluginCatalogFiltering()
 
 void pluginBridgeProtocol()
 {
+    class Connection final : public juce::InterprocessConnection
+    {
+    public:
+        Connection() : juce::InterprocessConnection(false, 0x53445046u) {}
+        ~Connection() override { disconnect(2000, Notify::no); }
+        void connectionMade() override {}
+        void connectionLost() override { lost.store(true, std::memory_order_release); }
+        void messageReceived(const juce::MemoryBlock& message) override
+        {
+            const auto* data = static_cast<const std::uint8_t*>(message.getData());
+            const auto validSize = message.getSize() == 256 * 1024 || message.getSize() == 31;
+            const auto expected = message.getSize() == 31 ? 0xa5u : 0x5au;
+            if (!validSize || !std::all_of(data, data + message.getSize(),
+                                         [expected](auto value) { return value == expected; }))
+                invalid.fetch_add(1, std::memory_order_relaxed);
+            received.fetch_add(1, std::memory_order_release);
+        }
+        std::atomic<int> received { 0 }, invalid { 0 };
+        std::atomic<bool> lost { false };
+    };
+    {
+        Connection receiver, sender;
+        const auto pipe = "studio-duo-framing-" + juce::Uuid().toString();
+        const auto connected = receiver.createPipe(pipe, 5000, true) && sender.connectToPipe(pipe, 5000);
+        expect(connected, "Owned native IPC framing fixtures can connect without an audio device.");
+        if (connected)
+        {
+            juce::MemoryBlock large(256 * 1024), small(31);
+            std::fill_n(static_cast<std::uint8_t*>(large.getData()), large.getSize(), std::uint8_t { 0x5a });
+            std::fill_n(static_cast<std::uint8_t*>(small.getData()), small.getSize(), std::uint8_t { 0xa5 });
+            std::atomic<bool> go { false }, sent { true };
+            const auto transmit = [&](const auto& message, int count)
+            {
+                while (!go.load(std::memory_order_acquire))
+                    std::this_thread::yield();
+                for (int index = 0; index < count; ++index)
+                    if (!sender.sendMessage(message))
+                    {
+                        sent.store(false, std::memory_order_release);
+                        break;
+                    }
+            };
+            std::thread stateWriter([&] { transmit(large, 32); });
+            std::thread heartbeatWriter([&] { transmit(small, 256); });
+            go.store(true, std::memory_order_release);
+            stateWriter.join();
+            heartbeatWriter.join();
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+            while (receiver.received.load(std::memory_order_acquire) < 288
+                   && std::chrono::steady_clock::now() < deadline && !receiver.lost.load())
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            expect(sent.load() && receiver.received.load() == 288 && receiver.invalid.load() == 0,
+                   "Concurrent large state/metadata frames and heartbeat-size frames cannot interleave on the native IPC pipe.");
+        }
+    }
+    {
+        Connection receiver, sender;
+        const auto pipe = "studio-duo-truncated-frame-" + juce::Uuid().toString();
+        const auto connected = receiver.createPipe(pipe, 5000, true) && sender.connectToPipe(pipe, 5000);
+        expect(connected, "The truncated native frame fixture has its own pipe.");
+        if (connected)
+        {
+            const std::array<juce::uint32, 2> header {
+                juce::ByteOrder::swapIfBigEndian(juce::uint32 { 0x53445046u }),
+                juce::ByteOrder::swapIfBigEndian(juce::uint32 { 1024 })
+            };
+            juce::MemoryBlock truncated(header.data(), sizeof(header));
+            truncated.setSize(sizeof(header) + 16, true);
+            const auto written = sender.getPipe()->write(truncated.getData(), static_cast<int>(truncated.getSize()), 5000);
+            sender.disconnect(2000, juce::InterprocessConnection::Notify::no);
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(7);
+            while (!receiver.lost.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline)
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            expect(written == static_cast<int>(truncated.getSize()) && receiver.lost.load() && receiver.received.load() == 0,
+                   "Truncated IPC payloads close explicitly instead of delivering zero-padded state or startup fields.");
+        }
+    }
     auto state =
         std::make_unique<studio::PluginBridgeSharedState>();
     state->numChannels.store(2);
@@ -1569,6 +1650,10 @@ int main(int argc, char* argv[])
         return *result;
     if (const auto result = runProjectExchangeFixture(arguments))
         return *result;
+    if (const auto result = runLongSessionQualification(arguments))
+        return *result;
+    if (const auto result = runVendorPluginQualification(arguments))
+        return *result;
     if (const auto result = runAudioDeviceProbeFixture(arguments))
         return *result;
 #if JUCE_WINDOWS
@@ -1647,10 +1732,12 @@ int main(int argc, char* argv[])
     RUN_SUITE(projectExchangeTests);
     RUN_SUITE(keyboardAccessibilityTests);
     RUN_SUITE(performanceHardeningTests);
+    RUN_SUITE(longSessionQualificationTests);
     RUN_SUITE(projectTemplateTests);
     RUN_SUITE(windowSizingTests);
     RUN_SUITE(updateTests);
     RUN_SUITE(midiTests);
+    RUN_SUITE(controlSurfaceTests);
     RUN_SUITE(dawProjectTests);
     RUN_SUITE(studioOneProjectTests);
     RUN_SUITE(masteringTests);

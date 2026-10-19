@@ -1,5 +1,7 @@
 #pragma once
 
+#include "PluginTransport.h"
+
 #include <juce_audio_basics/juce_audio_basics.h>
 
 #include <algorithm>
@@ -18,6 +20,7 @@ struct PluginParameterDescriptor
     juce::String name;
     float value = 0.0f;
     bool automatable = false;
+    int steps = -1; // Unknown, continuous (0), or discrete (>= 2).
 };
 
 struct PluginBridgeParameterEvent
@@ -28,7 +31,7 @@ struct PluginBridgeParameterEvent
     std::uint32_t sampleOffset = 0;
     float value = 0.0f;
     std::uint32_t flags = 0;
-    std::uint32_t rampEndOffset = 0;
+    std::uint32_t rampEndOffset = 0; // May equal numSamples: the final sample must retain the original slope.
     float rampEndValue = 0.0f;
 };
 
@@ -42,7 +45,7 @@ struct PluginBridgeMidiEvent
 struct alignas(64) PluginBridgeSharedState
 {
     static constexpr std::uint32_t magicValue = 0x53444252;
-    static constexpr std::uint32_t protocolVersion = 6;
+    static constexpr std::uint32_t protocolVersion = 9;
     static constexpr std::uint32_t bypassOutputFlag = 1u;
     static constexpr std::uint32_t resetAppliedFlag = 1u << 1u;
     static constexpr int maxChannels = 8;
@@ -87,6 +90,8 @@ struct alignas(64) PluginBridgeSharedState
         midiOutputEvents {};
     alignas(64) std::array<std::uint8_t, maxMidiBytes>
         midiOutputData {};
+    alignas(64) PluginTransport transport;
+    std::array<std::uint8_t, 8> transportPadding {};
 };
 
 static_assert(std::atomic<std::uint32_t>::is_always_lock_free,

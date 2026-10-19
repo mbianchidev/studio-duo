@@ -8,22 +8,50 @@
 #include "midi/MidiEditing.h"
 #include "plugin_host/PluginFormats.h"
 #include "plugin_host/ClapPluginInstance.h"
+#include "plugin_host/PluginAudioBuses.h"
 #include "devices/DeviceRegistry.h"
+#include "platform/MediaFileRevision.h"
 
 #include <signalsmith-stretch/signalsmith-stretch.h>
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <condition_variable>
 #include <limits>
 #include <mutex>
 #include <span>
+#include <set>
 #include <thread>
 
 namespace studio
 {
 namespace
 {
+juce::String preparedClipKey(const AudioClip& clip, double rate, const MediaFileRevision& revision)
+{
+    const auto path = clip.sourceFile.getFullPathName();
+    auto key = juce::String(path.length()) + ":" + path + ":" + revision.key;
+    const auto append = [&key](double value)
+    {
+        key << ":" << juce::String::toHexString(std::bit_cast<juce::int64>(value));
+    };
+    append(rate);
+    append(clip.durationSeconds);
+    append(clip.sourceOffsetSeconds);
+    append(clip.sourceLengthSeconds);
+    append(clip.sourceRangeStartSeconds);
+    append(clip.sourceRangeEndSeconds);
+    append(clip.playbackRate);
+    key << ":" << static_cast<int>(clip.stretchMode) << ":" << (clip.reversed ? 1 : 0);
+    for (const auto& marker : clip.warpMarkers)
+    {
+        append(marker.timelineOffsetSeconds);
+        append(marker.sourceSeconds);
+    }
+    return key;
+}
+
 juce::AudioFormatWriterOptions writerOptions(double sampleRate, int channels)
 {
     return juce::AudioFormatWriterOptions {}
@@ -112,23 +140,33 @@ juce::Result validateRecordingPlan(const RecordingPlan& plan)
 std::shared_ptr<juce::AudioProcessor> messageThreadOwnedProcessor(
     std::unique_ptr<juce::AudioProcessor> processor)
 {
+    if (processor == nullptr)
+        return {};
+    auto playHead = std::make_shared<PluginHostPlayHead>();
+    processor->setPlayHead(playHead.get());
     return {
         processor.release(),
-        [](juce::AudioProcessor* value)
+        [playHead](juce::AudioProcessor* value)
         {
             if (value == nullptr)
                 return;
+            auto destroy = [value, playHead]() mutable
+            {
+                delete value;
+                playHead.reset();
+            };
             const auto* messages =
                 juce::MessageManager::getInstanceWithoutCreating();
             if (messages == nullptr
                 || messages->isThisTheMessageThread())
             {
-                delete value;
+                destroy();
                 return;
             }
             if (!juce::MessageManager::callAsync(
-                    [value] { delete value; }))
+                    std::move(destroy)))
             {
+                value->setPlayHead(nullptr);
                 logError(
                     "plugin.runtime",
                     "Message thread unavailable during processor teardown.");
@@ -770,6 +808,11 @@ void StudioAudioEngine::seekSeconds(double seconds) noexcept
     requestMidiNoteTermination();
 }
 
+void StudioAudioEngine::setControlSurfaceInputReservation(juce::String identifier)
+{
+    midiCollector.setReservedInput(std::move(identifier));
+}
+
 void StudioAudioEngine::setMidiAuditionEnabled(bool enabled) noexcept
 {
     softwareMidiAuditionEnabled.store(enabled, std::memory_order_release);
@@ -960,6 +1003,38 @@ double StudioAudioEngine::currentSampleRate() const noexcept
 }
 
 #if defined(STUDIO_DUO_TESTING)
+juce::Result StudioAudioEngine::configureAudioForTesting(double rate, int blockSize)
+{
+    if (!std::isfinite(rate) || rate <= 0.0 || blockSize <= 0
+        || blockSize > PluginBridgeSharedState::maxBlockSize)
+        return juce::Result::fail("Synthetic audio configuration requires a valid sample rate and block size.");
+    if (isPlaying() || isRecording() || pluginRuntimeTransitionPending())
+        return juce::Result::fail("Stop synthetic playback and graph transitions before changing configuration.");
+    sampleRate.store(rate, std::memory_order_release);
+    deviceBlockSize.store(blockSize, std::memory_order_release);
+    midiCollector.reset(rate);
+    return juce::Result::ok();
+}
+
+juce::Result StudioAudioEngine::waitForSandboxDspForTesting()
+{
+    const juce::ScopedLock lock(pluginRequestLock);
+    const auto& graph = pluginRuntimeGraphs[static_cast<std::size_t>(activePluginRuntime.load(std::memory_order_acquire))];
+    for (const auto& track : graph.tracks)
+        for (const auto& insert : track.inserts)
+            if (insert.bridge != nullptr)
+                if (const auto completed = insert.bridge->waitForPendingOutput(std::chrono::seconds(5)); completed.failed())
+                    return juce::Result::fail(insert.name + ": " + completed.getErrorMessage());
+    return juce::Result::ok();
+}
+
+void StudioAudioEngine::renderActiveBlockForTesting(juce::AudioBuffer<float>& output)
+{
+    juce::AudioIODeviceCallbackContext context;
+    audioDeviceIOCallbackWithContext(nullptr, 0, output.getArrayOfWritePointers(),
+        output.getNumChannels(), output.getNumSamples(), context);
+}
+
 int StudioAudioEngine::minimumRouteBufferCapacityForTesting() const noexcept
 {
     const juce::ScopedLock lock(pluginRequestLock);
@@ -988,6 +1063,14 @@ double StudioAudioEngine::activeSnapshotSampleRateForTesting() const noexcept
         : snapshots.front().sampleRate;
 }
 
+int StudioAudioEngine::outputLatencySamplesForTesting() const noexcept
+{
+    const juce::ScopedLock lock(pluginRequestLock);
+    return activeSnapshotTemplate != nullptr
+        ? activeSnapshotTemplate->clickCompensation.delaySamples
+        : snapshots.front().clickCompensation.delaySamples;
+}
+
 juce::AudioBuffer<float>
 StudioAudioEngine::renderActiveBlockForTesting(int samples,
                                                int outputChannels)
@@ -997,18 +1080,7 @@ StudioAudioEngine::renderActiveBlockForTesting(int samples,
         channelCount,
         std::max(1, samples));
     output.clear();
-    std::vector<float*> channels;
-    channels.reserve(static_cast<std::size_t>(channelCount));
-    for (int channel = 0; channel < channelCount; ++channel)
-        channels.push_back(output.getWritePointer(channel));
-    juce::AudioIODeviceCallbackContext context;
-    audioDeviceIOCallbackWithContext(
-        nullptr,
-        0,
-        channels.data(),
-        channelCount,
-        output.getNumSamples(),
-        context);
+    renderActiveBlockForTesting(output);
     return output;
 }
 
@@ -1098,6 +1170,40 @@ std::uint64_t StudioAudioEngine::runtimeKeyForTesting(
 std::uint64_t StudioAudioEngine::sourceReadCountForTesting() const noexcept
 {
     return testingSourceReadCount.load(std::memory_order_relaxed);
+}
+
+void StudioAudioEngine::setMediaPreparationHookForTesting(std::function<void()> hook)
+{
+    testingMediaPreparationHook = std::move(hook);
+}
+
+StudioAudioEngine::PreparedAudioStorageForTesting
+StudioAudioEngine::preparedAudioStorageForTesting() const
+{
+    const juce::ScopedLock lock(pluginRequestLock);
+    PreparedAudioStorageForTesting result;
+    std::set<const float*> buffers;
+    const auto inspect = [&](const RenderSnapshot& snapshot)
+    {
+        for (const auto& track : snapshot.tracks)
+            for (const auto& source : track.sources)
+                for (const auto& clip : source.clips)
+                {
+                    ++result.references;
+                    if (clip.samples != nullptr && clip.samples->getNumChannels() > 0
+                        && buffers.insert(clip.samples->getReadPointer(0)).second)
+                    {
+                        ++result.distinctBuffers;
+                        result.bytes += static_cast<std::uint64_t>(clip.samples->getNumChannels())
+                            * static_cast<std::uint64_t>(clip.samples->getNumSamples()) * sizeof(float);
+                    }
+                }
+    };
+    for (const auto& snapshot : snapshots)
+        inspect(snapshot);
+    if (activeSnapshotTemplate != nullptr)
+        inspect(*activeSnapshotTemplate);
+    return result;
 }
 
 void StudioAudioEngine::processActiveBlockForTesting(int samples)
@@ -1499,7 +1605,8 @@ StudioAudioEngine::pluginRuntimeStatuses()
             if (previous[index].index != current[index].index
                 || previous[index].id != current[index].id
                 || previous[index].automatable
-                    != current[index].automatable)
+                    != current[index].automatable
+                || previous[index].steps != current[index].steps)
                 return true;
         }
         return false;
@@ -1581,7 +1688,8 @@ StudioAudioEngine::pluginRuntimeStatuses()
                                 : juce::String(index),
                             parameter->getName(128),
                             parameter->getValue(),
-                            parameter->isAutomatable()
+                            parameter->isAutomatable(),
+                            parameter->isDiscrete() ? std::max(2, parameter->getNumSteps()) : 0
                         });
                     }
                     parameterLayoutChanged =
@@ -1987,6 +2095,8 @@ StudioAudioEngine::preserveLiveAraStates(
         const auto preserveRackState = rackChanged && previous != previousRequests.cend()
             && origin != previousOrigins.cend() && origin->second == pluginStateHash(request.state)
             && previous->bridgeMode == request.bridgeMode
+            && previous->nonRealtime == request.nonRealtime
+            && previous->lastOutputBus == request.lastOutputBus
             && previous->deviceIdentifier == request.deviceIdentifier
             && previous->description.has_value() == request.description.has_value()
             && (!request.description.has_value()
@@ -2918,7 +3028,7 @@ juce::Result StudioAudioEngine::renderClipToWav(const AudioClip& clip,
     renderClip.processing.playbackRate = 1.0;
     renderClip.processing.reversed = false;
     renderClip.processing.warpMarkers.clear();
-    renderClip.samples = std::move(*processed);
+    renderClip.samples = std::make_shared<const juce::AudioBuffer<float>>(std::move(*processed));
 
     juce::AudioBuffer<float> block(2, 2048);
     std::int64_t position = 0;
@@ -3273,9 +3383,12 @@ juce::Result StudioAudioEngine::renderToBufferInternal(
             return failure;
         };
 
+        auto renderRequests = pluginRequests;
+        for (auto& request : renderRequests)
+            request.nonRealtime = true;
         if (const auto result = updateProjectInternal(
                 renderProject,
-                pluginRequests,
+                renderRequests,
                 true);
             result.failed())
         {
@@ -3339,7 +3452,7 @@ juce::Result StudioAudioEngine::renderToBufferInternal(
             false);
         destination.clear();
 
-        const auto realtime = std::any_of(
+        const auto hasSandboxedProcessors = std::any_of(
             pluginRequests.cbegin(),
             pluginRequests.cend(),
             [](const auto& request)
@@ -3381,16 +3494,21 @@ juce::Result StudioAudioEngine::renderToBufferInternal(
                         channel, destinationOffset, block, channel, sourceOffset, capturedSamples);
             }
             offset += samples;
-            if (realtime)
+            const auto runtimeIndex = activePluginRuntime.load(std::memory_order_acquire);
+            for (const auto& track : pluginRuntimeGraphs[static_cast<std::size_t>(runtimeIndex)].tracks)
             {
-                juce::Thread::sleep(
-                    std::max(
-                        1,
-                        static_cast<int>(
-                            std::ceil(
-                                static_cast<double>(samples)
-                                * 1000.0
-                                / renderSampleRate))));
+                for (const auto& insert : track.inserts)
+                {
+                    if (hasSandboxedProcessors && insert.bridge != nullptr)
+                        if (const auto completed = insert.bridge->waitForPendingOutput(std::chrono::seconds(5));
+                            completed.failed())
+                            return restoreAfterFailure(juce::Result::fail(
+                                insert.name + ": " + completed.getErrorMessage()), true);
+                    if (const auto* clap = dynamic_cast<const ClapPluginInstance*>(insert.inProcess.get());
+                        clap != nullptr && clap->suppressedProcessBlockCount() != 0)
+                        return restoreAfterFailure(juce::Result::fail(
+                            insert.name + ": CLAP processing was suppressed or failed during offline export."), true);
+                }
             }
         }
         for (const auto& status : pluginRuntimeStatuses())
@@ -3548,7 +3666,16 @@ std::optional<StudioAudioEngine::RenderSnapshot> StudioAudioEngine::buildSnapsho
     constexpr std::size_t maximumDecodedCacheBytes = 64 * 1024 * 1024;
     std::size_t decodedCacheBytes = 0;
     std::map<juce::String, juce::AudioBuffer<float>> decodedSources;
-    const auto buildClips = [this, targetSampleRate, &error, &decodedSources, &decodedCacheBytes](
+    juce::String largeSourcePath;
+    std::optional<juce::AudioBuffer<float>> largeSource;
+    std::map<juce::String, MediaFileRevision> sourceRevisions;
+    std::map<juce::String, std::shared_ptr<const juce::AudioBuffer<float>>> preparedForBuild;
+    {
+        const juce::ScopedLock lock(preparedClipCacheLock);
+        std::erase_if(preparedClipCache, [](const auto& entry) { return entry.second.expired(); });
+    }
+    const auto buildClips = [this, targetSampleRate, &error, &decodedSources, &decodedCacheBytes,
+                            &largeSource, &largeSourcePath, &sourceRevisions, &preparedForBuild](
                                 const Track& track,
                                 const std::vector<CompRegion>* compRegions)
         -> std::optional<std::vector<RenderClip>>
@@ -3561,33 +3688,63 @@ std::optional<StudioAudioEngine::RenderSnapshot> StudioAudioEngine::buildSnapsho
                 continue;
 
             const auto sourcePath = clip.sourceFile.getFullPathName();
-            auto cached = decodedSources.find(sourcePath);
-            std::optional<juce::AudioBuffer<float>> decoded;
-            const juce::AudioBuffer<float>* audio = nullptr;
-            if (cached != decodedSources.end())
-                audio = &cached->second;
-            else
+            auto revision = sourceRevisions.find(sourcePath);
+            if (revision == sourceRevisions.end())
             {
-                decoded = readAndResample(clip.sourceFile, targetSampleRate, error);
-                if (!decoded)
+                const auto observed = readMediaFileRevision(clip.sourceFile, error);
+                if (!observed)
                     return std::nullopt;
-                const auto bytes = static_cast<std::size_t>(decoded->getNumChannels())
-                    * static_cast<std::size_t>(decoded->getNumSamples()) * sizeof(float);
-                if (bytes <= maximumDecodedCacheBytes - decodedCacheBytes)
-                {
-                    decodedCacheBytes += bytes;
-                    cached = decodedSources.emplace(sourcePath, std::move(*decoded)).first;
-                    audio = &cached->second;
-                }
-                else
-                    audio = &*decoded;
+                revision = sourceRevisions.emplace(sourcePath, *observed).first;
             }
-            auto processed = processClipAudio(clip,
-                                              *audio,
-                                              targetSampleRate,
-                                              error);
-            if (!processed.has_value())
-                return std::nullopt;
+            const auto key = preparedClipKey(clip, targetSampleRate, revision->second);
+            std::shared_ptr<const juce::AudioBuffer<float>> prepared;
+            if (const auto existing = preparedForBuild.find(key); existing != preparedForBuild.end())
+                prepared = existing->second;
+            else if (revision->second.reusable)
+            {
+                const juce::ScopedLock lock(preparedClipCacheLock);
+                if (const auto cachedPrepared = preparedClipCache.find(key); cachedPrepared != preparedClipCache.end())
+                    prepared = cachedPrepared->second.lock();
+            }
+            if (prepared == nullptr)
+            {
+                auto cached = decodedSources.find(sourcePath);
+                const juce::AudioBuffer<float>* audio = nullptr;
+                if (cached != decodedSources.end())
+                    audio = &cached->second;
+                else if (largeSource && largeSourcePath == sourcePath)
+                    audio = &*largeSource;
+                else
+                {
+                    auto decoded = readAndResample(clip.sourceFile, targetSampleRate, error);
+                    if (!decoded)
+                        return std::nullopt;
+                    const auto bytes = static_cast<std::size_t>(decoded->getNumChannels())
+                        * static_cast<std::size_t>(decoded->getNumSamples()) * sizeof(float);
+                    if (bytes <= maximumDecodedCacheBytes - decodedCacheBytes)
+                    {
+                        decodedCacheBytes += bytes;
+                        cached = decodedSources.emplace(sourcePath, std::move(*decoded)).first;
+                        audio = &cached->second;
+                    }
+                    else
+                    {
+                        largeSource = std::move(*decoded);
+                        largeSourcePath = sourcePath;
+                        audio = &*largeSource;
+                    }
+                }
+                auto processed = processClipAudio(clip, *audio, targetSampleRate, error);
+                if (!processed)
+                    return std::nullopt;
+                prepared = std::make_shared<const juce::AudioBuffer<float>>(std::move(*processed));
+                if (revision->second.reusable)
+                {
+                    const juce::ScopedLock lock(preparedClipCacheLock);
+                    preparedClipCache[key] = prepared;
+                }
+            }
+            preparedForBuild.emplace(key, prepared);
             auto preparedClip = clip;
             preparedClip.sourceOffsetSeconds = 0.0;
             preparedClip.sourceLengthSeconds = clip.durationSeconds;
@@ -3615,7 +3772,7 @@ std::optional<StudioAudioEngine::RenderSnapshot> StudioAudioEngine::buildSnapsho
                 renderClip.sampleRate = targetSampleRate;
                 renderClip.gain = juce::Decibels::decibelsToGain(clip.gainDecibels);
                 renderClip.processing = preparedClip;
-                renderClip.samples = *processed;
+                renderClip.samples = prepared;
                 if (renderClip.lengthSamples > 0)
                     clips.push_back(std::move(renderClip));
             };
@@ -4149,14 +4306,13 @@ std::optional<StudioAudioEngine::RenderSnapshot> StudioAudioEngine::buildSnapsho
                     ? DeviceRegistry::descriptor(
                           sourceInsert->pluginIdentifier)
                     : nullptr;
-            if (descriptor == nullptr
-                || compiledRoute.sourceBusIndex <= 0
-                || compiledRoute.sourceBusIndex
-                    >= static_cast<int>(
-                        descriptor->outputBuses.size()))
+            const auto busCount = descriptor != nullptr ? static_cast<int>(descriptor->outputBuses.size())
+                : sourceTrack != nullptr && sourceInsert != sourceTrack->inserts.cend()
+                    ? sourceInsert->outputBusNames.size() : 0;
+            if (compiledRoute.sourceBusIndex <= 0 || compiledRoute.sourceBusIndex >= busCount)
             {
                 error =
-                    "A processor-output route references an unavailable bundled output bus.";
+                    "A processor-output route references an unavailable output bus.";
                 return std::nullopt;
             }
         }
@@ -4453,6 +4609,22 @@ std::optional<StudioAudioEngine::RenderSnapshot> StudioAudioEngine::buildSnapsho
 
     configureRuntimeTiming(snapshot, pluginRequests);
 
+#if defined(STUDIO_DUO_TESTING)
+    if (testingMediaPreparationHook)
+        testingMediaPreparationHook();
+#endif
+    for (const auto& [path, revision] : sourceRevisions)
+    {
+        const auto current = readMediaFileRevision(juce::File(path), error);
+        if (!current)
+            return std::nullopt;
+        if (*current != revision)
+        {
+            error = "Media changed while preparing playback. Retry the edit: "
+                + juce::File(path).getFileName();
+            return std::nullopt;
+        }
+    }
     return snapshot;
 }
 
@@ -4932,6 +5104,8 @@ std::optional<juce::AudioBuffer<float>> StudioAudioEngine::readAndResample(
         error = "Could not read audio samples from " + source.getFileName() + ".";
         return std::nullopt;
     }
+    if (juce::exactlyEqual(reader->sampleRate, targetSampleRate))
+        return sourceBuffer;
 
     const auto targetLength = juce::jmax(
         1,
@@ -5517,34 +5691,36 @@ bool StudioAudioEngine::readRenderClipSample(const RenderClip& clip,
                                              float& left,
                                              float& right) noexcept
 {
+    jassert(clip.samples != nullptr);
+    const auto& samples = *clip.samples;
     const auto timelineOffsetSeconds = clip.timelineOffsetBaseSeconds
         + static_cast<double>(relativeSample) / clip.sampleRate;
     const auto sourceSample = clip.processing.sourceSecondsAt(
         timelineOffsetSeconds)
         * clip.sampleRate;
     if (sourceSample < 0.0
-        || sourceSample >= static_cast<double>(clip.samples.getNumSamples()))
+        || sourceSample >= static_cast<double>(samples.getNumSamples()))
         return false;
 
     const auto firstIndex = static_cast<int>(std::floor(sourceSample));
     const auto secondIndex = std::min(firstIndex + 1,
-                                      clip.samples.getNumSamples() - 1);
+                                      samples.getNumSamples() - 1);
     const auto fraction = static_cast<float>(
         sourceSample - static_cast<double>(firstIndex));
     const auto preserveAttack = clip.processing.stretchMode == StretchMode::drums;
-    const auto sampleChannel = [&clip, firstIndex, secondIndex, fraction](int channel)
+    const auto sampleChannel = [&samples, firstIndex, secondIndex, fraction](int channel)
     {
-        const auto first = clip.samples.getSample(channel, firstIndex);
-        const auto second = clip.samples.getSample(channel, secondIndex);
+        const auto first = samples.getSample(channel, firstIndex);
+        const auto second = samples.getSample(channel, secondIndex);
         return first + (second - first) * fraction;
     };
     const auto nearestIndex = fraction < 0.5f ? firstIndex : secondIndex;
     left = preserveAttack
-        ? clip.samples.getSample(0, nearestIndex)
+        ? samples.getSample(0, nearestIndex)
         : sampleChannel(0);
-    right = clip.samples.getNumChannels() > 1
+    right = samples.getNumChannels() > 1
         ? preserveAttack
-            ? clip.samples.getSample(1, nearestIndex)
+            ? samples.getSample(1, nearestIndex)
             : sampleChannel(1)
         : left;
     auto gain = clip.gain
@@ -5881,17 +6057,24 @@ void StudioAudioEngine::processRuntimeChain(std::uint64_t key,
         ? readingSnapshotIndex : activeSnapshot.load(std::memory_order_acquire);
     auto& rackDelays = snapshots[static_cast<std::size_t>(snapshotIndex)].rackDelays;
     if (track != graph.tracks.end())
+    {
+        const auto transport = pluginTransportAt(snapshots[static_cast<std::size_t>(snapshotIndex)],
+            timelineSample, playing.load(std::memory_order_relaxed),
+            isRecording() || midiRecordingActive.load(std::memory_order_relaxed));
         for (auto& node : track->roots)
             processRackNode(node, *track, buffer, midi, sidechains, automation,
-                            timelineSample, outputRoutes, rackDelays);
+                            timelineSample, outputRoutes, rackDelays, transport);
+    }
 }
 
 void StudioAudioEngine::processRuntimeInsert(
     InsertRuntime& insert, juce::AudioBuffer<float>& buffer, juce::MidiBuffer* midi,
     const std::vector<RenderTrack::SidechainInput>* sidechains,
     const std::vector<RenderSource::PluginAutomation>* automation,
-    std::int64_t timelineSample, std::vector<RenderTrack::Route>* outputRoutes) noexcept
+    std::int64_t timelineSample, std::vector<RenderTrack::Route>* outputRoutes,
+    const PluginTransport& transport) noexcept
 {
+            insert.transport = transport;
             auto& runtimeMidi = midi != nullptr
                 ? *midi
                 : insert.midi;
@@ -6027,6 +6210,7 @@ void StudioAudioEngine::processRuntimeInsert(
 
             if (insert.bridge != nullptr && insert.bridge->isReady())
             {
+                insert.bridge->setTransport(transport);
                 const auto before = insert.bridge->lateBlockCount();
                 insert.bridge->processBlock(
                     buffer,
@@ -6035,7 +6219,25 @@ void StudioAudioEngine::processRuntimeInsert(
                     std::span<const PluginBridgeParameterEvent>(
                         insert.parameterEvents.data(),
                         static_cast<std::size_t>(
-                            insert.parameterEventCount)));
+                            insert.parameterEventCount)),
+                    insert.bridgeOutputBuffer.getNumChannels() > 0 ? &insert.bridgeOutputBuffer : nullptr);
+                if (outputRoutes != nullptr && insert.bridgeOutputBuffer.getNumChannels() > 0)
+                {
+                    const auto& buses = insert.bridge->outputBuses();
+                    for (auto& route : *outputRoutes)
+                    {
+                        if (route.sourceInsertId != insert.insertId || route.sourceBusIndex <= 0
+                            || route.sourceBusIndex >= static_cast<int>(buses.size()))
+                            continue;
+                        const auto& bus = buses[static_cast<std::size_t>(route.sourceBusIndex)];
+                        if (bus.bufferChannelOffset < 0 || bus.channels <= 0)
+                            continue;
+                        for (int channel = 0; channel < 2; ++channel)
+                            route.processingBuffer.copyFrom(channel, 0, insert.bridgeOutputBuffer,
+                                bus.bufferChannelOffset + std::min(channel, bus.channels - 1), 0, buffer.getNumSamples());
+                        route.processingBuffer.applyGain(0, buffer.getNumSamples(), insert.routedOutputGain);
+                    }
+                }
                 const auto after = insert.bridge->lateBlockCount();
                 if (after > before)
                     pluginLateBlocks.fetch_add(after - before, std::memory_order_relaxed);
@@ -6249,7 +6451,7 @@ void StudioAudioEngine::processRackNode(
     juce::MidiBuffer* midi, const std::vector<RenderTrack::SidechainInput>* sidechains,
     const std::vector<RenderSource::PluginAutomation>* automation,
     std::int64_t timelineSample, std::vector<RenderTrack::Route>* outputRoutes,
-    std::vector<RenderSnapshot::RackDelay>& rackDelays) noexcept
+    std::vector<RenderSnapshot::RackDelay>& rackDelays, const PluginTransport& transport) noexcept
 {
     if (node.bypassed)
         return;
@@ -6257,13 +6459,13 @@ void StudioAudioEngine::processRackNode(
     {
         if (node.insertIndex >= 0)
             processRuntimeInsert(track.inserts[static_cast<std::size_t>(node.insertIndex)],
-                                 buffer, midi, sidechains, automation, timelineSample, outputRoutes);
+                                 buffer, midi, sidechains, automation, timelineSample, outputRoutes, transport);
     }
     else if (node.kind == PluginInsertKind::serialRack)
     {
         for (auto& child : node.children)
             processRackNode(child, track, buffer, midi, sidechains, automation,
-                            timelineSample, outputRoutes, rackDelays);
+                            timelineSample, outputRoutes, rackDelays, transport);
     }
     else
     {
@@ -6281,7 +6483,7 @@ void StudioAudioEngine::processRackNode(
                 mergeRackMidi(branch.branchMidi, *midi);
             processRackNode(branch, track, branchView,
                             midi != nullptr ? &branch.branchMidi : nullptr,
-                            sidechains, automation, timelineSample, outputRoutes, rackDelays);
+                            sidechains, automation, timelineSample, outputRoutes, rackDelays, transport);
             const auto delay = std::find_if(rackDelays.begin(), rackDelays.end(),
                 [&track, &branch](const auto& candidate)
                 { return candidate.runtimeKey == track.key && candidate.insertId == branch.insertId; });
@@ -6314,6 +6516,8 @@ bool StudioAudioEngine::processInProcessRuntime(
     int outputSampleOffset) noexcept
 {
     auto& processor = *insert.inProcess;
+    if (auto* playHead = dynamic_cast<PluginHostPlayHead*>(processor.getPlayHead()))
+        playHead->setTransport(insert.transport.advanced(sidechainSampleOffset));
     auto* automationTarget =
         dynamic_cast<SampleAccurateAutomationTarget*>(&processor);
     if (!automation.empty() && automationTarget == nullptr)
@@ -6538,6 +6742,59 @@ double StudioAudioEngine::beatsAt(const RenderSnapshot& snapshot,
             return beats;
     }
     return beats;
+}
+
+PluginTransport StudioAudioEngine::pluginTransportAt(
+    const RenderSnapshot& snapshot, std::int64_t sample, bool running, bool recording) noexcept
+{
+    PluginTransport result;
+    result.samples = sample;
+    result.sampleRate = snapshot.sampleRate;
+    result.seconds = static_cast<double>(sample) / snapshot.sampleRate;
+    result.bpm = tempoAt(snapshot, result.seconds);
+    result.ppq = sample >= 0 ? beatsAt(snapshot, result.seconds) : result.seconds * result.bpm / 60.0;
+    auto meter = RenderSnapshot::ClockMeterChange {
+        0.0, snapshot.timeSignatureNumerator, snapshot.timeSignatureDenominator
+    };
+    auto completedBars = std::int64_t { 0 };
+    for (const auto& change : snapshot.meterChanges)
+    {
+        if (change.timeSeconds <= meter.timeSeconds + 0.0000001)
+        {
+            meter = change;
+            continue;
+        }
+        if (change.timeSeconds > result.seconds)
+            break;
+        const auto quarterBeats = beatsAt(snapshot, change.timeSeconds) - beatsAt(snapshot, meter.timeSeconds);
+        const auto length = static_cast<double>(meter.numerator) * 4.0 / meter.denominator;
+        completedBars += static_cast<std::int64_t>(std::ceil(quarterBeats / length - 0.0000001));
+        meter = change;
+    }
+    result.numerator = static_cast<std::uint64_t>(meter.numerator);
+    result.denominator = static_cast<std::uint64_t>(meter.denominator);
+    const auto meterStart = beatsAt(snapshot, meter.timeSeconds);
+    const auto barLength = static_cast<double>(meter.numerator) * 4.0 / meter.denominator;
+    const auto within = static_cast<std::int64_t>(std::floor((result.ppq - meterStart) / barLength));
+    result.barCount = completedBars + within;
+    result.barStartPpq = meterStart + static_cast<double>(within) * barLength;
+    result.loopStartSeconds = static_cast<double>(snapshot.loopStartSample) / snapshot.sampleRate;
+    result.loopEndSeconds = static_cast<double>(snapshot.loopEndSample) / snapshot.sampleRate;
+    result.loopStartPpq = beatsAt(snapshot, result.loopStartSeconds);
+    result.loopEndPpq = beatsAt(snapshot, result.loopEndSeconds);
+    result.flags = PluginTransport::valid | (running ? PluginTransport::playing : 0)
+        | (running && recording ? PluginTransport::recording : 0)
+        | (snapshot.loopEnabled ? PluginTransport::looping : 0);
+    const auto next = std::upper_bound(snapshot.tempoChanges.begin(), snapshot.tempoChanges.end(), result.seconds,
+        [](double seconds, const auto& change) { return seconds < change.timeSeconds; });
+    if (next != snapshot.tempoChanges.begin() && next != snapshot.tempoChanges.end())
+    {
+        const auto& current = *std::prev(next);
+        const auto duration = next->timeSeconds - current.timeSeconds;
+        if (current.rampToNext && duration > 0.0)
+            result.bpmIncrementPerSample = (next->bpm - current.bpm) / duration / snapshot.sampleRate;
+    }
+    return result;
 }
 
 StudioAudioEngine::RenderSnapshot::ClockMeterChange StudioAudioEngine::meterAt(
@@ -6813,6 +7070,10 @@ void StudioAudioEngine::prepareRackRequests(
             request.kind = insert.kind;
             request.containerId = insert.containerId;
             request.gainDecibels = insert.gainDecibels;
+            request.lastOutputBus = 0;
+            for (const auto& route : project.routingConnections)
+                if (route.enabled && route.sourceTrackId == track.id && route.sourceInsertId == insert.id)
+                    request.lastOutputBus = std::max(request.lastOutputBus, route.sourceBusIndex);
             request.bypassed = request.bypassed || PluginRack::isBypassed(track.inserts, insert);
             ordered.push_back(std::move(request));
         }
@@ -7284,24 +7545,6 @@ void StudioAudioEngine::runPluginRuntimeBuilder()
                     statuses.push_back(std::move(status));
                     continue;
                 }
-                if (request.sidechainChannels > 0
-                    && processor->getBusCount(true) > 1)
-                {
-                    auto layout = processor->getBusesLayout();
-                    layout.inputBuses.set(
-                        1,
-                        request.sidechainChannels == 1
-                            ? juce::AudioChannelSet::mono()
-                            : juce::AudioChannelSet::stereo());
-                    if (!processor->setBusesLayout(layout))
-                    {
-                        status.state = PluginRuntimeStatus::State::failed;
-                        status.message =
-                            "Processor rejected the requested sidechain layout.";
-                        statuses.push_back(std::move(status));
-                        continue;
-                    }
-                }
                 if (!processorState.isEmpty())
                 {
                     if (auto* validated =
@@ -7331,6 +7574,14 @@ void StudioAudioEngine::runPluginRuntimeBuilder()
                                 processorState.getSize()));
                     }
                 }
+                if (const auto configured = configurePluginAudioBuses(*processor, request.sidechainChannels, request.lastOutputBus);
+                    configured.failed())
+                {
+                    status.state = PluginRuntimeStatus::State::failed;
+                    status.message = configured.getErrorMessage();
+                    statuses.push_back(std::move(status));
+                    continue;
+                }
                 std::unique_ptr<AraDocumentHost> araDocument;
                 if (request.bridgeMode == PluginBridgeMode::araCompatibility)
                 {
@@ -7356,9 +7607,18 @@ void StudioAudioEngine::runPluginRuntimeBuilder()
                         continue;
                     }
                 }
+                processor->setNonRealtime(request.nonRealtime);
                 processor->prepareToPlay(
                     currentSampleRate(),
                     PluginBridgeSharedState::maxBlockSize);
+                if (const auto* clap = dynamic_cast<const ClapPluginInstance*>(processor.get()))
+                    if (const auto prepared = clap->preparationResult(); prepared.failed())
+                    {
+                        status.state = PluginRuntimeStatus::State::failed;
+                        status.message = prepared.getErrorMessage();
+                        statuses.push_back(std::move(status));
+                        continue;
+                    }
 
                 auto track = std::find_if(
                     graph.tracks.begin(),
@@ -7406,6 +7666,7 @@ void StudioAudioEngine::runPluginRuntimeBuilder()
                 insertRuntime.inProcessBuffer.clear();
                 status.latencySamples = processor->getLatencySamples();
                 status.tailSeconds = processor->getTailLengthSeconds();
+                status.outputBusNames = pluginOutputBusNames(pluginOutputBuses(*processor));
                 {
                     const auto& parameters = processor->getParameters();
                     for (int index = 0; index < parameters.size(); ++index)
@@ -7426,7 +7687,8 @@ void StudioAudioEngine::runPluginRuntimeBuilder()
                                 : juce::String(index),
                             parameter->getName(128),
                             parameter->getValue(),
-                            parameter->isAutomatable()
+                            parameter->isAutomatable(),
+                            parameter->isDiscrete() ? std::max(2, parameter->getNumSteps()) : 0
                         });
                     }
                 }
@@ -7456,7 +7718,8 @@ void StudioAudioEngine::runPluginRuntimeBuilder()
                                                         deviceBlockSize.load(
                                                             std::memory_order_acquire)),
                                                     request.state,
-                                                    request.sidechainChannels);
+                                                    request.sidechainChannels,
+                                                    request.nonRealtime, request.lastOutputBus);
             if (result.failed())
             {
                 auto track = std::find_if(graph.tracks.begin(),
@@ -7534,6 +7797,12 @@ void StudioAudioEngine::runPluginRuntimeBuilder()
                     + 1);
             insertRuntime.failureDelay.state->buffer.clear();
             insertRuntime.bridge = std::move(bridge);
+            if (request.lastOutputBus > 0)
+            {
+                insertRuntime.bridgeOutputBuffer.setSize(PluginBridgeSharedState::maxChannels,
+                    PluginBridgeSharedState::maxBlockSize);
+                insertRuntime.bridgeOutputBuffer.clear();
+            }
             track->inserts.push_back(std::move(insertRuntime));
             status.state = PluginRuntimeStatus::State::ready;
             status.message = "Sandbox ready";
@@ -7541,6 +7810,7 @@ void StudioAudioEngine::runPluginRuntimeBuilder()
             status.tailSeconds = track->inserts.back().bridge->reportedTailSeconds();
             status.parameters =
                 track->inserts.back().bridge->parameterDescriptors();
+            status.outputBusNames = pluginOutputBusNames(track->inserts.back().bridge->outputBuses());
             request.latencySamples = status.latencySamples;
             request.tailSeconds = status.tailSeconds;
             statuses.push_back(std::move(status));
@@ -7580,7 +7850,8 @@ void StudioAudioEngine::runPluginRuntimeBuilder()
             ++activeSnapshotRevision;
             ++pluginSnapshotRefreshRevision;
             pluginSnapshotRefreshPending = false;
-            pluginRuntimeGraphs[static_cast<std::size_t>(runtimeDestination)] = std::move(graph);
+            // Retired processors may dispatch to the message thread during destruction.
+            std::swap(pluginRuntimeGraphs[static_cast<std::size_t>(runtimeDestination)], graph);
             snapshots[static_cast<std::size_t>(snapshotDestination)]
                 = std::move(*pendingPluginSnapshot);
             pendingPluginSnapshot.reset();
@@ -7636,6 +7907,7 @@ juce::String StudioAudioEngine::pluginRuntimeFingerprint(
                     << (request.missing ? "m" : "a")
                     << ":"
                     << pluginBridgeModeToString(request.bridgeMode)
+                    << (request.nonRealtime ? ":offline" : ":realtime")
                     << ":"
                     << (request.recoveryDisabled ? "r" : "n")
                     << ":"
@@ -7646,6 +7918,8 @@ juce::String StudioAudioEngine::pluginRuntimeFingerprint(
         fingerprint << request.deviceIdentifier
                     << ":"
                     << request.sidechainChannels
+                    << ":"
+                    << request.lastOutputBus
                     << ":";
         if (request.araDocument != nullptr)
             fingerprint << request.araDocument->revision;
@@ -8025,6 +8299,31 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
                 static_cast<std::size_t>(runtimeIndex)],
             readingSnapshot,
             readingPluginRuntime
+        };
+        struct BridgeDeviceBlockScope
+        {
+            BridgeDeviceBlockScope(PluginRuntimeGraph& value, bool shouldBatch)
+                : graph(value), enabled(shouldBatch)
+            {
+                if (enabled)
+                    for (auto& track : graph.tracks)
+                        for (auto& insert : track.inserts)
+                            if (insert.bridge != nullptr)
+                                insert.bridge->beginDeviceBlock();
+            }
+            ~BridgeDeviceBlockScope()
+            {
+                if (enabled)
+                    for (auto& track : graph.tracks)
+                        for (auto& insert : track.inserts)
+                            if (insert.bridge != nullptr)
+                                insert.bridge->endDeviceBlock();
+            }
+            PluginRuntimeGraph& graph;
+            bool enabled;
+        } bridgeDeviceBlockScope {
+            pluginRuntimeGraphs[static_cast<std::size_t>(runtimeIndex)],
+            numSamples <= PluginBridgeSharedState::maxBlockSize
         };
 
         auto& snapshot = snapshots[static_cast<std::size_t>(snapshotIndex)];

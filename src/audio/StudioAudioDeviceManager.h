@@ -30,7 +30,7 @@ preferredAsioDeviceSetup(const juce::String& deviceName);
     const juce::BigInteger& activeChannels,
     int physicalChannel) noexcept;
 [[nodiscard]] juce::String audioDeviceConfigurationSignature(
-    const juce::AudioDeviceManager& manager);
+    const juce::AudioDeviceManager& manager, bool midiAvailable = true);
 [[nodiscard]] juce::Result probeNativeAudioDeviceSetup(
     const juce::XmlElement& setup);
 

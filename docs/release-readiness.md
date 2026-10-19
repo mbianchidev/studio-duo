@@ -20,6 +20,7 @@ The `hardening` CTest label selects the release-critical coverage:
 | Native exchange | Each platform creates the same complete synthetic package; both native readers open both packages in a separate dependent CI job |
 | Keyboard/accessibility | Native timeline focus, selection role/value, chronological audio/MIDI clip navigation, musical nudges, offscreen-selection reveal, button activation, and named mastering controls |
 | Engine/processing | Routing, linked edits, recording, automation, latency/racks, deterministic live/offline renders, sandbox crash/reload, and public-standard plugin fixtures |
+| Qualification tooling | Full-media one-second smoke at 96 kHz, concurrent graph/callback work, complete live/offline null, portable validation, raw callback CSV, and fail-closed evidence matrix contracts |
 | Interchange/mastering | Official embedded DAWproject schemas, transactional failures, compatibility reports, portable/missing-resource checks, analytical loudness/true-peak fixtures, and multi-song delivery |
 | Packaging | macOS DMG/updater ZIP signatures, binary equality, license/source material, private install/startup/removal; disposable Windows signed install, same-version replacement, startup, and user-data-preserving uninstall |
 
@@ -103,11 +104,20 @@ The pixel/CPU fixture uses an explicit software image so Windows Direct2D
 deferred GPU submission cannot turn an immediate pixel read into a false blank
 frame. Native accelerated presentation remains part of hands-on UI qualification.
 
-Snapshot construction shares decoded media only within that build, with a
-64 MiB additional cache budget. It does not cache between graph updates or
-trust file size/mtime to identify unchanged content. A same-size, same-timestamp
-media replacement must become audible after graph publication. Prepared clip
-storage and whole-file decoding still require long-session resource evaluation.
+Prepared PCM is immutable and shared across clips and published snapshots,
+instead of being copied into every publication/template. Metadata-only updates
+can reuse it on local APFS using file identity and nanosecond change time, or
+local NTFS using identity, change time, and the file's USN journal record.
+Size/mtime alone never authorize reuse. Other filesystems decode freshly on
+each update. Preparation rechecks source revisions before publishing and rejects
+observed changes without replacing the active graph. Both replaced and in-place
+same-size/same-mtime mutations have regression coverage.
+
+The cache holds weak references only; retired/removed PCM is not kept alive by
+the cache. Decode scratch is limited to 64 MiB of small sources plus the most
+recent large source. Whole-file preparation remains, so this is not a streaming
+guarantee or a fixed minimum RAM claim. The opt-in buffer matrix retains separate
+complete callback/null results for all five buffer sizes at each selected rate.
 
 ## Candidate compatibility matrix and blockers
 
@@ -128,8 +138,38 @@ personal paths, customer sessions, license material, and signing credentials.
 
 The accepted design explicitly allows opt-in ARA/trusted in-process modes with
 reduced crash isolation. Sandbox fixture success cannot establish containment
-for these modes. Resolve the qualification policy explicitly; do not silently
-waive the tracker's crash-containment criterion.
+for these modes. The [qualification policy](qualification.md#vendor-and-reduced-isolation-policy)
+requires saved-project, mode-specific consent and a successful recovery point
+before third-party opt-in. It requires separate vendor/mode results and an
+explicit human release disposition for the in-process exception. No such
+disposition is inferred from consent, recovery, or green CI; the tracker's
+unqualified crash-containment criterion remains blocked until that decision.
+
+The [qualification runbook](qualification.md) defines repeatable procedures,
+provisional workstation budgets, and the `scripts/qualify.py` evidence gate for
+issues #59, #58, #55, and #60. Its generated matrix starts entirely **not run**.
+The opt-in long-media command is driver-free computational characterisation,
+not a physical deadline or vendor pass. Whole-file decoding/prepared storage
+remains a resource risk; the preflight estimate and phase peaks expose it rather
+than advertising streaming. The optional dedicated-port Mackie Control profile
+now has protocol, connection, musical-exclusion, undo/automation and native
+settings contracts. Its physical model/firmware mappings and feedback remain
+unqualified. HUI, MIDI learn and extender/layer support are not implemented;
+ordinary musical note/CC routing still cannot substitute for surface testing.
+
+The pinned public Surge XT VST3/CLAP software matrix now runs on native ARM64
+macOS, Intel macOS and hosted Windows x64, with Apple AUBandpass on macOS.
+It retains independent-state/concurrent-worker, declared-latency null,
+trusted-reference, nested-rack, auxiliary-route and effect recovery results.
+Per-state sidechain response skips remain explicit. These driver-free artifacts
+do not establish physical deadlines, Windows 10/11 device compatibility,
+licensed ARA workflows, vendor hangs during state capture, or a human release
+disposition.
+
+Native keyboard contracts include precise gain/fade editing, take/comp menu
+actions, current track/clip state values, track-name validation and a scrollable
+200-message status history with stable selection. They do not establish actual
+VoiceOver/NVDA behavior or completion of the manual production journey.
 
 For blocker triage, attach a minimal synthetic reproducer and candidate evidence,
 classify data-loss/crash, unusable primary workflow, deadline/resource, or

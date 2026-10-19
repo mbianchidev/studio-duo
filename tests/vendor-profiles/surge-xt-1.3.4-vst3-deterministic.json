@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "name": "Surge XT",
+  "manufacturer": "Surge Synth Team",
+  "version": "1.3.4",
+  "format": "VST3",
+  "automatedParameterId": "1336600346",
+  "parameters": [
+    { "id": "1217754326", "name": "A Osc 1 Retrigger", "value": 1.0 },
+    { "id": "1568286615", "name": "A Osc 2 Retrigger", "value": 1.0 },
+    { "id": "1918818904", "name": "A Osc 3 Retrigger", "value": 1.0 },
+    { "id": "707220149", "name": "B Osc 1 Retrigger", "value": 1.0 },
+    { "id": "1057752438", "name": "B Osc 2 Retrigger", "value": 1.0 },
+    { "id": "1408284727", "name": "B Osc 3 Retrigger", "value": 1.0 }
+  ]
+}

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ui/StudioTheme.h"
+#include "midi/ControlSurface.h"
 
 #include <juce_core/juce_core.h>
 
@@ -29,9 +30,11 @@ public:
     [[nodiscard]] const std::vector<RecentProject>&
         recentProjects() const noexcept;
     [[nodiscard]] const juce::String& status() const noexcept;
+    [[nodiscard]] const ControlSurfaceSettings& controlSurfaceSettings() const noexcept;
 
     juce::Result setAutosaveEnabled(bool enabled);
     juce::Result setScanPluginsAtStartup(bool enabled);
+    juce::Result setControlSurfaceSettings(const ControlSurfaceSettings& settings);
     juce::Result setThemePreset(const juce::String& presetId);
     juce::Result setCustomThemePalette(
         const StudioThemePalette& palette);
@@ -51,6 +54,7 @@ private:
     juce::File settingsFile;
     bool autosave = true;
     bool scanAtStartup = true;
+    ControlSurfaceSettings controlSurface;
     juce::String selectedThemePreset { "studio-gray" };
     StudioThemePalette customTheme;
     std::vector<RecentProject> recent;

@@ -4,6 +4,7 @@
 #include "PluginEditorWindow.h"
 #include "SampleAccurateAutomationTarget.h"
 #include "ValidatedPluginStateTarget.h"
+#include "ClapPluginInstance.h"
 #include <algorithm>
 #include <cmath>
 #include <span>
@@ -19,6 +20,8 @@ PluginBridgeWorker::PluginBridgeWorker()
     PluginFormats::addSupportedFormats(formatManager);
     midiBuffer.ensureSize(
         PluginBridgeSharedState::maxMidiBytes);
+    midiInput.ensureSize(PluginBridgeSharedState::maxMidiBytes);
+    midiSegment.ensureSize(PluginBridgeSharedState::maxMidiBytes);
     automationBoundaries.reserve(
         static_cast<std::size_t>(
             PluginBridgeSharedState::maxParameterEvents * 2)
@@ -81,7 +84,7 @@ void PluginBridgeWorker::handleMessageFromCoordinator(const juce::MemoryBlock& m
                             < plugin->getParameters().size())
                     {
                         plugin->getParameters()[
-                            parameterIndex]->setValue(value);
+                            parameterIndex]->setValueNotifyingHost(value);
                     }
                 });
         }
@@ -119,6 +122,8 @@ void PluginBridgeWorker::handleMessageFromCoordinator(const juce::MemoryBlock& m
     const auto sampleRate = stream.readDouble();
     const auto blockSize = stream.readInt();
     const auto requestedSidechainChannels = stream.readInt();
+    const auto nonRealtime = stream.readBool();
+    const auto lastOutputBus = stream.readInt();
     auto newMapping = std::make_unique<juce::MemoryMappedFile>(
         sharedFile,
         juce::MemoryMappedFile::readWrite,
@@ -140,6 +145,7 @@ void PluginBridgeWorker::handleMessageFromCoordinator(const juce::MemoryBlock& m
 
     mapping = std::move(newMapping);
     sharedState = state;
+    sendStatus("startup|1");
 
     juce::MemoryBlock pluginState;
     if (stateBase64.isNotEmpty() && !pluginState.fromBase64Encoding(stateBase64))
@@ -154,7 +160,7 @@ void PluginBridgeWorker::handleMessageFromCoordinator(const juce::MemoryBlock& m
                         pluginState,
                         sampleRate,
                         blockSize,
-                        requestedSidechainChannels);
+                        requestedSidechainChannels, nonRealtime, lastOutputBus);
         return;
     }
 
@@ -166,6 +172,7 @@ void PluginBridgeWorker::handleMessageFromCoordinator(const juce::MemoryBlock& m
         return;
     }
 
+    sendStatus("startup|2");
     formatManager.createPluginInstanceAsync(
         description,
         sampleRate,
@@ -174,7 +181,9 @@ void PluginBridgeWorker::handleMessageFromCoordinator(const juce::MemoryBlock& m
          pluginState,
          sampleRate,
          blockSize,
-         requestedSidechainChannels](
+         requestedSidechainChannels,
+         nonRealtime,
+         lastOutputBus](
             std::unique_ptr<juce::AudioPluginInstance> instance,
             const juce::String& error)
         {
@@ -184,11 +193,12 @@ void PluginBridgeWorker::handleMessageFromCoordinator(const juce::MemoryBlock& m
                 return;
             }
 
+            sendStatus("startup|3");
             startProcessing(std::move(instance),
                             pluginState,
                             sampleRate,
                             blockSize,
-                            requestedSidechainChannels);
+                            requestedSidechainChannels, nonRealtime, lastOutputBus);
         });
 }
 
@@ -313,6 +323,10 @@ void PluginBridgeWorker::run()
         } processingScope { pluginAccessState };
 
         const std::lock_guard pluginLock(pluginMutex);
+        const auto transport = sharedState->transport;
+        playHead.setTransport(transport);
+        const auto* clap = dynamic_cast<const ClapPluginInstance*>(plugin.get());
+        const auto suppressedBefore = clap != nullptr ? clap->suppressedProcessBlockCount() : 0;
         const auto resetApplied =
             sharedState->resetRequested.exchange(
                 0,
@@ -407,6 +421,9 @@ void PluginBridgeWorker::run()
         }
         if (automationTarget == nullptr)
         {
+            midiInput.clear();
+            midiInput.addEvents(midiBuffer, 0, samples, 0);
+            midiBuffer.clear();
             automationBoundaries.clear();
             automationBoundaries.push_back(0);
             automationBoundaries.push_back(samples);
@@ -517,7 +534,11 @@ void PluginBridgeWorker::run()
                     processingChannels,
                     offset,
                     next - offset);
-                plugin->processBlock(view, midiBuffer);
+                midiSegment.clear();
+                midiSegment.addEvents(midiInput, offset, next - offset, -offset);
+                playHead.setTransport(transport.advanced(offset));
+                plugin->processBlock(view, midiSegment);
+                midiBuffer.addEvents(midiSegment, 0, next - offset, offset);
             }
         }
         auto midiOutputEventCount = 0;
@@ -567,18 +588,19 @@ void PluginBridgeWorker::run()
         for (int channel = 0; channel < PluginBridgeSharedState::maxChannels; ++channel)
         {
             auto& destination = sharedState->output[static_cast<std::size_t>(channel)];
-            if (channel < mainOutputChannels)
+            if (channel < outputChannels)
                 std::copy_n(processBuffer.getReadPointer(channel), samples, destination.begin());
             else
                 std::fill_n(destination.begin(), samples, 0.0f);
         }
         sharedState->numOutputChannels.store(
-            static_cast<std::uint32_t>(mainOutputChannels),
+            static_cast<std::uint32_t>(outputChannels),
             std::memory_order_relaxed);
+        auto outputFlags = resetApplied ? PluginBridgeSharedState::resetAppliedFlag : 0u;
+        if (clap != nullptr && clap->suppressedProcessBlockCount() != suppressedBefore)
+            outputFlags |= PluginBridgeSharedState::bypassOutputFlag;
         sharedState->outputFlags.store(
-            resetApplied
-                ? PluginBridgeSharedState::resetAppliedFlag
-                : 0,
+            outputFlags,
             std::memory_order_relaxed);
         sharedState->workerSequence.store(hostSequence, std::memory_order_release);
     }
@@ -588,46 +610,16 @@ void PluginBridgeWorker::startProcessing(std::unique_ptr<juce::AudioPluginInstan
                                          const juce::MemoryBlock& state,
                                          double sampleRate,
                                          int blockSize,
-                                         int requestedSidechainChannels)
+                                         int requestedSidechainChannels, bool nonRealtime, int lastOutputBus)
 {
     editorWindow.reset();
     if (newPlugin != nullptr)
     {
-        if (requestedSidechainChannels > 0
-            && newPlugin->getBusCount(true) > 1)
-        {
-            auto layout = newPlugin->getBusesLayout();
-            layout.inputBuses.set(
-                1,
-                requestedSidechainChannels == 1
-                    ? juce::AudioChannelSet::mono()
-                    : juce::AudioChannelSet::stereo());
-            if (!newPlugin->setBusesLayout(layout))
-            {
-                sendStatus("error:unsupported-sidechain-layout");
-                return;
-            }
-        }
-        const auto inputChannels = newPlugin->getTotalNumInputChannels();
-        const auto outputChannels = newPlugin->getTotalNumOutputChannels();
-        mainInputChannels = newPlugin->getBusCount(true) > 0
-            ? newPlugin->getChannelCountOfBus(true, 0)
-            : inputChannels;
-        sidechainInputChannels = newPlugin->getBusCount(true) > 1
-            ? newPlugin->getChannelCountOfBus(true, 1)
-            : 0;
-        mainOutputChannels = newPlugin->getBusCount(false) > 0
-            ? newPlugin->getChannelCountOfBus(false, 0)
-            : outputChannels;
-        processingChannels = std::max({ 2, inputChannels, outputChannels });
-        if (mainInputChannels > PluginBridgeSharedState::maxChannels
-            || sidechainInputChannels > PluginBridgeSharedState::maxChannels
-            || outputChannels > PluginBridgeSharedState::maxChannels)
-        {
-            sendStatus("error:unsupported-channel-layout");
-            return;
-        }
-
+        sendStatus("startup|4");
+        newPlugin->setNonRealtime(nonRealtime);
+        if (auto* clap = dynamic_cast<ClapPluginInstance*>(newPlugin.get()))
+            clap->setIsolatedWorkerProcessing(true);
+        newPlugin->setPlayHead(&playHead);
         newPlugin->setRateAndBufferSizeDetails(sampleRate, blockSize);
         if (!state.isEmpty())
         {
@@ -654,7 +646,35 @@ void PluginBridgeWorker::startProcessing(std::unique_ptr<juce::AudioPluginInstan
                     static_cast<int>(state.getSize()));
             }
         }
+        sendStatus("startup|5");
+        if (const auto configured = configurePluginAudioBuses(*newPlugin, requestedSidechainChannels, lastOutputBus);
+            configured.failed())
+        {
+            sendStatus("error:audio-buses:" + configured.getErrorMessage());
+            return;
+        }
+        const auto inputChannels = newPlugin->getTotalNumInputChannels();
+        outputChannels = newPlugin->getTotalNumOutputChannels();
+        mainInputChannels = newPlugin->getBusCount(true) > 0
+            ? newPlugin->getChannelCountOfBus(true, 0) : inputChannels;
+        sidechainInputChannels = newPlugin->getBusCount(true) > 1
+            ? newPlugin->getChannelCountOfBus(true, 1) : 0;
+        processingChannels = std::max({ 2, inputChannels, outputChannels });
+        if (mainInputChannels > PluginBridgeSharedState::maxChannels
+            || sidechainInputChannels > PluginBridgeSharedState::maxChannels
+            || outputChannels > PluginBridgeSharedState::maxChannels)
+        {
+            sendStatus("error:unsupported-channel-layout");
+            return;
+        }
+        sendStatus("startup|6");
         newPlugin->prepareToPlay(sampleRate, blockSize);
+        if (const auto* clap = dynamic_cast<const ClapPluginInstance*>(newPlugin.get()))
+            if (const auto prepared = clap->preparationResult(); prepared.failed())
+            {
+                sendStatus("error:prepare:" + prepared.getErrorMessage());
+                return;
+            }
     }
 
     if (plugin != nullptr)
@@ -668,6 +688,7 @@ void PluginBridgeWorker::startProcessing(std::unique_ptr<juce::AudioPluginInstan
                           true,
                           false);
     processBuffer.clear();
+    sendStatus("startup|7");
     const auto readyStatus =
         "ready|"
         + juce::String(plugin != nullptr ? plugin->getLatencySamples() : 0)
@@ -676,8 +697,11 @@ void PluginBridgeWorker::startProcessing(std::unique_ptr<juce::AudioPluginInstan
             plugin != nullptr ? plugin->getTailLengthSeconds() : 0.0,
             6)
         + "|"
-        + parameterMetadata();
+        + parameterMetadata()
+        + "|" + encodePluginOutputBuses(plugin != nullptr ? pluginOutputBuses(*plugin)
+            : std::vector<PluginOutputBus> { { "Main", 2, 0 } });
     processingThreadStarted.reset();
+    sendStatus("startup|8");
     if (!startThread(juce::Thread::Priority::high))
     {
         sendStatus("error:processing-thread-start-failed");
@@ -717,6 +741,8 @@ juce::String PluginBridgeWorker::parameterMetadata() const
             object->setProperty(
                 "automatable",
                 parameter->isAutomatable());
+            object->setProperty("steps", parameter->isDiscrete()
+                ? std::max(2, parameter->getNumSteps()) : 0);
             parameterValues.add(juce::var(object.release()));
         }
     }
@@ -734,6 +760,7 @@ void PluginBridgeWorker::audioProcessorParameterChanged(
     int,
     float)
 {
+    metadataReportPending.store(true, std::memory_order_release);
 }
 
 void PluginBridgeWorker::audioProcessorChanged(

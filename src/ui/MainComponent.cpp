@@ -11,6 +11,7 @@
 #include "logging/StudioLogger.h"
 #include "update/UpdateSettingsComponent.h"
 #include "plugin_host/PluginStateStore.h"
+#include "plugin_host/PluginIsolationPolicy.h"
 #include "model/PluginRack.h"
 #if JUCE_WINDOWS
 #include "platform/WindowsCrashHandler.h"
@@ -276,6 +277,10 @@ public:
           apply(std::move(applyCallback))
     {
         nameEditor.setText(std::move(currentName), false);
+        nameEditor.setTitle("Track name");
+        nameEditor.setName("Track name");
+        nameEditor.setDescription("Enter a non-empty track name, then apply or press Return.");
+        nameEditor.setWantsKeyboardFocus(true);
         nameEditor.setSelectAllWhenFocused(true);
         nameEditor.setColour(juce::TextEditor::backgroundColourId,
                              juce::Colour(StudioColours::panel));
@@ -286,13 +291,22 @@ public:
         nameEditor.onReturnKey = [this] { applyAndClose(); };
         nameEditor.onEscapeKey = [this] { close(); };
         addAndMakeVisible(nameEditor);
+        nameError.setTitle("Track name validation");
+        nameError.setColour(juce::Label::textColourId, juce::Colour(StudioColours::text));
+        nameError.setFont(juce::FontOptions(13.0f));
+        nameError.setBorderSize({});
+        addAndMakeVisible(nameError);
 
+        colourSelector.setTitle("Track colour");
+        colourSelector.setName("Track colour");
         colourSelector.setCurrentColour(currentColour,
                                         juce::dontSendNotification);
         addAndMakeVisible(colourSelector);
 
         applyButton.onClick = [this] { applyAndClose(); };
         cancelButton.onClick = [this] { close(); };
+        applyButton.setTitle("Apply track name and colour");
+        cancelButton.setTitle("Cancel track appearance edit");
         addAndMakeVisible(applyButton);
         addAndMakeVisible(cancelButton);
         setSize(340, 430);
@@ -308,6 +322,7 @@ public:
     {
         auto bounds = getLocalBounds().reduced(12);
         nameEditor.setBounds(bounds.removeFromTop(34));
+        nameError.setBounds(bounds.removeFromTop(26));
         bounds.removeFromTop(8);
         auto buttons = bounds.removeFromBottom(34);
         cancelButton.setBounds(buttons.removeFromRight(92).reduced(2));
@@ -322,6 +337,9 @@ private:
         const auto name = nameEditor.getText().trim();
         if (name.isEmpty())
         {
+            nameError.setText("Error: Enter a track name before applying.", juce::dontSendNotification);
+            if (auto* handler = nameError.getAccessibilityHandler())
+                handler->notifyAccessibilityEvent(juce::AccessibilityEvent::valueChanged);
             nameEditor.setColour(juce::TextEditor::outlineColourId,
                                  juce::Colour(StudioColours::orange));
             nameEditor.grabKeyboardFocus();
@@ -339,6 +357,7 @@ private:
     }
 
     juce::TextEditor nameEditor;
+    juce::Label nameError;
     juce::ColourSelector colourSelector;
     juce::TextButton applyButton { "APPLY" };
     juce::TextButton cancelButton { "CANCEL" };
@@ -1842,6 +1861,7 @@ MainComponent::MainComponent(
     };
     masteringWorkspace.onProjectRepaired = [this](auto repaired)
     {
+        controlSurface.discardPendingCommands();
         project = std::move(repaired);
         commandStack.clear();
         projectChanged();
@@ -2157,6 +2177,25 @@ MainComponent::MainComponent(
     refreshInputControls();
 
     setStatus("Preparing required startup services.");
+    controlSurface.onEvents = [this](auto events) { handleControlSurfaceEvents(events); };
+    controlSurface.readState = [this]
+    {
+        return controlSurfaceStateForProject(project, selectedTrackId, audioEngine.isPlaying(), hasActiveRecordingTargets());
+    };
+    controlSurface.onStatusChanged = [this](const auto& message, bool error)
+    {
+        const auto previousWasSurface = statusPanel.latestMessage() == lastControlSurfaceStatus;
+        lastControlSurfaceStatus = message;
+        if (error || !statusIsError || previousWasSurface)
+            setStatus(message, error);
+        else
+            logInfo("control-surface", message);
+    };
+    const auto& surfaceSettings = preferences.controlSurfaceSettings();
+    audioEngine.setControlSurfaceInputReservation(
+        surfaceSettings.enabled() ? surfaceSettings.inputDeviceId : juce::String());
+    if (const auto configured = controlSurface.configure(surfaceSettings); configured.failed())
+        setStatus(configured.getErrorMessage(), true);
     projectChanged(false);
     startTimerHz(30);
     setSize(1480, 900);
@@ -2212,7 +2251,7 @@ StartupDeviceSummary MainComponent::startupDeviceSummary() const
         summary.audioInputs = device->getActiveInputChannels().countNumberOfSetBits();
         summary.audioOutputs = device->getActiveOutputChannels().countNumberOfSetBits();
     }
-    if (deviceManager != nullptr)
+    if (deviceManager != nullptr && controlSurface.hardwareAvailable())
     {
         summary.midiAvailable = true;
         summary.retrospectiveCapture = summary.audioEnabled;
@@ -2231,6 +2270,7 @@ bool MainComponent::startupAudioHasWarning() const noexcept { return startupAudi
 
 void MainComponent::disableStartupAudio()
 {
+    controlSurface.setHardwareAvailable(false);
     audioEngine.shutdown();
     audioEngineInitialised = false;
     deviceManager.reset();
@@ -2274,6 +2314,7 @@ StartupOutcome MainComponent::initialiseStartupMidi(const juce::XmlElement* save
         + (audioEngineInitialised ? "Retrospective capture is available while audio processing is active."
                                   : "Retrospective capture requires active audio processing.");
     startupUnavailableMidiDevices = unavailable;
+    controlSurface.setHardwareAvailable(true);
     return { unavailable > 0 ? StartupState::warning : StartupState::succeeded,
              unavailable > 0 ? StartupIssue::midiUnavailable : StartupIssue::none, detail };
 }
@@ -2474,6 +2515,7 @@ bool MainComponent::prepareForShutdown()
         return true;
     appShutdownPrepared = true;
     stopTimer();
+    controlSurface.shutdown();
     midiEditor.drumPerformance().setKeyboardEnabled(false);
     audioEngine.setMidiAuditionEnabled(false);
     compatibilityValidator.removeAllJobs(true, 2000);
@@ -2929,6 +2971,7 @@ void MainComponent::timerCallback()
 {
     if (audioInitialiseInFlight)
         return;
+    pollControlSurface();
     if (auto calibration = audioEngine.takeLatencyCalibrationResult();
         calibration.has_value())
     {
@@ -3031,10 +3074,13 @@ void MainComponent::timerCallback()
                     == StudioAudioEngine::PluginRuntimeStatus::State::ready
                 && (insert->latencySamples != status.latencySamples
                     || std::abs(insert->tailSeconds - status.tailSeconds)
-                        > 0.000001))
+                        > 0.000001
+                    || (!insert->bundledDevice && insert->outputBusNames != status.outputBusNames)))
             {
                 insert->latencySamples = status.latencySamples;
                 insert->tailSeconds = status.tailSeconds;
+                if (!insert->bundledDevice)
+                    insert->outputBusNames = status.outputBusNames;
                 runtimeMetadataChanged = true;
             }
             if (status.state
@@ -3156,7 +3202,7 @@ void MainComponent::timerCallback()
     {
         inputConfigurationPollTicks = 0;
         auto* device = currentAudioDevice();
-        const auto signature = audioDeviceConfigurationSignature(*deviceManager);
+        const auto signature = audioDeviceConfigurationSignature(*deviceManager, controlSurface.hardwareAvailable());
         if (signature != inputConfigurationSignature)
         {
             inputConfigurationSignature = signature;
@@ -3370,6 +3416,7 @@ void MainComponent::replaceWithUnsavedProject(
     audioEngine.stop();
     if (projectPackage.exists())
         ProjectFile::clearReducedIsolationMarker(projectPackage);
+    controlSurface.discardPendingCommands();
     project = std::move(replacement);
     projectPackage = juce::File();
     transientCompatibilityReport.reset();
@@ -4291,8 +4338,24 @@ void MainComponent::showSettings(bool showUpdates)
 
     if (!showUpdates && !ensureAudioDeviceManager())
         logError("audio.settings", audioStartupError);
+    if (!showUpdates && deviceManager != nullptr && !controlSurface.hardwareAvailable())
+    {
+        auto ready = juce::Result::ok();
+#if JUCE_WINDOWS
+        juce::XmlElement discovery("DEVICESETUP");
+        discovery.setAttribute("deviceType", midiDeviceDiscoveryProbeType);
+        ready = probeAudioDeviceSetup(discovery);
+#endif
+        if (ready.wasOk())
+            juce::ignoreUnused(initialiseStartupMidi(nullptr));
+        else
+        {
+            setStatus("MIDI discovery failed: " + ready.getErrorMessage(), true);
+            logError("control-surface.discovery", ready.getErrorMessage());
+        }
+    }
     const auto settingsAudioSignature = deviceManager != nullptr
-        ? audioDeviceConfigurationSignature(*deviceManager) : juce::String();
+        ? audioDeviceConfigurationSignature(*deviceManager, controlSurface.hardwareAvailable()) : juce::String();
     auto settings = std::make_unique<SettingsComponent>(
         deviceManager.get(),
         updateService,
@@ -4317,7 +4380,13 @@ void MainComponent::showSettings(bool showUpdates)
                 safe->restartForUpdate();
         },
         showUpdates,
-        audioStartupError);
+        audioStartupError,
+        &controlSurface,
+        [safe = juce::Component::SafePointer<MainComponent>(this)](const ControlSurfaceSettings& surfaceSettings)
+        {
+            return safe != nullptr ? safe->configureControlSurface(surfaceSettings)
+                : juce::Result::fail("The workspace is no longer available.");
+        });
     settings->setLookAndFeel(&theme);
 
     juce::DialogWindow::LaunchOptions options;
@@ -4329,6 +4398,7 @@ void MainComponent::showSettings(bool showUpdates)
     options.useNativeTitleBar = true;
     options.resizable = true;
     settingsWindow.reset(options.create());
+    settingsWindow->setResizeLimits(680, 520, 3000, 2000);
     settingsWindow->enterModalState(
         true,
         juce::ModalCallbackFunction::create(
@@ -4339,7 +4409,7 @@ void MainComponent::showSettings(bool showUpdates)
                 {
                     if (safe->preserveStartupAudioSetup && safe->deviceManager != nullptr
                         && safe->currentAudioDevice() != nullptr
-                        && audioDeviceConfigurationSignature(*safe->deviceManager) != settingsAudioSignature)
+                        && audioDeviceConfigurationSignature(*safe->deviceManager, safe->controlSurface.hardwareAvailable()) != settingsAudioSignature)
                     {
                         safe->preserveStartupAudioSetup = false;
                         if (const auto saved = safe->deviceManager->saveCurrentSetup(); saved.failed())
@@ -4349,6 +4419,145 @@ void MainComponent::showSettings(bool showUpdates)
                 }
             }),
         false);
+}
+
+juce::Result MainComponent::configureControlSurface(const ControlSurfaceSettings& settings)
+{
+    if (hasActiveRecordingTargets() || recordingFinalizationInProgress || exportInProgress
+        || calibratingReampRouteId.isNotEmpty())
+        return juce::Result::fail("Stop recording, export or reamp calibration before changing control-surface ports.");
+    const auto* output = deviceManager != nullptr ? deviceManager->getDefaultMidiOutput() : nullptr;
+    if (const auto valid = validateControlSurfacePortUse(settings,
+            deviceManager != nullptr && deviceManager->isMidiInputDeviceEnabled(settings.inputDeviceId),
+            output != nullptr ? output->getIdentifier() : juce::String()); valid.failed())
+        return valid;
+    if (const auto saved = preferences.setControlSurfaceSettings(settings); saved.failed())
+        return saved;
+    audioEngine.setControlSurfaceInputReservation(settings.enabled() ? settings.inputDeviceId : juce::String());
+    return controlSurface.configure(settings);
+}
+
+bool MainComponent::controlSurfaceCommandsAllowed() const
+{
+    return startupServicesAvailable && !startupHub.isVisible() && !audioInitialiseInFlight
+        && !appShutdownPrepared && !exportInProgress && !recordingFinalizationInProgress
+        && calibratingReampRouteId.isEmpty() && juce::Component::getNumCurrentlyModalComponents() == 0;
+}
+
+void MainComponent::pollControlSurface()
+{
+    if (!controlSurface.settings().enabled() || !controlSurface.hardwareAvailable())
+        return;
+    const auto* output = deviceManager != nullptr ? deviceManager->getDefaultMidiOutput() : nullptr;
+    controlSurface.poll(controlSurfaceStateForProject(
+            project, selectedTrackId, audioEngine.isPlaying(), hasActiveRecordingTargets()),
+        juce::Time::getMillisecondCounterHiRes(), controlSurfaceCommandsAllowed(),
+        deviceManager != nullptr && deviceManager->isMidiInputDeviceEnabled(controlSurface.settings().inputDeviceId),
+        output != nullptr ? output->getIdentifier() : juce::String());
+}
+
+void MainComponent::handleControlSurfaceEvents(std::span<const ControlSurfaceEvent> events)
+{
+    using Type = ControlSurfaceEvent::Type;
+    if (events.empty() || !controlSurfaceCommandsAllowed())
+        return;
+    if (events.front().type == Type::volume || events.front().type == Type::pan)
+    {
+        juce::String error;
+        auto edit = prepareControlSurfaceMixEdit(project, events, audioEngine.positionSeconds(), error);
+        if (!edit)
+        {
+            setStatus(error, true);
+            return;
+        }
+        auto preview = pendingAutomationPreview;
+        if (!edit->previews.empty())
+        {
+            auto merged = preview.targets();
+            for (const auto& change : edit->previews)
+            {
+                const auto existing = std::find_if(merged.begin(), merged.end(),
+                    [&](const auto& target) { return target.target == change.target; });
+                if (existing != merged.end())
+                {
+                    existing->endSeconds = change.endSeconds;
+                    existing->endValue = change.endValue;
+                }
+                else
+                    merged.push_back(change);
+            }
+            if (const auto staged = preview.stage(std::move(merged)); staged.failed())
+            {
+                setStatus(staged.getErrorMessage(), true);
+                return;
+            }
+        }
+        if (edit->command && !perform(std::move(edit->command)))
+            return;
+        if (!edit->previews.empty())
+        {
+            pendingAutomationPreview = std::move(preview);
+            setStatus("Control-surface automation preview ready to commit.");
+        }
+        return;
+    }
+    for (const auto& event : events)
+    {
+        if (event.projectId != project.id)
+        {
+            setStatus("Discarded a control-surface command for a replaced project.", true);
+            continue;
+        }
+        switch (event.type)
+        {
+            case Type::play:
+                if (!audioEngine.isPlaying()) togglePlayback();
+                break;
+            case Type::stop: stopTransportAndRecording(); break;
+            case Type::record:
+                if (!hasActiveRecordingTargets()) toggleRecording();
+                break;
+            case Type::select:
+                if (project.findTrack(event.trackId) != nullptr) selectTrack(event.trackId);
+                break;
+            case Type::arm:
+                if (timeline.onTrackArm) timeline.onTrackArm(event.trackId);
+                break;
+            case Type::solo:
+                if (timeline.onTrackSolo) timeline.onTrackSolo(event.trackId);
+                break;
+            case Type::mute:
+                if (timeline.onTrackMute) timeline.onTrackMute(event.trackId);
+                break;
+            case Type::loop:
+                changeTransportState([](auto& state) { state.loopEnabled = !state.loopEnabled; });
+                break;
+            case Type::metronome:
+                changeTransportState([](auto& state) { state.metronomeEnabled = !state.metronomeEnabled; });
+                break;
+            case Type::save: beginSaveProject(); break;
+            case Type::undo: undo(); break;
+            case Type::rewind:
+            case Type::forward:
+            {
+                if (hasActiveRecordingTargets())
+                {
+                    setStatus("Stop recording before seeking from the control surface.", true);
+                    break;
+                }
+                const auto position = audioEngine.positionSeconds();
+                const auto meter = project.meterAt(position);
+                const auto barBeats = static_cast<double>(meter.numerator) * 4.0 / meter.denominator;
+                const auto beats = std::max(0.0, project.beatsAt(position) + (event.type == Type::forward ? barBeats : -barBeats));
+                audioEngine.seekSeconds(project.secondsAtBeat(beats));
+                break;
+            }
+            case Type::bankWhileTouched: setStatus("Release channel faders before changing the control-surface bank."); break;
+            case Type::unavailableTarget: setStatus("The touched control-surface track was removed. Release its fader before continuing.", true); break;
+            case Type::volume:
+            case Type::pan: setStatus("A mixed control-surface command batch was rejected.", true); break;
+        }
+    }
 }
 
 void MainComponent::applyTheme(
@@ -4512,6 +4721,7 @@ void MainComponent::requestStartupHub()
 
 void MainComponent::leaveProjectForStartupHub()
 {
+    controlSurface.discardPendingCommands();
     audioEngine.stop();
     if (projectPackage.exists())
     {
@@ -4880,7 +5090,39 @@ bool MainComponent::captureCurrentPluginStates(
         error = "Save the project before capturing processor state.";
         return false;
     }
-    for (auto& capture : audioEngine.capturePluginStates(2000))
+    const auto capturedProjectId = project.id;
+    const auto capturedPackage = projectPackage;
+    std::map<juce::String, juce::String> capturedIdentifiers;
+    for (const auto& trackId : trackIds)
+        if (const auto* track = project.findTrack(trackId))
+            for (const auto& insert : track->inserts)
+                capturedIdentifiers.emplace(insert.id, insert.pluginIdentifier);
+    auto captures = audioEngine.capturePluginStates(2000);
+    if (project.id != capturedProjectId || projectPackage != capturedPackage)
+    {
+        error = "The project changed during processor state capture. Retry the operation.";
+        return false;
+    }
+    for (const auto& capture : captures)
+    {
+        if (capture.insertId.isEmpty())
+        {
+            error = capture.result.getErrorMessage();
+            return false;
+        }
+        if (std::find(trackIds.cbegin(), trackIds.cend(), capture.trackId) == trackIds.cend())
+            continue;
+        const auto* track = project.findTrack(capture.trackId);
+        const auto* insert = track != nullptr ? PluginRack::find(track->inserts, capture.insertId) : nullptr;
+        const auto expected = capturedIdentifiers.find(capture.insertId);
+        if (insert == nullptr || expected == capturedIdentifiers.cend()
+            || insert->pluginIdentifier != expected->second)
+        {
+            error = "A processor changed during state capture. Retry the operation.";
+            return false;
+        }
+    }
+    for (auto& capture : captures)
     {
         if (capture.insertId.isEmpty())
         {
@@ -5036,6 +5278,7 @@ bool MainComponent::openProjectFrom(
             }
         }
     }
+    controlSurface.discardPendingCommands();
     project = std::move(opened->project);
     transientCompatibilityReport.reset();
     activeAutomationGesture.reset();
@@ -6390,7 +6633,16 @@ void MainComponent::changePluginMode(const juce::String& trackId,
                                      const juce::String& insertId,
                                      PluginBridgeMode mode)
 {
-    if (mode != PluginBridgeMode::araCompatibility)
+    const auto* track = project.findTrack(trackId);
+    const auto* insert = track != nullptr ? PluginRack::find(track->inserts, insertId) : nullptr;
+    if (insert == nullptr)
+    {
+        setStatus("The plugin is no longer available. Select an existing insert.", true);
+        return;
+    }
+    if (insert->bridgeMode == mode)
+        return;
+    if (!requiresReducedIsolationConsent(*insert, mode))
     {
         perform(std::make_unique<SetPluginBridgeModeCommand>(
             trackId,
@@ -6403,43 +6655,68 @@ void MainComponent::changePluginMode(const juce::String& trackId,
     {
         showError(
             "Save required",
-            "Save the project before enabling ARA 2 compatibility mode so Studio Duo can create a recovery point.");
-        return;
-    }
-    if (const auto result = ProjectFile::writeRecoveryPoint(
-            project,
-            projectPackage);
-        result.failed())
-    {
-        showError("ARA recovery point failed", result.getErrorMessage());
+            "Save the project before enabling reduced-isolation plugin hosting so Studio Duo can create a recovery point.");
         return;
     }
 
+    const auto ara = mode == PluginBridgeMode::araCompatibility;
+    const auto projectId = project.id;
+    const auto package = projectPackage;
+    const auto identifier = insert->pluginIdentifier;
     auto* dialog = new juce::AlertWindow(
-        "Enable ARA 2 compatibility mode?",
-        "ARA 2 needs synchronous access to the project document and runs this plugin in the Studio Duo process. Crash isolation is reduced. A recovery point has been written.",
+        ara ? "Enable ARA 2 compatibility mode?" : "Enable trusted in-process mode?",
+        reducedIsolationWarning(mode),
         juce::MessageBoxIconType::WarningIcon);
     dialog->addButton(
-        "Enable ARA 2",
+        ara ? "Enable ARA 2" : "Enable trusted mode",
         1,
         juce::KeyPress(juce::KeyPress::returnKey));
     dialog->addButton(
         "Cancel",
         0,
         juce::KeyPress(juce::KeyPress::escapeKey));
-    dialog->centreAroundComponent(insertPanel.get(), 520, 230);
+    dialog->centreAroundComponent(insertPanel.get(), 540, 260);
     const juce::Component::SafePointer<MainComponent> safe(this);
     dialog->enterModalState(
         true,
         juce::ModalCallbackFunction::create(
-            [safe, trackId, insertId](int result)
+            [safe, trackId, insertId, mode, projectId, package, identifier](int result)
             {
                 if (safe == nullptr || result != 1)
                     return;
+                const auto* currentTrack = safe->project.findTrack(trackId);
+                const auto* currentInsert = currentTrack != nullptr
+                    ? PluginRack::find(currentTrack->inserts, insertId) : nullptr;
+                if (safe->project.id != projectId || safe->projectPackage != package
+                    || currentInsert == nullptr || currentInsert->pluginIdentifier != identifier)
+                {
+                    safe->setStatus("The project or plugin changed. Request the hosting mode again.", true);
+                    return;
+                }
+                std::vector<juce::String> trackIds;
+                for (const auto& current : safe->project.tracks)
+                    trackIds.push_back(current.id);
+                juce::String stateError;
+                if (!safe->captureCurrentPluginStates(trackIds, stateError))
+                {
+                    safe->showError("Plugin recovery state failed", stateError);
+                    return;
+                }
+                if (safe->project.id != projectId || safe->projectPackage != package)
+                {
+                    safe->setStatus("The project changed while capturing recovery state. Request the hosting mode again.", true);
+                    return;
+                }
+                if (const auto recovery = ProjectFile::writeRecoveryPoint(safe->project, package);
+                    recovery.failed())
+                {
+                    safe->showError("Plugin recovery point failed", recovery.getErrorMessage());
+                    return;
+                }
                 safe->perform(std::make_unique<SetPluginBridgeModeCommand>(
                     trackId,
                     insertId,
-                    PluginBridgeMode::araCompatibility));
+                    mode));
             }),
         true);
 }

@@ -22,6 +22,7 @@
 #include "model/ProjectCommands.h"
 #include "model/ProjectTemplates.h"
 #include "model/TransportEditing.h"
+#include "midi/ControlSurfaceProject.h"
 #include "plugin_host/PluginBrowserComponent.h"
 #include "plugin_host/PluginCatalog.h"
 #include "project_io/ProjectFile.h"
@@ -128,6 +129,10 @@ private:
     bool ensureAudioDeviceManager();
     [[nodiscard]] juce::AudioIODevice* currentAudioDevice() const noexcept;
     bool connectAudioEngine();
+    void pollControlSurface();
+    bool controlSurfaceCommandsAllowed() const;
+    void handleControlSurfaceEvents(std::span<const ControlSurfaceEvent> events);
+    juce::Result configureControlSurface(const ControlSurfaceSettings& settings);
     void createNewProject();
     void createProjectFromTemplate(
         const juce::String& templateId);
@@ -376,6 +381,8 @@ private:
     bool startupAudioWarning = false;
     int startupUnavailableMidiDevices = 0;
     StudioAudioEngine audioEngine;
+    ControlSurfaceSession controlSurface;
+    juce::String lastControlSurfaceStatus;
     Project project { Project::createDefault() };
     CommandStack commandStack;
     juce::File projectPackage;

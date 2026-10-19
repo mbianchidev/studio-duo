@@ -154,6 +154,11 @@ void preferencePersistence()
                "Autosave recovery defaults to enabled.");
         expect(preferences.scanPluginsAtStartup(),
                "Startup plug-in scanning defaults to enabled.");
+        expect(!preferences.controlSurfaceSettings().enabled(),
+               "Legacy/default preferences never activate control-surface MIDI ports.");
+        expect(preferences.setControlSurfaceSettings({
+                   studio::ControlSurfaceProtocol::mackieControl, "mock-control-in", "mock-control-out"
+               }).wasOk(), "Explicit synthetic control-surface settings can be saved without opening MIDI.");
         expect(preferences.setAutosaveEnabled(false).wasOk()
                    && !preferences.autosaveEnabled(),
                "Autosave recovery can be disabled and persisted.");
@@ -179,6 +184,15 @@ void preferencePersistence()
                "Autosave recovery preference survives reload.");
         expect(!preferences.scanPluginsAtStartup(),
                "Startup plug-in scan preference survives reload.");
+        expect(preferences.controlSurfaceSettings().enabled()
+                   && preferences.controlSurfaceSettings().inputDeviceId == "mock-control-in"
+                   && preferences.controlSurfaceSettings().outputDeviceId == "mock-control-out",
+               "A dedicated surface protocol and exact port identities survive reload.");
+        auto incomplete = preferences.controlSurfaceSettings();
+        incomplete.outputDeviceId.clear();
+        expect(preferences.setControlSurfaceSettings(incomplete).failed()
+                   && preferences.controlSurfaceSettings().outputDeviceId == "mock-control-out",
+               "An invalid surface configuration cannot replace saved working settings.");
         expect(preferences.themePresetId() == "slate-blue"
                    && preferences.themePalette()
                        == *studio::studioThemePaletteForPreset(
@@ -225,6 +239,13 @@ void preferencePersistence()
                        ? " (" + error + ")"
                        : juce::String()))
                    .toRawUTF8());
+    }
+    file.replaceWithText("{\"autosaveEnabled\":true,\"controlSurface\":{\"protocol\":\"unsupported\","
+                         "\"inputDeviceId\":\"mock-in\",\"outputDeviceId\":\"mock-out\"}}");
+    {
+        studio::StudioPreferences preferences(file);
+        expect(!preferences.controlSurfaceSettings().enabled() && preferences.status().isNotEmpty(),
+               "Unsupported stored control protocols are visibly rejected and cannot open a driver.");
     }
     file.replaceWithText("{\"autosaveEnabled\":\"invalid\"}");
     {

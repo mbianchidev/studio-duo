@@ -1,0 +1,35 @@
+diff --git a/modules/juce_events/interprocess/juce_InterprocessConnection.h b/modules/juce_events/interprocess/juce_InterprocessConnection.h
+--- a/modules/juce_events/interprocess/juce_InterprocessConnection.h
++++ b/modules/juce_events/interprocess/juce_InterprocessConnection.h
+@@ -205,3 +205,4 @@ private:
+     //==============================================================================
+     ReadWriteLock pipeAndSocketLock;
++    CriticalSection messageWriteLock;
+     std::unique_ptr<StreamingSocket> socket;
+diff --git a/modules/juce_events/interprocess/juce_InterprocessConnection.cpp b/modules/juce_events/interprocess/juce_InterprocessConnection.cpp
+--- a/modules/juce_events/interprocess/juce_InterprocessConnection.cpp
++++ b/modules/juce_events/interprocess/juce_InterprocessConnection.cpp
+@@ -217,6 +217,7 @@ bool InterprocessConnection::sendMessage (const MemoryBlock& message)
+     MemoryBlock messageData (sizeof (messageHeader) + message.getSize());
+     messageData.copyFrom (messageHeader, 0, sizeof (messageHeader));
+     messageData.copyFrom (message.getData(), sizeof (messageHeader), message.getSize());
+ 
++    const ScopedLock messageLock (messageWriteLock);
+     return writeData (messageData.getData(), (int) messageData.getSize()) == (int) messageData.getSize();
+ }
+@@ -381,7 +382,13 @@ bool InterprocessConnection::readNextMessage()
+             }
+ 
+-            if (bytesRead >= 0)
+-                deliverDataInt (messageData);
++            if (bytesInMessage != 0)
++            {
++                deletePipeAndSocket();
++                connectionLostInt();
++                return false;
++            }
++
++            deliverDataInt (messageData);
+         }
+ 
+         return true;

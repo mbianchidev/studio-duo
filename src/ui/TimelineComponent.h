@@ -1,6 +1,7 @@
 #pragma once
 
 #include "model/ProjectModel.h"
+#include "ClipProcessingEditorComponent.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
@@ -47,6 +48,11 @@ public:
     [[nodiscard]] PaintStatistics paintStatisticsForTesting() const noexcept
     {
         return testingPaintStatistics;
+    }
+    [[nodiscard]] juce::PopupMenu keyboardContextMenuForTesting()
+    {
+        ensureSelectionVisible();
+        return createContextMenu(keyboardContextPosition(), false);
     }
 #endif
 
@@ -183,6 +189,10 @@ private:
                                      juce::Point<float> position) const noexcept;
     void updateHoverState(juce::Point<float> position);
     void showContextMenu(juce::Point<float> position, bool selectFromPosition = true);
+    juce::PopupMenu createContextMenu(juce::Point<float> position, bool selectFromPosition);
+    juce::Point<float> keyboardContextPosition() const;
+    void showClipProcessingEditor(const juce::String& clipId, ClipProcessingEditorComponent::Mode mode,
+                                  juce::Point<float> position);
     void selectForKeyboard(juce::String trackId, juce::String clipId = {});
     void ensureSelectionVisible();
     void updateAccessibleSelection();
@@ -191,6 +201,7 @@ private:
     const Project* project = nullptr;
     juce::String selectedTrackId;
     juce::String selectedClipId;
+    juce::String accessibleSelectionValue { "Timeline; no selection" };
     juce::String draggingTrackVolumeId;
     juce::String draggedMarkerId;
     juce::String draggedSectionId;

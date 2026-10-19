@@ -254,6 +254,7 @@ struct PluginInsert
     PluginInsertKind kind = PluginInsertKind::plugin;
     juce::String containerId;
     float gainDecibels = 0.0f;
+    juce::StringArray outputBusNames;
 
     [[nodiscard]] bool isContainer() const noexcept
     {

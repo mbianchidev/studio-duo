@@ -5,6 +5,7 @@
 #include "StudioAudioDeviceManager.h"
 #include "automation/AutomationScheduler.h"
 #include "midi/MidiCaptureBuffer.h"
+#include "midi/ControlSurface.h"
 #include "model/ProjectModel.h"
 #include "plugin_host/PluginBridgeClient.h"
 #include "plugin_host/AraDocumentHost.h"
@@ -88,6 +89,8 @@ public:
         PluginInsertKind kind = PluginInsertKind::plugin;
         juce::String containerId;
         float gainDecibels = 0.0f;
+        bool nonRealtime = false;
+        int lastOutputBus = 0;
     };
 
     struct PluginRuntimeStatus
@@ -109,6 +112,7 @@ public:
         int latencySamples = 0;
         double tailSeconds = 0.0;
         std::vector<PluginParameterDescriptor> parameters;
+        juce::StringArray outputBusNames;
     };
 
     struct TrackMeterSnapshot
@@ -146,6 +150,7 @@ public:
     [[nodiscard]] bool resetPluginProcessing();
     void setMetronomeEnabled(bool enabled) noexcept;
     void setMidiAuditionEnabled(bool enabled) noexcept;
+    void setControlSurfaceInputReservation(juce::String identifier);
     juce::Result enqueueMidiInput(const juce::String& trackId,
                                  const juce::MidiMessage& message);
 
@@ -156,7 +161,18 @@ public:
     [[nodiscard]] float rightPeak() const noexcept;
     [[nodiscard]] double currentSampleRate() const noexcept;
 #if defined(STUDIO_DUO_TESTING)
+    juce::Result configureAudioForTesting(double rate, int blockSize);
+    void renderActiveBlockForTesting(juce::AudioBuffer<float>& output);
+    juce::Result waitForSandboxDspForTesting();
     [[nodiscard]] std::uint64_t sourceReadCountForTesting() const noexcept;
+    struct PreparedAudioStorageForTesting
+    {
+        std::size_t references = 0;
+        std::size_t distinctBuffers = 0;
+        std::uint64_t bytes = 0;
+    };
+    [[nodiscard]] PreparedAudioStorageForTesting preparedAudioStorageForTesting() const;
+    void setMediaPreparationHookForTesting(std::function<void()> hook);
     struct MidiEventForTesting
     {
         std::uint64_t runtimeKey = 0;
@@ -167,6 +183,7 @@ public:
 
     [[nodiscard]] int minimumRouteBufferCapacityForTesting() const noexcept;
     [[nodiscard]] double activeSnapshotSampleRateForTesting() const noexcept;
+    [[nodiscard]] int outputLatencySamplesForTesting() const noexcept;
     [[nodiscard]] std::vector<int> parallelBranchDelaysForTesting() const;
     [[nodiscard]] juce::AudioBuffer<float>
         renderActiveBlockForTesting(int samples, int outputChannels = 2);
@@ -279,7 +296,7 @@ private:
         double sampleRate = 48000.0;
         float gain = 1.0f;
         AudioClip processing;
-        juce::AudioBuffer<float> samples;
+        std::shared_ptr<const juce::AudioBuffer<float>> samples;
     };
 
     struct RenderSource
@@ -590,8 +607,10 @@ private:
         std::shared_ptr<PluginBridgeClient> bridge;
         float routedOutputGain = 1.0f;
         std::shared_ptr<juce::AudioProcessor> inProcess;
+        PluginTransport transport;
         std::unique_ptr<AraDocumentHost> araDocument;
         juce::AudioBuffer<float> inProcessBuffer;
+        juce::AudioBuffer<float> bridgeOutputBuffer;
         juce::MidiBuffer midi;
         juce::MidiBuffer midiInput;
         juce::MidiBuffer midiSegment;
@@ -780,12 +799,15 @@ private:
         const std::vector<RenderTrack::SidechainInput>* sidechains,
         const std::vector<RenderSource::PluginAutomation>* automation,
         std::int64_t timelineSample, std::vector<RenderTrack::Route>* outputRoutes,
-        std::vector<RenderSnapshot::RackDelay>& rackDelays) noexcept;
+        std::vector<RenderSnapshot::RackDelay>& rackDelays, const PluginTransport& transport) noexcept;
     void processRuntimeInsert(
         InsertRuntime& insert, juce::AudioBuffer<float>& buffer, juce::MidiBuffer* midi,
         const std::vector<RenderTrack::SidechainInput>* sidechains,
         const std::vector<RenderSource::PluginAutomation>* automation,
-        std::int64_t timelineSample, std::vector<RenderTrack::Route>* outputRoutes) noexcept;
+        std::int64_t timelineSample, std::vector<RenderTrack::Route>* outputRoutes,
+        const PluginTransport& transport) noexcept;
+    static PluginTransport pluginTransportAt(const RenderSnapshot&, std::int64_t sample,
+                                             bool playing, bool recording) noexcept;
     void mergeRackMidi(juce::MidiBuffer& destination, const juce::MidiBuffer& source) noexcept;
     static void prepareRackRequests(
         const Project& project, std::vector<PluginRuntimeRequest>& requests);
@@ -812,6 +834,7 @@ private:
     void requestMidiNoteTermination() noexcept;
 #if defined(STUDIO_DUO_TESTING)
     std::atomic<std::uint64_t> testingSourceReadCount { 0 };
+    std::function<void()> testingMediaPreparationHook;
     void recordMidiEventsForTesting(
         std::uint64_t runtimeKey,
         const juce::MidiBuffer& midi) noexcept;
@@ -869,6 +892,8 @@ private:
 
     juce::AudioDeviceManager* deviceManager = nullptr;
     juce::AudioFormatManager formatManager;
+    juce::CriticalSection preparedClipCacheLock;
+    std::map<juce::String, std::weak_ptr<const juce::AudioBuffer<float>>> preparedClipCache;
     juce::File pluginBridgeWorkerExecutable;
     std::array<RenderSnapshot, 3> snapshots;
     std::atomic<std::uint64_t> activeRenderPair { 0 };
@@ -885,7 +910,7 @@ private:
     std::atomic<bool> midiInputEnabled { false };
     std::atomic<std::uint64_t> midiTerminationRequested { 0 };
     std::atomic<std::uint64_t> midiTerminationHandled { 0 };
-    juce::MidiMessageCollector midiCollector;
+    MusicalMidiInputCollector midiCollector;
     juce::MidiBuffer incomingMidi;
     struct SoftwareMidiEvent
     {

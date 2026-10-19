@@ -273,7 +273,7 @@ std::optional<PluginValidationReport> PluginValidationReport::fromVar(
 }
 
 PluginValidationReport PluginCompatibilityValidator::validate(
-    const juce::PluginDescription& description)
+    const juce::PluginDescription& description, SupplementalTools tools)
 {
     PluginValidationReport report;
     report.pluginIdentifier = description.createIdentifierString();
@@ -421,6 +421,18 @@ PluginValidationReport PluginCompatibilityValidator::validate(
     }
 
     instance->prepareToPlay(48000.0, 256);
+    if (const auto* clap = dynamic_cast<const ClapPluginInstance*>(instance.get()))
+    {
+        const auto prepared = clap->preparationResult();
+        addCheck(report, "prepare", prepared.wasOk() ? "pass" : "fail",
+            prepared.wasOk() ? "CLAP audio/render mode prepared" : prepared.getErrorMessage());
+        if (prepared.failed())
+        {
+            instance->releaseResources();
+            report.status = "fail";
+            return report;
+        }
+    }
     juce::AudioBuffer<float> audio(
         std::max({
             2,
@@ -508,7 +520,10 @@ PluginValidationReport PluginCompatibilityValidator::validate(
         addCheck(report, "ara2", "skip", "Plugin does not advertise ARA 2");
     }
 
-    report.checks.push_back(platformValidation(description));
+    report.checks.push_back(tools == SupplementalTools::run
+        ? platformValidation(description)
+        : PluginValidationCheck { "platform-validator", "skip",
+            "External platform tools explicitly omitted for an isolated plugin-only probe." });
 
     instance->releaseResources();
     araHost.reset();

@@ -1,6 +1,7 @@
 #include "UpdateSettingsComponent.h"
 
 #include "ui/StudioTheme.h"
+#include "ui/ControlSurfaceSettingsComponent.h"
 
 namespace studio
 {
@@ -1153,7 +1154,9 @@ SettingsComponent::SettingsComponent(
         themeChanged,
     std::function<void()> restartRequested,
     bool showUpdatesInitially,
-    const juce::String& audioUnavailableReason)
+    const juce::String& audioUnavailableReason,
+    ControlSurfaceSession* controlSurface,
+    std::function<juce::Result(const ControlSurfaceSettings&)> configureSurface)
 {
     juce::Component* audioContent = &audioUnavailableLabel;
     if (deviceManager != nullptr)
@@ -1165,8 +1168,8 @@ SettingsComponent::SettingsComponent(
             maximumHardwareAudioChannels,
             0,
             maximumHardwareAudioChannels,
-            true,
-            true,
+            controlSurface == nullptr || controlSurface->hardwareAvailable(),
+            controlSurface == nullptr || controlSurface->hardwareAvailable(),
             false,
             false);
         audioContent = audioPage.get();
@@ -1223,6 +1226,12 @@ SettingsComponent::SettingsComponent(
         juce::Colour(StudioColours::panel),
         audioContent,
         false);
+    if (controlSurface != nullptr)
+    {
+        controlSurfacePage = std::make_unique<ControlSurfaceSettingsComponent>(
+            *controlSurface, preferences.controlSurfaceSettings(), std::move(configureSurface));
+        tabs.addTab("Controls", juce::Colour(StudioColours::panel), controlSurfacePage.get(), false);
+    }
     tabs.addTab(
         "Updates",
         juce::Colour(StudioColours::panel),
@@ -1245,6 +1254,6 @@ void SettingsComponent::resized()
 
 void SettingsComponent::showUpdates()
 {
-    tabs.setCurrentTabIndex(4);
+    tabs.setCurrentTabIndex(tabs.getNumTabs() - 1);
 }
 }

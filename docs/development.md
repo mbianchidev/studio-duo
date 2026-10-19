@@ -31,6 +31,12 @@ is added, correcting its policy-version range and selecting modern MSVC runtime
 handling. The patches apply on clean sources and verify already-patched cached
 sources; a mismatched custom dependency source fails with an actionable error.
 For a customized LAME source override, retain/apply the portability fixes too.
+Source-built JUCE 9.0.3 also receives a checked private-IPC patch: relative POSIX
+named pipes use the inherited `TMPDIR`, falling back to `/tmp` only when that
+environment setting is absent. Parent/worker probes can therefore keep their
+FIFOs in an owned private directory instead of granting vendor code writes to
+global `/tmp` pipe patterns. An installed JUCE package is not modified; its
+private-probe compatibility must be verified separately.
 Phase 4 MIDI/editor workflows and bundled drum/guitar/bass devices are
 implemented. The dedicated DAWproject 1.0 translation, schema-validation, ZIP,
 scene, and compatibility-report layer is also implemented without runtime
@@ -53,6 +59,7 @@ those pins.
 - Git
 - A C++20 compiler
 - macOS with Xcode command-line tools, or Windows with Visual Studio 2022
+- Python 3.9 or newer for test builds and qualification evidence tools only
 
 ## Configure and build
 
@@ -77,10 +84,13 @@ Makefiles build and leaves later-copied resources outside the seal.
 
 ### Universal macOS builds and compilation caching
 
-macOS CI and releases use Ninja, two build workers, and the same universal
+Primary macOS CI and releases use Ninja, two build workers, and the same universal
 Release configuration. This exercises the release build and universal packaging
 on pull requests and lets tagged builds reuse matching completed compilation
 results from `main`.
+The separate Intel CI job builds native x86_64 binaries with the same compiler
+cache checks and runs the full native regression and public-vendor software
+matrix; its results do not substitute for physical interface qualification.
 The dependency cache is shared between those workflows and includes dependency
 patches plus the resolved compiler/SDK fingerprint in its key. This prevents
 cached JUCE helper build trees from retaining another toolchain's compiler paths.
@@ -114,8 +124,10 @@ ccache --show-stats
 Ninja supports CMake's compiler launchers directly, unlike the Xcode generator.
 Resolve the real Clang executables with `xcrun` so the cache fingerprints the
 selected toolchain, not macOS's `/usr/bin` compiler dispatchers.
-The revision macro is limited to the diagnostic/progress sources that use it,
-so a new Git revision does not invalidate every application and test object.
+The revision macro is limited to the diagnostic/progress sources and two
+qualification-report sources that use it. Those report sources also retain the
+full candidate SHA, so evidence stays candidate-specific without invalidating
+every application and test object when the Git revision changes.
 
 `scripts/check-macos-compiler-cache.sh` checks real cache reuse in an isolated
 temporary cache, then changes Intel-only and ARM-only headers independently.
@@ -167,6 +179,20 @@ large-edit-density performance profile. Its numeric report is written to
 exchanges complete native fixtures between both operating systems. See
 [release readiness](release-readiness.md) for exact commands, budgets, and
 what still requires hands-on qualification.
+The separate opt-in `--qualify-long-session` test-executable command generates
+unique full-length PCM, exercises the actual callback at 48/96 kHz with a
+preallocated output buffer, republishes graphs concurrently, validates a portable
+copy, and compares complete deterministic live/offline renders. Its CSV/report
+are characterisation, not physical-device qualification. The CTest smoke uses
+only three one-second songs and explicitly records that scope; CI retains
+`phase6-long-session-smoke.json` and `.csv`. That smoke checks the strict
+qualification exit/status contract independently of shared-runner scheduling:
+a measured audio-deadline failure stays failed in the retained report, while
+the smoke itself enforces the separate generous hosted-runner regression bounds.
+The opt-in command's real deadline budgets are not widened. The standard-library Python evidence
+gate rejects incomplete matrices, skipped checks, wrong candidates, absent or
+changed raw evidence, and missing reduced-isolation release dispositions.
+See [qualification procedures](qualification.md) for budgets and invocation.
 
 Multi-engine test fixtures keep `StudioAudioEngine` instances on the heap:
 their fixed MIDI trace arrays can exceed Windows's default 1 MiB stack when
@@ -226,6 +252,49 @@ Audio-probe tests use synthetic worker responses, abrupt exits, and timeouts;
 they never load an installed hardware driver. Windows additionally checks native
 exception reporting in a disposable child process.
 
+## Control-surface MIDI
+
+`midi/ControlSurface` separates the Mackie Control wire profile from an owned
+input/output connection. Construction, default/disabled preferences and
+pre-probe polling never discover or open MIDI. `MainComponent` permits a saved
+opt-in only after MIDI service readiness; explicit Settings retries retain the
+Windows separate-process discovery gate. Exact input/output identities are
+persisted in preferences schema 3. Legacy preferences default to disabled;
+invalid/unknown protocols are reported without opening a driver.
+
+Control ports must not be selected for musical input/output. Configuration
+rejects conflicts before changing saved settings or reservations. The engine's
+`MusicalMidiInputCollector` also excludes the reserved input from live musical
+and retrospective recording paths if a user later changes device assignments.
+The surface owns only its dedicated MIDI handles and never changes unrelated
+device-manager settings. Disconnect closes only those handles; reconnect never
+substitutes a similarly named device.
+
+The driver callback copies bounded packets into a 512-slot FIFO, with serialized
+producers and project-generation/dispatch guards. Project edits, feedback, and
+logging happen on the message thread. Stale commands older than 250 ms are
+discarded visibly; overflow fails closed until an explicit reconnect. Continuous
+controls coalesce before `ControlSurfaceProject` creates one undoable
+mix/automation transaction. Preview is staged, not committed accidentally.
+Lifecycle generation checks prevent a command callback from closing/reconfiguring
+its session and then receiving stale feedback from the old dispatch.
+
+Feedback is differential: fourteen-bit faders, pan rings, button LEDs and
+seven-bit LCD names. Touch suppresses motor updates and banking cannot retarget
+a held channel fader. MCU host-query/reply bytes are exchanged in memory only;
+device identity/serial bytes are not logged, exported or saved. The wire facts
+are documented by the independent
+[MCU interoperability reference](https://github.com/NicoG60/TouchMCU/blob/main/doc/mackie_control_protocol.md).
+This implements the documented common profile, not HUI, extenders, plug-in
+layers, timecode or physical-model certification.
+
+`controlSurfaceTests` uses only synthetic ports, challenges and projects. It
+covers protocol values, touch/feedback, musical exclusion, disconnected and
+conflicting ports, reconnect, stale/overflow input, project replacement,
+reentrant shutdown, undo/automation and native settings names/focus/layout.
+Its optional `STUDIO_DUO_CONTROL_SURFACE_IMAGE` output is an offscreen software
+render, never a desktop capture or screen-reader pass.
+
 ## Coordinated startup
 
 `StartupShellComponent` owns the lightweight surface, workers and
@@ -236,8 +305,9 @@ install. Preferences/recent metadata, cached catalog/compatibility data, and rec
 inspection run concurrently without constructing the full workspace or an audio
 manager. Workspace construction depends on those results; audio preflight depends
 on settings and the recovery decision. MIDI and requested-project dispatch wait
-for their actual services. Unsupported locale/control-surface/extension systems
-are not invented as startup tasks.
+for their actual services. Optional control surfaces stay driver-free until
+the MIDI service is available and an explicit saved profile is enabled.
+Unsupported locale/extension systems are not invented as startup tasks.
 
 The coordinator is message-thread-owned. Workers publish owned results through a
 mailbox; attempt tokens reject stale results after timeout, retry, or cancellation.
@@ -523,7 +593,7 @@ mutate active graphs or allocate on the callback. Seeking resets those histories
 Rack edits preserve live processor state outside the callback, including
 bypassed children and validated external state, while explicit changed state
 payloads and plugin replacement remain authoritative.
-Bundled auxiliary-output taps remain limited to the final processor on a
+Bundled and external auxiliary-output taps remain limited to the final processor on a
 serial-only path, and include its enclosing rack output gains. Parallel-branch
 taps are rejected rather than bypassing branch summing or delay compensation.
 
@@ -587,8 +657,11 @@ their path early. Seek and Stop rebuild the pipeline before playback resumes.
 
 Processor-inclusive export uses the same runtime graph. Bundled and trusted
 processors run offline; sandboxed third-party processors keep their one-block
-pipeline and use a paced real-time fallback. Processing is never silently
-omitted.
+pipeline, but export waits outside the audio callback for each submitted worker
+quantum instead of sleeping for its nominal audio duration. Slow valid DSP cannot
+silently become dry fallback in an export. Disconnect, explicit fallback and a
+five-second per-quantum timeout fail the render and retain the existing live
+restoration path. This completion wait never runs in normal realtime callbacks.
 
 Run the transport and installed-plugin activation diagnostics with:
 
@@ -616,9 +689,19 @@ before replacement, and reject unsupported capabilities/versions without
 recovery bypass. A corrupt manifest requires Save As. Legacy output-route IDs
 are deterministic across repeated migration and platform exchange.
 
-Graph construction reuses decoded source buffers within one snapshot, capped
-at 64 MiB of additional cached audio; no cache survives a rebuild. Thus edits to
-same-size/same-mtime media are observed. Timeline painting starts its grid at
+Graph construction shares immutable prepared PCM across clips and snapshot
+publications. A weak cache keys every source-mapping/stretch input and the exact
+sample-rate bits, not clip IDs, timeline positions, gain, polarity, or fades
+(those remain per-clip render metadata). Local APFS identity/nanosecond change
+time and local NTFS identity/change-time/USN revisions permit cross-update reuse;
+unavailable or coarse/remote filesystem revisions disable that optimization.
+Before publication all observed revisions are checked again. Media disappearing
+or changing during preparation rejects the new graph while the previous one stays
+audible. Native identities are in-memory cache keys, never diagnostic fields.
+Tests cover shared ownership, mixer/move/envelope edits, replacement and in-place
+same-size/same-mtime changes, rate changes, failed publication, and retired data.
+Decode scratch retains at most 64 MiB of small sources and one large source;
+equal-rate input avoids an unnecessary resampling copy. Timeline painting starts its grid at
 the visible meter anchor and culls offscreen rows/clips/automation/previews.
 Prepared audio storage still needs realistic long-file evaluation; the short
 synthetic performance fixture is not a streaming or hardware-capacity guarantee.
@@ -794,6 +877,70 @@ uses compact breakpoint/ramp descriptors. CLAP expands them to exact timed
 events inside one `process()` call, bundled gain applies processor-native
 per-sample ramps, and unsupported JUCE formats use an adaptive bounded split
 fallback. Overflow is counted rather than silently dropping later lanes.
+Loop-boundary slices of one device callback are assembled into one sandbox
+input packet, including sidechains, MIDI positions and automation ramp ends;
+they must not overwrite the single-slot bridge input before the worker can run.
+Ramp endpoints may be one sample past the block, preserving the original slope
+instead of reaching the endpoint a sample early.
+
+Bridge protocol 9 also carries the first slice's block-start transport snapshot:
+sample/second/quarter-note position, tempo and ramp increment, meter, bar start/
+count, loop bounds and play/record/loop flags. Trusted and bundled processors use
+an owned `PluginHostPlayHead`; its atomic-word snapshots are coherent and its
+lifetime includes deferred message-thread processor destruction. Workers install
+the same playhead before processing, and CLAP receives a typed transport event
+instead of a null pointer. Adaptive automation sub-blocks advance their clock;
+worker MIDI is rebased and reassembled with those sub-blocks, not replayed in
+every slice. Context describes the processing quantum's start, not a claim of
+sample-accurate within-quantum tempo/meter/loop transitions. The sliced bridge
+must retain its first clock, not silently substitute the post-wrap slice's time.
+
+Runtime publication swaps retired graphs out while holding the request lock,
+then destroys them after releasing it: native CLAP teardown may synchronously
+dispatch to the message thread, whose transition polling also needs that lock.
+Bridge startup likewise releases its response lock before stopping a timed-out
+worker, allowing its control callback thread to finish during teardown.
+
+Offline requests carry a transient non-realtime processing context through the
+runtime identity and worker startup; restoring the live graph restores its
+original context. The CLAP render extension receives the matching mode on the
+main thread before activation. Hard-realtime-only processors, rejected render
+modes, and failed activation produce explicit preparation errors, not successful
+dry exports. Offline and isolated-worker processing may wait up to five seconds
+for native lifecycle admission; the parent realtime callback never waits.
+Suppressed or failed CLAP processing is counted and rejected during offline
+export, including trusted processors and worker fallback output. The exporter
+waits for completed worker DSP outside the audio callback rather than sleeping
+for a nominal block duration. Host seek/reset requests reach the native CLAP
+reset callback on the next admitted audio-thread block, rather than inheriting
+JUCE's empty default reset.
+
+External output-bus names are discovered from the active processor and cached
+on its insert for the native routing menu and project reopen. They do not
+authorize a native layout: activation revalidates the requested bus and enables
+its default layout after state restoration. Workers publish a bounded,
+base64-encoded name/channel/offset map and return all enabled output channels
+within the existing eight-channel bridge limit. Mono main outputs and
+mono/stereo auxiliary buses retain independent offsets and the same declared
+latency. A per-frame wet marker keeps aligned stereo dry fallback separate from
+auxiliary outputs; a missed worker cannot feed the source's right input into a
+mono auxiliary bus. Invalid or unsupported layouts fail explicitly.
+The application and native test host also hide C/C++ and inline implementation
+symbols. Vendor JUCE implementations must not coalesce with the host's JUCE
+classes; hiding only Studio Duo's own CLAP modules does not protect against
+externally supplied JUCE-based processors.
+The checked JUCE framed-IPC patch serializes complete control-message writes:
+its child-process heartbeat thread otherwise writes concurrently with large
+state/parameter payloads, interleaving messages larger than a pipe's atomic-write
+limit. Truncated frames are rejected, not delivered as zero-padded startup/state
+data. This locking is outside realtime DSP. Native pipe regressions cover mixed
+large/heartbeat-size concurrent sends and incomplete payload rejection. Startup
+diagnostics retain typed stages 1-8 (mapping, creation, created, state, buses,
+prepare, metadata and processing thread) when a worker disconnects.
+
+CLAP activation refreshes clean parameter values while retaining pending host
+edits. Worker parameter changes publish refreshed metadata, including discrete
+step counts used by the generic editor's keyboard controls.
 Control gestures retain their start and end transport positions, including
 plugin parameters, VCA gain, sends, master controls, and control-room
 volume/pan/mute/polarity/dim processing. Touch restores the prior lane, latch
@@ -867,9 +1014,14 @@ the live runtime state before rebuilding the offline graph, preserving unsaved
 cabinet and parameter changes.
 
 ARA-capable VST3 and Audio Unit instances can opt into an in-process document
-binding. Studio Duo writes a recovery point before activation, shows the
-reduced-isolation warning, records an unclean-session marker, and reopens marked
-instances safe-disabled until explicit reload. The host registers immutable
+binding. Both third-party trusted in-process and ARA mode changes require a
+saved project and explicit, mode-specific crash/hang consent. After consent,
+Studio Duo revalidates the project/insert, captures current processor state
+through the existing state-store path, and writes the current recovery point
+before activation; failed capture/checkpoint prevents the change. Bundled DSP is not
+misrepresented as a third-party isolation opt-in. Studio Duo records an
+unclean-session marker and reopens marked instances safe-disabled until explicit
+reload. The host registers immutable
 audio sources, audio modifications, per-track region sequences, playback
 regions, and tempo/meter content before processor preparation. ARA model,
 archive, and teardown calls stay on one runtime thread; processor destruction

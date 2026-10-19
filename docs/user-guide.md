@@ -76,6 +76,8 @@ DAWproject exchange, and Phase 5 mastering and release workflows.
 | Seek by the edit grid / seek project boundaries | `Alt+Left/Right` / `Home/End` |
 | Open selected track or clip actions | `Shift+F10` |
 | Mute / solo / arm selected timeline track | `Alt+M` / `Alt+S` / `Alt+R` |
+| Adjust selected audio clip gain by 1 dB / 0.1 dB | `Alt+Up/Down` / `Alt+Shift+Up/Down` |
+| Clear selected clip while keeping its track | `Escape` |
 | Open | `Command/Ctrl+O` |
 | Import audio | `Command/Ctrl+I` |
 | Create MIDI clip at playhead | `Command/Ctrl+Shift+N` |
@@ -107,9 +109,27 @@ into view. Shift+F10 uses the existing context actions without changing the
 playhead; fade/warp actions use its current position. Musical nudges respect the
 chosen edit grid, tempo map, and existing linked-edit protections. Tab always
 leaves the timeline. The lower MIDI editor retains its own note-editing keys.
+The native timeline selection value includes mute/solo/arm, track level,
+take/comp and linked-edit state, plus selected clip timing, gain and fades.
+State changes do not rely on color or an unchanged selection name.
+The status strip exposes its current message and error state to native
+accessibility clients. Press Return or Space on **Status history** to open the
+message list; use the arrows to reach every retained message and Delete or
+**Clear selected message** to remove one. **Clear all messages** empties the
+history. New messages preserve the selected message instead of moving its target.
+
+For keyboard comping, clear the clip selection and use **Shift+F10 > Expand
+versions**, select a take with the arrows, then use its clip actions to choose
+the playlist or comp range. Existing trim/split and linked-edit rules still apply.
 
 Mastering metadata/timing fields have distinct accessible names; its add,
 analyze, export, DDP, portable-copy, and repair controls are keyboard-focusable.
+The generic plugin parameter editor names the selected parameter and its
+normalized value; use the selector, arrow keys, or editable value field.
+Automation mode/lane/target/value controls are named too. **Routing > EDIT**
+opens every existing route, including routes beyond the painted preview,
+without requiring a mouse. Linear and rotary sliders show a focus outline,
+and mastering song rows expose their sequence number and title.
 Actual assistive-technology and full-workflow qualification remains tracked in
 the [release-readiness matrix](release-readiness.md).
 
@@ -357,6 +377,12 @@ linear fade length, then drag the point in the middle of the fade vertically to
 shape it: upward is logarithmic and downward is a sharper inverse-exponential
 curve. Right-click a clip to mute or unmute that individual piece without
 muting its take lane.
+With keyboard focus, **Shift+F10 > Edit clip gain...**, **Edit fade in...** and
+**Edit fade out...** provide exact numeric alternatives to the gain, fade-length
+and fade-curve handles. Fade curves accept -1 through +1, with zero linear.
+Return applies one ordinary edit; Escape cancels and returns to the timeline.
+Invalid values keep the editor open with an explicit error rather than silently
+clamping them. Fade edits retain the existing linked-track behavior.
 
 Trimmed audio remains visible as a dashed waveform ghost and can be restored.
 After a split, each half keeps independent source boundaries and cannot expand
@@ -444,6 +470,60 @@ cycles are rejected before the route is added. A MIDI route can also filter one
 of channels 1-16; the metal multi-output template uses those filters.
 
 ## Record and edit MIDI
+
+### Mackie Control surfaces
+
+**Settings > Controls** provides an optional Mackie Control profile, disabled by
+default. Put the controller in **Mackie Control** mode manually, not HUI or an
+extender mode. Choose its dedicated input and output; Studio Duo never selects
+ports by a similar name or changes the musical device assignments for you.
+
+1. Stop recording, export and reamp calibration before changing control ports.
+2. In **Audio / MIDI**, disable that input for musical MIDI and choose a
+   different musical output, or no musical output.
+3. In **Controls**, choose **Mackie Control (8 strips + master)**, select the
+   exact controller ports, and choose **APPLY**. Do not select a synthesizer or
+   an output-to-input MIDI loop: feedback includes note, CC, pitch-bend and SysEx
+   messages.
+4. Verify the actual hardware response with a disposable synthetic project.
+   A connected status means the selected ports opened, not that its firmware,
+   wiring or physical behavior has been certified.
+
+| Control | Studio Duo mapping |
+| --- | --- |
+| Play / Stop / Record | Start playback / stop and finalize / start recording; Record does not stop an existing take |
+| Rewind / Forward | Move one bar using the current tempo/meter, disabled while recording |
+| Eight channel faders / master | Fourteen-bit normalized mixer volume over the existing -60 to +12 dB range |
+| V-Pots / V-Pot press | Relative pan / center pan |
+| Channel Rec / Solo / Mute / Select | Existing track arm, solo, mute and selection actions |
+| Bank / Channel left-right | Move eight tracks / one track, including a final partial bank |
+| Cycle / Click / Save / Undo | Existing loop, metronome, save and undo commands |
+
+Banks follow root mixer-track order, excluding folders and the independently
+mapped master. Track IDs remain stable when names change. Faders and pan use
+the existing undo and automation modes; each message-thread frame coalesces
+continuous input into one mix/automation transaction. Preview remains staged
+until committed. Motor feedback is suppressed while a channel fader is touched;
+release resynchronizes it to host state. Release channel faders before banking.
+LEDs, pan rings and bounded seven-bit LCD track names follow the current mixer
+model. Live metering/timecode, plug-in layers, expanders, HUI and MIDI learn are
+not implemented by this profile.
+
+The selected input is reserved and excluded from musical recording and
+retrospective capture. Other musical inputs remain unchanged. Commands are
+ignored in startup/modals/export/calibration; queued input older than 250 ms is
+discarded visibly rather than replaying a delayed Record press. An input overflow
+halts surface commands until **RECONNECT**; audio and other MIDI routing keep
+running. Unplug/replug retries only the saved port identities and resends host
+feedback. **REFRESH PORTS** updates the selectors; **RECONNECT** retries the saved
+configuration, not unsaved selections. Disable the profile to release its
+reservation before reusing that input for musical MIDI.
+
+Protocol and mocked connection tests do not certify a physical surface. Record
+the device/firmware, exact candidate and observed mappings using the
+[qualification procedure](qualification.md#physical-audio-midi-reamp-and-control-surfaces).
+
+### MIDI recording and editing
 
 Arm any combination of root MIDI and instrument tracks, then press **Start
 Recording** (circle icon).
@@ -635,6 +715,15 @@ auxiliary outputs. Processor-output taps inside parallel branches are rejected;
 use the splitter's combined track output instead. Lower its automatable
 Main level when using stems alone to avoid summing the full mix twice.
 
+External VST3, Audio Unit and CLAP processors also expose their discovered bus
+names under **Processor output** after becoming ready. Select the named bus and
+an aux/bus destination; the final-insert/serial-path rule still applies. The
+host validates the actual bus again when activating it. Sandboxed processors
+support up to eight enabled output channels in total; unsupported layouts or
+stale buses produce a visible error, not a successful silent stem. Lower the
+source track's fader when isolating pre-fader stems, rather than muting the
+track or counting its full mix twice.
+
 **TRACK** in the routing panel changes mono/stereo layout, polarity, solo-safe
 state, folder placement, and VCA assignment. Folder mute and solo scope their
 children without hiding summing; use a bus for audio summing. VCAs control the
@@ -702,11 +791,19 @@ ARA 2 mode.
 Moving the playhead resets existing plugin processors and queued bridge audio
 in place. Sandboxed workers remain running and ready instead of being rebuilt.
 
-ARA activation requires a saved project, writes a recovery point, and warns
-about reduced crash isolation. Studio Duo registers the track's immutable audio
+Third-party **Trusted in-process** and **ARA 2** activation both require a saved
+project and explicit consent. The warning explains that a plugin crash or hang
+can close or freeze Studio Duo: these modes do not provide sandbox containment.
+After confirmation, Studio Duo writes a recovery point before changing the mode;
+if writing fails, the mode is not changed. Switching between reduced-isolation
+modes requires fresh consent. Cancel retains the previous mode.
+Studio Duo registers the ARA track's immutable audio
 sources, clip playback regions, tempo map, and meter map with the ARA document.
 Processor and ARA document state are archived together, including unsaved ARA
 edits preserved across clip, tempo, and meter graph rebuilds.
+An unclean session reopens affected in-process inserts disabled until explicit
+reload. Recovery does not make an in-process crash isolated or establish a
+vendor compatibility pass.
 
 The inspector reports loading, ready, missing, bypassed, recovery-disabled,
 crashed, and late-block states. Select a failed insert and choose **Reload plugin**

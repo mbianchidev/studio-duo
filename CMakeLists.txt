@@ -28,9 +28,26 @@ execute_process(
 if(NOT STUDIO_DUO_BUILD_REVISION_RESULT EQUAL 0)
     set(STUDIO_DUO_BUILD_REVISION "source-archive")
 endif()
+execute_process(
+    COMMAND git rev-parse --verify HEAD
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    OUTPUT_VARIABLE STUDIO_DUO_BUILD_COMMIT
+    RESULT_VARIABLE STUDIO_DUO_BUILD_COMMIT_RESULT
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+)
+if(NOT STUDIO_DUO_BUILD_COMMIT_RESULT EQUAL 0)
+    set(STUDIO_DUO_BUILD_COMMIT "source-archive")
+endif()
 set_property(
     SOURCE src/startup/StartupDiagnostics.cpp src/ui/StartupProgressComponent.cpp
     APPEND PROPERTY COMPILE_DEFINITIONS
+        STUDIO_DUO_BUILD_REVISION="${STUDIO_DUO_BUILD_REVISION}"
+)
+set_property(
+    SOURCE tests/PerformanceHardeningTests.cpp tests/PluginCompatibilityTests.cpp
+    APPEND PROPERTY COMPILE_DEFINITIONS
+        STUDIO_DUO_BUILD_COMMIT="${STUDIO_DUO_BUILD_COMMIT}"
         STUDIO_DUO_BUILD_REVISION="${STUDIO_DUO_BUILD_REVISION}"
 )
 
@@ -110,6 +127,14 @@ if(NOT TARGET juce::juce_gui_extra)
         GIT_SHALLOW TRUE
     )
     FetchContent_MakeAvailable(JUCE)
+    studio_duo_apply_dependency_patch(
+        "${juce_SOURCE_DIR}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/third_party/juce/9.0.3-private-ipc.patch"
+    )
+    studio_duo_apply_dependency_patch(
+        "${juce_SOURCE_DIR}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/third_party/juce/9.0.3-framed-ipc.patch"
+    )
 endif()
 
 if(STUDIO_DUO_BUILD_TESTS OR STUDIO_DUO_AUDIO_EXPORT_TESTS_ONLY)
@@ -331,6 +356,7 @@ set(STUDIO_DUO_PLUGIN_SOURCES
     src/plugin_host/PluginBridgeClient.cpp
     src/plugin_host/PluginBridgeClient.h
     src/plugin_host/PluginBridgeProtocol.h
+    src/plugin_host/PluginAudioBuses.h
     src/plugin_host/PluginCatalog.cpp
     src/plugin_host/PluginCatalog.h
     src/plugin_host/PluginCompatibilityDatabase.cpp
@@ -475,6 +501,10 @@ target_sources(
         src/audio/StudioAudioDeviceManager.h
         src/audio/StudioAudioEngine.cpp
         src/audio/StudioAudioEngine.h
+        src/midi/ControlSurface.cpp
+        src/midi/ControlSurface.h
+        src/midi/ControlSurfaceProject.cpp
+        src/midi/ControlSurfaceProject.h
         src/audio/RecordingWaveform.h
         src/logging/StudioLogger.cpp
         src/logging/StudioLogger.h
@@ -497,6 +527,10 @@ target_sources(
         src/update/UpdateSettingsComponent.h
         src/ui/MainComponent.cpp
         src/ui/MainComponent.h
+        src/ui/ControlSurfaceSettingsComponent.cpp
+        src/ui/ControlSurfaceSettingsComponent.h
+        src/platform/MediaFileRevision.cpp
+        src/platform/MediaFileRevision.h
         src/ui/StartupProgressComponent.cpp
         src/ui/StartupProgressComponent.h
         src/ui/StartupShellComponent.cpp
@@ -543,6 +577,8 @@ target_sources(
         src/ui/StudioTheme.h
         src/ui/TimelineComponent.cpp
         src/ui/TimelineComponent.h
+        src/ui/ClipProcessingEditorComponent.cpp
+        src/ui/ClipProcessingEditorComponent.h
         ${STUDIO_DUO_MODEL_SOURCES}
         ${STUDIO_DUO_PLUGIN_SOURCES}
         ${STUDIO_DUO_STARTUP_SOURCES}
@@ -641,6 +677,10 @@ target_link_libraries(
         juce::juce_recommended_lto_flags
         juce::juce_recommended_warning_flags
 )
+set_target_properties(StudioDuo PROPERTIES
+    C_VISIBILITY_PRESET hidden
+    CXX_VISIBILITY_PRESET hidden
+    VISIBILITY_INLINES_HIDDEN TRUE)
 
 if(APPLE)
     add_custom_target(
@@ -915,6 +955,10 @@ if(STUDIO_DUO_BUILD_TESTS)
     endif()
 
     juce_add_console_app(StudioDuoTests PRODUCT_NAME "Studio Duo Tests")
+    set_target_properties(StudioDuoTests PROPERTIES
+        C_VISIBILITY_PRESET hidden
+        CXX_VISIBILITY_PRESET hidden
+        VISIBILITY_INLINES_HIDDEN TRUE)
     if(APPLE)
         add_dependencies(StudioDuoTests StudioDuoDevelopmentSignature)
     endif()
@@ -939,6 +983,13 @@ if(STUDIO_DUO_BUILD_TESTS)
         PRIVATE
             tests/ModelTests.cpp
             tests/MidiTests.cpp
+            tests/ControlSurfaceTests.cpp
+            src/midi/ControlSurface.cpp
+            src/midi/ControlSurface.h
+            src/midi/ControlSurfaceProject.cpp
+            src/midi/ControlSurfaceProject.h
+            src/ui/ControlSurfaceSettingsComponent.cpp
+            src/ui/ControlSurfaceSettingsComponent.h
             tests/RoutingModelTests.cpp
             tests/RoutingEngineTests.cpp
             tests/RoutingUiModelTests.cpp
@@ -960,11 +1011,15 @@ if(STUDIO_DUO_BUILD_TESTS)
             tests/AudioExportTests.cpp
             tests/MasteringTests.cpp
             tests/PluginCompatibilityTests.cpp
+            tests/VendorWorkflowProbe.cpp
+            tests/VendorWorkflowProbe.h
             tests/ProjectMigrationTests.cpp
             tests/ProjectHardeningTests.cpp
             tests/ProjectExchangeTests.cpp
             tests/KeyboardAccessibilityTests.cpp
             tests/PerformanceHardeningTests.cpp
+            src/platform/MediaFileRevision.cpp
+            src/platform/MediaFileRevision.h
             tests/ReleaseFixtures.h
             tests/ProjectTemplateTests.cpp
             tests/WindowSizingTests.cpp
@@ -998,8 +1053,16 @@ if(STUDIO_DUO_BUILD_TESTS)
             src/ui/StudioPanControl.h
             src/ui/TimelineComponent.cpp
             src/ui/TimelineComponent.h
+            src/ui/ClipProcessingEditorComponent.cpp
+            src/ui/ClipProcessingEditorComponent.h
             src/ui/MasteringWorkspaceComponent.cpp
             src/ui/MasteringWorkspaceComponent.h
+            src/ui/AutomationPanel.cpp
+            src/ui/AutomationPanel.h
+            src/ui/PluginParameterPanel.cpp
+            src/ui/PluginParameterPanel.h
+            src/ui/RoutingPanel.cpp
+            src/ui/RoutingPanel.h
             src/ui/MixerPanel.cpp
             src/ui/MixerPanel.h
             src/ui/PluginInsertPanel.cpp
@@ -1031,6 +1094,7 @@ if(STUDIO_DUO_BUILD_TESTS)
             src/plugin_host/PluginBridgeClient.cpp
             src/plugin_host/PluginBridgeClient.h
             src/plugin_host/PluginBridgeProtocol.h
+            src/plugin_host/PluginAudioBuses.h
             src/plugin_host/AraDocumentHost.cpp
             src/plugin_host/AraDocumentHost.h
             src/plugin_host/ClapPluginFormat.cpp
@@ -1193,10 +1257,10 @@ if(STUDIO_DUO_BUILD_TESTS)
 
     foreach(STUDIO_DUO_HARDENING_SUITE IN ITEMS
         projectHardeningTests saveInterruptionTests projectExchangeTests
-        keyboardAccessibilityTests performanceHardeningTests
+        keyboardAccessibilityTests infoPanelTests performanceHardeningTests longSessionQualificationTests
         projectMigrationTests packagePersistence projectRecovery startupTests
         pluginFormatTests pluginRecoveryTests pluginCompatibilityTests pluginRackEngineTests
-        routingEngineTests routingModelTests automationTests renderEngineTests
+        routingEngineTests routingModelTests automationTests renderEngineTests controlSurfaceTests
         dawProjectTests masteringTests transportTests linkedMultitrackEditing
         synchronizedRecordingCapture multitrackRecordingCommand reampWorkflow)
         set_property(TEST "StudioDuoTests.${STUDIO_DUO_HARDENING_SUITE}" APPEND PROPERTY LABELS "hardening")
@@ -1205,17 +1269,21 @@ if(STUDIO_DUO_BUILD_TESTS)
         StudioDuoTests.performanceHardeningTests
         PROPERTIES ENVIRONMENT "STUDIO_DUO_HARDENING_REPORT=${CMAKE_CURRENT_BINARY_DIR}/Testing/phase6-performance.json"
     )
+    set_tests_properties(StudioDuoTests.longSessionQualificationTests PROPERTIES
+        ENVIRONMENT "STUDIO_DUO_LONG_SESSION_SMOKE_REPORT=${CMAKE_CURRENT_BINARY_DIR}/Testing/phase6-long-session-smoke.json")
 
     set(STUDIO_DUO_HOST_TESTS)
     foreach(
         STUDIO_DUO_HOST_SUITE
         IN ITEMS
+            pluginBridgeProtocol
             audioDeviceProbeTests
             startupTests
             windowsCrashHandlerTests
             pluginFormatTests
             pluginCompatibilityTests
             performanceHardeningTests
+            longSessionQualificationTests
     )
         if(STUDIO_DUO_HOST_SUITE IN_LIST STUDIO_DUO_TEST_SUITES)
             list(
@@ -1231,6 +1299,15 @@ if(STUDIO_DUO_BUILD_TESTS)
             PROPERTIES RESOURCE_LOCK studio_duo_host
         )
     endif()
+    find_package(Python3 3.9 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME StudioDuoQualificationEvidence
+        COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/QualificationTests.py")
+    set_tests_properties(StudioDuoQualificationEvidence PROPERTIES
+        LABELS "hardening;qualification" TIMEOUT 30)
+    add_test(NAME StudioDuoVendorQualificationContracts
+        COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/VendorQualificationTests.py")
+    set_tests_properties(StudioDuoVendorQualificationContracts PROPERTIES
+        LABELS "hardening;qualification" TIMEOUT 30)
     if(APPLE OR WIN32)
         add_test(NAME StudioDuoStartup COMMAND StudioDuo --startup-self-test)
         set_tests_properties(
