@@ -120,6 +120,9 @@ cmake --build build --config Release --parallel
 ctest --test-dir build --build-config Release --output-on-failure
 ```
 
+For cached universal macOS builds with native test-only binaries, see the
+[development build configuration](docs/development.md#universal-macos-builds-and-compilation-caching).
+
 On macOS with the default generator:
 
 ```sh

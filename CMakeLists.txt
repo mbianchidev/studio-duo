@@ -28,9 +28,15 @@ execute_process(
 if(NOT STUDIO_DUO_BUILD_REVISION_RESULT EQUAL 0)
     set(STUDIO_DUO_BUILD_REVISION "source-archive")
 endif()
+set_property(
+    SOURCE src/startup/StartupDiagnostics.cpp src/ui/StartupProgressComponent.cpp
+    APPEND PROPERTY COMPILE_DEFINITIONS
+        STUDIO_DUO_BUILD_REVISION="${STUDIO_DUO_BUILD_REVISION}"
+)
 
 option(STUDIO_DUO_BUILD_TESTS "Build Studio Duo tests" ON)
 option(STUDIO_DUO_AUDIO_EXPORT_TESTS_ONLY "Build only the headless audio export regression tests" OFF)
+option(STUDIO_DUO_NATIVE_TESTS "Build macOS tests and fixtures for the host architecture only" OFF)
 set(STUDIO_DUO_BUNDLE_ID "dev.mbianchi.studioduo")
 
 include(FetchContent)
@@ -109,6 +115,12 @@ endif()
 if(STUDIO_DUO_BUILD_TESTS OR STUDIO_DUO_AUDIO_EXPORT_TESTS_ONLY)
     enable_testing()
     juce_add_console_app(StudioDuoAudioExportTests PRODUCT_NAME "Studio Duo Audio Export Tests")
+    if(APPLE AND STUDIO_DUO_NATIVE_TESTS)
+        set_target_properties(
+            StudioDuoAudioExportTests
+            PROPERTIES OSX_ARCHITECTURES "${CMAKE_HOST_SYSTEM_PROCESSOR}"
+        )
+    endif()
     target_sources(
         StudioDuoAudioExportTests
         PRIVATE tests/AudioExportTests.cpp src/render/AudioExport.cpp src/render/AudioExport.h
@@ -363,7 +375,6 @@ juce_add_gui_app(
 
 juce_generate_juce_header(StudioDuo)
 target_compile_definitions(StudioDuo PRIVATE
-    STUDIO_DUO_BUILD_REVISION="${STUDIO_DUO_BUILD_REVISION}"
     STUDIO_DUO_BUILD_CONFIG="$<CONFIG>")
 
 configure_file(
@@ -908,8 +919,20 @@ if(STUDIO_DUO_BUILD_TESTS)
         add_dependencies(StudioDuoTests StudioDuoDevelopmentSignature)
     endif()
     target_compile_definitions(StudioDuoTests PRIVATE
-        STUDIO_DUO_BUILD_REVISION="${STUDIO_DUO_BUILD_REVISION}"
         STUDIO_DUO_BUILD_CONFIG="$<CONFIG>")
+    if(APPLE AND STUDIO_DUO_NATIVE_TESTS)
+        set_target_properties(
+            StudioDuoTests
+            StudioDuoDdpEncoderFixture
+            StudioDuoAraFixture
+            StudioDuoAraFixture_VST3
+            StudioDuoAraFixture_AU
+            StudioDuoRoutingFixture
+            StudioDuoRoutingFixture_VST3
+            StudioDuoClapFixture
+            PROPERTIES OSX_ARCHITECTURES "${CMAKE_HOST_SYSTEM_PROCESSOR}"
+        )
+    endif()
 
     target_sources(
         StudioDuoTests

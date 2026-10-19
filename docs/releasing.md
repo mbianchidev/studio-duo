@@ -89,7 +89,18 @@ The workflow rejects a tag when:
 - the tagged commit is not reachable from `origin/main`
 
 Both platform builds must pass the complete test suite before the GitHub Release
-is published. Windows publication also requires successful Authenticode signing,
+is published. The macOS build uses the same two-worker Ninja configuration and
+architecture-aware ccache configuration as CI, so default-branch compilation can be
+reused by tags. The application and standalone plugins remain universal; test-only
+executables and fixtures are native to the runner, matching the architecture
+that actually executes the complete suite. See
+[universal build configuration](development.md#universal-macos-builds-and-compilation-caching).
+The release build requests only the signed app and complete test targets,
+including their fixture dependencies. Standalone VST3/AU exports are not in the
+release archives and remain covered by CI's full build instead.
+An isolated compiler-cache check verifies independent Intel/ARM header changes
+before cached universal objects can be used.
+Windows publication also requires successful Authenticode signing,
 `signtool verify /pa /v`, and an exact signer-thumbprint match for both
 `Studio Duo.exe` and the installer. CI exercises the same verification path
 with an ephemeral test certificate.

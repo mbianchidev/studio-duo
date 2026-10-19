@@ -210,6 +210,12 @@ void startupTests()
         plugins.ready = 100;
         plugins.failures[3] = 2;
         const auto report = startupDiagnosticReport(privateData, devices, plugins, true, true, 12.0);
+        const auto build = report.getProperty("build", {});
+        const auto revision = build.getProperty("revision", {});
+        const auto configuration = build.getProperty("configuration", {});
+        expect(revision.isString() && revision.toString().isNotEmpty()
+                   && configuration.isString() && configuration.toString() == STUDIO_DUO_BUILD_CONFIG,
+               "Startup diagnostics retain the build revision and configuration.");
         const auto json = juce::JSON::toString(report);
         expect(!json.contains("MOCK_") && !json.contains("/Users/") && !json.contains("C:\\")
                    && json.contains("startup.project") && json.contains("durationMs")
