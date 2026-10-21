@@ -105,17 +105,9 @@ double truePeak(const juce::AudioBuffer<float>& audio,
 
     juce::dsp::AudioBlock<const float> input(audio);
     auto peak = 0.0f;
-    for (int start = 0;
-         start < audio.getNumSamples();
-         start += blockSize)
+    const auto measureBlock = [&](const juce::dsp::AudioBlock<const float>& block)
     {
-        const auto count = std::min(
-            blockSize,
-            audio.getNumSamples() - start);
-        const auto upsampled = oversampling.processSamplesUp(
-            input.getSubBlock(
-                static_cast<std::size_t>(start),
-                static_cast<std::size_t>(count)));
+        const auto upsampled = oversampling.processSamplesUp(block);
         for (std::size_t channel = 0;
              channel < upsampled.getNumChannels();
              ++channel)
@@ -126,6 +118,21 @@ double truePeak(const juce::AudioBuffer<float>& audio,
                  ++sample)
                 peak = std::max(peak, std::abs(samples[sample]));
         }
+    };
+    for (int start = 0; start < audio.getNumSamples(); start += blockSize)
+    {
+        const auto count = std::min(blockSize, audio.getNumSamples() - start);
+        measureBlock(input.getSubBlock(static_cast<std::size_t>(start), static_cast<std::size_t>(count)));
+    }
+    // Flush reconstruction support only; these zeroes are not programme for I/LRA.
+    const auto tailSamples = static_cast<int>(std::ceil(2.0 * oversampling.getLatencyInSamples())) + 1;
+    juce::AudioBuffer<float> tail(audio.getNumChannels(), std::min(blockSize, tailSamples));
+    tail.clear();
+    const juce::dsp::AudioBlock<const float> tailBlock(tail);
+    for (int start = 0; start < tailSamples; start += blockSize)
+    {
+        const auto count = std::min(blockSize, tailSamples - start);
+        measureBlock(tailBlock.getSubBlock(0, static_cast<std::size_t>(count)));
     }
     return static_cast<double>(peak);
 }
@@ -315,10 +322,6 @@ MasteringMeasurement MasteringEngine::analyse(
             : 1.0;
     }
 
-    const auto analysisTailSamples = static_cast<int>(
-        std::llround(sampleRate * 1.5));
-    const auto weightedSamples =
-        audio.getNumSamples() + analysisTailSamples;
     const auto blockSamples = std::max(
         1,
         static_cast<int>(std::llround(sampleRate * 0.4)));
@@ -345,7 +348,7 @@ MasteringMeasurement MasteringEngine::analyse(
     auto shortTermSum = 0.0;
     std::vector<double> absoluteGated;
     std::vector<double> shortTermEnergies;
-    for (int sample = 0; sample < weightedSamples; ++sample)
+    for (int sample = 0; sample < audio.getNumSamples(); ++sample)
     {
         auto energy = 0.0;
         for (int channel = 0; channel < audio.getNumChannels(); ++channel)
@@ -353,9 +356,7 @@ MasteringMeasurement MasteringEngine::analyse(
             const auto filtered =
                 highPasses[static_cast<std::size_t>(channel)].process(
                     shelves[static_cast<std::size_t>(channel)].process(
-                        sample < audio.getNumSamples()
-                            ? audio.getSample(channel, sample)
-                            : 0.0f));
+                        audio.getSample(channel, sample)));
             const auto channelWeight =
                 channel == 3 || channel == 4 ? 1.41 : 1.0;
             energy += channelWeight * filtered * filtered;
@@ -370,7 +371,6 @@ MasteringMeasurement MasteringEngine::analyse(
         shortTermRing[shortTermIndex] = energy;
 
         if (sample + 1 >= blockSamples
-            && sample < audio.getNumSamples()
             && (sample + 1 - blockSamples) % hopSamples == 0)
         {
             const auto blockEnergy =

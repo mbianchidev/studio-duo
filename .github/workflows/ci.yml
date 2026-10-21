@@ -75,9 +75,24 @@ jobs:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Install macOS compiler cache
+      - name: Install macOS compiler cache and reference meter
         if: runner.os == 'macOS'
-        run: HOMEBREW_NO_AUTO_UPDATE=1 brew install ccache
+        run: HOMEBREW_NO_AUTO_UPDATE=1 brew install ccache ffmpeg
+
+      - name: Install Windows reference meter
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install ffmpeg --yes --no-progress --limit-output
+          if ($LASTEXITCODE -notin @(0, 3010)) {
+            throw "FFmpeg installation failed with exit code $LASTEXITCODE."
+          }
+          $meters = @(Get-ChildItem -LiteralPath "$env:ChocolateyInstall/lib/ffmpeg" -Filter ffmpeg.exe -Recurse -File)
+          if ($meters.Count -ne 1) {
+            throw "Expected one actual FFmpeg executable, not a Chocolatey launcher shim."
+          }
+          "STUDIO_DUO_FFMPEG_DIRECTORY=$($meters[0].DirectoryName)" >> $env:GITHUB_ENV
+          & $meters[0].FullName -version
 
       - name: Cache macOS compilation
         if: runner.os == 'macOS'
@@ -104,6 +119,7 @@ jobs:
         run: >
           cmake -S . -B build
           -DSTUDIO_DUO_BUILD_TESTS=ON
+          -DSTUDIO_DUO_MASTERING_REFERENCE_TESTS=ON
           ${{ matrix.configure_args }}
 
       - name: Build
@@ -132,6 +148,7 @@ jobs:
             build/Testing/phase6-performance.json
             build/Testing/phase6-long-session-smoke.json
             build/Testing/phase6-long-session-smoke.csv
+            build/Testing/mastering-references
             build/Testing/Temporary/LastTest.log
           if-no-files-found: ignore
           retention-days: 7

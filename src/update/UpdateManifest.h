@@ -8,6 +8,8 @@
 
 namespace studio
 {
+inline constexpr std::int64_t maximumUpdatePackageBytes = 2LL * 1024 * 1024 * 1024;
+
 enum class UpdatePlatform
 {
     macOS,

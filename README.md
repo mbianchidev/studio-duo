@@ -67,6 +67,9 @@ regression coverage from required physical-device, vendor/ARA, accessibility,
 long-session, clean-machine, and upgrade checks. Green CI alone does not qualify
 those workflows. The [qualification runbook](docs/qualification.md) describes
 the remaining procedures and evidence.
+The gate includes distribution and independent mastering references; native CI
+also compares synthetic mono/stereo metrology against FFmpeg and exercises
+atomic macOS update replacement without opening the desktop.
 
 - VST3 and CLAP are supported on both platforms; Audio Units are macOS-only.
   VST2 is not enabled. Third-party **Trusted in-process** and **ARA 2** modes

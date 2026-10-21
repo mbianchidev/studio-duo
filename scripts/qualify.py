@@ -18,6 +18,10 @@ import sys
 TARGETS = ("macos-arm64", "macos-x86_64", "windows10-x64", "windows11-x64")
 SAMPLE_RATES = (48000, 96000)
 BUFFER_SIZES = (64, 128, 256, 512, 1024)
+REFERENCE_RATES = (44100, 48000, 96000)
+REFERENCE_KINDS = ("steady", "gated", "dynamic", "intersample", "silence", "tail-transient")
+REFERENCE_TOLERANCES = {"lufs": 0.1, "lra": 1.0, "dbtp": 0.3}
+PRESERVED_DATA = ("projects", "media", "preferences", "processor_state", "recent_projects")
 CHECKS = {
     "performance": (
         "full-length-multisong-media", "callback-deadlines-cpu-during-graph-edits",
@@ -48,6 +52,17 @@ CHECKS = {
         "all-themes-custom-colours-noncolour-states", "magnification-high-dpi-visible-focus",
         "no-drag-only-or-unreachable-primary-controls",
     ),
+    "distribution": (
+        "minimum-current-clean-install", "release-artifact-hashes",
+        "different-version-upgrade-preservation",
+        "actual-in-app-update-cancel-interrupt-rollback-restart",
+        "unwritable-target-error-preservation", "uninstall-preserves-user-data-reinstall",
+    ),
+    "references": (
+        "independent-bs1770-r128-true-peak", "dither-resampling-encoded-file",
+        "multisong-gaps-overlaps-fades-metadata", "licensed-ddp-independent-verifier",
+        "external-dawproject-roundtrips", "visible-unsupported-transactional-transfer",
+    ),
 }
 
 
@@ -56,10 +71,13 @@ def check_ids(area, target):
     if area == "hardware":
         result += (["coreaudio-audio-midi"] if target.startswith("macos")
                    else ["native-asio-audio-midi", "windows-audio-fallback"])
+    if area == "distribution":
+        result += (["quarantine-gatekeeper-user-approval"] if target.startswith("macos")
+                   else ["authenticode-trust-timestamp-signer", "standard-user-admin-vc-runtime"])
     return result
 
 
-def new_report(candidate_sha):
+def new_report(candidate_sha, candidate_version=""):
     systems = [
         dict(target=target, os_version="", cpu="", ram_gib=0, storage="", binary_sha256="")
         for target in TARGETS
@@ -80,8 +98,15 @@ def new_report(candidate_sha):
                 run["reduced_isolation_disposition"] = dict(approved=False, rationale="", evidence=[])
             if area == "accessibility":
                 run["assistive_technology"] = "VoiceOver" if target.startswith("macos") else "NVDA"
+            if area == "distribution":
+                run.update(package_sha256="", signing_policy="", signer_thumbprint="",
+                           signature_trusted=False, signature_timestamped=False, notarized=False,
+                           os_coverage=[], upgrades=[])
+            if area == "references":
+                run["measurements"] = []
             runs.append(run)
-    return dict(schema_version=1, candidate_sha=candidate_sha, systems=systems, runs=runs)
+    return dict(schema_version=2, candidate_sha=candidate_sha, candidate_version=candidate_version,
+                systems=systems, runs=runs)
 
 
 def read_json(text):
@@ -111,15 +136,72 @@ def number(value):
     return type(value) is int or (type(value) is float and math.isfinite(value))
 
 
+def stable_version(value):
+    if not isinstance(value, str) or len(value) > 64:
+        return None
+    if re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", value) is None:
+        return None
+    return tuple(int(part) for part in value.split("."))
+
+
+def reference_measurement_errors(rows, label):
+    errors = []
+    if not isinstance(rows, list):
+        return [f"{label}: reference measurements must be an array."]
+    seen = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            errors.append(f"{label}: invalid reference measurement.")
+            continue
+        kind, rate, channels = row.get("kind"), row.get("sample_rate_hz"), row.get("channels")
+        if (not isinstance(kind, str) or kind not in REFERENCE_KINDS
+                or type(rate) is not int or rate not in REFERENCE_RATES
+                or type(channels) is not int or channels not in (1, 2)):
+            errors.append(f"{label}: unsupported reference kind/rate/channel layout.")
+            continue
+        key = (kind, rate, channels)
+        if key in seen:
+            errors.append(f"{label}: duplicate reference measurement {key}.")
+            continue
+        seen.add(key)
+        for field in ("reference_tool", "reference_version", "provenance"):
+            if not nonempty(row.get(field)):
+                errors.append(f"{label} {key}: {field} is required.")
+        if not digest(row.get("source_sha256"), 64):
+            errors.append(f"{label} {key}: exact source_sha256 is required.")
+        for metric, tolerance in REFERENCE_TOLERANCES.items():
+            actual, reference = row.get("actual_" + metric), row.get("reference_" + metric)
+            if kind == "silence":
+                if actual is not None or reference is not None:
+                    errors.append(f"{label} {key}: silence requires null {metric}, not a finite floor.")
+                if "actual_" + metric not in row or "reference_" + metric not in row:
+                    errors.append(f"{label} {key}: explicit silence results are required.")
+                continue
+            minimum, maximum = (0, 200) if metric == "lra" else (-300, 60)
+            if any(not number(value) or not minimum <= value <= maximum for value in (actual, reference)):
+                errors.append(f"{label} {key}: finite bounded {metric} measurements are required.")
+            elif abs(actual - reference) > tolerance + 1e-9:
+                errors.append(f"{label} {key}: {metric} exceeds the fixed {tolerance} tolerance.")
+    for kind in REFERENCE_KINDS:
+        for rate in REFERENCE_RATES:
+            for channels in (1, 2):
+                if (kind, rate, channels) not in seen:
+                    errors.append(f"{label}: Missing reference measurement {(kind, rate, channels)}.")
+    return errors
+
+
 def validate(report, root, candidate_sha):
     errors = []
     root = Path(root).resolve()
     if not isinstance(report, dict):
         return ["Report must be a JSON object."]
-    if type(report.get("schema_version")) is not int or report["schema_version"] != 1:
+    if type(report.get("schema_version")) is not int or report["schema_version"] != 2:
         errors.append("Unsupported schema_version.")
     if not digest(candidate_sha, 40) or report.get("candidate_sha") != candidate_sha:
         errors.append("Report candidate SHA does not match the exact requested candidate.")
+    candidate_version = stable_version(report.get("candidate_version"))
+    if candidate_version is None:
+        errors.append("An exact stable candidate_version is required.")
 
     def evidence(items, label):
         if not isinstance(items, list) or not items:
@@ -274,6 +356,47 @@ def validate(report, root, candidate_sha):
         else:
             evidence(disposition.get("evidence"), label + " reduced-isolation disposition")
 
+    def distribution(run, label):
+        if not digest(run.get("package_sha256"), 64):
+            errors.append(f"{label}: exact release package_sha256 is required.")
+        mac = run["target"].startswith("macos")
+        policies = ("ad-hoc-user-approved", "developer-id-notarized") if mac else ("authenticode",)
+        if run.get("signing_policy") not in policies:
+            errors.append(f"{label}: an explicit supported production signing/trust policy is required.")
+        if not mac or run.get("signing_policy") == "developer-id-notarized":
+            if (not digest(run.get("signer_thumbprint"), 40)
+                    or run.get("signature_trusted") is not True
+                    or run.get("signature_timestamped") is not True):
+                errors.append(f"{label}: verified signer, trust and timestamp are required.")
+        if run.get("signing_policy") == "developer-id-notarized" and run.get("notarized") is not True:
+            errors.append(f"{label}: Developer ID policy requires verified notarization.")
+        coverage = run.get("os_coverage")
+        if (not isinstance(coverage, list) or len(coverage) != 2
+                or any(not isinstance(row, dict) or not nonempty(row.get("os_version"))
+                       or row.get("coverage") not in ("minimum", "current") for row in coverage)
+                or {row["coverage"] for row in coverage} != {"minimum", "current"}):
+            errors.append(f"{label}: separate minimum/current OS installation records are required.")
+        upgrades = run.get("upgrades")
+        if not isinstance(upgrades, list) or not upgrades:
+            errors.append(f"{label}: at least one actual different-version upgrade is required.")
+            return
+        for upgrade in upgrades:
+            if not isinstance(upgrade, dict):
+                errors.append(f"{label}: invalid upgrade record.")
+                continue
+            before, after = stable_version(upgrade.get("from_version")), stable_version(upgrade.get("to_version"))
+            if before is None or after is None or after != candidate_version or before >= after:
+                errors.append(f"{label}: upgrade versions must increase to the exact candidate version.")
+            preserved = upgrade.get("preserved_data")
+            if not isinstance(preserved, dict):
+                errors.append(f"{label}: semantic before/after preservation hashes are required.")
+                continue
+            for name in PRESERVED_DATA:
+                pair = preserved.get(name)
+                if (not isinstance(pair, dict) or not digest(pair.get("before_sha256"), 64)
+                        or pair.get("before_sha256") != pair.get("after_sha256")):
+                    errors.append(f"{label}: {name} preservation hashes are missing or changed.")
+
     runs = report.get("runs")
     if not isinstance(runs, list):
         errors.append("runs must be an array.")
@@ -332,7 +455,12 @@ def validate(report, root, candidate_sha):
             hardware(run, label)
         elif area == "vendors":
             vendors(run, label)
-        elif run.get("assistive_technology") != ("VoiceOver" if target.startswith("macos") else "NVDA"):
+        elif area == "distribution":
+            distribution(run, label)
+        elif area == "references":
+            errors.extend(reference_measurement_errors(run.get("measurements"), label))
+        elif area == "accessibility" and run.get("assistive_technology") != (
+                "VoiceOver" if target.startswith("macos") else "NVDA"):
             errors.append(f"{label}: the target's actual VoiceOver/NVDA tool is required.")
     for target in TARGETS:
         for area in CHECKS:
@@ -346,6 +474,7 @@ def main():
     subcommands = parser.add_subparsers(dest="command", required=True)
     create = subcommands.add_parser("create", help="Create an explicitly not-run evidence template.")
     create.add_argument("--candidate-sha", required=True)
+    create.add_argument("--candidate-version", required=True)
     create.add_argument("--output", required=True, type=Path)
     check = subcommands.add_parser("check", help="Fail closed unless the exact candidate has complete evidence.")
     check.add_argument("report", type=Path)
@@ -353,11 +482,13 @@ def main():
     args = parser.parse_args()
     if not digest(args.candidate_sha, 40):
         parser.error("--candidate-sha must be the exact lowercase 40-character Git commit SHA.")
+    if args.command == "create" and stable_version(args.candidate_version) is None:
+        parser.error("--candidate-version must be an exact stable MAJOR.MINOR.PATCH version.")
     try:
         if args.command == "create":
             args.output.parent.mkdir(parents=True, exist_ok=True)
             with args.output.open("x", encoding="utf-8") as stream:
-                json.dump(new_report(args.candidate_sha), stream, indent=2, allow_nan=False)
+                json.dump(new_report(args.candidate_sha, args.candidate_version), stream, indent=2, allow_nan=False)
                 stream.write("\n")
             print(f"Created {args.output}. All qualifications remain not_run.")
             return 0

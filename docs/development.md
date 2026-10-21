@@ -124,7 +124,7 @@ ccache --show-stats
 Ninja supports CMake's compiler launchers directly, unlike the Xcode generator.
 Resolve the real Clang executables with `xcrun` so the cache fingerprints the
 selected toolchain, not macOS's `/usr/bin` compiler dispatchers.
-The revision macro is limited to the diagnostic/progress sources and two
+The revision macro is limited to the diagnostic/progress sources and three
 qualification-report sources that use it. Those report sources also retain the
 full candidate SHA, so evidence stays candidate-specific without invalidating
 every application and test object when the Git revision changes.
@@ -191,8 +191,41 @@ a measured audio-deadline failure stays failed in the retained report, while
 the smoke itself enforces the separate generous hosted-runner regression bounds.
 The opt-in command's real deadline budgets are not widened. The standard-library Python evidence
 gate rejects incomplete matrices, skipped checks, wrong candidates, absent or
-changed raw evidence, and missing reduced-isolation release dispositions.
+changed raw evidence, missing reduced-isolation release dispositions, incomplete
+distribution/upgrade records and out-of-tolerance independent metrology.
 See [qualification procedures](qualification.md) for budgets and invocation.
+
+The standard suite also exercises verified download publication/cancellation
+without networking. On macOS, `StudioDuoMacUpdateInstaller` runs the exact
+embedded updater script against privately signed synthetic 1.0.0/1.0.1 bundles,
+including wrong versions/identities, invalid archives/signatures, failed
+publication, a signal immediately after exchange, and an untrappable kill.
+It uses the real `renamex_np(RENAME_SWAP)` helper but never opens an application.
+The signed bundle includes that helper under `Contents/Helpers`; the
+development-signature target depends on copying/signing it before sealing the
+whole bundle. These fixtures are not clean-machine or actual released-app
+upgrade qualification.
+
+For independent FFmpeg original-rate R128/true-peak comparisons, install FFmpeg
+with its `ebur128` filter and configure a **clean, committed** candidate:
+
+```sh
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+  -DSTUDIO_DUO_BUILD_TESTS=ON -DSTUDIO_DUO_MASTERING_REFERENCE_TESTS=ON
+cmake --build build --config Release --parallel
+ctest --test-dir build --build-config Release -R 'MasteringReference|MasteringQualification' \
+  --output-on-failure --no-tests=error
+```
+
+`STUDIO_DUO_FFMPEG_EXECUTABLE` can select an actual meter binary explicitly;
+`STUDIO_DUO_FFMPEG_DIRECTORY` is a discovery hint used by Windows CI to avoid
+hashing a launcher shim. FFmpeg is test tooling only, never linked into or
+required by the application. Every run gets a fresh owned directory under
+`build/Testing/mastering-references`, with exact binary/tool/source hashes,
+all 36 native measurements, original PCM and independent raw logs. CI and
+tagged releases enable this option on their native test architectures and
+retain those directories with the other regression evidence. A passing matrix
+remains `qualificationStatus: not-qualified` for the complete release.
 
 Multi-engine test fixtures keep `StudioAudioEngine` instances on the heap:
 their fixed MIDI trace arrays can exceed Windows's default 1 MiB stack when
