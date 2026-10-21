@@ -368,6 +368,13 @@
           <a class="text-link" href="https://github.com/mbianchidev/studio-duo/blob/main/docs/user-guide.md">Get to know the studio <span aria-hidden="true">&#8599;</span></a>
         </div>
         <p class="small-note">Universal macOS DMG / Windows x64 installer &amp; portable ZIP / Checksums included</p>
+        <details class="macos-install" id="macos-first-launch">
+          <summary>macOS: app blocked on first launch?</summary>
+          <p>Open the DMG and drag <strong>Studio Duo.app</strong> into <strong>Applications</strong> first. Current macOS releases are ad hoc signed, not Apple-notarized, so Gatekeeper may block the first launch.</p>
+          <p>Only continue if you trust the download from the <a class="inline-link" href="https://github.com/mbianchidev/studio-duo/releases/latest">official GitHub release</a> and have verified its SHA-256 checksum against <code>SHA256SUMS.txt</code> from that release. If macOS blocks the installed app, open Terminal and run:</p>
+          <pre><code>xattr -dr com.apple.quarantine "/Applications/Studio Duo.app"</code></pre>
+          <p>This removes the quarantine flag only from this app; it does not verify the download or make an unsafe app safe. Gatekeeper remains enabled globally. Reopen Studio Duo from Applications.</p>
+        </details>
         <p class="platform-note"><strong>Windows support is best effort only.</strong> I work on Studio Duo alone. I have no Windows testing device, and limited development time restricts hands-on Windows testing.</p>
         <div class="system-requirements" id="system-requirements">
           <h3>Desktop system requirements</h3>
