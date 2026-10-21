@@ -38,6 +38,29 @@ test('section navigation and download links point to working destinations', asyn
     'href', 'https://github.com/mbianchidev/studio-duo/releases/latest');
 });
 
+test('macOS first-launch help targets only the trusted installed app', async ({ page }) => {
+  await page.goto('./');
+  const help = page.locator('#macos-first-launch');
+  await help.locator('summary').focus();
+  await page.keyboard.press('Enter');
+  await expect(help).toHaveAttribute('open', '');
+  await expect(help).toContainText('Applications first');
+  await expect(help).toContainText('official GitHub release');
+  await expect(help).toContainText('SHA256SUMS.txt');
+  await expect(help).toContainText('open Terminal and run');
+  await expect(help.locator('pre code')).toHaveText(
+    'xattr -dr com.apple.quarantine "/Applications/Studio Duo.app"');
+  await expect(help).toContainText('quarantine flag only from this app');
+  await expect(help).toContainText('does not verify the download');
+  await expect(help).toContainText('Reopen Studio Duo from Applications');
+  await page.evaluate(() => document.fonts.ready);
+  expect(await help.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  const results = await new AxeBuilder({ page }).include('#macos-first-launch')
+    .withTags(['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa']).analyze();
+  expect(results.violations).toEqual([]);
+});
+
 test('every screenshot opens, closes, and restores keyboard focus', async ({ page }) => {
   await page.goto('./');
   const links = page.locator('.screenshot-link');
@@ -70,6 +93,11 @@ test('content and the screenshot fallback work without JavaScript', async ({ bro
     await page.goto(baseURL);
     await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Download Studio Duo.' })).toBeAttached();
+    const help = page.locator('#macos-first-launch');
+    await help.locator('summary').click();
+    await expect(help.locator('pre code')).toBeVisible();
+    await expect(help.locator('pre code')).toHaveText(
+      'xattr -dr com.apple.quarantine "/Applications/Studio Duo.app"');
     await page.getByRole('link', { name: 'Enlarge the Studio Duo session screenshot' }).click();
     await expect(page).toHaveURL(/\/studio-duo\/images\/session\.webp$/);
   } finally {

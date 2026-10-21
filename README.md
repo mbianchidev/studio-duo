@@ -159,6 +159,25 @@ third-party runtimes. `--default-audio` bypasses the saved device configuration
 for this launch. **Help > Startup diagnostics** retains step history and exports
 a privacy-safe JSON report. See [startup troubleshooting and logs](docs/user-guide.md#logs-and-diagnostics).
 
+### macOS first launch
+
+Open the DMG and drag **Studio Duo.app** into **Applications** first
+(`/Applications/Studio Duo.app`). Current macOS releases are ad hoc signed,
+not Apple-notarized, so Gatekeeper may block the first launch.
+
+Only continue if you trust the download from the
+[official GitHub release](https://github.com/mbianchidev/studio-duo/releases/latest)
+and have verified its SHA-256 checksum against `SHA256SUMS.txt` from that
+release. If macOS blocks the installed app, open **Terminal** and run:
+
+```sh
+xattr -dr com.apple.quarantine "/Applications/Studio Duo.app"
+```
+
+Reopen **Studio Duo** from **Applications**. This removes the quarantine flag
+only from this app; it does not verify the download or make an unsafe app safe.
+Gatekeeper remains enabled globally.
+
 ## Documentation
 
 - [Documentation index](docs/README.md)

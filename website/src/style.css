@@ -193,6 +193,11 @@ figcaption { display: flex; justify-content: space-between; gap: 16px; padding-t
 .download-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 32px; margin-top: 32px; }
 .download > .small-note { font: 10px/1.8 var(--utility); margin-top: 20px; }
 .download > .platform-note { margin-top: 24px; }
+.macos-install { max-width: 760px; margin-top: 24px; color: var(--muted); }
+.macos-install summary { padding-block: 12px; color: var(--text); cursor: pointer; font-size: 13px; }
+.macos-install p { margin-top: 12px; font-size: 13px; }
+.macos-install pre { margin-block: 16px; padding: 16px; border: 1px solid var(--line); background: var(--panel); white-space: pre-wrap; overflow-wrap: anywhere; }
+.macos-install code { font: 13px/1.8 var(--utility); }
 .platform-note strong, .linux-note strong { color: var(--text); font-weight: 600; }
 .system-requirements { margin-top: 48px; padding-top: 32px; border-top: 1px solid var(--line); }
 .system-requirements > h3 { font-size: 20px; font-weight: 500; }

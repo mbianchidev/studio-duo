@@ -181,12 +181,26 @@ update path.
 
 Download artifacts from the repository's
 [Releases](https://github.com/mbianchidev/studio-duo/releases) page.
+Verify the download against `SHA256SUMS.txt` from the same release before
+installation.
 
-On macOS, open the DMG and drag **Studio Duo** into **Applications**. The current
-pipeline applies an ad hoc application signature but does not use an Apple
-Developer ID or notarization, so macOS may require approval in **System
-Settings > Privacy & Security** on first launch. Later updates are discovered
-and downloaded inside Studio Duo. **Restart and Update** replaces the installed
+On macOS, open the DMG and drag **Studio Duo.app** into **Applications**
+(`/Applications/Studio Duo.app`) before launching it. The current pipeline
+applies an ad hoc application signature but does not use an Apple Developer ID
+or notarization, so macOS may require approval in **System Settings > Privacy
+& Security** on first launch.
+
+If Gatekeeper blocks the installed app, and only if you trust this verified
+official download, open **Terminal** and run:
+
+```sh
+xattr -dr com.apple.quarantine "/Applications/Studio Duo.app"
+```
+
+Reopen **Studio Duo** from **Applications**. This removes the quarantine flag
+only from this app; it does not verify the download or make an unsafe app safe.
+Gatekeeper remains enabled globally. Later updates are discovered and
+downloaded inside Studio Duo. **Restart and Update** replaces the installed
 bundle when the `.app` and its parent directory are writable.
 
 On Windows, run
@@ -200,5 +214,3 @@ same installation. Uninstalling or upgrading does not remove user data under
 The ZIP remains available for portable use: extract it to a writable directory
 and run `Studio Duo.exe`. Neither Windows package currently associates Explorer
 with `.studioduo` directory packages.
-
-Verify either download against `SHA256SUMS.txt` before installation.
