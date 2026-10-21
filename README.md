@@ -10,6 +10,7 @@
 [Download](https://github.com/mbianchidev/studio-duo/releases/latest) ·
 [User guide](docs/user-guide.md) ·
 [Build from source](#build-from-source) ·
+[AI policy](#ai-policy) ·
 [Contribute](docs/contributing.md)
 
 Studio Duo is an open-source digital audio workstation (DAW) for macOS and
@@ -250,6 +251,12 @@ See [startup troubleshooting and logs](docs/user-guide.md#logs-and-diagnostics).
 - [Releasing](docs/releasing.md)
 - [Release readiness and compatibility matrix](docs/release-readiness.md)
 - [Candidate qualification procedures and evidence](docs/qualification.md)
+
+## AI policy
+
+You are responsible for everything you contribute, including AI-assisted code,
+documentation, and assets. Review and test your contribution before submitting
+it. You must be able to explain what the code does and why it is needed.
 
 ## Contributing
 
