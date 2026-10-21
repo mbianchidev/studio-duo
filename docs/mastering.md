@@ -37,10 +37,21 @@ applied before album output gain.
 - sample peak and oversampled true peak
 - stereo correlation
 
-K-weighting coefficients are generated for the source sample rate. File LRA
-finalization includes 1.5 seconds of analysis silence. The automated calibration
-fixture checks a generated 1 kHz tone at -23 LUFS and verifies that true-peak
-analysis detects an inter-sample peak.
+K-weighting coefficients are generated for the source sample rate. Integrated
+loudness and LRA use only actual programme samples, with no invented trailing
+silence. True-peak reconstruction separately flushes its FIR support so a
+transient at the final sample is not lost to filter latency. The automated
+calibration fixture checks a generated 1 kHz tone at -23 LUFS, constant-programme
+LRA, inter-sample peaks and the final-sample transient.
+
+The optional [independent metrology matrix](qualification.md#independent-mastering-metrology)
+compares actual native measurements against FFmpeg `ebur128` for 36 synthetic
+mono/stereo cases at 44.1/48/96 kHz. Fixed tolerances are 0.1 LU for integrated
+loudness, 1.0 LU for LRA and 0.3 dB for true peak. Original programme I/LRA and
+separately flushed peak reconstruction are measured independently; normalizer
+input statistics do not substitute for original-rate programme metrology.
+This is not licensed DDP verification, an official reference-asset conformance
+claim, encoded-delivery qualification or external-DAW acceptance.
 
 The built-in distribution presets are reporting targets only. Studio Duo does
 not turn a streaming or broadcast target into automatic loudness normalization.

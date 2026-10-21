@@ -1,11 +1,11 @@
 #include "UpdateService.h"
 
 #include "UpdateInstaller.h"
+#include "UpdateDownload.h"
 #include "logging/StudioLogger.h"
 
 #include <juce_cryptography/juce_cryptography.h>
 
-#include <array>
 #include <utility>
 
 namespace studio
@@ -198,7 +198,8 @@ void UpdateService::checkForUpdates()
     {
         const juce::ScopedLock lock(stateLock);
         if (state.phase == UpdatePhase::checking
-            || state.phase == UpdatePhase::downloading)
+            || state.phase == UpdatePhase::downloading
+            || state.phase == UpdatePhase::cancelling)
             return;
         state.phase = UpdatePhase::checking;
         state.message = "Checking for updates...";
@@ -216,8 +217,10 @@ void UpdateService::downloadUpdate()
         if (!availableRelease.has_value()
             || state.phase == UpdatePhase::checking
             || state.phase == UpdatePhase::downloading
+            || state.phase == UpdatePhase::cancelling
             || state.phase == UpdatePhase::ready)
             return;
+        downloadCancellation.store(false);
         state.phase = UpdatePhase::downloading;
         state.message = "Starting the update download...";
         state.progress = 0.0;
@@ -225,6 +228,24 @@ void UpdateService::downloadUpdate()
     triggerAsyncUpdate();
     requestedOperation.store(Operation::download);
     notify();
+}
+
+void UpdateService::cancelDownload()
+{
+    {
+        const juce::ScopedLock lock(stateLock);
+        if (state.phase != UpdatePhase::downloading)
+            return;
+        downloadCancellation.store(true);
+        state.phase = UpdatePhase::cancelling;
+        state.message = "Cancelling the update download...";
+    }
+    {
+        const juce::ScopedLock lock(networkLock);
+        if (activeWebStream != nullptr)
+            activeWebStream->cancel();
+    }
+    triggerAsyncUpdate();
 }
 
 juce::Result UpdateService::setAutomaticDownloads(bool enabled)
@@ -346,27 +367,19 @@ void UpdateService::handleAsyncUpdate()
 
 void UpdateService::performCheck()
 {
-    int statusCode = 0;
-    auto input = juce::URL(manifestUrl).createInputStream(
-        juce::URL::InputStreamOptions(
-            juce::URL::ParameterHandling::inAddress)
-            .withConnectionTimeoutMs(10000)
-            .withNumRedirectsToFollow(5)
-            .withStatusCode(&statusCode)
-            .withExtraHeaders(
-                requestHeaders(currentVersion, "application/json")));
+    auto input = std::make_unique<juce::WebInputStream>(juce::URL(manifestUrl), false);
+    input->withConnectionTimeout(10000).withNumRedirectsToFollow(5)
+        .withExtraHeaders(requestHeaders(currentVersion, "application/json"));
+    [[maybe_unused]] ActiveWebStreamGuard activeStreamGuard(networkLock, activeWebStream, input.get());
     if (threadShouldExit())
         return;
-    if (input == nullptr)
+    if (!input->connect(nullptr))
     {
         publishCheckFailure(
             "Studio Duo could not connect to the update service.");
         return;
     }
-    [[maybe_unused]] ActiveWebStreamGuard activeStreamGuard(
-        networkLock,
-        activeWebStream,
-        input.get());
+    const auto statusCode = input->getStatusCode();
     if (statusCode != 200)
     {
         publishCheckFailure(
@@ -487,10 +500,14 @@ void UpdateService::performCheck()
         return;
     }
 
+    bool downloadAutomatically = false;
     {
         const juce::ScopedLock lock(stateLock);
         availableRelease = *release;
-        state.phase = UpdatePhase::available;
+        downloadAutomatically = automaticDownloads.load();
+        if (downloadAutomatically)
+            downloadCancellation.store(false);
+        state.phase = downloadAutomatically ? UpdatePhase::downloading : UpdatePhase::available;
         state.availableVersion = release->version;
         state.releaseNotesUrl = release->releaseNotesUrl;
         state.message =
@@ -506,18 +523,43 @@ void UpdateService::performCheck()
             + " is available.");
     triggerAsyncUpdate();
 
-    if (automaticDownloads.load())
+    if (downloadAutomatically)
         performDownload(*release);
 }
 
 void UpdateService::performDownload(const UpdateRelease& release)
 {
-    publishState(
-        UpdatePhase::downloading,
-        "Downloading Studio Duo "
-            + release.version
-            + "...",
-        0.0);
+    const auto cancelled = [this] { return threadShouldExit() || downloadCancellation.load(); };
+    const auto publishCancelled = [this]
+    {
+        if (!threadShouldExit())
+        {
+            publishState(UpdatePhase::available,
+                         "Update download cancelled. Choose Download to try again; "
+                         "the installed application is unchanged.", 0.0);
+            logInfo("update.download", "The user cancelled the update download.");
+        }
+    };
+    if (cancelled())
+    {
+        publishCancelled();
+        return;
+    }
+    {
+        const juce::ScopedLock lock(stateLock);
+        if (!cancelled())
+        {
+            state.phase = UpdatePhase::downloading;
+            state.message = "Downloading Studio Duo " + release.version + "...";
+            state.progress = 0.0;
+        }
+    }
+    if (cancelled())
+    {
+        publishCancelled();
+        return;
+    }
+    triggerAsyncUpdate();
 
     const auto directoryResult = downloadsDirectory.createDirectory();
     if (directoryResult.failed())
@@ -530,34 +572,28 @@ void UpdateService::performDownload(const UpdateRelease& release)
 
     const auto destination =
         downloadsDirectory.getChildFile(release.asset.fileName);
-    const auto temporary = downloadsDirectory.getChildFile(
-        release.asset.fileName
-        + ".part-"
-        + juce::Uuid().toString());
-
-    int statusCode = 0;
-    auto input = juce::URL(release.asset.url).createInputStream(
-        juce::URL::InputStreamOptions(
-            juce::URL::ParameterHandling::inAddress)
-            .withConnectionTimeoutMs(10000)
-            .withNumRedirectsToFollow(5)
-            .withStatusCode(&statusCode)
-            .withExtraHeaders(
-                requestHeaders(
-                    currentVersion,
-                    "application/octet-stream")));
-    if (threadShouldExit())
+    auto input = std::make_unique<juce::WebInputStream>(juce::URL(release.asset.url), false);
+    input->withConnectionTimeout(10000).withNumRedirectsToFollow(5)
+        .withExtraHeaders(requestHeaders(currentVersion, "application/octet-stream"));
+    [[maybe_unused]] ActiveWebStreamGuard activeStreamGuard(networkLock, activeWebStream, input.get());
+    if (cancelled())
+    {
+        publishCancelled();
         return;
-    if (input == nullptr)
+    }
+    const auto connected = input->connect(nullptr);
+    if (cancelled())
+    {
+        publishCancelled();
+        return;
+    }
+    if (!connected)
     {
         publishFailure(
             "Studio Duo could not connect to the update download.");
         return;
     }
-    [[maybe_unused]] ActiveWebStreamGuard activeStreamGuard(
-        networkLock,
-        activeWebStream,
-        input.get());
+    const auto statusCode = input->getStatusCode();
     if (statusCode != 200)
     {
         publishFailure(
@@ -567,119 +603,33 @@ void UpdateService::performDownload(const UpdateRelease& release)
         return;
     }
 
-    auto output =
-        std::make_unique<juce::FileOutputStream>(temporary);
-    if (output->failedToOpen())
-    {
-        publishFailure(
-            "Studio Duo could not create the update package: "
-            + output->getStatus().getErrorMessage());
-        return;
-    }
-
-    std::array<char, 64 * 1024> buffer {};
-    std::int64_t bytesDownloaded = 0;
     auto lastPublishedProgress = -1.0;
-    while (!threadShouldExit())
-    {
-        const auto bytesRead = input->read(
-            buffer.data(),
-            static_cast<int>(buffer.size()));
-        if (bytesRead <= 0)
-            break;
-        if (!output->write(
-                buffer.data(),
-                static_cast<std::size_t>(bytesRead)))
+    const auto result = downloadUpdatePackage(
+        *input, destination, release.asset.sizeBytes, release.asset.sha256, cancelled,
+        [&](double progress)
         {
-            output->flush();
-            output.reset();
-            temporary.deleteFile();
-            publishFailure(
-                "Studio Duo could not write the update package.");
-            return;
-        }
-
-        bytesDownloaded += bytesRead;
-        if (bytesDownloaded > release.asset.sizeBytes)
-        {
-            output->flush();
-            output.reset();
-            temporary.deleteFile();
-            publishFailure(
-                "The update download exceeded its declared size.");
-            return;
-        }
-        const auto progress = juce::jlimit(
-            0.0,
-            1.0,
-            static_cast<double>(bytesDownloaded)
-                / static_cast<double>(release.asset.sizeBytes));
-        if (progress - lastPublishedProgress >= 0.005)
-        {
+            if (cancelled() || progress - lastPublishedProgress < 0.005)
+                return;
             lastPublishedProgress = progress;
-            publishState(
-                UpdatePhase::downloading,
-                "Downloading Studio Duo "
-                    + release.version
-                    + "... "
-                    + juce::String(
-                        static_cast<int>(progress * 100.0))
-                    + "%",
-                progress);
-        }
-    }
-
-    output->flush();
-    const auto outputStatus = output->getStatus();
-    output.reset();
-    if (threadShouldExit())
+            {
+                const juce::ScopedLock lock(stateLock);
+                if (state.phase == UpdatePhase::cancelling)
+                    return;
+                state.phase = UpdatePhase::downloading;
+                state.message = "Downloading Studio Duo " + release.version + "... "
+                    + juce::String(static_cast<int>(progress * 100.0)) + "%";
+                state.progress = progress;
+            }
+            triggerAsyncUpdate();
+        });
+    if (result.status == UpdateDownloadResult::Status::cancelled)
     {
-        temporary.deleteFile();
+        publishCancelled();
         return;
     }
-    if (outputStatus.failed())
+    if (result.status == UpdateDownloadResult::Status::failed)
     {
-        temporary.deleteFile();
-        publishFailure(
-            "Studio Duo could not finish the update download: "
-            + outputStatus.getErrorMessage());
-        return;
-    }
-    if (bytesDownloaded != release.asset.sizeBytes)
-    {
-        temporary.deleteFile();
-        publishFailure(
-            "The update download was incomplete: expected "
-            + juce::String(release.asset.sizeBytes)
-            + " bytes, received "
-            + juce::String(bytesDownloaded)
-            + ".");
-        return;
-    }
-
-    const auto actualHash =
-        juce::SHA256(temporary).toHexString().toLowerCase();
-    if (actualHash != release.asset.sha256)
-    {
-        temporary.deleteFile();
-        publishFailure(
-            "The update download failed SHA-256 verification.");
-        return;
-    }
-
-    if (destination.existsAsFile()
-        && !destination.deleteFile())
-    {
-        temporary.deleteFile();
-        publishFailure(
-            "Studio Duo could not replace the previous update package.");
-        return;
-    }
-    if (!temporary.moveFileTo(destination))
-    {
-        temporary.deleteFile();
-        publishFailure(
-            "Studio Duo could not publish the downloaded update.");
+        publishFailure(result.message);
         return;
     }
 

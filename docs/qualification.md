@@ -3,7 +3,9 @@
 This runbook covers [#59](https://github.com/mbianchidev/studio-duo/issues/59),
 [#58](https://github.com/mbianchidev/studio-duo/issues/58),
 [#55](https://github.com/mbianchidev/studio-duo/issues/55), and
-[#60](https://github.com/mbianchidev/studio-duo/issues/60).
+[#60](https://github.com/mbianchidev/studio-duo/issues/60), plus
+[#56](https://github.com/mbianchidev/studio-duo/issues/56) distribution and
+[#57](https://github.com/mbianchidev/studio-duo/issues/57) trusted references.
 It is not their sign-off. Actual hardware, approved vendor processors, VoiceOver
 and NVDA, and supported physical testing systems remain mandatory. Never
 reinterpret a short fixture, virtual device, headless callback, or component
@@ -26,6 +28,7 @@ Python 3.9+ and the standard library are sufficient:
 ```sh
 candidate="$(git rev-parse HEAD)"
 python3 -B scripts/qualify.py create --candidate-sha "$candidate" \
+  --candidate-version "$(cat VERSION)" \
   --output build/qualification/evidence.json
 python3 -B scripts/qualify.py check build/qualification/evidence.json \
   --candidate-sha "$candidate"
@@ -33,7 +36,7 @@ python3 -B scripts/qualify.py check build/qualification/evidence.json \
 
 On Windows use `python`, `$candidate = git rev-parse HEAD`, and PowerShell path
 syntax. Creation refuses to overwrite an existing report. The template contains
-all four areas on macOS ARM64, macOS Intel, Windows 10 x64, and Windows 11 x64;
+all six areas on macOS ARM64, macOS Intel, Windows 10 x64, and Windows 11 x64;
 every check starts `not_run`. Fill each run's reproducible procedure, settings,
 tool versions, timezone-qualified time, and manual attestation. Every required
 check needs an observation and nonempty raw-evidence files with relative paths
@@ -49,6 +52,10 @@ wrong candidates, empty evidence, and changed files never pass. Duplicate JSON
 keys and nonfinite numbers are invalid. This verifies completeness and integrity,
 not the truth of a human observation or a signature: it cannot grant release
 approval, certify accessibility, or verify an external approver's authority.
+Schema version 2 requires all 24 target/area runs and the exact candidate
+application version. Older four-area reports remain historical evidence and
+cannot pass this complete gate; create a fresh template rather than relabeling
+or silently upgrading their results.
 
 ## Long-session resource and deadline qualification
 
@@ -439,3 +446,114 @@ expected/observed behavior, and a synthetic reproduction. An inaccessible
 primary command, keyboard trap, lost focus preventing continuation, or missing
 essential announcement blocks sign-off until fixed and retested on the actual
 assistive technology. Source remediation is not a completed manual audit.
+
+## Distribution and real updater qualification
+
+Use clean supported systems, not only a development machine or hosted Windows
+Server. For each target, retain separate `os_coverage` records for the minimum
+and current supported OS/build. An ARM machine that cannot boot macOS 12 does
+not establish the minimum-OS pass. Record the exact installed executable and
+release package hashes, OS/build, installation privileges and actual signature/
+trust output. Never export private keys, certificates containing private keys,
+personal paths or signing passwords.
+
+The current macOS policy is `ad-hoc-user-approved`: test a quarantined official
+download and the documented local Privacy & Security approval flow without
+disabling Gatekeeper globally. If a human explicitly adopts
+`developer-id-notarized`, retain verified signer, trusted/timestamped signature
+and notarization results. Do not infer either policy from `codesign --verify`.
+Windows requires `authenticode`, an exact lowercase signer SHA-1 thumbprint,
+and observed trusted/timestamped signatures for the real executable/installer.
+Disposable CI-certificate trust is not production publisher trust.
+
+1. Install from the recorded artifacts with standard-user/admin behavior and
+   VC++ runtime handling checked on Windows. Run the full synthetic
+   record/edit/mix/master/export journey, not only driver-free startup.
+2. Install a prior supported release, create synthetic projects/media, saved
+   processor states, preferences and recent-project entries, then update to
+   the exact candidate. Record `upgrades` with increasing stable
+   `from_version`/`to_version`; same-version reinstallation cannot pass.
+3. For every `preserved_data` category (`projects`, `media`, `preferences`,
+   `processor_state`, `recent_projects`), hash canonical before/after semantic
+   snapshots and require equality. Include every intended value; document
+   version-migration normalization instead of ignoring differences. Raw media
+   hashes must remain identical. Preserve the prior installation and test
+   sessions until the comparisons pass.
+4. Exercise the actual in-app check/download/restart path. Cancel while
+   connecting and during transfer; interrupt downloads/replacements, deny
+   destination writes, retry and restart. Record visible error/cancellation,
+   partial-file cleanup, intact project/settings/media, rollback and the
+   actual reopened version. Do not simulate a trust or permission pass by
+   changing a real user's global settings.
+5. Uninstall, verify application files/registrations are removed and synthetic
+   user data is retained, then reinstall and reopen those data.
+
+The shared verified-download core never deletes a previous package before
+the replacement has passed size and SHA-256 checks. Its native fixtures cover
+truncation, excess bytes, wrong hashes, cancellation and a blocked destination.
+macOS exchanges verified directories atomically through its bundled helper.
+The exact embedded shell payload has private signed synthetic-bundle tests for
+different-version replacement, corrupt/signature/identity failures, failed
+exchange, signal rollback and kill-after-exchange generation preservation.
+`--no-relaunch` suppresses desktop launch only in these explicit headless drills.
+They do not exercise the installed application's complete UI/update journey.
+A successful `open` request is not proof that the new application subsequently
+completed startup; that remains part of actual candidate qualification.
+
+An untrappable kill can leave the previous generation in
+`.studio-duo-update.*` and the installation lock beside the still-complete
+installed app. Preserve both and the update log; verify versions/signatures
+before deliberate recovery. Future helpers refuse to discard that lock or
+the older generation automatically. Do not count this retained recovery state
+as a clean successful upgrade.
+
+## Independent mastering metrology
+
+Use a clean candidate built as described in
+[development](development.md#test), with FFmpeg available. The test-only native
+probe decodes the complete bounded mono/stereo file, verifies source stability
+and calls the same `MasteringEngine::analyse` used by the product. It never
+opens audio/MIDI devices, starts plugins or drives the desktop.
+
+```sh
+candidate="$(git rev-parse HEAD)"
+python3 -B scripts/qualify-mastering.py \
+  "--test-binary=$PWD/build/StudioDuoTests_artefacts/Release/StudioDuoTests" \
+  --evidence-root build/qualification/mastering \
+  --expected-sha "$candidate"
+```
+
+Use the native `.exe` on Windows. `--ffmpeg` selects an actual executable.
+The evidence root may exist; each invocation reserves a fresh run directory
+and never overwrites previous evidence. Omitting `--expected-sha` creates an
+explicitly labeled local trial, not exact clean-candidate evidence.
+Nonzero process exits, timeouts, malformed/nonfinite measurements, missing
+cases, wrong source shape/hash, dirty/wrong candidates or changed executables
+fail the run. Existing native output directories are not overwritten.
+
+The 36 deterministic 32-bit PCM cases cover mono/stereo at 44.1/48/96 kHz:
+steady tone, absolute/relative-gated programme, dynamic levels, inter-sample
+peaks, digital silence and a last-sample transient. FFmpeg `ebur128` measures
+integrated loudness/LRA from the **original-rate, unpadded programme**.
+A separate peak-only pass zero-extends 200 ms to flush its reconstruction
+filter; those extra samples never enter the programme I/LRA comparison.
+Normalizer input statistics are not substituted for these measurements.
+Digital silence is explicitly undefined (`null`), not an invented finite LUFS/
+true-peak floor.
+
+Fixed maximum differences are **0.1 LU integrated**, **1.0 LU LRA** and
+**0.3 dBTP**. The same checker enforces those bounds in automated output and
+the manual evidence matrix; a supplied wider tolerance cannot waive them.
+Retain original PCM, both independent logs, native JSON, reference version/
+executable SHA-256, candidate/test-binary/source hashes and exact settings.
+Reports remain `qualificationStatus: not-qualified` even when this matrix passes.
+
+For complete #57 sign-off, separately retain independent decoded/encoded-file,
+dither/resampling and multi-song gap/overlap/fade/metadata results. Run an
+explicitly licensed DDP encoder and independent delivery checker; a mock DDP
+adapter or the product's own fileset checks are not conformance evidence.
+Exercise supported external DAWproject producers/consumers with synthetic edits,
+routing, automation, MIDI, media and processor state, plus visible object-specific
+unsupported-data reports and transactional failures. Do not download licensed
+reference assets or proprietary tools without permission, use customer sessions,
+or turn schema/native round trips into external-DAW acceptance.

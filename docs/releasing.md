@@ -147,6 +147,8 @@ the DMG and updater ZIP, checks mounted/extracted binary equality and
 license/source material, then installs and starts a private copy with a
 30-second driver-free deadline. Cleanup removes only its own temporary install
 and detaches its own volume; it refuses to run while Studio Duo is already open.
+It also requires the signed atomic application-exchange helper and verifies
+its packaged bytes and, for universal releases, both architecture slices.
 Tagged builds additionally require both ARM64 and x86_64 slices.
 macOS 26 and later use the current `diskutil image` creation/attachment APIs;
 older supported build hosts retain the compatible `hdiutil` path. Image
@@ -176,6 +178,13 @@ reuse the existing installer and its permanent Inno Setup application ID; no
 Windows service or updater-specific credential is required. Portable ZIP
 builds do not update in place; the installed Setup build provides the automatic
 update path.
+macOS's exact embedded updater payload uses same-filesystem atomic directory
+exchange, retains the prior generation until the launch request succeeds, and
+rolls back handled failures/interruption. Untrappable termination preserves a
+complete installed generation plus retained recovery data and a fail-closed
+installation lock. Headless signed synthetic-bundle drills are part of CTest;
+they are not released-app/clean-machine qualification. See the
+[distribution procedure](qualification.md#distribution-and-real-updater-qualification).
 
 ## Install released artifacts
 

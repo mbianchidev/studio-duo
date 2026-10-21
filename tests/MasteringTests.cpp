@@ -120,6 +120,8 @@ void masteringTests()
                       - (-23.0))
                       < 0.2,
            "BS.1770 analysis measures a 1 kHz calibration tone at -23 LUFS.");
+    expect(analysis.loudnessRangeLu.has_value() && *analysis.loudnessRangeLu < 0.1,
+           "Constant programme loudness range excludes invented silence after the programme.");
 
     juce::AudioBuffer<float> interSamplePeak(2, 4096);
     for (int channel = 0; channel < interSamplePeak.getNumChannels(); ++channel)
@@ -149,6 +151,14 @@ void masteringTests()
             + juce::String(peakAnalysis.truePeakDbtp, 3)
             + " dBTP).")
                .toRawUTF8());
+
+    juce::AudioBuffer<float> finalImpulse(2, 4096);
+    finalImpulse.clear();
+    finalImpulse.setSample(0, finalImpulse.getNumSamples() - 1, 0.5f);
+    finalImpulse.setSample(1, finalImpulse.getNumSamples() - 1, -0.5f);
+    const auto finalImpulseAnalysis = studio::MasteringEngine::analyse(finalImpulse, sampleRate);
+    expect(finalImpulseAnalysis.truePeakDbtp >= finalImpulseAnalysis.samplePeakDbfs - 0.01,
+           "True-peak analysis flushes its reconstruction filter for a transient at the final sample.");
 
     juce::AudioBuffer<float> dynamicProgramme(
         2,

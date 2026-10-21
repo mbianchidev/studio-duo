@@ -1038,7 +1038,10 @@ UpdateSettingsComponent::UpdateSettingsComponent(
         "Download and verify the available update");
     downloadButton.onClick = [this]
     {
-        updateService.downloadUpdate();
+        if (updateService.snapshot().phase == UpdatePhase::downloading)
+            updateService.cancelDownload();
+        else
+            updateService.downloadUpdate();
     };
 
     addAndMakeVisible(restartButton);
@@ -1081,7 +1084,7 @@ void UpdateSettingsComponent::resized()
     checkButton.setBounds(
         buttons.removeFromLeft(168).reduced(3));
     downloadButton.setBounds(
-        buttons.removeFromLeft(132).reduced(3));
+        buttons.removeFromLeft(156).reduced(3));
     restartButton.setBounds(
         buttons.removeFromLeft(188).reduced(3));
 }
@@ -1122,23 +1125,28 @@ void UpdateSettingsComponent::refresh(
 
     downloadProgress = snapshot.progress;
     progressBar.setVisible(
-        snapshot.phase == UpdatePhase::downloading);
+        snapshot.phase == UpdatePhase::downloading || snapshot.phase == UpdatePhase::cancelling);
 
     const auto busy =
         snapshot.phase == UpdatePhase::checking
-        || snapshot.phase == UpdatePhase::downloading;
+        || snapshot.phase == UpdatePhase::downloading
+        || snapshot.phase == UpdatePhase::cancelling;
     checkButton.setEnabled(
         !busy
         && snapshot.phase != UpdatePhase::unsupported);
     downloadButton.setEnabled(
-        !busy
-        && snapshot.availableVersion.isNotEmpty()
-        && snapshot.phase != UpdatePhase::ready);
+        snapshot.phase == UpdatePhase::downloading
+        || (!busy && snapshot.availableVersion.isNotEmpty() && snapshot.phase != UpdatePhase::ready));
     downloadButton.setButtonText(
-        snapshot.phase == UpdatePhase::failed
+        snapshot.phase == UpdatePhase::downloading ? "CANCEL DOWNLOAD"
+        : snapshot.phase == UpdatePhase::cancelling ? "CANCELLING..."
+        : snapshot.phase == UpdatePhase::failed
             && snapshot.availableVersion.isNotEmpty()
             ? "RETRY DOWNLOAD"
             : "DOWNLOAD");
+    downloadButton.setTooltip(snapshot.phase == UpdatePhase::downloading
+        ? "Cancel this download and remove its partial package without changing the installed application"
+        : "Download and verify the available update");
     restartButton.setEnabled(
         snapshot.phase == UpdatePhase::ready);
 }

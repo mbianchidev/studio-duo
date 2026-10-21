@@ -6,9 +6,6 @@ namespace studio
 {
 namespace
 {
-constexpr std::int64_t maximumUpdatePackageBytes =
-    static_cast<std::int64_t>(2) * 1024 * 1024 * 1024;
-
 bool numericValue(const juce::var& value)
 {
     return value.isInt() || value.isInt64() || value.isDouble();

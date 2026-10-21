@@ -22,12 +22,15 @@ mkdir -p "$output_directory"
 output_directory="$(cd "$output_directory" && pwd)"
 executable="$app/Contents/MacOS/Studio Duo"
 [[ -x "$executable" ]] || fail "The application executable is missing."
+swap_helper="$app/Contents/Helpers/studio-duo-update-swap"
+[[ -x "$swap_helper" ]] || fail "The atomic application-exchange helper is missing."
 bundle_version="$(plutil -extract CFBundleShortVersionString raw -o - "$app/Contents/Info.plist")"
 [[ "$bundle_version" == "$version" ]] || fail "The application version does not match the package version."
 codesign --verify --deep --strict "$app"
 if [[ "$require_universal" == --universal ]]; then
     for architecture in arm64 x86_64; do
         lipo "$executable" -verify_arch "$architecture"
+        lipo "$swap_helper" -verify_arch "$architecture"
     done
     architecture_label=universal
 else
@@ -99,6 +102,9 @@ for bundle in "$installed" "$unzipped"; do
     codesign --verify --deep --strict "$bundle"
     cmp -s "$executable" "$bundle/Contents/MacOS/Studio Duo" \
         || fail "A packaged application executable differs from the built executable."
+    [[ -x "$bundle/Contents/Helpers/studio-duo-update-swap" ]] \
+        && cmp -s "$swap_helper" "$bundle/Contents/Helpers/studio-duo-update-swap" \
+        || fail "A packaged application-exchange helper is missing or changed."
     for license in \
         lame-COPYING.txt lame-NOTICE.txt lame-config.h \
         lame-4.0-source.tar.gz studio-duo-source.tar.gz \
