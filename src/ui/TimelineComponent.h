@@ -210,6 +210,7 @@ private:
     juce::String dragOriginalTrackId;
     juce::String dragPreviewTrackId;
     double playheadSeconds = 0.0;
+    double navigationEndSeconds = minimumTimelineSeconds;
     double markerDragOriginalSeconds = 0.0;
     double markerDragPreviewSeconds = 0.0;
     double sectionDragOriginalStart = 0.0;
@@ -244,6 +245,8 @@ private:
 
     static constexpr double minimumPixelsPerSecond = 24.0;
     static constexpr double maximumPixelsPerSecond = 9600.0;
+    static constexpr double minimumTimelineSeconds = 30.0 * 60.0;
+    static constexpr double timelineExtensionSeconds = 5.0 * 60.0;
     static constexpr int markerLaneHeight = 20;
     static constexpr int sectionLaneHeight = 24;
     static constexpr int timelineRulerTop =

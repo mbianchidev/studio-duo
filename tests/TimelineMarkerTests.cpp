@@ -33,10 +33,69 @@ juce::MouseEvent mouseEvent(
         dragged
     };
 }
+
+void timelineNavigationRange()
+{
+    auto project = studio::Project::createDefault();
+    studio::TimelineComponent timeline;
+    timeline.setProject(&project);
+    timeline.setPixelsPerSecond(
+        studio::TimelineComponent::defaultPixelsPerSecond * 0.25);
+    expect(timeline.preferredWidth(640)
+               >= static_cast<int>(timeline.xForSeconds(30.0 * 60.0)),
+           "An empty arrangement offers at least thirty minutes at 25 percent zoom.");
+
+    juce::Viewport viewport;
+    viewport.setBounds(0, 0, 640, 240);
+    viewport.setViewedComponent(&timeline, false);
+    timeline.setSize(timeline.preferredWidth(viewport.getWidth()),
+                     timeline.preferredHeight(viewport.getHeight()));
+    auto keepsExtending = true;
+    for (auto iteration = 0; iteration < 4; ++iteration)
+    {
+        const auto oldWidth = timeline.getWidth();
+        viewport.setViewPosition(oldWidth, 0);
+        const auto oldPosition = viewport.getViewPositionX();
+        timeline.setViewportPosition(oldPosition);
+        timeline.setSize(timeline.preferredWidth(viewport.getWidth()),
+                         timeline.preferredHeight(viewport.getHeight()));
+        keepsExtending = keepsExtending
+            && timeline.getWidth() > oldWidth
+            && viewport.getViewPositionX() == oldPosition;
+    }
+    expect(keepsExtending,
+           "Repeated right-edge scrolling extends the timeline without moving the viewport.");
+
+    const auto navigatedSeconds =
+        (static_cast<double>(timeline.getWidth()) - timeline.xForSeconds(0.0))
+        / timeline.getPixelsPerSecond();
+    viewport.setViewPosition(0, 0);
+    timeline.setViewportPosition(0);
+    for (const auto zoom : { 1.0, 100.0, 0.25 })
+    {
+        timeline.setPixelsPerSecond(
+            studio::TimelineComponent::defaultPixelsPerSecond * zoom);
+        timeline.setSize(timeline.preferredWidth(viewport.getWidth()),
+                         timeline.preferredHeight(viewport.getHeight()));
+        expect(timeline.getWidth()
+                   >= static_cast<int>(timeline.xForSeconds(navigatedSeconds)),
+               "Scrolling back and changing zoom preserve the navigated time range.");
+    }
+
+    timeline.setPlayheadSeconds(2.0 * 60.0 * 60.0);
+    expect(timeline.preferredWidth(viewport.getWidth())
+               > static_cast<int>(timeline.xForSeconds(2.0 * 60.0 * 60.0)),
+           "The timeline grows ahead of playback beyond its current navigation extent.");
+    expect(std::abs(project.lengthSeconds() - 8.0) < 0.000001,
+           "Extra navigation space does not change the project's content or export length.");
+    viewport.setViewedComponent(nullptr, false);
+}
 }
 
 void timelineMarkerTests()
 {
+    timelineNavigationRange();
+
     auto project = studio::Project::createDefault();
     project.markers = {
         { "marker", "Flag", 1.0 }
