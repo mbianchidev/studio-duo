@@ -8375,16 +8375,6 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
                     recordingTransportEnd - position));
             }
 
-            if (transportRunning
-                && position >= snapshot.lengthSamples
-                && !renderingRecording
-                && !renderLooping)
-            {
-                playing.store(false, std::memory_order_release);
-                requestMidiNoteTermination();
-                break;
-            }
-
             const auto terminationOrdinal =
                 midiTerminationRequested.load(
                     std::memory_order_acquire);
@@ -9284,15 +9274,6 @@ void StudioAudioEngine::audioDeviceIOCallbackWithContext(const float* const* inp
                     position,
                     snapshot.loopStartSample,
                     snapshot.loopEndSample);
-            }
-            else if (transportRunning
-                     && !renderingRecording
-                     && !renderLooping
-                     && position >= snapshot.lengthSamples)
-            {
-                position = snapshot.lengthSamples;
-                playing.store(false, std::memory_order_release);
-                requestMidiNoteTermination();
             }
         }
 

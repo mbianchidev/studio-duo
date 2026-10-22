@@ -576,6 +576,61 @@ bool hasSafeChannelReset(
             > 0;
 }
 
+void continuousPlaybackPastContentEnd()
+{
+    auto project = studio::Project::createDefault();
+    project.metronomeEnabled = false;
+    auto engine = std::make_unique<studio::StudioAudioEngine>();
+    expect(engine->updateProject(project).wasOk(),
+           "Continuous playback publishes an empty arrangement.");
+    engine->seekSeconds(project.lengthSeconds() - 0.01);
+    engine->play();
+    engine->processActiveBlockForTesting(960);
+    expect(engine->isPlaying()
+               && closeTo(engine->positionSeconds(),
+                          project.lengthSeconds() + 0.01),
+           "Playback continues through empty space beyond the current content end.");
+}
+
+void playbackStartsAndResumesAtSeekPosition()
+{
+    auto project = studio::Project::createDefault();
+    project.metronomeEnabled = false;
+    auto engine = std::make_unique<studio::StudioAudioEngine>();
+    constexpr auto blockSize = 64;
+    for (const auto sampleRate : { 48000.0, 96000.0 })
+    {
+        expect(engine->configureAudioForTesting(sampleRate, blockSize).wasOk()
+                   && engine->updateProject(project).wasOk(),
+               "Seek and resume use the configured playback sample rate.");
+        const auto blockSeconds = blockSize / sampleRate;
+        for (const auto startSeconds : { 1.25, project.lengthSeconds(), 1800.125 })
+        {
+            engine->seekSeconds(startSeconds);
+            engine->play();
+            expect(closeTo(engine->positionSeconds(), startSeconds),
+                   "Starting playback preserves the chosen playhead position.");
+            engine->processActiveBlockForTesting(blockSize);
+            expect(engine->isPlaying()
+                       && closeTo(engine->positionSeconds(), startSeconds + blockSeconds),
+                   "Playback advances from the chosen position, including beyond thirty minutes.");
+            engine->pause();
+            engine->processActiveBlockForTesting(blockSize);
+            expect(!engine->isPlaying()
+                       && closeTo(engine->positionSeconds(), startSeconds + blockSeconds),
+                   "Paused callbacks preserve the current playhead position.");
+            engine->play();
+            engine->processActiveBlockForTesting(blockSize);
+            expect(engine->isPlaying()
+                       && closeTo(engine->positionSeconds(), startSeconds + 2.0 * blockSeconds),
+                   "Resuming playback continues from the paused position without rewinding.");
+            engine->stop();
+            expect(!engine->isPlaying() && closeTo(engine->positionSeconds(), 0.0),
+                   "An explicit Stop still returns the playhead to the beginning.");
+        }
+    }
+}
+
 void midiTransportDiscontinuities()
 {
     {
@@ -818,7 +873,7 @@ void midiTransportDiscontinuities()
         auto fixture = createRoutedMidiFixture(7.99, 8.0);
         studio::StudioAudioEngine engine;
         expect(engine.updateProject(fixture.project).wasOk(),
-               "Automatic-end termination fixture publishes.");
+               "Content-end MIDI fixture publishes.");
         engine.seekSeconds(7.99);
         engine.clearMidiEventsForTesting();
         engine.play();
@@ -831,7 +886,7 @@ void midiTransportDiscontinuities()
         const auto destinationKey =
             studio::StudioAudioEngine::runtimeKeyForTesting(
                 fixture.destinationTrackId);
-        expect(!engine.isPlaying()
+        expect(engine.isPlaying()
                    && traceCount(
                           endingBlock,
                           destinationKey,
@@ -843,18 +898,25 @@ void midiTransportDiscontinuities()
                    && !hasTermination(
                        endingBlock,
                        destinationKey),
-               "The automatic-end fixture leaves a boundary note active until transport termination runs.");
+               "Reaching the content end keeps playback and its boundary note active.");
         engine.processActiveBlockForTesting(64);
         const auto ended = engine.takeMidiEventsForTesting();
-        expect(hasTermination(ended, sourceKey)
-                   && hasTermination(ended, destinationKey),
-               "Automatic transport end terminates boundary notes through every destination.");
+        const auto isNoteOff = [](const auto& message)
+        {
+            return message.isNoteOff();
+        };
+        expect(engine.isPlaying()
+                   && traceCount(ended, sourceKey, isNoteOff) == 1
+                   && traceCount(ended, destinationKey, isNoteOff) == 1
+                   && !hasSafeChannelReset(ended, sourceKey)
+                   && !hasSafeChannelReset(ended, destinationKey),
+               "Boundary note-offs reach every destination without stopping playback or resetting MIDI channels.");
         engine.processActiveBlockForTesting(64);
         const auto endedAgain =
             engine.takeMidiEventsForTesting();
         expect(!hasTermination(endedAgain, sourceKey)
                    && !hasTermination(endedAgain, destinationKey),
-               "Automatic transport end clears active state without repeated note termination.");
+               "Continued playback does not repeatedly terminate completed boundary notes.");
     }
 }
 }
@@ -863,6 +925,8 @@ void transportTests()
 {
     namedProjectMarkerCommands();
     invalidProjectMarkers();
+    continuousPlaybackPastContentEnd();
+    playbackStartsAndResumesAtSeekPosition();
 
     auto project = studio::Project::createDefault();
     project.name = "Transport verification";

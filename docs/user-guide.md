@@ -912,12 +912,19 @@ copies.
 ## Navigate the timeline
 
 Use the **-**, **100%**, and **+** controls, keyboard shortcuts, or
-`Command/Ctrl` plus the mouse wheel to zoom while keeping the playhead centered.
+the mouse wheel over the timeline canvas to zoom around the pointer.
+The minimum zoom remains **25%**. Even an empty arrangement offers at least
+30 minutes of timeline space, and scrolling right extends it further without
+requiring clips first. This navigation space does not lengthen audio exports.
 The arrangement follows the playhead during playback and recording while track
-headers remain pinned.
+headers remain pinned, extending the timeline as needed.
 
 Right-click the timeline to place the playhead and open the context menu.
-Pressing Play at the project end rewinds before starting.
+**Play** starts from the current playhead position, including positions beyond
+the last clip. **Pause** keeps that position for resuming. Playback continues
+through empty space instead of stopping at the current content end; **Stop**
+returns to the beginning. Enabled loops and punch-recording boundaries still
+apply.
 
 ## Mastering and release
 

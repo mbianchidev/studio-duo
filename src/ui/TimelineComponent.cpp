@@ -84,6 +84,15 @@ void TimelineComponent::setPlayheadSeconds(double seconds)
 void TimelineComponent::setViewportPosition(int horizontalPosition)
 {
     const auto newPosition = std::max(0, horizontalPosition);
+    if (const auto* viewport = findParentComponentOfClass<juce::Viewport>())
+    {
+        const auto visibleEndSeconds =
+            (static_cast<double>(newPosition) + viewport->getViewWidth()
+             - trackHeaderWidth) / pixelsPerSecond;
+        navigationEndSeconds = std::max(
+            navigationEndSeconds,
+            visibleEndSeconds + timelineExtensionSeconds);
+    }
     if (newPosition == viewportPositionX)
         return;
 
@@ -145,7 +154,9 @@ int TimelineComponent::preferredWidth(int minimumWidth) const
     auto previewEnd = 0.0;
     for (const auto& preview : recordingPreviews)
         previewEnd = std::max(previewEnd, preview.startSeconds + preview.durationSeconds);
-    const auto seconds = std::max(projectSeconds, previewEnd) + 8.0;
+    const auto seconds = std::max(
+        navigationEndSeconds,
+        std::max({ projectSeconds, previewEnd, playheadSeconds }) + 8.0);
     const auto maximumContentWidth = static_cast<double>(
         std::numeric_limits<int>::max() - trackHeaderWidth);
     const auto contentWidth = std::min(maximumContentWidth,

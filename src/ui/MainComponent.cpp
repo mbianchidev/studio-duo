@@ -3168,8 +3168,9 @@ void MainComponent::timerCallback()
                       + " s. Press STOP REC or STOP to finish.",
                   false,
                   false);
-        updateTimelineSize();
     }
+    timeline.setViewportPosition(timelineViewport.getViewPositionX());
+    updateTimelineSize();
 
     auto viewportX = timelineViewport.getViewPositionX();
     if (playing || recording)
@@ -5553,26 +5554,6 @@ void MainComponent::togglePlayback()
     {
         audioEngine.pause();
         return;
-    }
-
-    const auto playbackEnd = project.loopEnabled
-        ? std::max(project.lengthSeconds(), project.loopEndSeconds)
-        : project.lengthSeconds();
-    if (audioEngine.positionSeconds() >= playbackEnd - 0.001)
-    {
-        if (!audioEngine.resetPluginProcessing())
-        {
-            setStatus("Could not reset plugin pipelines before rewinding.", true);
-            return;
-        }
-        audioEngine.seekSeconds(0.0);
-        timeline.setPlayheadSeconds(0.0);
-        timelineViewport.setViewPosition(0, timelineViewport.getViewPositionY());
-        timeline.setViewportPosition(0);
-        if (project.hasActivePluginInserts())
-        {
-            setStatus("Rewound to project start.");
-        }
     }
 
     if (audioEngine.pluginRuntimeTransitionPending())
