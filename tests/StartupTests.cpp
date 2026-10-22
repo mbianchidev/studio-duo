@@ -256,6 +256,57 @@ void startupTests()
                "Clean shutdown clears only the corresponding per-session markers.");
     }
     {
+        juce::PluginDescription first;
+        first.name = "Mock Processor";
+        first.pluginFormatName = "VST3";
+        first.fileOrIdentifier = "mock-plugin";
+        first.uniqueId = 123;
+        first.deprecatedUid = 456;
+        first.version = "1";
+        auto differentId = first;
+        ++differentId.uniqueId;
+        auto differentLegacyId = first;
+        ++differentLegacyId.deprecatedUid;
+        auto differentFile = first;
+        differentFile.fileOrIdentifier = "mock-other-plugin";
+        auto updated = first;
+        updated.version = "2";
+        updated.pluginFormatName = "CLAP";
+
+        juce::KnownPluginList expected;
+        juce::XmlElement xml("KNOWNPLUGINS");
+        for (const auto& description : { first, differentId, differentLegacyId, differentFile, updated })
+        {
+            expected.addType(description);
+            xml.addChildElement(description.createXml().release());
+        }
+        xml.createNewChildElement("IGNORED");
+        for (int index = 0; index < 2; ++index)
+            xml.createNewChildElement("BLACKLISTED")->setAttribute("id", "mock-blocked-plugin");
+
+        juce::KnownPluginList restored;
+        auto stale = first;
+        stale.fileOrIdentifier = "mock-stale-plugin";
+        restored.addType(stale);
+        restored.addToBlacklist("mock-stale-blocked-plugin");
+        restored.recreateFromXml(xml);
+
+        const auto expectedTypes = expected.getTypes();
+        const auto restoredTypes = restored.getTypes();
+        auto descriptionsMatch = restoredTypes.size() == expectedTypes.size();
+        if (descriptionsMatch)
+            for (int index = 0; index < restoredTypes.size(); ++index)
+                descriptionsMatch = descriptionsMatch
+                    && restoredTypes[index].createXml()->toString() == expectedTypes[index].createXml()->toString();
+        expect(descriptionsMatch && restoredTypes.size() == 4,
+               "Bulk catalog restoration preserves JUCE identity keys, insertion order and last duplicate metadata.");
+        expect(restored.getBlacklistedFiles() == juce::StringArray { "mock-blocked-plugin", "mock-blocked-plugin" },
+               "Bulk catalog restoration replaces stale state, ignores unknown tags and preserves blacklist entries.");
+        restored.recreateFromXml(juce::XmlElement("UNRELATED"));
+        expect(restored.getNumTypes() == 0 && restored.getBlacklistedFiles().isEmpty(),
+               "Restoring an unrelated XML root clears both cached descriptions and the blacklist.");
+    }
+    {
         const auto directory = fixture.getChildFile("catalog");
         expect(directory.createDirectory().wasOk()
                    && directory.getChildFile("plugins.xml").replaceWithText("<corrupt"),

@@ -1,0 +1,54 @@
+diff --git a/modules/juce_audio_processors/scanning/juce_KnownPluginList.cpp b/modules/juce_audio_processors/scanning/juce_KnownPluginList.cpp
+--- a/modules/juce_audio_processors/scanning/juce_KnownPluginList.cpp
++++ b/modules/juce_audio_processors/scanning/juce_KnownPluginList.cpp
+@@ -388,18 +388,44 @@
+ void KnownPluginList::recreateFromXml (const XmlElement& xml)
+ {
+-    clear();
+-    clearBlacklistedFiles();
++    Array<PluginDescription> restoredTypes;
++    StringArray restoredBlacklist;
+-
++
+     if (xml.hasTagName ("KNOWNPLUGINS"))
+     {
++        std::map<std::tuple<String, int, int>, int> typeIndices;
++        restoredTypes.ensureStorageAllocated (xml.getNumChildElements());
++
+         for (auto* e : xml.getChildIterator())
+         {
+             PluginDescription info;
+-
++
+             if (e->hasTagName ("BLACKLISTED"))
+-                blacklist.add (e->getStringAttribute ("id"));
++                restoredBlacklist.add (e->getStringAttribute ("id"));
+             else if (info.loadFromXml (*e))
+-                addType (info);
++            {
++                const auto [entry, inserted] = typeIndices.emplace (
++                    std::make_tuple (info.fileOrIdentifier, info.deprecatedUid, info.uniqueId), restoredTypes.size());
++
++                if (inserted)
++                    restoredTypes.add (std::move (info));
++                else
++                {
++                    auto& existing = restoredTypes.getReference (entry->second);
++                    jassert (existing.name == info.name);
++                    jassert (existing.isInstrument == info.isInstrument);
++                    existing = std::move (info);
++                }
++            }
+         }
+     }
++
++    std::reverse (restoredTypes.begin(), restoredTypes.end());
++
++    {
++        const ScopedLock lock (typesArrayLock);
++        types.swapWith (restoredTypes);
++        blacklist.swapWith (restoredBlacklist);
++    }
++
++    sendChangeMessage();
+ }

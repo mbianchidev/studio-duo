@@ -35,8 +35,12 @@ Source-built JUCE 9.0.3 also receives a checked private-IPC patch: relative POSI
 named pipes use the inherited `TMPDIR`, falling back to `/tmp` only when that
 environment setting is absent. Parent/worker probes can therefore keep their
 FIFOs in an owned private directory instead of granting vendor code writes to
-global `/tmp` pipe patterns. An installed JUCE package is not modified; its
-private-probe compatibility must be verified separately.
+global `/tmp` pipe patterns. A checked catalog-restore patch also replaces
+quadratic per-descriptor insertion with indexed bulk restoration, retaining JUCE's
+file/current-ID/legacy-ID duplicate identity, last duplicate metadata, reverse
+first-insertion order, and blacklist entries. An installed JUCE package is not
+modified; its private-probe compatibility and large-catalog startup performance
+must be verified separately.
 Phase 4 MIDI/editor workflows and bundled drum/guitar/bass devices are
 implemented. The dedicated DAWproject 1.0 translation, schema-validation, ZIP,
 scene, and compatibility-report layer is also implemented without runtime
