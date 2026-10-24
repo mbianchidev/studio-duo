@@ -154,6 +154,21 @@ not rebuild standalone VST3/AU exports that are not included in release archives
 CI still builds all standalone plugin targets, and normal developer builds
 continue to build every target.
 
+### Windows compiler scheduling
+
+The CI build step enables MSBuild's `UseMultiToolTask` and
+`EnforceProcessCountAcrossBuilds`, with `CL_MPCount` set to the matrix's four-worker
+Windows build budget. `cmake --build --parallel 4` limits concurrent projects,
+not JUCE's per-project `/MP` compiler workers. The shared compiler pool schedules
+individual C/C++ files across projects without multiplying those worker limits.
+This also permits file-level parallelism in targets without `/MP`.
+
+The settings are scoped to the CI build step and inherited by nested helper
+builds. macOS Ninja builds ignore these MSBuild settings. The full build target,
+Release optimization, Windows symbols, native tests, vendor probes, package
+checks, and cross-platform project exchange remain unchanged. Tagged release
+builds retain their existing configuration.
+
 ## Test
 
 ```sh
