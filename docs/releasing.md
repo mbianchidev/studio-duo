@@ -95,9 +95,16 @@ reused by tags. The application and standalone plugins remain universal; test-on
 executables and fixtures are native to the runner, matching the architecture
 that actually executes the complete suite. See
 [universal build configuration](development.md#universal-macos-builds-and-compilation-caching).
-The release build requests only the signed app and complete test targets,
-including their fixture dependencies. Standalone VST3/AU exports are not in the
-release archives and remain covered by CI's full build instead.
+Both platform release builds request only the app and complete test targets,
+including their fixture dependencies. The macOS build also requests the
+development-signature target. Standalone VST3/AU exports are not in the release
+archives and remain covered by CI's full build instead.
+The Windows build retains its four-worker MSBuild budget and shares CI's
+OS/architecture-scoped dependency-cache key, including CMake configuration and
+dependency patches. Tags can reuse the default branch's dependency cache instead
+of requiring a separate release-only cache. A cache miss still fetches the pinned
+dependencies and builds and tests the same targets; cached dependencies do not
+replace application compilation or regression checks.
 An isolated compiler-cache check verifies independent Intel/ARM header changes
 before cached universal objects can be used.
 Windows publication also requires successful Authenticode signing,

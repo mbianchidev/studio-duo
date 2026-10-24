@@ -57,9 +57,12 @@ https://mbianchidev.github.io/studio-duo/
 ```
 
 `.github/workflows/website.yml` installs locked dependencies, audits, builds,
-checks the production site, and uploads only `website/dist/`. Pull requests
-validate and upload an artifact but cannot deploy. A website change merged
-into `main` deploys to the `github-pages` environment; a manual workflow run
+checks the production site, and uploads only `website/dist/`. CI installs
+Chromium's headless shell and its system dependencies, not the unused headed
+browser. All four viewport projects still run with the same two-worker limit;
+local headed-browser installation remains available for interactive debugging.
+Pull requests validate and upload an artifact but cannot deploy. A website change
+merged into `main` deploys to the `github-pages` environment; a manual workflow run
 on `main` also deploys. A run on another branch only validates. The deploy job
 has the Pages and OIDC write permissions; the build job only reads repository
 contents. Production deployments queue instead of canceling one another.
