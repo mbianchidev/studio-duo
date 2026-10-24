@@ -54,8 +54,8 @@ Inno Setup 7.1.0 remain the latest stable releases for their respective
 dependencies. Windows packages download the current signed Visual C++ runtime
 from Microsoft's release channel and verify its signature and version.
 GitHub Actions are pinned to exact release commits for checkout 7.0.1, cache
-6.1.0, upload-artifact 7.0.2, and download-artifact 8.0.2; Dependabot maintains
-those pins.
+6.1.0, upload-artifact 7.0.2, download-artifact 8.0.2, and setup-python 7.1.0;
+Dependabot maintains those pins.
 
 ## Prerequisites
 
@@ -64,6 +64,11 @@ those pins.
 - A C++20 compiler
 - macOS with Xcode command-line tools, or Windows with Visual Studio 2022
 - Python 3.9 or newer for test builds and qualification evidence tools only
+
+Python 3.15.1 is the recommended stable version, pinned in `.python-version` for
+local version managers and CI/release qualification. Those workflows pass the
+selected interpreter explicitly to CMake so tests do not pick a different
+system Python. The native application does not require Python at runtime.
 
 ## Configure and build
 

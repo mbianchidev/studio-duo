@@ -269,7 +269,7 @@ architectural changes or new dependencies.
 ## Website
 
 The static product website lives in `website/`, separate from the native app.
-With Node.js 24 LTS, run `cd website && npm ci && npm run dev` and open the
+With Node.js 26.12.1, run `cd website && npm ci && npm run dev` and open the
 printed URL at `/studio-duo/`. `npm run build` produces `website/dist/`.
 Website changes are checked on pull requests and deployed to GitHub Pages
 only from `main`; select **GitHub Actions** in the repository's Pages settings.

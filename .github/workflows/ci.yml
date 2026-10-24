@@ -75,6 +75,12 @@ jobs:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - name: Set up Python
+        id: python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version-file: .python-version
+
       - name: Install macOS compiler cache and reference meter
         if: runner.os == 'macOS'
         run: HOMEBREW_NO_AUTO_UPDATE=1 brew install ccache ffmpeg
@@ -120,6 +126,7 @@ jobs:
           cmake -S . -B build
           -DSTUDIO_DUO_BUILD_TESTS=ON
           -DSTUDIO_DUO_MASTERING_REFERENCE_TESTS=ON
+          "-DPython3_EXECUTABLE=${{ steps.python.outputs.python-path }}"
           ${{ matrix.configure_args }}
 
       - name: Build
