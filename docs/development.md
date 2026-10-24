@@ -154,20 +154,20 @@ not rebuild standalone VST3/AU exports that are not included in release archives
 CI still builds all standalone plugin targets, and normal developer builds
 continue to build every target.
 
-### Windows compiler scheduling
+### CI failure handling
 
-The CI build step enables MSBuild's `UseMultiToolTask` and
-`EnforceProcessCountAcrossBuilds`, with `CL_MPCount` set to the matrix's four-worker
-Windows build budget. `cmake --build --parallel 4` limits concurrent projects,
-not JUCE's per-project `/MP` compiler workers. The shared compiler pool schedules
-individual C/C++ files across projects without multiplying those worker limits.
-This also permits file-level parallelism in targets without `/MP`.
+The native CI build matrix uses `fail-fast: true`. When a required platform job
+fails, GitHub cancels its queued and running matrix siblings instead of spending
+more runner time on an already-failed revision. The failed job still reports
+failure; canceled siblings do not count as passing coverage.
 
-The settings are scoped to the CI build step and inherited by nested helper
-builds. macOS Ninja builds ignore these MSBuild settings. The full build target,
-Release optimization, Windows symbols, native tests, vendor probes, package
-checks, and cross-platform project exchange remain unchanged. Tagged release
-builds retain their existing configuration.
+Successful runs retain every platform, test, vendor probe, package/install
+check, and cross-platform project exchange. Exchange verification still requires
+the entire build matrix to succeed. This saves work only on failures, not on
+successful builds, and trades complete cross-platform failure diagnostics for
+earlier cancellation. Fix the failure and push again to obtain full results.
+Tagged release builds and the reusable exchange workflow keep their existing
+failure handling.
 
 ## Test
 

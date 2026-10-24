@@ -18,7 +18,7 @@ jobs:
   build-and-test:
     name: ${{ matrix.os }}
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         include:
           - os: macos-latest
@@ -123,10 +123,6 @@ jobs:
           ${{ matrix.configure_args }}
 
       - name: Build
-        env:
-          UseMultiToolTask: "true"
-          EnforceProcessCountAcrossBuilds: "true"
-          CL_MPCount: ${{ matrix.build_parallel }}
         run: cmake --build build --config Release --parallel ${{ matrix.build_parallel }}
 
       - name: Report macOS compilation cache
