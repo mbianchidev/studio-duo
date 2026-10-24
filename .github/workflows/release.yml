@@ -178,13 +178,15 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: build/_deps
-          key: release-windows-${{ hashFiles('CMakeLists.txt') }}
+          key: dependencies-${{ runner.os }}-${{ runner.arch }}-v3-native-${{ hashFiles('CMakeLists.txt', 'cmake/*.cmake', 'third_party/**/*.patch') }}
 
       - name: Configure
         run: cmake -S . -B build -A x64 -DSTUDIO_DUO_BUILD_TESTS=ON -DSTUDIO_DUO_MASTERING_REFERENCE_TESTS=ON
 
       - name: Build
-        run: cmake --build build --config Release --parallel 4
+        run: >
+          cmake --build build --config Release --parallel 4
+          --target StudioDuo StudioDuoTests StudioDuoAudioExportTests
 
       - name: Test
         run: >

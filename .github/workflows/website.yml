@@ -49,7 +49,7 @@ jobs:
         run: npm run build
 
       - name: Install test browser
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install --with-deps --only-shell chromium
 
       - name: Check production site
         run: npm test
