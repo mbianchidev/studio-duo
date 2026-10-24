@@ -154,6 +154,21 @@ not rebuild standalone VST3/AU exports that are not included in release archives
 CI still builds all standalone plugin targets, and normal developer builds
 continue to build every target.
 
+### CI failure handling
+
+The native CI build matrix uses `fail-fast: true`. When a required platform job
+fails, GitHub cancels its queued and running matrix siblings instead of spending
+more runner time on an already-failed revision. The failed job still reports
+failure; canceled siblings do not count as passing coverage.
+
+Successful runs retain every platform, test, vendor probe, package/install
+check, and cross-platform project exchange. Exchange verification still requires
+the entire build matrix to succeed. This saves work only on failures, not on
+successful builds, and trades complete cross-platform failure diagnostics for
+earlier cancellation. Fix the failure and push again to obtain full results.
+Tagged release builds and the reusable exchange workflow keep their existing
+failure handling.
+
 ## Test
 
 ```sh
