@@ -9,7 +9,9 @@ needed at runtime. Content and image links remain usable without JavaScript.
 
 ## Local development
 
-Use Node.js 24 LTS and npm:
+Use Node.js 26.12.1 (current stable) and npm. `website/.nvmrc` pins the same
+version for local development and CI. If you use nvm, run `nvm install && nvm use`
+from `website/` first. The package's supported minimum remains Node.js 22.12.0.
 
 ```sh
 cd website
