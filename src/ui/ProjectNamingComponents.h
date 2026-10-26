@@ -45,19 +45,19 @@ private:
             setText(projectName + (dirty ? " *" : ""), juce::dontSendNotification);
     }
 
-    void editorShown(juce::TextEditor* editor) override
+    void editorShown(juce::TextEditor* textEditor) override
     {
-        editor->setTitle("Song name");
-        editor->setText(projectName, false);
-        editor->selectAll();
-        juce::Label::editorShown(editor);
+        textEditor->setTitle("Song name");
+        textEditor->setText(projectName, false);
+        textEditor->selectAll();
+        juce::Label::editorShown(textEditor);
     }
 
-    void editorAboutToBeHidden(juce::TextEditor* editor) override
+    void editorAboutToBeHidden(juce::TextEditor* textEditor) override
     {
         // Return and focus loss notify edits on different sides of hiding the editor.
-        pendingName = editor->getText().trim();
-        juce::Label::editorAboutToBeHidden(editor);
+        pendingName = textEditor->getText().trim();
+        juce::Label::editorAboutToBeHidden(textEditor);
         refresh();
     }
 

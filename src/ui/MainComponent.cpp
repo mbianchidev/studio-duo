@@ -3401,14 +3401,14 @@ void MainComponent::createProjectFromTemplate(
     promptNewProjectName(std::move(*templateProject));
 }
 
-void MainComponent::promptNewProjectName(Project replacement)
+void MainComponent::promptNewProjectName(Project newProject)
 {
     if (!projectReplacementAvailable())
         return;
     const auto directory =
         juce::File::getSpecialLocation(juce::File::userDocumentsDirectory);
     const auto suggestedName = preferences.suggestProjectName(
-        replacement.name, directory,
+        newProject.name, directory,
         startupHub.isVisible() ? juce::String() : project.name);
     auto* dialog = createProjectNameDialog(suggestedName, this).release();
     dialog->centreAroundComponent(this, 480, 190);
@@ -3418,7 +3418,7 @@ void MainComponent::promptNewProjectName(Project replacement)
         juce::ModalCallbackFunction::create(
             [safe = juce::Component::SafePointer<MainComponent>(this),
              dialogSafe, projectId = project.id, directory,
-             replacement = std::move(replacement)](int result) mutable
+             replacement = std::move(newProject)](int result) mutable
             {
                 if (result != 1 || safe == nullptr || dialogSafe == nullptr
                     || safe->project.id != projectId)
@@ -3432,16 +3432,16 @@ void MainComponent::promptNewProjectName(Project replacement)
                 }
                 safe->confirmProjectReplacement(
                     [safe, projectId, directory, name,
-                     replacement = std::move(replacement)]() mutable
+                     projectToCreate = std::move(replacement)]() mutable
                     {
                         if (safe == nullptr || safe->project.id != projectId)
                             return;
-                        replacement.name = safe->preferences.suggestProjectName(
+                        projectToCreate.name = safe->preferences.suggestProjectName(
                             name, directory,
                             safe->startupHub.isVisible() ? juce::String() : safe->project.name);
-                        const auto createdName = replacement.name;
+                        const auto createdName = projectToCreate.name;
                         safe->replaceWithUnsavedProject(
-                            std::move(replacement), "Created " + createdName + ".");
+                            std::move(projectToCreate), "Created " + createdName + ".");
                     });
             }),
         true);

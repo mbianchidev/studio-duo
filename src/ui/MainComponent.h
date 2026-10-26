@@ -137,7 +137,7 @@ private:
     void createNewProject();
     void createProjectFromTemplate(
         const juce::String& templateId);
-    void promptNewProjectName(Project replacement);
+    void promptNewProjectName(Project newProject);
     void replaceWithUnsavedProject(
         Project replacement,
         const juce::String& statusMessage);
