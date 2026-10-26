@@ -154,6 +154,44 @@ StudioPreferences::recentProjects() const noexcept
     return recent;
 }
 
+juce::String StudioPreferences::suggestProjectName(
+    const juce::String& preferredName,
+    const juce::File& directory,
+    const juce::String& activeProjectName) const
+{
+    const auto requestedName = preferredName.trim();
+    auto base = requestedName;
+    const auto numberStart = base.lastIndexOf(" (");
+    if (numberStart > 0 && base.endsWithChar(')'))
+    {
+        const auto number = base.substring(numberStart + 2).dropLastCharacters(1);
+        if (number.isNotEmpty() && number.containsOnly("0123456789"))
+            base = base.substring(0, numberStart);
+    }
+    const auto nameInUse = [&](const juce::String& candidate)
+    {
+        return candidate.equalsIgnoreCase(activeProjectName)
+            || directory.getChildFile(
+                juce::File::createLegalFileName(candidate) + ".studioduo").exists()
+            || std::any_of(recent.cbegin(), recent.cend(), [&](const auto& entry)
+               {
+                   return entry.file.exists()
+                       && (candidate.equalsIgnoreCase(entry.name)
+                           || candidate.equalsIgnoreCase(entry.file.getFileNameWithoutExtension()));
+               });
+    };
+    auto candidate = requestedName;
+    for (int suffix = 1; nameInUse(candidate); ++suffix)
+    {
+        const auto ending = " (" + juce::String(suffix) + ")";
+        candidate = base + ending;
+        const auto filename = juce::File::createLegalFileName(candidate);
+        if (!filename.endsWith(ending))
+            candidate = filename.dropLastCharacters(ending.length()) + ending;
+    }
+    return candidate;
+}
+
 const juce::String&
 StudioPreferences::status() const noexcept
 {

@@ -50,6 +50,21 @@ private:
     std::vector<std::unique_ptr<ProjectCommand>> commands;
 };
 
+class RenameProjectCommand final : public ProjectCommand
+{
+public:
+    explicit RenameProjectCommand(juce::String replacementName);
+
+    [[nodiscard]] juce::String name() const override;
+    bool perform(Project& project, juce::String& error) override;
+    void undo(Project& project) override;
+
+private:
+    juce::String newName;
+    juce::String oldName;
+    bool capturedOriginal = false;
+};
+
 class AddProjectMarkerCommand final : public ProjectCommand
 {
 public:

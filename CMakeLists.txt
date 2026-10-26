@@ -549,6 +549,7 @@ target_sources(
         src/update/UpdateSettingsComponent.h
         src/ui/MainComponent.cpp
         src/ui/MainComponent.h
+        src/ui/ProjectNamingComponents.h
         src/ui/ControlSurfaceSettingsComponent.cpp
         src/ui/ControlSurfaceSettingsComponent.h
         src/platform/MediaFileRevision.cpp
@@ -1057,6 +1058,7 @@ if(STUDIO_DUO_BUILD_TESTS)
             src/platform/MediaFileRevision.h
             tests/ReleaseFixtures.h
             tests/ProjectTemplateTests.cpp
+            src/ui/ProjectNamingComponents.h
             tests/WindowSizingTests.cpp
             tests/TransportTests.cpp
             tests/TransportEditingTests.cpp

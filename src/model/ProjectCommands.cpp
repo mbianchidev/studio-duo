@@ -255,6 +255,37 @@ bool validateAutomationTarget(const Project& project,
 }
 }
 
+RenameProjectCommand::RenameProjectCommand(juce::String replacementName)
+    : newName(std::move(replacementName).trim())
+{
+}
+
+juce::String RenameProjectCommand::name() const
+{
+    return "Rename song";
+}
+
+bool RenameProjectCommand::perform(Project& project, juce::String& error)
+{
+    if (newName.isEmpty() || juce::File::createLegalFileName(newName).isEmpty())
+    {
+        error = "A song name must contain a valid filename character.";
+        return false;
+    }
+    if (!capturedOriginal)
+    {
+        oldName = project.name;
+        capturedOriginal = true;
+    }
+    project.name = newName;
+    return true;
+}
+
+void RenameProjectCommand::undo(Project& project)
+{
+    project.name = oldName;
+}
+
 bool CommandStack::perform(std::unique_ptr<ProjectCommand> command,
                            Project& project,
                            juce::String& error)
