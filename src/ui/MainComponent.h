@@ -10,6 +10,7 @@
 #include "MidiEditorComponent.h"
 #include "PluginInsertPanel.h"
 #include "PluginParameterPanel.h"
+#include "ProjectNamingComponents.h"
 #include "RoutingPanel.h"
 #include "StartupHubComponent.h"
 #include "TimelineComponent.h"
@@ -136,6 +137,7 @@ private:
     void createNewProject();
     void createProjectFromTemplate(
         const juce::String& templateId);
+    void promptNewProjectName(Project newProject);
     void replaceWithUnsavedProject(
         Project replacement,
         const juce::String& statusMessage);
@@ -488,7 +490,7 @@ private:
     juce::Label tempoLabel;
     juce::Label meterLabel;
     juce::Label positionLabel;
-    juce::Label projectLabel;
+    ProjectNameLabel projectLabel;
 
     StudioIconButton addTrackButton {
         StudioIcon::add,

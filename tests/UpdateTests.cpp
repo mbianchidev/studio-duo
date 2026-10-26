@@ -1,6 +1,7 @@
 #include "update/UpdateManifest.h"
 #include "update/UpdateDownload.h"
 #include "update/StudioPreferences.h"
+#include "ReleaseFixtures.h"
 #include "TestHarness.h"
 #include "TestSuites.h"
 
@@ -138,6 +139,49 @@ void manifestParsing()
              error)
              .has_value(),
         "Portable Windows builds do not advertise an in-place update.");
+}
+
+void projectNameSuggestions()
+{
+    release_fixture::Directory directory;
+    studio::StudioPreferences preferences(
+        directory.file.getChildFile("preferences.json"), false);
+    expect(directory.file.getChildFile("Metal Tracking.studioduo").createDirectory().wasOk(),
+           "A synthetic existing song can be created.");
+    expect(preferences.suggestProjectName("Metal Tracking", directory.file) == "Metal Tracking (1)",
+           "An existing template-named song defaults to the first parenthesized suffix.");
+    expect(directory.file.getChildFile("Metal Tracking (1).studioduo").createDirectory().wasOk()
+               && directory.file.getChildFile("Metal Tracking (2).studioduo").createDirectory().wasOk()
+               && directory.file.getChildFile("Metal Tracking (4).studioduo").createDirectory().wasOk(),
+           "Synthetic numbered songs can be created.");
+    expect(preferences.suggestProjectName("Metal Tracking", directory.file) == "Metal Tracking (3)",
+           "Numbered defaults use the first free suffix rather than nesting or skipping gaps.");
+    expect(preferences.suggestProjectName("Metal Tracking (1)", directory.file) == "Metal Tracking (3)",
+           "An existing numbered name advances the original suffix rather than adding nested parentheses.");
+    expect(preferences.suggestProjectName("  Untitled  ", directory.file) == "Untitled",
+           "An unused blank-song default is preserved without surrounding whitespace.");
+
+    const auto recentPackage = directory.file.getChildFile("elsewhere/session.studioduo");
+    expect(recentPackage.createDirectory().wasOk()
+               && preferences.recordRecentProject(recentPackage, "Songwriting").wasOk(),
+           "A synthetic recent song can have a display name different from its package filename.");
+    expect(preferences.suggestProjectName("Songwriting", directory.file) == "Songwriting (1)",
+           "New songs avoid existing recent song names even when saved in a different folder.");
+    expect(preferences.suggestProjectName("songwriting", directory.file, "SONGWRITING (1)") == "songwriting (2)",
+           "Recent and active unsaved song names are compared without case-sensitive duplicate defaults.");
+    expect(preferences.suggestProjectName("session", directory.file) == "session (1)",
+           "Recent package filenames also prevent duplicate defaults.");
+    expect(preferences.recordRecentProject(
+               directory.file.getChildFile("missing.studioduo"), "Fresh Song").wasOk()
+               && preferences.suggestProjectName("Fresh Song", directory.file) == "Fresh Song",
+           "Missing recent packages do not reserve an otherwise available song name.");
+    const auto longName = juce::String::repeatedString("N", 128);
+    const auto longSuggestion = preferences.suggestProjectName(longName, directory.file, longName);
+    expect(juce::File::createLegalFileName(longSuggestion).endsWith(" (1)"),
+           "A duplicate long song name retains its unique suffix after filename normalization.");
+    expect(directory.file.getChildFile(longName + ".studioduo").createDirectory().wasOk()
+               && preferences.suggestProjectName(longName, directory.file) == longSuggestion,
+           "A long existing package cannot trap numbered-name selection in an endless filename-truncation collision.");
 }
 
 void preferencePersistence()
@@ -338,6 +382,7 @@ void updateTests()
 {
     semanticVersionComparison();
     manifestParsing();
+    projectNameSuggestions();
     preferencePersistence();
     packageDownloadPreservation();
 }

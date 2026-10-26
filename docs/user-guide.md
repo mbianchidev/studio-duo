@@ -149,6 +149,23 @@ When Studio Duo opens without a project path, the startup hub offers:
 - **Import From Studio One** explains direct native import and Studio One's
   DAWproject export workflow.
 
+**New Song** and **Create From Template** ask for a song name before creating it.
+Blank songs default to **Untitled**; templates default to their template name.
+If that name is already used by the current song, an available recent project,
+or a `.studioduo` package in Documents, Studio Duo suggests the first free
+` (1)`, ` (2)`, ` (3)` suffix. Enter a custom name and choose **Create**, or use
+**Cancel** / Escape to leave the current song unchanged. Unsaved work still
+offers the usual save-or-discard choice before another song replaces it.
+
+Double-click the song name in the top bar to rename any blank, template, saved,
+or imported song. Keyboard users can focus the name and press Return or F2.
+Return or clicking outside commits the edit; Escape cancels it. Names must
+contain a usable filename character. Renaming supports Undo/Redo and is saved
+with the project; the `*` unsaved-change marker is never part of the editable
+name. Changing the display name does not move or rename an existing project
+package, and saving to a different filename does not replace the chosen song
+name.
+
 The hub also lists up to 12 recent projects, newest edit first. Opening,
 saving, or editing a saved project moves it to the top. Missing or inaccessible
 entries are labeled clearly and include a **Remove** action; use **Open Existing

@@ -29,6 +29,10 @@ public:
     [[nodiscard]] StudioThemePalette themePalette() const;
     [[nodiscard]] const std::vector<RecentProject>&
         recentProjects() const noexcept;
+    [[nodiscard]] juce::String suggestProjectName(
+        const juce::String& preferredName,
+        const juce::File& directory,
+        const juce::String& activeProjectName = {}) const;
     [[nodiscard]] const juce::String& status() const noexcept;
     [[nodiscard]] const ControlSurfaceSettings& controlSurfaceSettings() const noexcept;
 

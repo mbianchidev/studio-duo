@@ -831,6 +831,10 @@ MainComponent::MainComponent(
     addAndMakeVisible(projectLabel);
     projectLabel.setFont(juce::Font(juce::FontOptions(18.0f, juce::Font::bold)));
     projectLabel.setJustificationType(juce::Justification::centredLeft);
+    projectLabel.onRename = [this](const juce::String& name)
+    {
+        perform(std::make_unique<RenameProjectCommand>(name));
+    };
 
     addAndMakeVisible(positionLabel);
     positionLabel.setFont(juce::Font(juce::FontOptions(15.0f, juce::Font::bold)));
@@ -3379,15 +3383,13 @@ bool MainComponent::keyPressed(const juce::KeyPress& key)
 
 void MainComponent::createNewProject()
 {
-    replaceWithUnsavedProject(
-        ProjectTemplates::createBlankSong(),
-        "New blank song created.");
+    promptNewProjectName(ProjectTemplates::createBlankSong());
 }
 
 void MainComponent::createProjectFromTemplate(
     const juce::String& templateId)
 {
-    const auto templateProject =
+    auto templateProject =
         ProjectTemplates::create(templateId);
     if (!templateProject)
     {
@@ -3396,10 +3398,53 @@ void MainComponent::createProjectFromTemplate(
             true);
         return;
     }
-    const auto name = templateProject->name;
-    replaceWithUnsavedProject(
-        std::move(*templateProject),
-        "Created " + name + " from a template.");
+    promptNewProjectName(std::move(*templateProject));
+}
+
+void MainComponent::promptNewProjectName(Project newProject)
+{
+    if (!projectReplacementAvailable())
+        return;
+    const auto directory =
+        juce::File::getSpecialLocation(juce::File::userDocumentsDirectory);
+    const auto suggestedName = preferences.suggestProjectName(
+        newProject.name, directory,
+        startupHub.isVisible() ? juce::String() : project.name);
+    auto* dialog = createProjectNameDialog(suggestedName, this).release();
+    dialog->centreAroundComponent(this, 480, 190);
+    const juce::Component::SafePointer<juce::AlertWindow> dialogSafe(dialog);
+    dialog->enterModalState(
+        true,
+        juce::ModalCallbackFunction::create(
+            [safe = juce::Component::SafePointer<MainComponent>(this),
+             dialogSafe, projectId = project.id, directory,
+             replacement = std::move(newProject)](int result) mutable
+            {
+                if (result != 1 || safe == nullptr || dialogSafe == nullptr
+                    || safe->project.id != projectId)
+                    return;
+                const auto name = dialogSafe->getTextEditorContents("name").trim();
+                if (name.isEmpty() || juce::File::createLegalFileName(name).isEmpty())
+                {
+                    safe->showError("Song name unavailable",
+                                    "Enter a song name containing a valid filename character.");
+                    return;
+                }
+                safe->confirmProjectReplacement(
+                    [safe, projectId, directory, name,
+                     projectToCreate = std::move(replacement)]() mutable
+                    {
+                        if (safe == nullptr || safe->project.id != projectId)
+                            return;
+                        projectToCreate.name = safe->preferences.suggestProjectName(
+                            name, directory,
+                            safe->startupHub.isVisible() ? juce::String() : safe->project.name);
+                        const auto createdName = projectToCreate.name;
+                        safe->replaceWithUnsavedProject(
+                            std::move(projectToCreate), "Created " + createdName + ".");
+                    });
+            }),
+        true);
 }
 
 void MainComponent::replaceWithUnsavedProject(
@@ -3611,9 +3656,16 @@ void MainComponent::beginSaveProject(bool saveAs)
         return;
     }
 
+    const auto packageName = juce::File::createLegalFileName(project.name);
+    if (packageName.isEmpty())
+    {
+        showError("Project save unavailable",
+                  "Rename the song to include a valid filename character before saving.");
+        return;
+    }
     const auto initial = projectPackage.exists()
-        ? projectPackage.getParentDirectory().getNonexistentChildFile(project.name + " copy", ".studioduo", false)
-        : juce::File::getSpecialLocation(juce::File::userDocumentsDirectory).getChildFile(project.name + ".studioduo");
+        ? projectPackage.getParentDirectory().getNonexistentChildFile(packageName + " copy", ".studioduo", false)
+        : juce::File::getSpecialLocation(juce::File::userDocumentsDirectory).getChildFile(packageName + ".studioduo");
     fileChooser = std::make_unique<juce::FileChooser>(saveAs ? "Save Studio Duo project as" : "Save Studio Duo project",
                                                       initial,
                                                       "*.studioduo",
@@ -4019,7 +4071,7 @@ void MainComponent::beginExportDawProject()
              ? projectPackage.getParentDirectory()
              : juce::File::getSpecialLocation(
                    juce::File::userMusicDirectory))
-            .getChildFile(project.name + ".dawproject");
+            .getChildFile(juce::File::createLegalFileName(project.name) + ".dawproject");
     fileChooser = std::make_unique<juce::FileChooser>(
         "Export DAWproject 1.0",
         initial,
@@ -4917,9 +4969,6 @@ void MainComponent::saveProjectTo(const juce::File& package)
 
     const auto normalised = ProjectFile::normalisePackagePath(package);
     auto projectToSave = project;
-    if (projectToSave.name == "Untitled")
-        projectToSave.name =
-            normalised.getFileNameWithoutExtension();
 
     const auto resumePlayback = audioEngine.isPlaying();
     if (resumePlayback)
@@ -5040,7 +5089,7 @@ void MainComponent::saveProjectTo(const juce::File& package)
     reducedIsolationMarkerSignature.clear();
     updateReducedIsolationMarker();
     dirty = false;
-    projectLabel.setText(project.name, juce::dontSendNotification);
+    projectLabel.setProjectName(project.name, dirty);
     if (resumePlayback)
         audioEngine.play();
     finishSave();
@@ -6734,7 +6783,7 @@ juce::Result MainComponent::changeDrumSoundPreset(
     if (!preview)
     {
         dirty = true;
-        projectLabel.setText(project.name + " *", juce::dontSendNotification);
+        projectLabel.setProjectName(project.name, dirty);
         setStatus("Drum kit sound: " + names[presetIndex] + ".");
     }
     return juce::Result::ok();
@@ -6791,7 +6840,7 @@ void MainComponent::showDrumKitTuning(const juce::String& trackId, int note)
         if (!(track->automationArmed && track->automationMode == AutomationMode::preview))
         {
             safe->dirty = true;
-            safe->projectLabel.setText(safe->project.name + " *", juce::dontSendNotification);
+            safe->projectLabel.setProjectName(safe->project.name, safe->dirty);
         }
         return juce::Result::ok();
     };
@@ -10804,7 +10853,7 @@ void MainComponent::projectChanged(bool writeRecovery, bool markDirty)
     insertPanel->setProject(&project);
     masteringWorkspace.setProject(&project);
     masteringWorkspace.setProjectPackage(projectPackage);
-    projectLabel.setText(project.name + (dirty ? " *" : ""), juce::dontSendNotification);
+    projectLabel.setProjectName(project.name, dirty);
     loopButton.setToggleState(project.loopEnabled, juce::dontSendNotification);
     loopButton.setAccessibleLabel(
         project.loopEnabled ? "Disable loop" : "Enable loop");
