@@ -10512,7 +10512,7 @@ void MainComponent::promptSongSection(double position,
 
 void MainComponent::showAutomationPanel()
 {
-    auto panel = std::make_unique<AutomationPanel>();
+    auto panel = std::make_unique<AutomationPanel>(audioEngine.currentSampleRate());
     auto* panelPointer = panel.get();
     panel->setProject(&project);
     panel->setTrack(selectedTrackId);
@@ -10544,15 +10544,14 @@ void MainComponent::showAutomationPanel()
         if (panelSafe != nullptr)
             panelSafe->refresh();
     };
-    panel->onUpdateLane = [safe, panelSafe](auto before, auto after)
+    panel->onUpdateLane = [safe](auto before, auto after)
     {
         if (safe == nullptr)
-            return;
-        safe->perform(std::make_unique<SetAutomationLaneCommand>(
-            std::move(before),
-            std::move(after)));
-        if (panelSafe != nullptr)
-            panelSafe->refresh();
+            return juce::Result::fail("The project is no longer available.");
+        return safe->perform(std::make_unique<SetAutomationLaneCommand>(
+            std::move(before), std::move(after)))
+            ? juce::Result::ok()
+            : juce::Result::fail("The automation edit was rejected. See the project error for details.");
     };
     panel->onRemoveLane = [safe, panelSafe](const auto& laneId)
     {

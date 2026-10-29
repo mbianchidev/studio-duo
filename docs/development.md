@@ -956,6 +956,21 @@ they must not overwrite the single-slot bridge input before the worker can run.
 Ramp endpoints may be one sample past the block, preserving the original slope
 instead of reaching the endpoint a sample early.
 
+`AutomationPanel` provides native chronological point selection and exact
+seconds/beats/value fields. Lane and point IDs, not sorted indices, retain
+selection through refreshes, moves and undo; coincident points stay distinct.
+Numeric fields use `formatRoundTripNumber` / `parseFiniteNumber`, and unchanged
+apply actions do not create undo entries. Exact positions must fit signed
+64-bit samples at the audio sample rate captured when the editor opens.
+Point edits dispatch the existing `SetAutomationLaneCommand` on the message
+thread, with failures retained as
+visible/native-accessible text rather than success-shaped refreshes.
+Enablement changes invalidate the exact editors' JUCE accessibility handlers:
+their cached text role otherwise can remain read-only after a point reappears.
+Native keyboard contracts cover these transitions, command failures, tempo-ramp
+timebase conversion, exact playhead additions, and software layout in every
+theme. They do not establish an actual VoiceOver/NVDA qualification pass.
+
 Bridge protocol 9 also carries the first slice's block-start transport snapshot:
 sample/second/quarter-note position, tempo and ramp increment, meter, bar start/
 count, loop bounds and play/record/loop flags. Trusted and bundled processors use

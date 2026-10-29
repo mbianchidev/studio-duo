@@ -11,7 +11,9 @@
 #include "ui/MidiEditorComponent.h"
 #include "plugin_host/PluginIsolationPolicy.h"
 
+#include <array>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 
 namespace
@@ -476,6 +478,378 @@ void preciseSlipAndStretchControls()
     }
 }
 
+void automationPointKeyboardEditing()
+{
+    auto project = studio::Project::createDefault();
+    const auto trackId = project.tracks.front().id;
+    studio::AutomationLane volume;
+    volume.name = "Synthetic volume";
+    volume.target.trackId = trackId;
+    volume.points = { { "volume-point", 0.0, 0.5 } };
+    auto pan = volume;
+    pan.id = "synthetic-pan-lane";
+    pan.name = "Synthetic pan";
+    pan.target.type = studio::AutomationTargetType::trackPan;
+    pan.points = { { "pan-first", 0.125, 0.12345678901234567 },
+                   { "pan-second", 2.0, 0.8 } };
+    project.automationLanes = { volume, pan };
+    studio::AutomationPanel panel;
+    panel.setProject(&project);
+    panel.setTrack(trackId);
+    auto* lanes = dynamic_cast<juce::ComboBox*>(panel.findChildWithID("automation.lanes"));
+    auto* points = dynamic_cast<juce::ComboBox*>(panel.findChildWithID("automation.points"));
+    auto* position = dynamic_cast<juce::TextEditor*>(panel.findChildWithID("automation.position"));
+    auto* value = dynamic_cast<juce::TextEditor*>(panel.findChildWithID("automation.value"));
+    auto* apply = dynamic_cast<juce::Button*>(panel.findChildWithID("automation.apply"));
+    auto* remove = dynamic_cast<juce::Button*>(panel.findChildWithID("automation.remove-selected"));
+    auto* status = dynamic_cast<juce::Label*>(panel.findChildWithID("automation.status"));
+    expect(lanes != nullptr && points != nullptr && position != nullptr && value != nullptr
+               && apply != nullptr && remove != nullptr && status != nullptr,
+           "Automation exposes native point selection, exact position/value, apply/remove and validation controls.");
+    if (lanes == nullptr || points == nullptr || position == nullptr || value == nullptr
+        || apply == nullptr || remove == nullptr || status == nullptr)
+        return;
+
+    studio::CommandStack commands;
+    int edits = 0;
+    panel.onUpdateLane = [&](auto before, auto after)
+    {
+        ++edits;
+        juce::String error;
+        const auto applied = commands.perform(
+            std::make_unique<studio::SetAutomationLaneCommand>(std::move(before), std::move(after)),
+            project, error);
+        panel.refresh();
+        return applied ? juce::Result::ok() : juce::Result::fail(error);
+    };
+    lanes->setSelectedItemIndex(1, juce::sendNotificationSync);
+    expect(points->getNumItems() == 2 && points->getText().contains("0.125")
+               && points->getText().contains("seconds"),
+           "The selected lane exposes each automation point with its time unit and current value.");
+    apply->onClick();
+    expect(edits == 0 && juce::exactlyEqual(project.automationLanes.back().points.front().value, pan.points.front().value),
+           "Applying unchanged automation retains full numeric precision and creates no undo edit.");
+    points->setSelectedItemIndex(1, juce::sendNotificationSync);
+    panel.refresh();
+    expect(lanes->getSelectedItemIndex() == 1 && points->getSelectedItemIndex() == 1,
+           "Refreshing automation retains lane and point identities instead of resetting to the first lane.");
+    std::swap(project.automationLanes.front(), project.automationLanes.back());
+    panel.refresh();
+    expect(lanes->getSelectedItemIndex() == 0 && lanes->getText() == pan.name
+               && points->getSelectedItemIndex() == 1,
+           "Reordering lanes preserves the selected lane and point by ID, not their old list indices.");
+    std::swap(project.automationLanes.front(), project.automationLanes.back());
+    panel.refresh();
+    position->setText("0.0625", false);
+    value->setText("0.9876543210987654", false);
+    apply->onClick();
+    const auto& edited = project.automationLanes.back().points;
+    expect(edits == 1 && edited.front().id == "pan-second"
+               && edited.front().position == 0.0625 && juce::exactlyEqual(edited.front().value, 0.9876543210987654)
+               && edited.back().id == "pan-first" && lanes->getSelectedItemIndex() == 1
+               && points->getSelectedItemIndex() == 0,
+           "Exact point edits sort chronologically while retaining the edited identity across synchronous refreshes.");
+    expect(commands.undo(project)
+               && project.automationLanes.back().points.back().id == "pan-second"
+               && project.automationLanes.back().points.back().position == 2.0,
+           "Keyboard automation point edits use the ordinary undoable project command.");
+    panel.refresh();
+    expect(points->getSelectedItemIndex() == 1,
+           "Undo and refresh follow the selected point ID rather than its former sorted index.");
+    remove->onClick();
+    expect(edits == 2 && project.automationLanes.back().points.size() == 1
+               && project.automationLanes.back().points.front().id == "pan-first"
+               && project.automationLanes.front().points.front().id == "volume-point",
+           "Remove selected deletes the chosen point, not the point nearest the unrelated playhead or another lane.");
+    auto coincident = project.automationLanes.back().points.front();
+    coincident.id = "coincident-point";
+    coincident.value = 0.9;
+    project.automationLanes.back().points.push_back(coincident);
+    panel.refresh();
+    points->setSelectedItemIndex(1, juce::sendNotificationSync);
+    remove->onClick();
+    expect(edits == 3 && project.automationLanes.back().points.size() == 1
+               && project.automationLanes.back().points.front().id == "pan-first",
+           "Coincident automation points remain individually selectable and removable by their own identities.");
+}
+
+void automationPointValidationAndTimebase()
+{
+    auto project = studio::Project::createDefault();
+    project.tempo = 137.0;
+    project.tempoChanges = { { 0.0, 137.0, true }, { 2.0, 193.0, false } };
+    studio::AutomationLane lane;
+    lane.target.trackId = project.tracks.front().id;
+    lane.points = { { "precise-point", 1.0 / 48000.0, 0.12345678901234567 } };
+    project.automationLanes = { lane };
+    studio::AutomationPanel panel;
+    panel.setProject(&project);
+    panel.setTrack(lane.target.trackId);
+    auto* points = dynamic_cast<juce::ComboBox*>(panel.findChildWithID("automation.points"));
+    auto* position = dynamic_cast<juce::TextEditor*>(panel.findChildWithID("automation.position"));
+    auto* value = dynamic_cast<juce::TextEditor*>(panel.findChildWithID("automation.value"));
+    auto* apply = dynamic_cast<juce::Button*>(panel.findChildWithID("automation.apply"));
+    auto* remove = dynamic_cast<juce::Button*>(panel.findChildWithID("automation.remove-selected"));
+    auto* status = dynamic_cast<juce::Label*>(panel.findChildWithID("automation.status"));
+    juce::Button* beatTime = nullptr;
+    juce::Button* step = nullptr;
+    juce::Button* addPoint = nullptr;
+    juce::Slider* slider = nullptr;
+    for (auto* child : panel.getChildren())
+    {
+        if (auto* button = dynamic_cast<juce::Button*>(child))
+        {
+            if (button->getTitle() == "Use beat-based automation time") beatTime = button;
+            if (button->getTitle() == "Use step interpolation") step = button;
+            if (button->getButtonText() == "ADD POINT") addPoint = button;
+        }
+        if (auto* candidate = dynamic_cast<juce::Slider*>(child)) slider = candidate;
+    }
+    expect(points != nullptr && position != nullptr && value != nullptr && apply != nullptr
+               && remove != nullptr && status != nullptr && beatTime != nullptr && step != nullptr
+               && addPoint != nullptr && slider != nullptr,
+           "The automation validation fixture reaches every exact, slider, timebase and point action.");
+    if (points == nullptr || position == nullptr || value == nullptr || apply == nullptr
+        || remove == nullptr || status == nullptr || beatTime == nullptr || step == nullptr
+        || addPoint == nullptr || slider == nullptr)
+        return;
+    studio::CommandStack commands;
+    int edits = 0;
+    const auto update = [&](auto before, auto after)
+    {
+        ++edits;
+        juce::String error;
+        return commands.perform(
+            std::make_unique<studio::SetAutomationLaneCommand>(std::move(before), std::move(after)),
+            project, error) ? juce::Result::ok() : juce::Result::fail(error);
+    };
+    panel.onUpdateLane = update;
+    expect(panel.keyPressed(juce::KeyPress(juce::KeyPress::returnKey)) && edits == 0,
+           "Return on an unchanged sample-precise point does not round its time or value or create an edit.");
+    for (const auto* invalid : { "", "nan", "inf", "-0.1", "1second", "1 2", "1e999" })
+    {
+        position->setText(invalid, false);
+        apply->onClick();
+        expect(edits == 0 && status->getText().startsWith("Error:")
+                   && position->getText() == invalid
+                   && juce::exactlyEqual(project.automationLanes.front().points.front().position,
+                                         lane.points.front().position),
+               "Invalid automation positions remain visible and cannot dispatch or partially mutate the lane.");
+    }
+    position->setText("0.5", false);
+    for (const auto* invalid : { "", "nan", "inf", "-0.001", "1.001", "0.1tail" })
+    {
+        value->setText(invalid, false);
+        apply->onClick();
+        expect(edits == 0 && status->getText().contains("0 to 1") && value->getText() == invalid,
+               "Exact automation values reject incomplete, non-finite and out-of-range input instead of clamping it.");
+    }
+    value->setText("0.8", false);
+    if (value->onTextChange)
+        value->onTextChange();
+    expect(std::abs(slider->getValue() - 0.8) < 1e-12,
+           "A valid exact value synchronizes the native slider without changing the saved point.");
+    panel.onUpdateLane = [](auto, auto) { return juce::Result::fail("Synthetic frozen lane."); };
+    apply->onClick();
+    expect(edits == 0 && status->getText().contains("Synthetic frozen lane")
+               && position->getText() == "0.5" && value->getText() == "0.8",
+           "A rejected project command retains its precise inputs and reports the actual failure.");
+    beatTime->setToggleState(true, juce::dontSendNotification);
+    beatTime->onClick();
+    expect(!beatTime->getToggleState() && project.automationLanes.front().timebase == studio::AutomationTimebase::seconds,
+           "A rejected timebase change restores the actual lane setting rather than leaving a false beat-time state.");
+    step->setToggleState(true, juce::dontSendNotification);
+    step->onClick();
+    expect(!step->getToggleState() && project.automationLanes.front().interpolation == studio::AutomationInterpolation::linear,
+           "A rejected interpolation change restores the actual setting without pretending the edit succeeded.");
+    panel.onUpdateLane = update;
+    expect(panel.keyPressed(juce::KeyPress(juce::KeyPress::returnKey)) && edits == 1
+               && status->getText().isEmpty() && project.automationLanes.front().points.front().position == 0.5,
+           "Return retries the retained exact inputs through the ordinary command after a failure.");
+    for (const auto modifiers : std::array<int, 5> {
+             juce::ModifierKeys::commandModifier, juce::ModifierKeys::ctrlModifier,
+             juce::ModifierKeys::altModifier, juce::ModifierKeys::shiftModifier,
+             juce::ModifierKeys::ctrlModifier | juce::ModifierKeys::altModifier })
+        expect(!panel.keyPressed(juce::KeyPress(juce::KeyPress::returnKey, modifiers, 0)) && edits == 1,
+               "Modified Return chords remain available to workspace and assistive-technology commands.");
+    expect(!panel.keyPressed(juce::KeyPress(juce::KeyPress::escapeKey))
+               && !panel.keyPressed(juce::KeyPress(juce::KeyPress::tabKey)),
+           "Exact automation editing never traps Escape dismissal or Tab navigation.");
+
+    const auto expectedBeat = project.beatsAt(0.5);
+    beatTime->setToggleState(true, juce::dontSendNotification);
+    beatTime->onClick();
+    expect(edits == 2 && points->getText().contains("beats") && position->getTitle().contains("beats")
+               && std::abs(project.automationLanes.front().points.front().position - expectedBeat) < 1e-12,
+           "Changing timebase retains the selected point and its timeline time across a tempo ramp.");
+    position->setText("3.125", false);
+    value->setText("0.3", false);
+    panel.keyPressed(juce::KeyPress(juce::KeyPress::returnKey));
+    expect(edits == 3 && project.automationLanes.front().points.front().position == 3.125,
+           "Exact beat-lane positions are edited in beats, not silently interpreted as seconds.");
+    panel.setPositionSeconds(0.75);
+    value->setText("0.7654321987654321", false);
+    addPoint->onClick();
+    const auto& added = project.automationLanes.front().points.front();
+    expect(edits == 4 && project.automationLanes.front().points.size() == 2
+               && added.id != "precise-point" && points->getSelectedItemIndex() == 0
+               && std::abs(added.position - project.beatsAt(0.75)) < 1e-12
+               && juce::exactlyEqual(added.value, 0.7654321987654321),
+           "Add point keeps its playhead semantics, exact typed value, chosen lane and newly created selection.");
+    remove->onClick();
+    remove->onClick();
+    expect(edits == 6 && project.automationLanes.front().points.empty()
+               && !points->isEnabled() && !position->isEnabled() && !apply->isEnabled()
+               && !remove->isEnabled() && addPoint->isEnabled(),
+           "Removing the final point disables stale edit actions but retains keyboard point creation.");
+    panel.setProject(nullptr);
+    for (auto* child : panel.getChildren())
+        if (dynamic_cast<juce::Button*>(child) != nullptr || dynamic_cast<juce::ComboBox*>(child) != nullptr
+            || dynamic_cast<juce::Slider*>(child) != nullptr || dynamic_cast<juce::TextEditor*>(child) != nullptr)
+            expect(!child->isEnabled(), "An unavailable project disables every automation editing control.");
+    expect(!panel.keyPressed(juce::KeyPress(juce::KeyPress::returnKey)),
+           "An unavailable automation project cannot consume Return as a successful edit.");
+}
+
+void automationPointSampleRange()
+{
+    auto project = studio::Project::createDefault();
+    studio::AutomationLane lane;
+    lane.target.trackId = project.tracks.front().id;
+    lane.points = { { "bounded-point", 0.125, 0.5 } };
+    for (const auto sampleRate : { 44100.0, 48000.0, 192000.0 })
+    {
+        for (const auto timebase : { studio::AutomationTimebase::seconds, studio::AutomationTimebase::beats })
+        {
+            lane.timebase = timebase;
+            project.automationLanes = { lane };
+            studio::AutomationPanel panel(sampleRate);
+            panel.setProject(&project);
+            panel.setTrack(lane.target.trackId);
+            auto* position = dynamic_cast<juce::TextEditor*>(panel.findChildWithID("automation.position"));
+            auto* apply = dynamic_cast<juce::Button*>(panel.findChildWithID("automation.apply"));
+            auto* status = dynamic_cast<juce::Label*>(panel.findChildWithID("automation.status"));
+            if (position == nullptr || apply == nullptr || status == nullptr)
+            {
+                expect(false, "The bounded automation point fixture has exact editing controls.");
+                continue;
+            }
+            int edits = 0;
+            double dispatched = 0.0;
+            panel.onUpdateLane = [&](auto, auto after)
+            {
+                ++edits;
+                dispatched = after.points.front().position;
+                return juce::Result::ok();
+            };
+            position->setText("1e100", false);
+            apply->onClick();
+            expect(edits == 0 && position->getText() == "1e100" && status->getText().contains("sample range"),
+                   "Finite second/beat positions outside the signed audio sample range are rejected before reaching the scheduler.");
+            if (timebase != studio::AutomationTimebase::seconds)
+                continue;
+            const auto boundary = static_cast<double>(std::numeric_limits<std::int64_t>::max()) / sampleRate;
+            const auto outside = std::nextafter(boundary, std::numeric_limits<double>::infinity());
+            position->setText(juce::String(outside, 17), false);
+            apply->onClick();
+            expect(edits == 0 && status->getText().contains("sample range"),
+                   "A representable time immediately outside the signed sample boundary cannot overflow llround.");
+            const auto inside = std::nextafter(boundary, 0.0);
+            position->setText(juce::String(inside, 17), false);
+            apply->onClick();
+            expect(edits == 1 && juce::exactlyEqual(dispatched, inside),
+                   "A representable time immediately inside the signed sample boundary remains editable at each tested audio rate.");
+        }
+    }
+}
+
+void automationPointNativeControls()
+{
+    auto project = studio::Project::createDefault();
+    studio::AutomationLane lane;
+    lane.name = "Synthetic automation";
+    lane.target.trackId = project.tracks.front().id;
+    lane.points = { { "native-point", 2.125, 0.12345678901234567 } };
+    project.automationLanes = { lane };
+    studio::StudioTheme theme;
+    const auto originalPalette = theme.palette();
+    for (const auto& preset : studio::studioThemePresets())
+    {
+        theme.applyPalette(preset.palette);
+        studio::AutomationPanel panel;
+        panel.setLookAndFeel(&theme);
+        panel.setVisible(false);
+        panel.addToDesktop(juce::ComponentPeer::windowIsTemporary);
+        panel.setProject(&project);
+        panel.setTrack(lane.target.trackId);
+        int controls = 0;
+        for (auto* child : panel.getChildren())
+        {
+            if (dynamic_cast<juce::Button*>(child) == nullptr && dynamic_cast<juce::ComboBox*>(child) == nullptr
+                && dynamic_cast<juce::Slider*>(child) == nullptr && dynamic_cast<juce::TextEditor*>(child) == nullptr)
+                continue;
+            ++controls;
+            const auto* handler = child->getAccessibilityHandler();
+            expect(handler != nullptr && handler->getTitle().isNotEmpty()
+                       && child->getWantsKeyboardFocus() && !child->getBounds().isEmpty()
+                       && panel.getLocalBounds().contains(child->getBounds()),
+                   ("Automation control '" + child->getTitle() + "' has a native name, keyboard focus and on-panel bounds in "
+                    + preset.name + ".").toRawUTF8());
+            if (const auto* editor = dynamic_cast<const juce::TextEditor*>(child))
+            {
+                const auto* text = handler != nullptr ? handler->getTextInterface() : nullptr;
+                expect(handler != nullptr && handler->getRole() == juce::AccessibilityRole::editableText
+                           && text != nullptr && !text->isReadOnly()
+                           && text->getText({ 0, text->getTotalNumCharacters() }) == editor->getText(),
+                       "Exact automation inputs expose their complete, unrounded text through the native editable-text interface.");
+            }
+        }
+        expect(controls == 17, "The native automation audit includes every selector, editor, slider and action.");
+        auto* position = dynamic_cast<juce::TextEditor*>(panel.findChildWithID("automation.position"));
+        auto* apply = dynamic_cast<juce::Button*>(panel.findChildWithID("automation.apply"));
+        auto* status = dynamic_cast<juce::Label*>(panel.findChildWithID("automation.status"));
+        if (position != nullptr && apply != nullptr && status != nullptr)
+        {
+            position->setText("invalid", false);
+            apply->onClick();
+            const auto* handler = status->getAccessibilityHandler();
+            const auto* value = handler != nullptr ? handler->getValueInterface() : nullptr;
+            expect(value != nullptr && value->getCurrentValueAsString() == status->getText()
+                       && status->getText().startsWith("Error:"),
+                   "Automation validation exposes its actual non-color-only error through the native value interface.");
+            project.automationLanes.front().points.clear();
+            panel.refresh();
+            const auto* disabled = position->getAccessibilityHandler();
+            expect(disabled != nullptr && disabled->getRole() == juce::AccessibilityRole::staticText,
+                   "An empty lane exposes its unavailable position field as non-editable native text.");
+            project.automationLanes.front().points = lane.points;
+            panel.refresh();
+            const auto* enabled = position->getAccessibilityHandler();
+            expect(enabled != nullptr && enabled->getRole() == juce::AccessibilityRole::editableText,
+                   "Restoring a point invalidates a cached disabled text role so assistive clients can edit it again.");
+            panel.setProject(nullptr);
+            panel.setProject(&project);
+            const auto* exactValue = panel.findChildWithID("automation.value")->getAccessibilityHandler();
+            expect(exactValue != nullptr && exactValue->getRole() == juce::AccessibilityRole::editableText,
+                   "Reopening an available project restores the exact value field's native editable role too.");
+        }
+        juce::Image image(juce::Image::ARGB, panel.getWidth(), panel.getHeight(), true, juce::SoftwareImageType());
+        juce::Graphics graphics(image);
+        panel.paintEntireComponent(graphics, true);
+        expect(image.getPixelAt(2, 2).getARGB() == studio::StudioColours::panel,
+               "The complete automation editor renders using the native offscreen software path in every theme.");
+        const auto destination = juce::SystemStats::getEnvironmentVariable("STUDIO_DUO_AUTOMATION_IMAGE", {});
+        if (destination.isNotEmpty() && juce::String(preset.id) == "studio-gray")
+        {
+            const auto stream = juce::File(destination).createOutputStream();
+            expect(stream != nullptr && juce::PNGImageFormat().writeImageToStream(image, *stream),
+                   "The synthetic automation preview is retained without capturing or operating the desktop.");
+        }
+        panel.setLookAndFeel(nullptr);
+    }
+    theme.applyPalette(originalPalette);
+}
+
 void namedProductionControls()
 {
     studio::PluginParameterPanel parameters("Synthetic processor", "synthetic-insert",
@@ -526,10 +900,10 @@ void namedProductionControls()
         if (dynamic_cast<juce::ComboBox*>(child) != nullptr || dynamic_cast<juce::Slider*>(child) != nullptr)
         {
             ++namedControls;
-            expect(child->getTitle().isNotEmpty() && child->getWantsKeyboardFocus(),
-                   "Every automation mode/lane/target/value control is named and keyboard-reachable.");
+            expect(child->getTitle().isNotEmpty() && (!child->isEnabled() || child->getWantsKeyboardFocus()),
+                   "Every automation mode/lane/target/value control is named and keyboard-reachable when available.");
         }
-    expect(namedControls == 4, "The automation audit covers all four selector/value controls.");
+    expect(namedControls == 5, "The automation audit covers all five selector/slider controls.");
 
     auto project = studio::Project::createDefault();
     studio::RoutingPanel routing;
@@ -638,6 +1012,10 @@ void keyboardAccessibilityTests()
     midiPointerSelectionDoesNotMoveNotes();
     clipProcessingControls();
     preciseSlipAndStretchControls();
+    automationPointKeyboardEditing();
+    automationPointValidationAndTimebase();
+    automationPointSampleRange();
+    automationPointNativeControls();
     namedProductionControls();
     isolationConsentPolicy();
     themeContrastContracts();

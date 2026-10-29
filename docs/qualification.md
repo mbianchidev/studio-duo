@@ -436,7 +436,7 @@ versions. Native component tests are source contracts, not those runs.
 | Arm/record/hardware | Reach every control without drag, identify channels/values, stop/finalize, recover disconnect |
 | Audio and MIDI edits | Timeline F6, arrows, musical nudges, Shift+F10, offscreen reveal, split/trim, piano-roll entry/resize/expression |
 | Takes/comp/linked edits | Expand/select take lanes, create/adjust comp and linked operations without mouse-only steps |
-| Routing/mix/automation | Inspector sliders, every existing route through Routing EDIT, mode/lane/target/value, writing and preview |
+| Routing/mix/automation | Inspector sliders, every existing route through Routing EDIT, mode/lane/target, existing point selection, exact seconds/beats/value, Apply/Remove selected, writing and preview |
 | Plugins | Insert tree navigation/actions, generic named parameters and native vendor editors, failure/reload/mode consent |
 | Mastering/portable/export | Named song rows, reorder/metadata, source mixes, analysis, portable creation/repair, export and native destinations |
 | Modals and status | Names/roles/values/selection, errors/warnings, Escape/Return, focus visible and restored to a sensible trigger |
@@ -454,6 +454,12 @@ invalid values open with text errors, dispatch ordinary project callbacks, and
 provide Return/Escape behavior without dragging. Track-name editing has an
 explicit native name and a visible validation error. Keep these contracts while
 auditing actual focus restoration and assistive announcements on each OS.
+Automation point contracts also cover chronological selection, exact numeric
+edits, coincident-point removal, identity retention through moves/refresh/undo,
+tempo-ramp timebase conversion, rejected commands, and restored editable-text
+roles after a field is re-enabled. Check those exact controls, their text errors,
+Return/Tab/Escape behavior and draft-versus-committed values with the actual
+assistive tools; native contracts and software theme renders are not those runs.
 The current status/error message also exposes a native button/value and explicit
 error text. Its history uses a native, scrollable keyboard list for all 200
 retained messages, preserves selection by message ID when updates arrive, and
