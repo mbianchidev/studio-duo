@@ -1,6 +1,7 @@
 #include "ReleaseFixtures.h"
 #include "TestSuites.h"
 
+#include "audio/AudioMemoryBudget.h"
 #include "audio/StudioAudioEngine.h"
 #include "platform/Architecture.h"
 #include "platform/MediaFileRevision.h"
@@ -841,11 +842,29 @@ int qualifyLongSession(const LongSessionProfile& profile, const juce::File& outp
         + 64LL * 1024 * 1024 + 512LL * 1024 * 1024;
     report->setProperty("decodedMediaBytes", decodedBytes);
     report->setProperty("preparedMediaBytesUpperBound", preparedBytes);
+    const auto clipSamples = std::llround(
+        static_cast<double>(profile.songSeconds) / profile.clipsPerSong * profile.sampleRate);
+    const auto uniquePreparedBytes = clipSamples * stereoFrameBytes
+        * profile.tracks * profile.songs * profile.clipsPerSong;
+    report->setProperty("preparedMediaBytesPerGraph", uniquePreparedBytes);
+    report->setProperty("largestSourceBufferBytes", largestSourceBytes);
+    report->setProperty("fullSessionRenderBufferBytes", totalSamples * stereoFrameBytes);
+    report->setProperty("engineAudioMemoryLimitBytes",
+        static_cast<juce::int64>(studio::maximumAudioBufferBytes));
     report->setProperty("estimatedPreparedGenerations", 1);
     report->setProperty("snapshotAudioOwnership", "Shared immutable PCM; graph edits in this profile change metadata only.");
     report->setProperty("estimatedPeakBytes", estimatedPeakBytes);
-    if (totalSamples > std::numeric_limits<int>::max() - studio::PluginBridgeSharedState::maxSupportedLatencySamples
-        || estimatedPeakBytes > static_cast<juce::int64>(profile.memoryBudgetMiB) * 1024 * 1024)
+    juce::String memoryError;
+    if (!studio::boundedAudioSampleCount(
+            static_cast<double>(profile.songSeconds) * profile.sampleRate, 2, memoryError))
+        return finish("blocked", "Full-length source decode: " + memoryError);
+    if (!studio::boundedAudioSampleCount(static_cast<double>(totalSamples), 2, memoryError))
+        return finish("blocked", "Full-session render buffer: " + memoryError);
+    std::size_t reservedPreparedBytes = 0;
+    if (!studio::reservePreparedAudio(
+            static_cast<std::size_t>(uniquePreparedBytes), reservedPreparedBytes, memoryError))
+        return finish("blocked", "Prepared project audio: " + memoryError);
+    if (estimatedPeakBytes > static_cast<juce::int64>(profile.memoryBudgetMiB) * 1024 * 1024)
         return finish("blocked", "Whole-file decoded/prepared buffers exceed the selected preflight memory budget.");
     if (sharedFixture == nullptr
         && output.getBytesFreeOnVolume() < decodedBytes * 2 + 512LL * 1024 * 1024)
@@ -945,6 +964,8 @@ int qualifyLongSession(const LongSessionProfile& profile, const juce::File& outp
     const auto playbackSamples = totalSamples + outputLatency;
     report->setProperty("declaredOutputLatencySamples", outputLatency);
     report->setProperty("contentSamples", totalSamples);
+    if (!studio::boundedAudioSampleCount(static_cast<double>(playbackSamples), 2, memoryError))
+        return finish("blocked", "Latency-extended playback capture: " + memoryError);
     juce::AudioBuffer<float> live(2, static_cast<int>(playbackSamples));
     std::vector<CallbackMeasurement> measurements;
     measurements.reserve(static_cast<std::size_t>((playbackSamples + profile.bufferSize - 1) / profile.bufferSize));
@@ -1210,8 +1231,58 @@ void longSessionQualificationTests()
                && !boundedDestination.getChildFile("synthetic-workload").exists(),
            "The preflight includes shared PCM, decode/processing scratch, and both full render buffers.");
     profile = {};
+    profile.tracks = 128;
+    profile.songs = 2;
+    profile.songSeconds = 6;
+    profile.memoryBudgetMiB = 65536;
+    const auto engineBoundDestination = directory.file.getChildFile("engine-memory-preflight");
+    const auto engineBoundOutcome = qualifyLongSession(profile, engineBoundDestination);
+    const auto engineBoundReport = juce::JSON::parse(engineBoundDestination.getChildFile("report.json"));
+    expect(engineBoundOutcome == 2 && engineBoundReport["status"].toString() == "blocked"
+               && engineBoundReport["reason"].toString().contains("512 MiB")
+               && static_cast<juce::int64>(engineBoundReport["engineAudioMemoryLimitBytes"])
+                   == static_cast<juce::int64>(studio::maximumAudioBufferBytes)
+               && static_cast<juce::int64>(engineBoundReport["preparedMediaBytesPerGraph"]) == 589824000
+               && engineBoundReport["mediaWriteMilliseconds"].isVoid()
+               && engineBoundReport["sourceFileBytes"].isVoid()
+               && !engineBoundDestination.getChildFile("synthetic-workload").exists(),
+           "The engine's prepared-PCM limit blocks oversized workloads before media generation even with a larger process budget.");
+    profile = {};
+    profile.tracks = 1;
+    profile.songs = 2;
+    profile.songSeconds = 3600;
+    profile.memoryBudgetMiB = 65536;
+    const auto sourceBoundDestination = directory.file.getChildFile("source-memory-preflight");
+    const auto sourceBoundOutcome = qualifyLongSession(profile, sourceBoundDestination);
+    const auto sourceBoundReport = juce::JSON::parse(sourceBoundDestination.getChildFile("report.json"));
+    expect(sourceBoundOutcome == 2 && sourceBoundReport["status"].toString() == "blocked"
+               && sourceBoundReport["reason"].toString().startsWith("Full-length source decode:")
+               && sourceBoundReport["mediaWriteMilliseconds"].isVoid()
+               && !sourceBoundDestination.getChildFile("synthetic-workload").exists(),
+           "A full-length source exceeding the decode buffer limit is blocked without creating it.");
+    profile.songSeconds = 700;
+    const auto renderBoundDestination = directory.file.getChildFile("render-memory-preflight");
+    const auto renderBoundOutcome = qualifyLongSession(profile, renderBoundDestination);
+    const auto renderBoundReport = juce::JSON::parse(renderBoundDestination.getChildFile("report.json"));
+    expect(renderBoundOutcome == 2 && renderBoundReport["status"].toString() == "blocked"
+               && renderBoundReport["reason"].toString().startsWith("Full-session render buffer:")
+               && renderBoundReport["mediaWriteMilliseconds"].isVoid()
+               && !renderBoundDestination.getChildFile("synthetic-workload").exists(),
+           "Full-session render storage is checked separately from each song's source buffer before generating media.");
+    profile.songSeconds = 1;
+    profile.memoryBudgetMiB = 256;
+    const auto processBoundDestination = directory.file.getChildFile("process-memory-preflight");
+    const auto processBoundOutcome = qualifyLongSession(profile, processBoundDestination);
+    const auto processBoundReport = juce::JSON::parse(processBoundDestination.getChildFile("report.json"));
+    expect(processBoundOutcome == 2 && processBoundReport["status"].toString() == "blocked"
+               && processBoundReport["reason"].toString().contains("selected preflight memory budget")
+               && processBoundReport["mediaWriteMilliseconds"].isVoid()
+               && !processBoundDestination.getChildFile("synthetic-workload").exists(),
+           "A workload within the engine limits still respects the selected process-memory budget.");
+    profile = {};
     profile.tracks = 2;
     profile.songSeconds = 1;
+    profile.clipsPerSong = 7;
     profile.bufferSize = 1024;
     profile.sampleRate = 96000;
     const auto destination = directory.file.getChildFile("characterisation");
@@ -1239,6 +1310,8 @@ void longSessionQualificationTests()
                && static_cast<int>(report["declaredOutputLatencySamples"]) == 16
                && static_cast<juce::int64>(report["renderedSamples"]) == 288016
                && static_cast<double>(report["maximumNullError"]) <= 1e-5
+               && static_cast<juce::int64>(report["preparedMediaBytesPerGraph"]) == 4607904
+               && static_cast<juce::int64>(report["retainedPreparedSampleBytes"]) >= 4607904
                && destination.getChildFile("callbacks.csv").getSize() > 100
                && !destination.getChildFile("synthetic-workload").exists(),
            "Evidence records its exact synthetic scope/rate/counts and cleans only the generated workload.");
