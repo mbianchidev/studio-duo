@@ -174,7 +174,8 @@ private:
 class AddTrackCommand final : public ProjectCommand
 {
 public:
-    explicit AddTrackCommand(Track trackToAdd);
+    explicit AddTrackCommand(Track trackToAdd, juce::String beforeTrackId = {},
+                             std::optional<RoutingConnection> mainOutput = {});
 
     [[nodiscard]] juce::String name() const override;
     bool perform(Project& project, juce::String& error) override;
@@ -182,6 +183,7 @@ public:
 
 private:
     Track track;
+    juce::String beforeTrackId;
     std::optional<RoutingConnection> outputRoute;
     std::size_t insertionIndex = 0;
 };

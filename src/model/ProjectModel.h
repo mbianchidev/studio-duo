@@ -316,6 +316,11 @@ struct Track
     TrackType type = TrackType::audio;
     juce::String outputTrackId;
     juce::String folderTrackId;
+    bool active = true;
+    bool hidden = false;
+    bool folderCollapsed = false;
+    juce::String frozenTrackId;
+    juce::String freezeSourceTrackId;
     std::vector<juce::String> controlledTrackIds;
     ChannelLayout channelLayout = ChannelLayout::stereo;
     float volumeDecibels = 0.0f;
@@ -518,6 +523,7 @@ class Project
 {
 public:
     static constexpr int currentFormatVersion = 12;
+    static constexpr std::size_t maximumTracks = 1000;
 
     juce::String id { juce::Uuid().toString() };
     juce::String name { "Untitled" };
@@ -560,6 +566,11 @@ public:
 
     static Project createDefault();
 
+    [[nodiscard]] bool canAddTracks(std::size_t count, juce::String& error) const;
+    [[nodiscard]] bool isTrackActive(const juce::String& trackId) const noexcept;
+    [[nodiscard]] bool isTrackFrozen(const juce::String& trackId) const noexcept;
+    [[nodiscard]] juce::String frozenSourceTrackId(const juce::String& trackId) const;
+    [[nodiscard]] bool isTrackVisible(const juce::String& trackId) const noexcept;
     [[nodiscard]] ProjectMarker* findMarker(const juce::String& markerId);
     [[nodiscard]] const ProjectMarker* findMarker(
         const juce::String& markerId) const;

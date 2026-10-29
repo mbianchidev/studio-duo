@@ -424,6 +424,17 @@ juce::Path createStudioIconPath(StudioIcon icon)
             path.lineTo(5.0f, 18.0f);
             break;
 
+        case StudioIcon::stretch:
+            path.startNewSubPath(3.0f, 12.0f);
+            path.lineTo(21.0f, 12.0f);
+            addChevron(path, 7.0f, 7.0f, 2.0f, 12.0f, 7.0f, 17.0f);
+            addChevron(path, 17.0f, 7.0f, 22.0f, 12.0f, 17.0f, 17.0f);
+            path.startNewSubPath(10.0f, 5.0f);
+            path.lineTo(10.0f, 19.0f);
+            path.startNewSubPath(14.0f, 5.0f);
+            path.lineTo(14.0f, 19.0f);
+            break;
+
         case StudioIcon::zoomOut:
         case StudioIcon::zoomIn:
             path.addEllipse(3.0f, 3.0f, 14.0f, 14.0f);

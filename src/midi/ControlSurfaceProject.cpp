@@ -26,7 +26,8 @@ ControlSurfaceState controlSurfaceStateForProject(
     result.metronomeEnabled = project.metronomeEnabled;
     for (const auto& track : project.tracks)
     {
-        if (track.parentTrackId.isNotEmpty() || track.type == TrackType::folder)
+        if (track.parentTrackId.isNotEmpty() || track.type == TrackType::folder
+            || !project.isTrackVisible(track.id) || !project.isTrackActive(track.id))
             continue;
         ControlSurfaceTrack state { track.id, track.name, normalisedVolume(track.volumeDecibels),
             (track.pan + 1.0f) * 0.5f, track.armed, track.solo, track.muted };

@@ -1,4 +1,5 @@
 #include "UpdateSettingsComponent.h"
+#include "ui/WorkflowSettingsComponent.h"
 
 #include "ui/StudioTheme.h"
 #include "ui/ControlSurfaceSettingsComponent.h"
@@ -1164,7 +1165,9 @@ SettingsComponent::SettingsComponent(
     bool showUpdatesInitially,
     const juce::String& audioUnavailableReason,
     ControlSurfaceSession* controlSurface,
-    std::function<juce::Result(const ControlSurfaceSettings&)> configureSurface)
+    std::function<juce::Result(const ControlSurfaceSettings&)> configureSurface,
+    juce::ApplicationCommandManager* commandManager,
+    std::function<void()> macrosChanged)
 {
     juce::Component* audioContent = &audioUnavailableLabel;
     if (deviceManager != nullptr)
@@ -1239,6 +1242,12 @@ SettingsComponent::SettingsComponent(
         controlSurfacePage = std::make_unique<ControlSurfaceSettingsComponent>(
             *controlSurface, preferences.controlSurfaceSettings(), std::move(configureSurface));
         tabs.addTab("Controls", juce::Colour(StudioColours::panel), controlSurfacePage.get(), false);
+    }
+    if (commandManager != nullptr)
+    {
+        workflowPage = std::make_unique<WorkflowSettingsComponent>(
+            *commandManager, preferences, std::move(macrosChanged));
+        tabs.addTab("Workflow", juce::Colour(StudioColours::panel), workflowPage.get(), false);
     }
     tabs.addTab(
         "Updates",

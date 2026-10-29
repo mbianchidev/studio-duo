@@ -65,7 +65,9 @@ public:
         bool showUpdatesInitially,
         const juce::String& audioUnavailableReason = {},
         ControlSurfaceSession* controlSurface = nullptr,
-        std::function<juce::Result(const ControlSurfaceSettings&)> configureSurface = {});
+        std::function<juce::Result(const ControlSurfaceSettings&)> configureSurface = {},
+        juce::ApplicationCommandManager* commandManager = nullptr,
+        std::function<void()> macrosChanged = {});
 
     void paint(juce::Graphics& graphics) override;
     void resized() override;
@@ -78,6 +80,7 @@ private:
     std::unique_ptr<juce::Component> appearancePage;
     std::unique_ptr<juce::Component> vstPage;
     std::unique_ptr<juce::Component> controlSurfacePage;
+    std::unique_ptr<juce::Component> workflowPage;
     std::unique_ptr<UpdateSettingsComponent> updatePage;
     juce::TabbedComponent tabs {
         juce::TabbedButtonBar::TabsAtTop

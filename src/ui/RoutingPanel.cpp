@@ -439,7 +439,9 @@ void RoutingPanel::showTrackMenu()
                     });
     for (const auto& candidate : project->tracks)
     {
-        if (candidate.type != TrackType::folder || candidate.id == track->id)
+        if ((candidate.type != TrackType::folder && candidate.type != TrackType::bus
+             && candidate.type != TrackType::instrument)
+            || candidate.id == track->id)
             continue;
         folders.addItem(candidate.name,
                         true,

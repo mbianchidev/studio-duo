@@ -49,7 +49,8 @@ before publication. Temporary files are not selected as complete generations.
 Current manifests include `midiCompositionV1`,
 `midiChannelPressureV1`, `bundledCompositionDevicesV1`, `scenesV1`,
 `compatibilityReportsV1`, `renderReportsV2`, `dawprojectV1`, and
-`masteringAlbumV1`, `sectionTransportV1`, `timelineMarkersV1`, and `pluginRacksV1`. Readers must reject a manifest
+`masteringAlbumV1`, `sectionTransportV1`, `timelineMarkersV1`, `pluginRacksV1`,
+and `trackLifecycleV1`. Readers must reject a manifest
 version newer than they support rather than silently dropping MIDI, bundled
 output/cabinet state, scenes, or interchange diagnostics.
 Versions/counters must be whole numeric values; textual or fractional values
@@ -70,6 +71,29 @@ processor records, tone snapshots, mixer snapshots, render reports, drum maps,
 pattern aliases, MIDI routing templates, general project metadata, launch
 scenes, structured compatibility reports, and the mastering album. Automation lanes are stored
 separately.
+
+### Track lifecycle and rendered media
+
+`active` and `hidden` are independent booleans, defaulting to `true` and `false`
+for earlier projects. `folderCollapsed` defaults to `false`. Folder membership
+can target an ordinary folder, audio bus or instrument bus; hierarchy cycles
+are rejected. Visibility and processing inherit parent/take-folder state
+without changing stored child flags. The master must stay active and visible.
+The 1000-track limit includes the master, take lanes and frozen proxies.
+
+A frozen original stores its render's ID in `frozenTrackId`; the processor-free
+audio render stores the original's ID in `freezeSourceTrackId`. Native loading
+checks reciprocal links, available sources and an audio proxy without inserts.
+The original retains its clips, processor state references, routing and
+automation. A frozen source is inactive for processing without overwriting its
+stored `active` flag. Unfreeze removes the render and restores the original.
+
+Clip FX and bounce produce ordinary 32-bit floating-point WAV media with
+SHA-256 source hashes, referenced by normal clips. They introduce no proprietary real-time
+clip processor state. Clip FX retains its clip ID; a bounce records a new clip.
+The command history retains original clip state for Undo, and original media
+files are not overwritten or deleted. Shortcut mappings and macros are local
+preferences, not project data.
 
 ### Section transport and loops
 

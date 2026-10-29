@@ -29,7 +29,7 @@ class StudioAudioEngine final : private juce::AudioIODeviceCallback
 {
 public:
     static constexpr std::size_t maximumRecordingTracks = 64;
-    static constexpr std::size_t maximumMeterTracks = 128;
+    static constexpr std::size_t maximumMeterTracks = Project::maximumTracks;
 
     struct RecordingResult
     {
@@ -479,6 +479,7 @@ private:
             std::uint64_t runtimeKey = 0;
             int audioTrackIndex = -1;
             bool inputArmed = false;
+            bool active = true;
             std::vector<Destination> destinations;
             std::vector<Event> events;
             std::shared_ptr<ActiveScheduledState>
@@ -650,6 +651,7 @@ private:
     struct MeterSlot
     {
         juce::String trackId;
+        std::atomic<std::uint64_t> runtimeKey { 0 };
         std::atomic<float> preFaderLeft { 0.0f };
         std::atomic<float> preFaderRight { 0.0f };
         std::atomic<float> postFaderLeft { 0.0f };
@@ -999,7 +1001,7 @@ private:
         std::make_shared<std::atomic<bool>>(true)
     };
     mutable juce::CriticalSection meterLock;
-    std::array<MeterSlot, maximumMeterTracks> meterSlots;
+    std::vector<MeterSlot> meterSlots { maximumMeterTracks };
     std::array<std::unique_ptr<LockFreeRecorder>, maximumRecordingTracks> recorders;
     std::atomic<int> activeRecorderCount { 0 };
     std::atomic<bool> recordingAccepting { false };

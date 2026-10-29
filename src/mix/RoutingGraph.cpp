@@ -60,11 +60,19 @@ bool hasFinalSerialInsert(const Track& track, const juce::String& insertId)
 
 bool validateTrackRoles(const Project& project, juce::String& error)
 {
+    if (!project.canAddTracks(0, error))
+        return false;
     std::vector<juce::String> ids;
     auto masterCount = 0;
     auto controlRoomCount = 0;
     for (const auto& track : project.tracks)
     {
+        if (track.type == TrackType::master
+            && (!track.active || track.hidden || track.frozenTrackId.isNotEmpty() || track.freezeSourceTrackId.isNotEmpty()))
+        {
+            error = "The master track must remain active, visible and unfrozen.";
+            return false;
+        }
         if (!PluginRack::validate(track.inserts, error))
             return false;
         if (track.id.isEmpty()
@@ -108,10 +116,11 @@ bool validateTrackRoles(const Project& project, juce::String& error)
             }
             const auto* folder = project.findTrack(folderId);
             if (folder == nullptr
-                || folder->type != TrackType::folder
+                || (folder->type != TrackType::folder && folder->type != TrackType::bus
+                    && folder->type != TrackType::instrument)
                 || folder->parentTrackId.isNotEmpty())
             {
-                error = "Tracks can belong only to available root folders.";
+                error = "Tracks can belong only to available root folders, bus folders or instrument folders.";
                 return false;
             }
             visited.push_back(folderId);

@@ -18,7 +18,8 @@ constexpr std::array currentCapabilities {
     "araCompatibilityV1", "bundledDevicesV1", "bundledCompositionDevicesV1",
     "toneSnapshotsV1", "renderReportsV2", "midiCompositionV1",
     "midiChannelPressureV1", "scenesV1", "compatibilityReportsV1", "dawprojectV1",
-    "masteringAlbumV1", "sectionTransportV1", "timelineMarkersV1", "pluginRacksV1"
+    "masteringAlbumV1", "sectionTransportV1", "timelineMarkersV1", "pluginRacksV1",
+    "trackLifecycleV1"
 };
 
 #if defined(STUDIO_DUO_TESTING)

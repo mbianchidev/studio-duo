@@ -1708,6 +1708,8 @@ int main(int argc, char* argv[])
     RUN_SUITE(multitrackRecordingCommand);
     RUN_SUITE(transportTests);
     RUN_SUITE(transportEditingTests);
+    RUN_SUITE(arrangementWorkflowTests);
+    RUN_SUITE(workspaceCommandTests);
     RUN_SUITE(sectionTransportTests);
     RUN_SUITE(transportSettingsTests);
     RUN_SUITE(routingModelTests);

@@ -4,6 +4,7 @@
 #include "NumericInput.h"
 #include "StudioPanControl.h"
 #include "StudioTheme.h"
+#include "model/ArrangementEditing.h"
 
 #include <algorithm>
 #include <cmath>
@@ -103,9 +104,9 @@ std::vector<const Track*> MixerPanel::mixerTracks() const
     if (project == nullptr)
         return result;
 
-    for (const auto& track : project->tracks)
-        if (track.parentTrackId.isEmpty())
-            result.push_back(&track);
+    for (const auto* track : ArrangementEditing::visibleTracks(*project))
+        if (track->parentTrackId.isEmpty())
+            result.push_back(track);
     return result;
 }
 
@@ -239,7 +240,8 @@ void MixerPanel::paint(juce::Graphics& graphics)
         graphics.fillRect(strip.getX(), strip.getY(), strip.getWidth(), 4);
         graphics.setColour(juce::Colour(StudioColours::text));
         graphics.setFont(12.0f);
-        graphics.drawFittedText(track->name,
+        graphics.drawFittedText(track->name + (track->frozenTrackId.isNotEmpty() ? " [FROZEN]"
+                                             : !project->isTrackActive(track->id) ? " [OFF]" : ""),
                                 strip.reduced(8).withHeight(24),
                                 juce::Justification::centred,
                                 1);

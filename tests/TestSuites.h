@@ -44,6 +44,8 @@ void projectTemplateTests();
 void windowSizingTests();
 void transportTests();
 void transportEditingTests();
+void arrangementWorkflowTests();
+void workspaceCommandTests();
 void sectionTransportTests();
 void transportSettingsTests();
 void updateTests();

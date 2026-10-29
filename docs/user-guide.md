@@ -86,6 +86,10 @@ DAWproject exchange, and Phase 5 mastering and release workflows.
 | Redo | `Command/Ctrl+Shift+Z` |
 | Copy and duplicate selected clip | `Command/Ctrl+C`, then `Command/Ctrl+V` |
 | Split selected clip at playhead | `S` |
+| Show / hide arrangement automation | `A` |
+| Toggle pitch-preserving stretch tool | `T` |
+| Group selected tracks into a folder / bus folder | `Command/Ctrl+Shift+F` / `Command/Ctrl+Shift+G` |
+| Bounce selected clips to a new track / in place | `Command/Ctrl+B` / `Command/Ctrl+Shift+B` |
 | Trim selected clip start to playhead | `[` |
 | Trim selected clip end to playhead | `]` |
 | Delete selected clip | `Delete` or `Backspace` |
@@ -136,6 +140,120 @@ the [release-readiness matrix](release-readiness.md).
 Scroll the mouse wheel over the timeline canvas to zoom around the pointer.
 Wheel or trackpad scrolling over the track-header column instead moves the
 track list vertically. On macOS, pinch gestures continue to zoom the timeline.
+
+## Arrangement automation and clip tools
+
+Press **A** or the edit-toolbar automation button to reveal the existing
+automation on every visible track. Each lane has its own name and curve;
+the same curves overlay clips at their actual timeline positions. Disabled
+lanes remain visible but dimmed. Seconds- and beat-based points follow the
+project tempo map. Double-click a lane to open its track's automation editor.
+Hiding automation changes the view, not its playback or saved points.
+
+The smart clip tool uses the upper-left and upper-right handles for fade-in
+and fade-out, the upper middle for gain, and the lower edges for ordinary
+trimming. Fade-curve handles remain independent from fade length. **T** enables
+the stretch tool: drag a clip's right edge to change duration without changing
+pitch, within the 0.25x to 4x range. The stretch icon marks that handle.
+**Alt/Option-drag horizontally** inside a clip slips its source audio while
+keeping the clip's timeline position and duration. Slips respect recoverable
+source bounds and existing linked-edit alignment.
+
+Command/Ctrl-click clips or tracks to select more than one. Shift-click track
+headers to select a contiguous range. Selection is shown on every selected
+clip/header and announced with its count. **Command/Ctrl+A** selects visible
+timeline clips; the focused MIDI editor retains its own note-selection keys.
+
+## Folders, deactivation and track limits
+
+With tracks selected, **Command/Ctrl+Shift+F** creates a regular folder without
+changing their audio routing. **Command/Ctrl+Shift+G** creates an audio bus
+folder for audio/instrument tracks and routes their main outputs through it.
+Members must share a folder and main output so grouping does not silently
+rewrite unrelated routing. The bus can host amps, EQ, VST effects and other
+inserts. MIDI-only selections create an instrument bus folder with MIDI routes
+already connected: add the desired synth or instrument to that folder.
+Use a regular folder for a mixed MIDI/audio-only selection.
+
+The disclosure triangle collapses a folder without muting it. Track actions
+also include **Deactivate track**, **Hide track**, and **Show all hidden
+tracks**. Deactivation suspends processing and recording/live input while
+retaining clips, routing and processor state. Hiding only removes the track
+from the timeline, mixer and control-surface bank; hidden tracks can still
+play. Folder deactivation applies to its descendants. Save a project before
+deactivating processors whose current state needs to be captured. Availability,
+folder creation, and membership changes support Undo/Redo and survive reopening.
+
+A project supports **1000 total tracks**, including its master, buses, folders,
+take lanes and frozen render tracks. Creation, duplication, recording takes and
+imports enforce that limit rather than silently dropping tracks. Simultaneous
+audio recording retains its separate 64-track limit. Prepared audio and each
+decode/render buffer have a 512 MiB preflight budget; oversized requests fail
+with guidance instead of requesting unbounded PCM memory. These are structural
+limits, not a guarantee that 1000 heavy VST chains run in real time. CPU and RAM
+needs still depend on the material, plugins and machine.
+
+## Clip FX, bounce and freeze
+
+Select an audio clip or take and choose **CLIP FX...** in the inspector, or
+**AudioSuite: apply effects to clip range...** in its actions. Add effects or a
+serial/parallel rack, edit parameters or open the plugin's native editor, then
+choose clip-relative start/end times and an effects tail from 0 to 30 seconds.
+**Render clip FX** affects only that clip interval. A short internal blend
+avoids abrupt wet/dry changes; the tail mixes over following dry audio and can
+extend the clip. Existing stretch, polarity, reversal, gain and fades are baked
+once, and the track's insert chain stays unchanged. Third-party clip effects
+use sandboxed processing; bundled DSP runs in-process.
+
+**Bounce selected clips to new track** prints their combined time range,
+including silence between clips, and keeps the original clips muted.
+**Bounce selected clips in place** replaces the selection. On one audio track,
+in-place bounce consolidates clip processing before its existing track inserts,
+so those inserts are not applied twice. Other prints use the relevant track
+processing and faders, without baking the master chain. Different main outputs
+must be bounced separately; cross-track in-place prints cannot silently replace
+different send paths. Print media is 32-bit floating-point WAV at the current
+engine sample rate, without normalization or dither.
+
+For a complete CPU-heavy track, save the project and choose **Freeze track**.
+Studio Duo prints its current arrangement and effects tails, creates a
+processor-free audio render track, and leaves the original visible as
+**FROZEN**. The original processing graph is suspended, including descendants
+of a bus/instrument folder. The render retains the source's mixer settings,
+automation, sends, main output and VCA relationships without applying inserts
+or the master chain twice. Original clips and processors are locked against
+edits while frozen. **Unfreeze track** on either track restores the editable
+original and removes the render track; render-track fader/pan/mute/solo changes
+are carried back. Both transitions support Undo/Redo and native project saves.
+Print multi-output or externally MIDI-sending instruments separately before
+freezing. Live inputs must be recorded before an offline print can include them.
+
+Failed renders never replace source clips. Original media remains untouched;
+successful edits can be undone. Native `.studioduo` files preserve unfreeze
+relationships. DAWproject transfers the printed audio and unloaded originals,
+but reports the loss of native freeze links, original frozen processor chains
+and their parameter automation. Keep the native project for further editing.
+
+## Custom shortcuts and workflow macros
+
+Open **Settings > Workflow > Shortcuts** to see workspace and timeline commands,
+change or remove bindings, resolve collisions, or reset defaults. Native text
+fields, sliders, buttons and MIDI/drum editor keys retain their local keyboard
+behavior. Shortcut changes apply immediately and are saved locally; the table
+above lists defaults.
+
+In **Settings > Workflow > Macros**, create a named sequence, add commands,
+reorder/remove steps and save it. A maximum of 32 macros with 64 steps each
+keeps execution bounded. Choose a saved macro in the edit-toolbar selector and
+press the adjacent **Run workflow macro** button, or assign it a shortcut in
+the **Workflow macros** command category. The selected button assignment is
+remembered across restarts.
+
+Macros run Studio Duo commands, not raw keystrokes or operating-system scripts,
+so rebinding a shortcut does not change a macro's meaning. Only synchronous
+commands are offered: file dialogs, renders, recording starts and nested macros
+cannot be inserted. A failure stops at the named step; earlier edits remain
+separately undoable.
 
 ## Start a session
 

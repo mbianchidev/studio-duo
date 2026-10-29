@@ -993,6 +993,73 @@ std::optional<CompRegion> CompRegion::fromVar(const juce::var& value,
     return region;
 }
 
+bool Project::canAddTracks(std::size_t count, juce::String& error) const
+{
+    if (tracks.size() > maximumTracks || count > maximumTracks - tracks.size())
+    {
+        error = "A project supports at most " + juce::String(static_cast<int>(maximumTracks))
+            + " tracks, including folders, buses, takes and frozen renders.";
+        return false;
+    }
+    return true;
+}
+
+bool Project::isTrackActive(const juce::String& trackId) const noexcept
+{
+    auto* track = findTrack(trackId);
+    for (std::size_t depth = 0; track != nullptr && depth <= tracks.size(); ++depth)
+    {
+        if (!track->active || track->frozenTrackId.isNotEmpty())
+            return false;
+        const auto parentId = track->parentTrackId.isNotEmpty()
+            ? track->parentTrackId : track->folderTrackId;
+        if (parentId.isEmpty())
+            return true;
+        track = findTrack(parentId);
+    }
+    return false;
+}
+
+bool Project::isTrackFrozen(const juce::String& trackId) const noexcept
+{
+    return frozenSourceTrackId(trackId).isNotEmpty();
+}
+
+juce::String Project::frozenSourceTrackId(const juce::String& trackId) const
+{
+    auto* track = findTrack(trackId);
+    for (std::size_t depth = 0; track != nullptr && depth <= tracks.size(); ++depth)
+    {
+        if (track->frozenTrackId.isNotEmpty())
+            return track->id;
+        if (track->freezeSourceTrackId.isNotEmpty())
+            return track->freezeSourceTrackId;
+        const auto parentId = track->parentTrackId.isNotEmpty() ? track->parentTrackId : track->folderTrackId;
+        if (parentId.isEmpty())
+            return {};
+        track = findTrack(parentId);
+    }
+    return {};
+}
+
+bool Project::isTrackVisible(const juce::String& trackId) const noexcept
+{
+    auto* track = findTrack(trackId);
+    for (std::size_t depth = 0; track != nullptr && depth <= tracks.size(); ++depth)
+    {
+        if (track->hidden)
+            return false;
+        const auto take = track->parentTrackId.isNotEmpty();
+        const auto parentId = take ? track->parentTrackId : track->folderTrackId;
+        if (parentId.isEmpty())
+            return true;
+        track = findTrack(parentId);
+        if (track != nullptr && (take ? track->versionsCollapsed : track->folderCollapsed))
+            return false;
+    }
+    return false;
+}
+
 juce::var Track::toVar() const
 {
     auto object = std::make_unique<juce::DynamicObject>();
@@ -1008,6 +1075,11 @@ juce::var Track::toVar() const
     object->setProperty("type", trackTypeToString(type));
     object->setProperty("outputTrackId", outputTrackId);
     object->setProperty("folderTrackId", folderTrackId);
+    object->setProperty("active", active);
+    object->setProperty("hidden", hidden);
+    object->setProperty("folderCollapsed", folderCollapsed);
+    object->setProperty("frozenTrackId", frozenTrackId);
+    object->setProperty("freezeSourceTrackId", freezeSourceTrackId);
     juce::Array<juce::var> controlledTrackValues;
     for (const auto& trackId : controlledTrackIds)
         controlledTrackValues.add(trackId);
@@ -1061,6 +1133,18 @@ std::optional<Track> Track::fromVar(const juce::var& value, juce::String& error)
     const auto* object = requireObject(value, error, "Track");
     if (object == nullptr)
         return std::nullopt;
+    for (const auto* field : { "active", "hidden", "folderCollapsed" })
+        if (object->hasProperty(field) && !object->getProperty(field).isBool())
+        {
+            error = "Track availability fields must be booleans.";
+            return std::nullopt;
+        }
+    for (const auto* field : { "frozenTrackId", "freezeSourceTrackId" })
+        if (object->hasProperty(field) && !object->getProperty(field).isString())
+        {
+            error = "Frozen track references must be strings.";
+            return std::nullopt;
+        }
 
     Track track;
     track.id = object->getProperty("id").toString();
@@ -1093,6 +1177,11 @@ std::optional<Track> Track::fromVar(const juce::var& value, juce::String& error)
     track.type = *type;
     track.outputTrackId = object->getProperty("outputTrackId").toString();
     track.folderTrackId = object->getProperty("folderTrackId").toString();
+    track.active = booleanProperty(*object, "active", true);
+    track.hidden = booleanProperty(*object, "hidden", false);
+    track.folderCollapsed = booleanProperty(*object, "folderCollapsed", false);
+    track.frozenTrackId = object->getProperty("frozenTrackId").toString();
+    track.freezeSourceTrackId = object->getProperty("freezeSourceTrackId").toString();
     const auto controlledTrackValues = object->getProperty("controlledTrackIds");
     if (controlledTrackValues.isArray())
         for (const auto& controlledTrackValue : *controlledTrackValues.getArray())
@@ -2130,7 +2219,7 @@ std::vector<juce::String> Project::armedAudioParentTrackIds() const
     std::vector<juce::String> parentIds;
     for (const auto& track : tracks)
     {
-        if (track.type != TrackType::audio || !track.armed)
+        if (track.type != TrackType::audio || !track.armed || !isTrackActive(track.id))
             continue;
 
         const auto parentId = track.parentTrackId.isNotEmpty()
@@ -2779,8 +2868,10 @@ double Project::timelineEndSeconds() const noexcept
 
 bool Project::hasActivePluginInserts() const noexcept
 {
-    return std::any_of(tracks.cbegin(), tracks.cend(), [](const auto& track)
+    return std::any_of(tracks.cbegin(), tracks.cend(), [this](const auto& track)
     {
+        if (!isTrackActive(track.id))
+            return false;
         return std::any_of(track.inserts.cbegin(), track.inserts.cend(), [&track](const auto& insert)
         {
             return !insert.isContainer() && !insert.missing
@@ -3189,6 +3280,9 @@ std::optional<Project> Project::fromVar(const juce::var& value, juce::String& er
         return std::nullopt;
     }
 
+    if (!project.canAddTracks(static_cast<std::size_t>(trackValues.getArray()->size()), error))
+        return std::nullopt;
+
     for (const auto& trackValue : *trackValues.getArray())
     {
         auto track = Track::fromVar(trackValue, error);
@@ -3206,6 +3300,26 @@ std::optional<Project> Project::fromVar(const juce::var& value, juce::String& er
 
     for (const auto& track : project.tracks)
     {
+        if (track.frozenTrackId.isNotEmpty())
+        {
+            const auto* proxy = project.findTrack(track.frozenTrackId);
+            if (proxy == nullptr || proxy->id == track.id || proxy->freezeSourceTrackId != track.id
+                || proxy->type != TrackType::audio || !proxy->inserts.empty()
+                || track.freezeSourceTrackId.isNotEmpty())
+            {
+                error = "A frozen source requires its matching processor-free audio render.";
+                return std::nullopt;
+            }
+        }
+        if (track.freezeSourceTrackId.isNotEmpty())
+        {
+            const auto* source = project.findTrack(track.freezeSourceTrackId);
+            if (source == nullptr || source->frozenTrackId != track.id)
+            {
+                error = "A frozen render requires its matching original source track.";
+                return std::nullopt;
+            }
+        }
         if (!track.midiClips.empty()
             && (track.parentTrackId.isNotEmpty()
                 || (track.type != TrackType::midi
