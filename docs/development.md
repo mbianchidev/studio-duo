@@ -907,6 +907,22 @@ before/after clip states to typed commands, so drags remain one undo step.
 Standard controls remain tabbable with a visible focus ring; `Enter`, arrows,
 `Shift+Left/Right`, `Alt+Up/Down`, select-all, and delete provide keyboard
 alternatives for note and lane editing.
+`Alt+Left/Right` browses existing notes by actual start beat, pitch and stable
+ID without issuing a project edit. Adding Shift extends/contracts a range
+around its anchor. With no notes selected, arrows move an entry cursor;
+same-clip project refreshes preserve it, and drum pitch navigation follows
+mapped rows. Note selection/cursor reveal covers all 128 piano pitches and
+the actual visible drum-row count, including tall grids. Pointer gestures
+defer reveal until release so scrolling cannot transpose a stationary drag.
+The custom grid has a native list role and read-only text value for its clip,
+selection count, active note values, cursor, grid and lane. Value-change events
+reflect edits even when the selection name is unchanged; stale note IDs are
+pruned after project changes. Expression edits read the same nearest-cursor
+point as announcements and write at the cursor, so repeated adjustments advance
+that point. Native selectors are named, child controls retain
+their keys, and unrelated Command/Control/Alt chords are not converted into
+note edits. These operations remain on the UI thread and retain the existing
+typed-command path, with no audio-callback changes.
 Its alternate `DrumPerformanceComponent` provides twelve native pad buttons,
 kit-preset/sound/channel/velocity controls, explicit keyboard and key-binding
 modes, and callbacks to the existing transport. It never inserts a note on a UI timer:

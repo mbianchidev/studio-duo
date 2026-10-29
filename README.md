@@ -34,8 +34,9 @@ See [status and limits](#status-and-limits) before relying on a release.
   automation visibility and customizable shortcuts/macros extend those
   [arrangement workflows](docs/user-guide.md#arrangement-automation-and-clip-tools).
 - **Compose MIDI and drums.** Live, recorded, and retrospective MIDI; piano-roll
-  and drum editors with per-note expression, probability, drum maps, seeded
-  humanization, and multi-output routing. Twelve performance pads and a
+  and drum editors with keyboard note entry/selection, per-note expression,
+  probability, drum maps, seeded humanization, and multi-output routing.
+  Twelve performance pads and a
   [drum geometry view](docs/user-guide.md#drum-geometry) share the same editable
   clips; the synthesized drum instrument includes style presets and kit tuning.
 - **Mix with plugins and automation.** Cycle-safe sends, sidechains, auxes,

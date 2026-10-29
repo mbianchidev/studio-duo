@@ -65,6 +65,7 @@ public:
     bool keyPressed(const juce::KeyPress& key) override;
     void focusGained(FocusChangeType cause) override;
     void focusLost(FocusChangeType cause) override;
+    std::unique_ptr<juce::AccessibilityHandler> createAccessibilityHandler() override;
 
 private:
     enum class View
@@ -99,9 +100,13 @@ private:
     [[nodiscard]] const MidiNote* noteAt(
         juce::Point<float> position) const;
     [[nodiscard]] std::vector<const DrumMapEntry*> drumRows() const;
+    [[nodiscard]] int adjacentPitch(int pitch, int direction) const;
+    [[nodiscard]] int visibleDrumRowCount() const;
+    [[nodiscard]] int minimumRowOffset() const;
     [[nodiscard]] int maximumRowOffset() const;
     [[nodiscard]] MidiEditorLane selectedLane() const noexcept;
     [[nodiscard]] MidiExpressionType selectedExpressionType() const noexcept;
+    [[nodiscard]] const MidiExpressionPoint* expressionAtCursor(const MidiNote& note) const;
 
     void refreshControls();
     void changeEditorMode(MidiEditorMode mode);
@@ -113,11 +118,16 @@ private:
     void expandSelectedPattern();
     void applyLaneAt(juce::Point<float> position);
     void selectOnly(const juce::String& noteId);
+    bool selectAdjacentNote(int direction, bool extend);
+    void selectionChanged();
+    void ensureCursorVisible();
+    void updateAccessibleSelection();
     void removeSelectedNotes();
 
     const Project* project = nullptr;
     juce::String selectedTrackId;
     juce::String selectedClipId;
+    juce::String accessibleSelectionValue;
     std::vector<juce::String> selectedNoteIds;
     std::optional<MidiClip> dragBefore;
     std::optional<MidiClip> dragPreview;
@@ -173,6 +183,7 @@ private:
 
     static constexpr int laneHeight = 92;
     static constexpr int pianoRows = 24;
+    static constexpr int initialPianoTopPitch = 83;
     static constexpr float minimumDrumRowHeight = 18.0f;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MidiEditorComponent)

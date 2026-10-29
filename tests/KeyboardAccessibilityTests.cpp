@@ -8,6 +8,7 @@
 #include "ui/RoutingPanel.h"
 #include "ui/StudioTheme.h"
 #include "ui/ClipProcessingEditorComponent.h"
+#include "ui/MidiEditorComponent.h"
 #include "plugin_host/PluginIsolationPolicy.h"
 
 #include <cmath>
@@ -15,6 +16,327 @@
 
 namespace
 {
+void midiNoteKeyboardNavigation()
+{
+    auto project = studio::Project::createDefault();
+    auto& track = project.tracks.front();
+    track.type = studio::TrackType::midi;
+    studio::MidiClip clip;
+    clip.name = "Synthetic keyboard notes";
+    studio::MidiNote late, early;
+    late.id = "keyboard-note-late";
+    late.startBeats = 0.9;
+    late.timingOffsetBeats = 0.125;
+    late.pitch = 72;
+    early.id = "keyboard-note-early";
+    early.startBeats = 1.0;
+    early.timingOffsetBeats = -0.125;
+    early.pitch = 60;
+    clip.notes = { late, early };
+    track.midiClips = { clip };
+    studio::MidiEditorComponent editor;
+    editor.setSize(1000, 500);
+    editor.setVisible(false);
+    editor.addToDesktop(juce::ComponentPeer::windowIsTemporary);
+    editor.setProject(&project);
+    editor.setSelection(track.id, clip.id);
+    int edits = 0;
+    editor.onClipEdited = [&](const auto&, const auto&, const auto& after, const auto&)
+    {
+        ++edits;
+        track.midiClips.front() = after;
+        editor.setProject(&project);
+        editor.setSelection(track.id, clip.id);
+    };
+    expect(editor.keyPressed(juce::KeyPress(juce::KeyPress::rightKey, juce::ModifierKeys::altModifier, 0))
+               && edits == 0,
+           "Alt+Right selects an existing MIDI note without moving it or requiring a mouse.");
+    const auto selectionValue = [&]
+    {
+        const auto* handler = editor.getAccessibilityHandler();
+        const auto* value = handler != nullptr ? handler->getValueInterface() : nullptr;
+        expect(handler != nullptr && handler->getRole() == juce::AccessibilityRole::list
+                   && handler->getTitle().contains(clip.name) && value != nullptr && value->isReadOnly(),
+               "The MIDI grid exposes its clip identity and a native read-only selection value.");
+        return value != nullptr ? value->getCurrentValueAsString() : juce::String();
+    };
+    auto announced = selectionValue();
+    expect(announced.contains("MIDI note 60") && announced.contains("beat 0.875")
+               && announced.contains("duration 0.250") && announced.contains("velocity 100")
+               && announced.contains("channel 1") && announced.contains("probability 100.0%"),
+           "The selected MIDI note announces its pitch, timing, duration, velocity, channel and probability.");
+    const auto rangeModifiers = juce::ModifierKeys::altModifier | juce::ModifierKeys::shiftModifier;
+    expect(editor.keyPressed(juce::KeyPress(juce::KeyPress::rightKey, rangeModifiers, 0))
+               && edits == 0 && selectionValue().contains("2 notes selected"),
+           "Alt+Shift+Right extends the MIDI selection without editing notes.");
+    expect(editor.keyPressed(juce::KeyPress(juce::KeyPress::leftKey, rangeModifiers, 0))
+               && edits == 0 && selectionValue().contains("1 note selected"),
+           "Reversing extended MIDI navigation contracts the range back to its anchor.");
+    expect(editor.keyPressed(juce::KeyPress(juce::KeyPress::leftKey, juce::ModifierKeys::altModifier, 0))
+               && selectionValue().contains("MIDI note 60"),
+           "MIDI note browsing clamps at the first note instead of wrapping.");
+    int selectors = 0;
+    for (auto* child : editor.getChildren())
+        if (const auto* selector = dynamic_cast<const juce::ComboBox*>(child))
+        {
+            ++selectors;
+            expect(selector->getTitle().isNotEmpty() && selector->getWantsKeyboardFocus(),
+                   "Every MIDI lane/expression/grid/pattern/routing selector has a native name and keyboard focus.");
+        }
+    expect(selectors == 5, "The MIDI selector audit covers all five native selectors.");
+    expect(editor.keyPressed(juce::KeyPress(juce::KeyPress::deleteKey))
+               && edits == 1 && track.midiClips.front().notes.size() == 1
+               && track.midiClips.front().notes.front().id == late.id,
+           "Keyboard MIDI selection follows actual played beats, not persisted note order or unshifted start beats.");
+    expect(selectionValue().containsIgnoreCase("no notes selected"),
+           "Deleting MIDI notes clears stale selection metadata after the project refresh.");
+    auto& remaining = track.midiClips.front().notes.front();
+    remaining.velocity = 80;
+    remaining.channel = 9;
+    remaining.probability = 0.25;
+    studio::MidiExpressionPoint pressure;
+    pressure.offsetBeats = 0.2;
+    pressure.value = 0.4;
+    remaining.expressions = { pressure };
+    editor.setProject(&project);
+    editor.setSelection(track.id, clip.id);
+    editor.keyPressed(juce::KeyPress(juce::KeyPress::rightKey, juce::ModifierKeys::altModifier, 0));
+    announced = selectionValue();
+    expect(announced.contains("velocity 80") && announced.contains("channel 9")
+               && announced.contains("probability 25.0%"),
+           "A same-name MIDI selection announces changed values after a project refresh.");
+    for (auto* child : editor.getChildren())
+        if (auto* selector = dynamic_cast<juce::ComboBox*>(child);
+            selector != nullptr && selector->getTitle() == "MIDI note property lane")
+            selector->setSelectedId(5, juce::sendNotificationSync);
+    editor.keyPressed(juce::KeyPress(juce::KeyPress::upKey, juce::ModifierKeys::altModifier, 0));
+    editor.keyPressed(juce::KeyPress(juce::KeyPress::upKey, juce::ModifierKeys::altModifier, 0));
+    const auto& expression = track.midiClips.front().notes.front().expressions.front();
+    expect(edits == 3 && std::abs(expression.offsetBeats) < 1e-9 && std::abs(expression.value - 0.5) < 1e-9
+               && selectionValue().contains("Poly pressure 0.500 at note beat 0.000"),
+           "Repeated keyboard expression edits advance and announce the point at the note cursor, not a later unrelated point.");
+    editor.setProject(nullptr);
+    const auto* handler = editor.getAccessibilityHandler();
+    expect(handler != nullptr && handler->getValueInterface() != nullptr
+               && handler->getValueInterface()->getCurrentValueAsString() == "No MIDI clip selected",
+           "An unavailable project clears the MIDI selection's native value.");
+    expect(!editor.keyPressed(juce::KeyPress(juce::KeyPress::returnKey))
+               && !editor.keyPressed(juce::KeyPress(juce::KeyPress::deleteKey))
+               && !editor.keyPressed(juce::KeyPress(juce::KeyPress::rightKey)),
+           "An unavailable MIDI clip does not consume note-editing keys as successful operations.");
+}
+
+void midiCursorKeyboardEntry()
+{
+    auto project = studio::Project::createDefault();
+    auto& track = project.tracks.front();
+    track.type = studio::TrackType::midi;
+    track.midiClips.emplace_back();
+    const auto clipId = track.midiClips.front().id;
+    studio::MidiEditorComponent editor;
+    editor.setSize(1000, 500);
+    editor.setProject(&project);
+    editor.setSelection(track.id, clipId);
+    int edits = 0;
+    editor.onClipEdited = [&](const auto&, const auto&, const auto& after, const auto&)
+    {
+        ++edits;
+        track.midiClips.front() = after;
+        editor.setProject(&project);
+        editor.setSelection(track.id, clipId);
+    };
+    expect(editor.keyPressed(juce::KeyPress(juce::KeyPress::rightKey))
+               && editor.keyPressed(juce::KeyPress(juce::KeyPress::upKey)) && edits == 0,
+           "Arrows position an empty MIDI grid's note-entry cursor without creating or moving a note.");
+    editor.setProject(&project);
+    editor.setSelection(track.id, clipId);
+    editor.keyPressed(juce::KeyPress(juce::KeyPress::returnKey));
+    const auto& notes = track.midiClips.front().notes;
+    expect(edits == 1 && notes.size() == 1 && std::abs(notes.front().startBeats - 0.25) < 1e-9
+               && notes.front().pitch == 61,
+           "Return creates a note at the keyboard cursor, preserved across ordinary same-clip refreshes.");
+    editor.keyPressed(juce::KeyPress(juce::KeyPress::rightKey));
+    editor.keyPressed(juce::KeyPress(juce::KeyPress::rightKey, juce::ModifierKeys::shiftModifier, 0));
+    expect(edits == 3 && notes.size() == 1 && std::abs(notes.front().startBeats - 0.5) < 1e-9
+               && std::abs(notes.front().durationBeats - 0.5) < 1e-9,
+           "Existing arrow nudges and Shift+arrow resizing still edit the selected note.");
+    editor.keyPressed(juce::KeyPress(juce::KeyPress::escapeKey));
+    expect(editor.keyPressed(juce::KeyPress(juce::KeyPress::rightKey))
+               && editor.keyPressed(juce::KeyPress(juce::KeyPress::downKey)) && edits == 3,
+           "Escape returns to cursor navigation without mutating the formerly selected note.");
+    editor.keyPressed(juce::KeyPress(juce::KeyPress::returnKey));
+    expect(edits == 4 && notes.size() == 2 && notes.back().pitch == 60
+               && std::abs(notes.back().startBeats - 0.75) < 1e-9,
+           "Keyboard entry can create a second note at a different beat and pitch without a mouse.");
+    expect(!editor.keyPressed(juce::KeyPress(juce::KeyPress::tabKey)),
+           "MIDI note navigation never traps Tab.");
+    studio::DrumMap map;
+    map.name = "Synthetic keyboard kit";
+    for (const auto pitch : { 36, 52, 60, 90 })
+    {
+        studio::DrumMapEntry entry;
+        entry.noteNumber = pitch;
+        map.entries.push_back(entry);
+    }
+    project.drumMaps.push_back(map);
+    auto& drumClip = track.midiClips.front();
+    drumClip.editorMode = studio::MidiEditorMode::drums;
+    drumClip.drumMapId = map.id;
+    drumClip.notes.clear();
+    editor.setSelection(track.id, {});
+    editor.setSelection(track.id, clipId);
+    expect(editor.keyPressed(juce::KeyPress(juce::KeyPress::downKey)) && edits == 4,
+           "Empty drum-grid cursor movement follows mapped kit rows rather than unmapped semitones.");
+    editor.keyPressed(juce::KeyPress(juce::KeyPress::returnKey));
+    expect(edits == 5 && notes.size() == 1 && notes.front().pitch == 52
+               && notes.front().drumMapEntryId == map.entries[1].id,
+           "Keyboard drum entry retains the chosen mapped voice and its ordinary drum metadata.");
+}
+
+void midiProtectedKeyboardShortcuts()
+{
+    auto project = studio::Project::createDefault();
+    auto& track = project.tracks.front();
+    track.type = studio::TrackType::midi;
+    track.midiClips.emplace_back();
+    track.midiClips.front().notes.emplace_back();
+    studio::MidiEditorComponent editor;
+    editor.setProject(&project);
+    editor.setSelection(track.id, track.midiClips.front().id);
+    editor.keyPressed(juce::KeyPress(juce::KeyPress::rightKey, juce::ModifierKeys::altModifier, 0));
+    int edits = 0;
+    editor.onClipEdited = [&](const auto&, const auto&, const auto&, const auto&) { ++edits; };
+    for (const auto& key : {
+             juce::KeyPress(juce::KeyPress::returnKey, juce::ModifierKeys::commandModifier, 0),
+             juce::KeyPress(juce::KeyPress::deleteKey, juce::ModifierKeys::commandModifier, 0),
+             juce::KeyPress(juce::KeyPress::rightKey, juce::ModifierKeys::commandModifier, 0),
+             juce::KeyPress(juce::KeyPress::upKey, juce::ModifierKeys::ctrlModifier | juce::ModifierKeys::altModifier, 0),
+             juce::KeyPress(juce::KeyPress::rightKey, juce::ModifierKeys::ctrlModifier | juce::ModifierKeys::altModifier, 0),
+             juce::KeyPress(juce::KeyPress::returnKey, juce::ModifierKeys::altModifier, 0),
+             juce::KeyPress(juce::KeyPress::deleteKey, juce::ModifierKeys::altModifier, 0),
+             juce::KeyPress(juce::KeyPress::escapeKey, juce::ModifierKeys::altModifier, 0) })
+        expect(!editor.keyPressed(key) && edits == 0,
+               "Unrelated workspace and assistive-technology chords never become destructive MIDI edits.");
+}
+
+void midiKeyboardSelectionVisibility()
+{
+    auto project = studio::Project::createDefault();
+    auto& track = project.tracks.front();
+    track.type = studio::TrackType::midi;
+    studio::DrumMap map;
+    for (int pitch = 0; pitch < 96; ++pitch)
+    {
+        studio::DrumMapEntry entry;
+        entry.noteNumber = pitch;
+        entry.name = "Synthetic voice " + juce::String(pitch);
+        map.entries.push_back(entry);
+    }
+    project.drumMaps.push_back(map);
+    studio::StudioTheme theme;
+    const auto originalPalette = theme.palette();
+    studio::MidiEditorComponent editor;
+    editor.setLookAndFeel(&theme);
+    for (const auto drums : { false, true })
+    {
+        studio::MidiClip clip;
+        clip.editorMode = drums ? studio::MidiEditorMode::drums : studio::MidiEditorMode::pianoRoll;
+        clip.drumMapId = drums ? map.id : juce::String();
+        studio::MidiNote high, low;
+        high.pitch = drums ? 95 : 127;
+        high.startBeats = 2.0;
+        low.pitch = 0;
+        low.startBeats = 0.5;
+        clip.notes = { high, low };
+        track.midiClips = { clip };
+        editor.setSelection(track.id, {});
+        editor.setProject(&project);
+        editor.setSelection(track.id, clip.id);
+        for (const auto height : { 300, 900 })
+        {
+            editor.setSize(1000, height);
+            for (const auto& preset : studio::studioThemePresets())
+            {
+                theme.applyPalette(preset.palette);
+                editor.keyPressed(juce::KeyPress(juce::KeyPress::escapeKey));
+                for (const auto& note : { low, high })
+                {
+                    editor.keyPressed(juce::KeyPress(juce::KeyPress::rightKey, juce::ModifierKeys::altModifier, 0));
+                    juce::Image image(juce::Image::ARGB, editor.getWidth(), editor.getHeight(), true, juce::SoftwareImageType());
+                    juce::Graphics graphics(image);
+                    editor.paint(graphics);
+                    const auto labels = drums ? 190 : 66;
+                    const auto x = labels + static_cast<int>((note.startBeats + note.durationBeats * 0.5)
+                        / clip.durationBeats * (editor.getWidth() - labels));
+                    int outlinePixels = 0;
+                    auto outlineTop = image.getHeight();
+                    auto outlineBottom = -1;
+                    for (int y = 0; y < image.getHeight(); ++y)
+                        if (image.getPixelAt(x, y) == juce::Colours::white)
+                        {
+                            ++outlinePixels;
+                            outlineTop = std::min(outlineTop, y);
+                            outlineBottom = y;
+                        }
+                    const auto gridBottom = height - std::min(92, std::max(48, (height - 70) / 3));
+                    expect(outlinePixels >= 2 && outlineTop >= 70 && outlineBottom < gridBottom,
+                           ("Keyboard selection renders the actual selected " + juce::String(drums ? "drum" : "piano")
+                            + " note " + juce::String(note.pitch) + " within the grid at height "
+                            + juce::String(height) + " in " + preset.name + ".").toRawUTF8());
+                }
+            }
+        }
+    }
+    theme.applyPalette(originalPalette);
+    editor.setLookAndFeel(nullptr);
+}
+
+void midiPointerSelectionDoesNotMoveNotes()
+{
+    auto project = studio::Project::createDefault();
+    auto& track = project.tracks.front();
+    track.type = studio::TrackType::midi;
+    studio::DrumMap map;
+    for (int pitch = 0; pitch < 96; ++pitch)
+    {
+        studio::DrumMapEntry entry;
+        entry.noteNumber = pitch;
+        map.entries.push_back(entry);
+    }
+    project.drumMaps.push_back(map);
+    studio::MidiClip clip;
+    clip.editorMode = studio::MidiEditorMode::drums;
+    clip.drumMapId = map.id;
+    studio::MidiNote first, partial;
+    first.pitch = 95;
+    partial.pitch = 87;
+    partial.startBeats = 2.0;
+    clip.notes = { first, partial };
+    track.midiClips = { clip };
+    studio::MidiEditorComponent editor;
+    editor.setSize(1000, 300);
+    editor.setProject(&project);
+    editor.setSelection(track.id, clip.id);
+    int edits = 0;
+    editor.onClipEdited = [&](const auto&, const auto&, const auto& after, const auto&)
+    {
+        ++edits;
+        track.midiClips.front() = after;
+        editor.setProject(&project);
+        editor.setSelection(track.id, clip.id);
+    };
+    const juce::Point<float> position { 620.0f, 218.0f };
+    const auto now = juce::Time::getCurrentTime();
+    const juce::MouseEvent down { juce::Desktop::getInstance().getMainMouseSource(), position, {},
+        0.0f, 0.0f, 0.0f, 0.0f, 0.0f, &editor, &editor, now, position, now, 1, false };
+    const auto drag = down.withNewPosition(position);
+    editor.mouseDown(down);
+    editor.mouseDrag(drag);
+    editor.mouseUp(drag);
+    expect(edits == 0 && track.midiClips.front().notes.back().pitch == partial.pitch,
+           "Selecting a partially visible drum note does not scroll beneath a stationary pointer and transpose it.");
+}
+
 void clipProcessingControls()
 {
     studio::AudioClip clip;
@@ -309,6 +631,11 @@ void masteringKeyboardControls()
 
 void keyboardAccessibilityTests()
 {
+    midiNoteKeyboardNavigation();
+    midiCursorKeyboardEntry();
+    midiProtectedKeyboardShortcuts();
+    midiKeyboardSelectionVisibility();
+    midiPointerSelectionDoesNotMoveNotes();
     clipProcessingControls();
     preciseSlipAndStretchControls();
     namedProductionControls();

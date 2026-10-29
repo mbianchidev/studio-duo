@@ -176,8 +176,12 @@ disposition.
 
 Native keyboard contracts include precise gain/fade editing, take/comp menu
 actions, current track/clip state values, track-name validation and a scrollable
-200-message status history with stable selection. They do not establish actual
-VoiceOver/NVDA behavior or completion of the manual production journey.
+200-message status history with stable selection. MIDI contracts include
+individual/range note selection, mouse-free cursor entry, mapped drum rows,
+current note/expression values, protected modified shortcuts, and software
+selection rendering across every theme and both piano pitch extremes. They do
+not establish actual VoiceOver/NVDA behavior or completion of the manual
+production journey.
 
 Native CI separately retains 36 independent FFmpeg metrology comparisons at
 44.1/48/96 kHz with fixed 0.1 LU integrated, 1.0 LU LRA and 0.3 dBTP tolerances.
