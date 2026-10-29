@@ -21,7 +21,7 @@ The `hardening` CTest label selects the release-critical coverage:
 | Keyboard/accessibility | Native timeline focus, selection role/value, chronological audio/MIDI clip navigation, musical nudges, offscreen-selection reveal, button activation, and named mastering controls |
 | Engine/processing | Routing, linked edits, recording, automation, latency/racks, deterministic live/offline renders, sandbox crash/reload, and public-standard plugin fixtures |
 | Qualification tooling | Full-media one-second smoke at 96 kHz, concurrent graph/callback work, complete live/offline null, portable validation, raw callback CSV, and fail-closed six-area evidence matrix contracts |
-| Interchange/mastering | Official embedded DAWproject schemas, transactional failures, compatibility reports, portable/missing-resource checks, analytical fixtures, independent FFmpeg mono/stereo metrology and multi-song delivery |
+| Interchange/mastering | Official embedded DAWproject schemas, transactional failures, compatibility reports, portable/missing-resource checks, analytical fixtures, independent FFmpeg mono/stereo metrology and 29 encoded multi-song deliveries |
 | Packaging | macOS DMG/updater ZIP signatures, binary equality, license/source material, private install/startup/removal; disposable Windows signed install, same-version replacement, startup, and user-data-preserving uninstall |
 | Update failure handling | Verified/cancellable download publication; actual embedded macOS payload against signed synthetic versions, atomic directory exchange, signal rollback and generation preservation after an untrappable kill |
 
@@ -190,8 +190,11 @@ production journey.
 Native CI separately retains 36 independent FFmpeg metrology comparisons at
 44.1/48/96 kHz with fixed 0.1 LU integrated, 1.0 LU LRA and 0.3 dBTP tolerances.
 Original PCM, exact source/tool/test-binary hashes and both programme/peak raw
-logs stay with the candidate. This does not replace licensed DDP verification,
-external-DAW acceptance, encoded-delivery checks or human release approval.
+logs stay with the candidate. A separate 29-case encoded album matrix retains
+repeated WAV/AIFF/FLAC/Ogg/MP3 files, independent/native decoded PCM, a separate
+SRC/sequencing oracle, dither statistics, metadata and fixed-tolerance final-file
+metrology. This does not replace licensed DDP verification, external-DAW
+acceptance, official reference-asset/codec conformance or human release approval.
 Synthetic macOS updater fixtures do not establish actual released-app upgrades,
 clean-machine Gatekeeper behavior, production Windows trust or a complete
 post-restart workflow.

@@ -50,8 +50,10 @@ mono/stereo cases at 44.1/48/96 kHz. Fixed tolerances are 0.1 LU for integrated
 loudness, 1.0 LU for LRA and 0.3 dB for true peak. Original programme I/LRA and
 separately flushed peak reconstruction are measured independently; normalizer
 input statistics do not substitute for original-rate programme metrology.
-This is not licensed DDP verification, an official reference-asset conformance
-claim, encoded-delivery qualification or external-DAW acceptance.
+The separate [encoded-delivery matrix](qualification.md#independent-encoded-mastering-delivery)
+checks 29 actual multi-song exports, including independent decoding, conversion,
+dither and metadata. Neither matrix is licensed DDP verification, an official
+reference-asset or codec-conformance claim, or external-DAW acceptance.
 
 The built-in distribution presets are reporting targets only. Studio Duo does
 not turn a streaming or broadcast target into automatic loudness normalization.
@@ -80,6 +82,11 @@ After encoding, Studio Duo decodes and remeasures the final file. The adjacent
 `.report.json` includes source, sequence/settings, and output hashes; format,
 sample rate, bit depth, duration, loudness, LRA, true peak, sample peak, and
 correlation; warnings; and an RSA signature.
+MP3 measurements use the actual gapless decoded programme described by the
+file's Xing/Info and LAME tags, not encoder/decoder priming or trailing padding.
+An incomplete or inconsistent tag fails verification before replacing a master.
+WAV writes both standard `IGNR` and legacy `GENR` genre tags; Ogg Vorbis includes
+copyright comments as well as title, artist, album, date and genre.
 
 The per-install signing key is stored in the Studio Duo application-data
 directory under `Signing/render-report-key.json`. The signature detects report

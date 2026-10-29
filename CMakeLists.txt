@@ -54,7 +54,7 @@ set_property(
 option(STUDIO_DUO_BUILD_TESTS "Build Studio Duo tests" ON)
 option(STUDIO_DUO_AUDIO_EXPORT_TESTS_ONLY "Build only the headless audio export regression tests" OFF)
 option(STUDIO_DUO_NATIVE_TESTS "Build macOS tests and fixtures for the host architecture only" OFF)
-option(STUDIO_DUO_MASTERING_REFERENCE_TESTS "Run independent FFmpeg mastering reference comparisons" OFF)
+option(STUDIO_DUO_MASTERING_REFERENCE_TESTS "Run independent FFmpeg mastering and encoded delivery comparisons" OFF)
 if(STUDIO_DUO_MASTERING_REFERENCE_TESTS AND
    (NOT STUDIO_DUO_BUILD_TESTS OR STUDIO_DUO_AUDIO_EXPORT_TESTS_ONLY))
     message(FATAL_ERROR "Independent mastering reference comparisons require the full native test build.")
@@ -143,6 +143,14 @@ if(NOT TARGET juce::juce_gui_extra)
     studio_duo_apply_dependency_patch(
         "${juce_SOURCE_DIR}"
         "${CMAKE_CURRENT_SOURCE_DIR}/third_party/juce/9.0.3-catalog-restore.patch"
+    )
+    studio_duo_apply_dependency_patch(
+        "${juce_SOURCE_DIR}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/third_party/juce/9.0.3-wav-genre.patch"
+    )
+    studio_duo_apply_dependency_patch(
+        "${juce_SOURCE_DIR}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/third_party/juce/9.0.3-ogg-copyright.patch"
     )
 endif()
 
@@ -1367,7 +1375,8 @@ if(STUDIO_DUO_BUILD_TESTS)
     set_tests_properties(StudioDuoVendorQualificationContracts PROPERTIES
         LABELS "hardening;qualification" TIMEOUT 30)
     add_test(NAME StudioDuoMasteringQualificationContracts
-        COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/MasteringQualificationTests.py")
+        COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/MasteringQualificationTests.py"
+            "--test-binary=$<TARGET_FILE:StudioDuoTests>")
     set_tests_properties(StudioDuoMasteringQualificationContracts PROPERTIES
         LABELS "hardening;qualification" TIMEOUT 30)
     if(APPLE)
@@ -1380,6 +1389,8 @@ if(STUDIO_DUO_BUILD_TESTS)
     if(STUDIO_DUO_MASTERING_REFERENCE_TESTS)
         find_program(STUDIO_DUO_FFMPEG_EXECUTABLE ffmpeg
             HINTS ENV STUDIO_DUO_FFMPEG_DIRECTORY REQUIRED)
+        find_program(STUDIO_DUO_FFPROBE_EXECUTABLE ffprobe
+            HINTS ENV STUDIO_DUO_FFMPEG_DIRECTORY REQUIRED)
         add_test(NAME StudioDuoMasteringReferences
             COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/scripts/qualify-mastering.py"
                 "--test-binary=$<TARGET_FILE:StudioDuoTests>"
@@ -1387,6 +1398,16 @@ if(STUDIO_DUO_BUILD_TESTS)
                 "--evidence-root=${CMAKE_CURRENT_BINARY_DIR}/Testing/mastering-references"
                 "--expected-sha=${STUDIO_DUO_BUILD_COMMIT}")
         set_tests_properties(StudioDuoMasteringReferences PROPERTIES
+            LABELS "hardening;qualification" TIMEOUT 600)
+        add_test(NAME StudioDuoMasteringDeliveryReferences
+            COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/scripts/qualify-mastering.py"
+                --delivery
+                "--test-binary=$<TARGET_FILE:StudioDuoTests>"
+                "--ffmpeg=${STUDIO_DUO_FFMPEG_EXECUTABLE}"
+                "--ffprobe=${STUDIO_DUO_FFPROBE_EXECUTABLE}"
+                "--evidence-root=${CMAKE_CURRENT_BINARY_DIR}/Testing/mastering-references/delivery"
+                "--expected-sha=${STUDIO_DUO_BUILD_COMMIT}")
+        set_tests_properties(StudioDuoMasteringDeliveryReferences PROPERTIES
             LABELS "hardening;qualification" TIMEOUT 600)
     endif()
     if(APPLE OR WIN32)
