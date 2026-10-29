@@ -164,6 +164,14 @@ void expectLosslessAudio(juce::AudioFormatReader& reader,
             }
 }
 
+void expectMp3VerificationFrames(const juce::File& file, int frames)
+{
+    juce::String error;
+    const auto reader = AudioExport::createVerificationReader(file, AudioExportFormat::mp3, error);
+    expect(reader != nullptr && reader->lengthInSamples == frames,
+           ("Every offered MP3 setting retains exact gapless verification frames: " + error).toRawUTF8());
+}
+
 void defaultSettingsAreSupported()
 {
     const AudioExportSettings settings;
@@ -458,6 +466,7 @@ void mp3ModesRatesAndBitrates()
             if (!encode(shortAudio, file, settings))
                 continue;
             expectMp3GaplessTag(file, shortAudio.getNumSamples());
+            expectMp3VerificationFrames(file, shortAudio.getNumSamples());
             auto reader = readerFor(file, settings.format);
             expect(reader != nullptr && std::abs(reader->sampleRate - rate) < 0.001
                        && reader->numChannels == static_cast<unsigned int>(settings.channels),
@@ -473,6 +482,7 @@ void mp3ModesRatesAndBitrates()
             if (!encode(shortAudio, file, settings))
                 continue;
             expectMp3GaplessTag(file, shortAudio.getNumSamples());
+            expectMp3VerificationFrames(file, shortAudio.getNumSamples());
             auto reader = readerFor(file, settings.format);
             expect(reader != nullptr && std::abs(reader->sampleRate - rate) < 0.001,
                    "All VBR qualities work at every offered MP3 sample rate.");
@@ -498,6 +508,69 @@ void mp3ModesRatesAndBitrates()
         expect(reader != nullptr && reader->lengthInSamples > 0,
                "VBR exports decode using the built-in MP3 decoder.");
     }
+}
+
+void mp3VerificationUsesGaplessProgramme()
+{
+    ExportDirectory directory;
+    constexpr auto frames = 12345;
+    for (const auto rate : { 32000.0, 44100.0, 48000.0 })
+        for (const auto channels : { 1, 2 })
+            for (const auto mode : { studio::Mp3BitrateMode::constant, studio::Mp3BitrateMode::variable })
+            {
+                juce::AudioBuffer<float> audio(2, frames);
+                for (int channel = 0; channel < 2; ++channel)
+                    for (int sample = 0; sample < frames; ++sample)
+                    {
+                        const auto taper = std::min({ 1.0, sample / 512.0, (frames - 1 - sample) / 512.0 });
+                        audio.setSample(channel, sample, static_cast<float>(
+                            taper * 0.2 * std::sin(juce::MathConstants<double>::twoPi * 3100.0 * sample / rate
+                                                   + channel * 0.31)));
+                    }
+                AudioExportSettings settings;
+                settings.format = AudioExportFormat::mp3;
+                settings.bitDepth = 32;
+                settings.sampleRate = rate;
+                settings.channels = channels;
+                settings.mp3BitrateMode = mode;
+                const auto file = directory.file.getChildFile("gapless.mp3");
+                if (!encode(audio, file, settings))
+                    continue;
+                juce::String error;
+                auto reader = AudioExport::createVerificationReader(file, settings.format, error);
+                expect(reader != nullptr && reader->lengthInSamples == frames
+                           && reader->numChannels == static_cast<unsigned int>(channels),
+                       ("Gapless verification honors MPEG-1 CBR/VBR rate, layout and exact programme frames: "
+                        + error).toRawUTF8());
+                if (reader == nullptr || reader->lengthInSamples != frames)
+                    continue;
+                juce::AudioBuffer<float> decoded(channels, frames);
+                expect(reader->read(&decoded, 0, frames, 0, true, channels == 2),
+                       "The complete tagged programme decodes without synthetic padding.");
+                double squaredError = 0, maximumError = 0;
+                for (int channel = 0; channel < channels; ++channel)
+                    for (int sample = 0; sample < frames; ++sample)
+                    {
+                        const auto expected = channels == 1
+                            ? (audio.getSample(0, sample) + audio.getSample(1, sample)) * 0.5
+                            : static_cast<double>(audio.getSample(channel, sample));
+                        const auto difference = std::abs(decoded.getSample(channel, sample) - expected);
+                        squaredError += difference * difference;
+                        maximumError = std::max(maximumError, difference);
+                    }
+                expect(maximumError < 0.02 && std::sqrt(squaredError / (frames * channels)) < 0.003,
+                       "Gapless decoding preserves actual waveform alignment, not just a declared duration.");
+                reader.reset();
+                auto truncated = bytes(file);
+                truncated.setSize(truncated.getSize() - 1);
+                const auto damaged = directory.file.getChildFile("truncated.mp3");
+                expect(damaged.replaceWithData(truncated.getData(), truncated.getSize()),
+                       "A truncated MP3 verification fixture can be written.");
+                error.clear();
+                expect(AudioExport::createVerificationReader(damaged, settings.format, error) == nullptr
+                           && error.isNotEmpty(),
+                       "Verification rejects an incomplete tagged MP3 instead of measuring synthesized silence.");
+            }
 }
 
 void metadataUsesCodecKeys()
@@ -533,13 +606,19 @@ void metadataUsesCodecKeys()
         if (format == AudioExportFormat::mp3)
             expectMp3GaplessTag(file, audio.getNumSamples());
         if (format == AudioExportFormat::wav && reader != nullptr)
+        {
             expect(reader->metadataValues[juce::WavAudioFormat::riffInfoTitle] == metadata["title"]
                        && reader->metadataValues[juce::WavAudioFormat::riffInfoArtist] == metadata["artist"],
                    "WAV maps generic title/artist into RIFF INFO keys.");
+            expect(reader->metadataValues[juce::WavAudioFormat::riffInfoGenre] == metadata["genre"]
+                       && reader->metadataValues["IGNR"] == metadata["genre"],
+                   "WAV retains legacy GENR and interoperable RIFF INFO IGNR genre tags.");
+        }
         else if (format == AudioExportFormat::oggVorbis && reader != nullptr)
             expect(reader->metadataValues[juce::OggVorbisAudioFormat::id3title] == metadata["title"]
-                       && reader->metadataValues[juce::OggVorbisAudioFormat::id3artist] == metadata["artist"],
-                   "Ogg maps generic title/artist into Vorbis comments.");
+                       && reader->metadataValues[juce::OggVorbisAudioFormat::id3artist] == metadata["artist"]
+                       && reader->metadataValues["copyright"] == metadata["copyright"],
+                   "Ogg maps title/artist and preserves copyright in Vorbis comments.");
         else if (format == AudioExportFormat::flac)
             expect(contains(data, "TITLE=Synthetic export") && contains(data, "ARTIST=Studio Duo"),
                    "FLAC contains a standards-compliant Vorbis comment block.");
@@ -717,6 +796,7 @@ void audioExportTests()
     deterministicIntegerDither();
     codecQualityControlsAreEffective();
     mp3ModesRatesAndBitrates();
+    mp3VerificationUsesGaplessProgramme();
     metadataUsesCodecKeys();
     independentMp3ExportsCanRunConcurrently();
     rejectsInvalidSettingsAndKeepsDestination();

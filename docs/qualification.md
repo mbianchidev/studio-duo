@@ -584,9 +584,96 @@ Retain original PCM, both independent logs, native JSON, reference version/
 executable SHA-256, candidate/test-binary/source hashes and exact settings.
 Reports remain `qualificationStatus: not-qualified` even when this matrix passes.
 
-For complete #57 sign-off, separately retain independent decoded/encoded-file,
-dither/resampling and multi-song gap/overlap/fade/metadata results. Run an
-explicitly licensed DDP encoder and independent delivery checker; a mock DDP
+## Independent encoded mastering delivery
+
+The same clean candidate and optional CMake setting also run a separate
+hardware-free matrix through the real `MasteringReleaseService::exportMaster`.
+FFmpeg and FFprobe are test tools, not application dependencies:
+
+```sh
+candidate="$(git rev-parse HEAD)"
+python3 -B scripts/qualify-mastering.py --delivery \
+  "--test-binary=$PWD/build/StudioDuoTests_artefacts/Release/StudioDuoTests" \
+  --evidence-root build/qualification/delivery \
+  --expected-sha "$candidate"
+```
+
+`--ffmpeg` and `--ffprobe` select actual executables. Trial/candidate integrity,
+fresh-directory, bounded-process and fail-closed rules are the same as for the
+36-case metrology matrix above. CI/release CTest retains these runs under
+`build/Testing/mastering-references/delivery`, inside its existing regression
+evidence artifact.
+
+| Deliveries | Rates | Layouts | Settings |
+| --- | --- | --- | --- |
+| 12 WAV integer | 44.1/48/96 kHz | Mono/stereo | 16 and 24 bits, TPDF |
+| 3 WAV float | 44.1/48/96 kHz | Stereo | 32 bits, no dither |
+| 2 AIFF | 48 kHz | Mono/stereo | 24 bits, no dither |
+| 2 FLAC | 96 kHz | Mono/stereo | 24 bits, compression 5 |
+| 2 Ogg Vorbis | 48 kHz | Mono/stereo | Quality 6 |
+| 8 MP3 | 44.1/48 kHz | Mono/stereo | 320 kbps CBR and VBR quality 2 |
+
+Every case assembles three unique four-second synthetic songs from 96/48/44.1
+kHz sources, including a mono source. It selects an alternate over a deliberately
+loud unselected mix, excludes the reference, and applies an initial 0.25-second
+gap, a 0.5-second overlap, another 0.25-second gap, distinct fades and per-song/
+album gains. The complete result is 12 seconds. The 96 kHz source includes a
+30 kHz component to expose inadequate downsampling filters. Normalization is off.
+Title/album, artist, full date, genre and copyright, including non-ASCII text,
+must survive independent container inspection in **every** format.
+
+FFmpeg's independent `swresample` converter uses a 64-tap filter, phase shift 10
+and exact rational ratios. A separate Python sample-domain sequence applies the
+specified placements, fades, gains and mono fold-down to those converted sources.
+Every decoded output sample is compared with this oracle, with no fitted
+alignment, discarded boundary samples or substituted duration. Fixed maximum/
+RMS sample-error budgets are `1e-4` / `1e-5` for lossless deliveries, plus
+1.5 LSB maximum for TPDF integer output or 1 LSB without dither, and 0.6 LSB RMS.
+Float output gets no quantization allowance. Lossy output uses `0.03` / `0.005`
+for these specific fixtures and quality settings, not a general music-quality
+or codec-conformance guarantee.
+
+Native verification PCM is separately retained and compared sample-aligned
+against FFmpeg: `1e-4` maximum / `1e-5` RMS for lossless decoders, `1e-3` maximum /
+`1e-5` RMS for lossy decoders. Lossy implementations can differ on sparse,
+low-level transition samples; this regression budget does not assert bit-exact
+MPEG decoding. Gapless frame counts remain exact. The built-in MP3 verifier
+uses the encoded Xing/Info/LAME counts, encoder priming and decoder synthesis
+delay, not a convenient pre-encode frame count or a platform duration estimate.
+Headless regressions additionally cover CBR/VBR, mono/stereo at all offered
+32/44.1/48 kHz rates and rejection of truncated tagged files.
+
+Each export is repeated. Lossless and MP3 files must be byte-identical; Ogg's
+container serial may differ, but its complete independently decoded PCM must
+match exactly. The independently decoded initial silence interval checks TPDF
+at 16 and 24 bits: only `-1`, `0`, `+1` LSB, mean within 0.025 LSB, RMS between
+0.45 and 0.55 LSB, and absolute stereo correlation at most 0.05.
+
+Original-rate, unpadded encoded-programme I/LRA and separately flushed peak
+reconstruction retain the unchanged **0.1 LU / 1.0 LU / 0.3 dBTP** meter bounds.
+Wrong codec, rate, precision, channels, duration, metadata, source/output hashes,
+missing/duplicate cases, nonfinite data and changed tools/candidates fail.
+The native CLI contracts also check invalid/duplicate arguments, unsafe/changed
+sources and preservation of an existing destination; a failed mastering export
+must preserve both its previous audio file and signed report.
+
+Retained evidence includes synthetic sources and relative-path fixture JSON,
+both encoded passes, native and independent decoded PCM, independent converted
+sources and assembled oracle PCM, tool versions/hashes, native candidate/build
+and measurements, raw meter/decoder logs, metadata and a SHA-256/size inventory.
+The native probe verifies each real signed product sidecar before removing its
+private output path, random ID/time, public key and signature. It retains the
+original sidecar's SHA-256 and verification result, then deletes the originals
+and disposable private signing key. These privacy-safe measurement snapshots
+are **not independently verifiable signed originals** or release-authority
+attestations. The parent runner also removes the known private files after a
+native failure or timeout. Passing still records
+`qualificationStatus: not-qualified`.
+
+### Remaining external reference acceptance
+
+For complete #57 sign-off, run an explicitly licensed DDP encoder and
+independent delivery checker; a mock DDP
 adapter or the product's own fileset checks are not conformance evidence.
 Exercise supported external DAWproject producers/consumers with synthetic edits,
 routing, automation, MIDI, media and processor state, plus visible object-specific

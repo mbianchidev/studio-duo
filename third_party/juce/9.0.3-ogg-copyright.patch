@@ -1,0 +1,23 @@
+diff --git a/modules/juce_audio_formats/codecs/juce_OggVorbisAudioFormat.cpp b/modules/juce_audio_formats/codecs/juce_OggVorbisAudioFormat.cpp
+--- a/modules/juce_audio_formats/codecs/juce_OggVorbisAudioFormat.cpp
++++ b/modules/juce_audio_formats/codecs/juce_OggVorbisAudioFormat.cpp
+@@ -163,6 +163,7 @@
+             addMetadataItem (comment, "DATE",        OggVorbisAudioFormat::id3date);
+             addMetadataItem (comment, "GENRE",       OggVorbisAudioFormat::id3genre);
+             addMetadataItem (comment, "TRACKNUMBER", OggVorbisAudioFormat::id3trackNumber);
++            addMetadataItem (comment, "COPYRIGHT",   "copyright");
+-
++
+             lengthInSamples = (uint32) ov_pcm_total (&ovFile, -1);
+             numChannels = (unsigned int) info->channels;
+@@ -338,7 +339,8 @@
+                                                              { OggVorbisAudioFormat::id3comment,     "COMMENT" },
+                                                              { OggVorbisAudioFormat::id3date,        "DATE" },
+                                                              { OggVorbisAudioFormat::id3genre,       "GENRE" },
+-                                                             { OggVorbisAudioFormat::id3trackNumber, "TRACKNUMBER" } };
++                                                             { OggVorbisAudioFormat::id3trackNumber, "TRACKNUMBER" },
++                                                             { "copyright",                         "COPYRIGHT" } };
+-
++
+         for (const auto& [key, tag] : tags)
+             if (const auto it = metadata.find (key); it != metadata.end() && it->second.isNotEmpty())

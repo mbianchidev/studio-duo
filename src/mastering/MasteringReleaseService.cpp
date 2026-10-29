@@ -40,14 +40,13 @@ bool writeAudio(const juce::AudioBuffer<float>& audio,
 
 std::optional<MasteringMeasurement> analyseFile(
     const juce::File& file,
+    AudioExportFormat format,
     juce::String& error)
 {
-    juce::AudioFormatManager formats;
-    formats.registerBasicFormats();
-    auto reader = std::unique_ptr<juce::AudioFormatReader>(
-        formats.createReaderFor(file));
-    if (reader == nullptr
-        || reader->lengthInSamples <= 0
+    auto reader = AudioExport::createVerificationReader(file, format, error);
+    if (reader == nullptr)
+        return std::nullopt;
+    if (reader->lengthInSamples <= 0
         || reader->lengthInSamples
             > std::numeric_limits<int>::max())
     {
@@ -443,7 +442,7 @@ std::optional<RenderReport> MasteringReleaseService::exportMaster(
     rendered->audio.setSize(0, 0);
     rendered.reset();
 
-    auto measurement = analyseFile(stagedMasterFile, error);
+    auto measurement = analyseFile(stagedMasterFile, settings.format, error);
     if (!measurement.has_value())
         return std::nullopt;
     RenderReport report;

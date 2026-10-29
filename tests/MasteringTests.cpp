@@ -435,6 +435,48 @@ void masteringTests()
                    *mp3Report, signingDirectory, signatureError),
            ("MP3 masters are encoded, remeasured and signed like lossless releases: "
             + exportError).toRawUTF8());
+    expect(mp3Report.has_value()
+               && std::abs(mp3Report->durationSeconds - renderAlbum.durationSeconds()) < 1.0 / 44100.0,
+           ("MP3 final-file measurements exclude encoder delay and padding (measured "
+            + juce::String(mp3Report ? mp3Report->durationSeconds : -1.0, 6)
+            + " seconds).").toRawUTF8());
+    const auto previousMasterHash = juce::SHA256(firstMaster).toHexString();
+    const auto previousSidecar = firstMaster.getSiblingFile("release-a.report.json");
+    const auto previousReportHash = juce::SHA256(previousSidecar).toHexString();
+    auto invalidAlbum = renderAlbum;
+    invalidAlbum.tracks.front().selectedSource()->sourceHash = juce::String::repeatedString("0", 64);
+    juce::String invalidExportError;
+    expect(!studio::MasteringReleaseService::exportMaster(
+               invalidAlbum, firstMaster, exportSettings, signingDirectory, invalidExportError)
+               && invalidExportError.isNotEmpty()
+               && juce::SHA256(firstMaster).toHexString() == previousMasterHash
+               && juce::SHA256(previousSidecar).toHexString() == previousReportHash,
+           "A failed mastering source verification preserves the valid destination and signed sidecar.");
+
+    const auto gaplessSource = renderDirectory.getChildFile("gapless-source.wav");
+    expect(writeSineWave(gaplessSource, 997.0, 0.18f, 44100.0, 12.0),
+           "A non-MPEG-frame-aligned gapless measurement fixture can be written.");
+    studio::MasteringAlbum gaplessAlbum;
+    studio::MasteringTrack gaplessTrack;
+    studio::MasteringSourceMix gaplessMix;
+    gaplessMix.file = gaplessSource;
+    gaplessMix.sourceHash = juce::SHA256(gaplessSource).toHexString();
+    gaplessMix.durationSeconds = 12.0;
+    gaplessTrack.sources = { gaplessMix };
+    gaplessTrack.selectedSourceId = gaplessMix.id;
+    gaplessTrack.fadeInSeconds = 0.1;
+    gaplessTrack.fadeOutSeconds = 0.1;
+    gaplessAlbum.tracks = { gaplessTrack };
+    for (const auto mode : { studio::Mp3BitrateMode::constant, studio::Mp3BitrateMode::variable })
+    {
+        exportSettings.mp3BitrateMode = mode;
+        const auto report = studio::MasteringReleaseService::exportMaster(
+            gaplessAlbum, renderDirectory.getChildFile("gapless.mp3"), exportSettings, signingDirectory, exportError);
+        expect(report && std::abs(report->durationSeconds - 12.0) < 1e-9,
+               ("CBR and VBR reports measure only the gapless decoded programme (measured "
+                + juce::String(report ? report->durationSeconds : -1.0, 6)
+                + " seconds): " + exportError).toRawUTF8());
+    }
 
     exportSettings.format = studio::MasteringExportFormat::aiff;
     exportSettings.bitDepth = 24;
