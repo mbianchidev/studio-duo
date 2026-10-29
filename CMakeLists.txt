@@ -328,6 +328,12 @@ set(STUDIO_DUO_MODEL_SOURCES
     src/model/LinkedEditModel.cpp
     src/model/LinkedEditModel.h
     src/model/ProjectCommands.cpp
+    src/model/ArrangementEditing.cpp
+    src/model/ArrangementEditing.h
+    src/workflow/WorkspaceCommands.cpp
+    src/workflow/WorkspaceCommands.h
+    src/render/ArrangementRender.cpp
+    src/render/ArrangementRender.h
     src/model/ProjectCommands.h
     src/model/TransportEditing.cpp
     src/model/TransportEditing.h
@@ -548,6 +554,7 @@ target_sources(
         src/update/UpdateSettingsComponent.cpp
         src/update/UpdateSettingsComponent.h
         src/ui/MainComponent.cpp
+        src/ui/MainComponentCommands.cpp
         src/ui/MainComponent.h
         src/ui/ProjectNamingComponents.h
         src/ui/ControlSurfaceSettingsComponent.cpp
@@ -599,6 +606,10 @@ target_sources(
         src/ui/StartupHubComponent.h
         src/ui/StudioTheme.h
         src/ui/TimelineComponent.cpp
+        src/ui/ClipEffectsComponent.cpp
+        src/ui/ClipEffectsComponent.h
+        src/ui/WorkflowSettingsComponent.cpp
+        src/ui/WorkflowSettingsComponent.h
         src/ui/TimelineComponent.h
         src/ui/ClipProcessingEditorComponent.cpp
         src/ui/ClipProcessingEditorComponent.h
@@ -1062,6 +1073,8 @@ if(STUDIO_DUO_BUILD_TESTS)
             tests/WindowSizingTests.cpp
             tests/TransportTests.cpp
             tests/TransportEditingTests.cpp
+            tests/ArrangementWorkflowTests.cpp
+            tests/WorkspaceCommandTests.cpp
             tests/SectionTransportTests.cpp
             tests/TransportSettingsTests.cpp
             tests/UpdateTests.cpp
@@ -1076,6 +1089,8 @@ if(STUDIO_DUO_BUILD_TESTS)
             src/ui/StartupProgressComponent.h
             src/plugin_host/PluginCatalog.cpp
             src/plugin_host/PluginCatalog.h
+            src/plugin_host/PluginBrowserComponent.cpp
+            src/plugin_host/PluginBrowserComponent.h
             tests/DawProjectTests.cpp
             tests/StudioOneProjectTests.cpp
             src/ui/TransportSettingsComponent.cpp
@@ -1089,6 +1104,10 @@ if(STUDIO_DUO_BUILD_TESTS)
             src/ui/StudioIconButton.h
             src/ui/StudioPanControl.h
             src/ui/TimelineComponent.cpp
+            src/ui/ClipEffectsComponent.cpp
+            src/ui/ClipEffectsComponent.h
+            src/ui/WorkflowSettingsComponent.cpp
+            src/ui/WorkflowSettingsComponent.h
             src/ui/TimelineComponent.h
             src/ui/ClipProcessingEditorComponent.cpp
             src/ui/ClipProcessingEditorComponent.h

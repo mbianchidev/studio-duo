@@ -20,6 +20,7 @@
 #include "automation/AutomationRecorder.h"
 #include "dawproject_io/DawProjectIO.h"
 #include "model/LinkedEditModel.h"
+#include "model/ArrangementEditing.h"
 #include "model/ProjectCommands.h"
 #include "model/ProjectTemplates.h"
 #include "model/TransportEditing.h"
@@ -29,6 +30,7 @@
 #include "project_io/ProjectFile.h"
 #include "project_io/ProjectImportService.h"
 #include "render/RenderEngine.h"
+#include "render/ArrangementRender.h"
 #include "update/StudioPreferences.h"
 #include "update/UpdateService.h"
 #include "startup/StartupDiagnostics.h"
@@ -46,6 +48,8 @@ class MainComponent final : public juce::Component,
                             public juce::FileDragAndDropTarget,
                             private juce::Timer,
                             private juce::KeyListener,
+                            private juce::ApplicationCommandTarget,
+                            private juce::ChangeListener,
                             private UpdateService::Listener
 {
 public:
@@ -126,6 +130,19 @@ private:
     void timerCallback() override;
     bool keyPressed(const juce::KeyPress& key) override;
     bool keyPressed(const juce::KeyPress& key, juce::Component*) override;
+    juce::ApplicationCommandTarget* getNextCommandTarget() override;
+    void getAllCommands(juce::Array<juce::CommandID>&) override;
+    void getCommandInfo(juce::CommandID, juce::ApplicationCommandInfo&) override;
+    bool perform(const juce::ApplicationCommandTarget::InvocationInfo&) override;
+    void changeListenerCallback(juce::ChangeBroadcaster*) override;
+    bool workspaceCommandEnabled(juce::CommandID) const;
+    bool executeWorkspaceCommand(juce::CommandID);
+    bool handleWorkspaceKey(const juce::KeyPress&);
+    void refreshWorkspaceCommands();
+    void updateWorkspaceShortcutLabels();
+    juce::String workspaceShortcutDescription(juce::CommandID) const;
+    void deleteWorkspaceSelection();
+    void changeWorkspaceTrackAvailability(bool hide);
 
     bool ensureAudioDeviceManager();
     [[nodiscard]] juce::AudioIODevice* currentAudioDevice() const noexcept;
@@ -217,6 +234,19 @@ private:
     void showAddTrackMenu();
     void duplicateSelectedTrack();
     void deleteSelectedTrack();
+    void groupSelectedTracks(bool busFolder);
+    void changeTrackLifecycle(const juce::String&, const std::function<void(TrackLifecycleState&)>&);
+    void showHiddenTracks();
+    juce::Result slipClip(const juce::String&, double sourceDeltaSeconds, bool allowClamp);
+    juce::Result stretchClip(const juce::String&, double durationSeconds);
+    void bounceSelectedClips(bool inPlace);
+    void freezeTrack(const juce::String&);
+    void unfreezeTrack(const juce::String&);
+    void showClipEffects(const juce::String&);
+    juce::Result runClipRender(
+        const juce::String& label,
+        std::function<juce::Result(const juce::File&, AudioClip&)> render,
+        std::function<bool(const AudioClip&)> commit);
     void showPluginPickerForTrack(
         const juce::String& trackId,
         juce::Rectangle<int> targetArea, const juce::String& containerId = {});
@@ -326,6 +356,7 @@ private:
     [[nodiscard]] std::vector<StudioAudioEngine::PluginRuntimeRequest>
         pluginRuntimeRequests(const Project& sourceProject) const;
     bool perform(std::unique_ptr<ProjectCommand> command);
+    bool performPreparedRender(std::unique_ptr<ProjectCommand> command);
     void changeSelectedTrackState(const std::function<void(TrackMixState&)>& change);
     void changeTransportState(const std::function<void(ProjectTransportState&)>& change);
     void changeEditGroups(const std::function<void(std::vector<EditGroup>&)>& change);
@@ -387,6 +418,10 @@ private:
     juce::String lastControlSurfaceStatus;
     Project project { Project::createDefault() };
     CommandStack commandStack;
+    juce::ApplicationCommandManager commandManager;
+    bool updatingWorkspaceCommands = false;
+    bool macroRunning = false;
+    bool lastWorkspaceCommandFailed = false;
     juce::File projectPackage;
     std::vector<ActiveRecordingTarget> activeRecordingTargets;
     std::vector<juce::String> activeMidiRecordingTrackIds;
@@ -399,6 +434,7 @@ private:
     juce::String copiedClipId;
     juce::String replacementInsertId;
     bool dirty = false;
+    std::uint64_t projectRevision = 0;
     bool appShutdownPrepared = false;
     bool audioEngineInitialised = false;
     bool exportInProgress = false;
@@ -580,6 +616,7 @@ private:
         "Arm audio tracks for recording or MIDI and instrument tracks for live input"
     };
     juce::TextButton trackColourButton;
+    juce::TextButton clipEffectsButton { "CLIP FX..." };
     StudioIconButton splitClipButton {
         StudioIcon::split,
         "Split clip",
@@ -616,7 +653,17 @@ private:
         "Snap edits",
         "Snap clip, marker, and section edits to the selected grid"
     };
+    StudioIconButton automationViewButton {
+        StudioIcon::automation, "Show automation", "Show or hide all timeline automation lanes (A)"
+    };
+    StudioIconButton stretchToolButton {
+        StudioIcon::stretch, "Stretch tool", "Stretch clip ends while preserving pitch; Alt-drag slips the source"
+    };
     juce::ComboBox editGridSelector;
+    juce::ComboBox macroSelector;
+    StudioIconButton runMacroButton {
+        StudioIcon::play, "Run workflow macro", "Run the selected macro; create macros in Settings > Workflow"
+    };
 
     juce::Viewport timelineViewport;
     TimelineComponent timeline;

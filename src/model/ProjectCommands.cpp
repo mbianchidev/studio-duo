@@ -12,6 +12,29 @@ namespace studio
 {
 namespace
 {
+bool editableTrack(const Project& project, const juce::String& id, juce::String& error)
+{
+    if (project.findTrack(id) == nullptr)
+    {
+        error = "The editing target track is unavailable.";
+        return false;
+    }
+    if (project.isTrackFrozen(id))
+    {
+        error = "Unfreeze the track before editing its clips, processors or routing.";
+        return false;
+    }
+    return true;
+}
+
+bool editableClip(const Project& project, const juce::String& id, juce::String& error)
+{
+    const auto* track = project.findTrackContainingClip(id);
+    if (track == nullptr)
+        track = project.findTrackContainingMidiClip(id);
+    return editableTrack(project, track != nullptr ? track->id : juce::String(), error);
+}
+
 bool validProjectMarker(const ProjectMarker& marker)
 {
     return marker.id.trim().isNotEmpty()
@@ -193,6 +216,16 @@ bool validateAutomationTarget(const Project& project,
                               const AutomationTarget& target,
                               juce::String& error)
 {
+    if (project.isTrackFrozen(target.trackId))
+    {
+        const auto* frozen = project.findTrack(target.trackId);
+        const auto* source = frozen != nullptr ? project.findTrack(frozen->freezeSourceTrackId) : nullptr;
+        if (source == nullptr || source->frozenTrackId.isNotEmpty() || !project.isTrackMixEditable(target.trackId))
+        {
+            error = "Unfreeze the track before editing its automation.";
+            return false;
+        }
+    }
     const auto* track = project.findTrack(target.trackId);
     if (track == nullptr)
     {
@@ -799,8 +832,9 @@ void SetSectionTransportCommand::undo(Project& project)
     section->clickSettings = oldClickSettings;
 }
 
-AddTrackCommand::AddTrackCommand(Track trackToAdd)
-    : track(std::move(trackToAdd))
+AddTrackCommand::AddTrackCommand(Track trackToAdd, juce::String beforeId,
+                                 std::optional<RoutingConnection> mainOutput)
+    : track(std::move(trackToAdd)), beforeTrackId(std::move(beforeId)), outputRoute(std::move(mainOutput))
 {
 }
 
@@ -811,6 +845,8 @@ juce::String AddTrackCommand::name() const
 
 bool AddTrackCommand::perform(Project& project, juce::String& error)
 {
+    if (!project.canAddTracks(1, error))
+        return false;
     if (project.findTrack(track.id) != nullptr)
     {
         error = "A track with the same ID already exists.";
@@ -845,10 +881,16 @@ bool AddTrackCommand::perform(Project& project, juce::String& error)
         return true;
     }
 
-    const auto master = std::find_if(project.tracks.begin(), project.tracks.end(), [](const auto& candidate)
+    const auto master = std::find_if(project.tracks.begin(), project.tracks.end(), [this](const auto& candidate)
     {
-        return candidate.type == TrackType::master;
+        return beforeTrackId.isNotEmpty() ? candidate.id == beforeTrackId
+                                         : candidate.type == TrackType::master;
     });
+    if (beforeTrackId.isNotEmpty() && master == project.tracks.end())
+    {
+        error = "The requested track insertion position is unavailable.";
+        return false;
+    }
 
     insertionIndex = static_cast<std::size_t>(std::distance(project.tracks.begin(), master));
     project.tracks.insert(project.tracks.begin() + static_cast<std::ptrdiff_t>(insertionIndex), track);
@@ -965,6 +1007,8 @@ juce::String AddClipCommand::name() const
 
 bool AddClipCommand::perform(Project& project, juce::String& error)
 {
+    if (!editableTrack(project, trackId, error))
+        return false;
     auto* track = project.findTrack(trackId);
     if (track == nullptr || track->type == TrackType::master)
     {
@@ -1004,6 +1048,8 @@ juce::String DuplicateClipCommand::name() const
 
 bool DuplicateClipCommand::perform(Project& project, juce::String& error)
 {
+    if (!editableClip(project, sourceClipId, error))
+        return false;
     if (!createdDuplicate)
     {
         auto* track = project.findTrackContainingClip(sourceClipId);
@@ -1091,6 +1137,8 @@ juce::String AddRecordingTakeCommand::name() const
 
 bool AddRecordingTakeCommand::perform(Project& project, juce::String& error)
 {
+    if (!project.canAddTracks(tracks.size(), error))
+        return false;
     if (tracks.empty())
     {
         error = "A recording take must contain at least one track.";
@@ -1255,6 +1303,9 @@ juce::String MoveClipCommand::name() const
 
 bool MoveClipCommand::perform(Project& project, juce::String& error)
 {
+    if (!editableClip(project, clipId, error)
+        || (newTrackId.isNotEmpty() && !editableTrack(project, newTrackId, error)))
+        return false;
     auto* sourceTrack = project.findTrackContainingClip(clipId);
     if (sourceTrack == nullptr)
     {
@@ -1355,6 +1406,8 @@ juce::String SetClipStateCommand::name() const
 
 bool SetClipStateCommand::perform(Project& project, juce::String& error)
 {
+    if (!editableTrack(project, trackId, error))
+        return false;
     auto* track = project.findTrack(trackId);
     if (track == nullptr || oldClip.id != newClip.id)
     {
@@ -1409,6 +1462,8 @@ juce::String TrimClipCommand::name() const
 
 bool TrimClipCommand::perform(Project& project, juce::String& error)
 {
+    if (!editableClip(project, clipId, error))
+        return false;
     auto* clip = project.findClip(clipId);
     if (clip == nullptr)
     {
@@ -1489,6 +1544,8 @@ juce::String SplitClipCommand::name() const
 
 bool SplitClipCommand::perform(Project& project, juce::String& error)
 {
+    if (!editableClip(project, clipId, error))
+        return false;
     auto* track = project.findTrackContainingClip(clipId);
     auto* clip = project.findClip(clipId);
     if (track == nullptr || clip == nullptr)
@@ -1594,6 +1651,8 @@ juce::String DeleteClipCommand::name() const
 
 bool DeleteClipCommand::perform(Project& project, juce::String& error)
 {
+    if (!editableClip(project, clipId, error))
+        return false;
     auto* track = project.findTrackContainingClip(clipId);
     if (track == nullptr)
     {
@@ -1641,6 +1700,8 @@ juce::String AddMidiClipCommand::name() const
 
 bool AddMidiClipCommand::perform(Project& project, juce::String& error)
 {
+    if (!editableTrack(project, trackId, error))
+        return false;
     auto* track = project.findTrack(trackId);
     if (track == nullptr
         || track->parentTrackId.isNotEmpty()
@@ -1708,6 +1769,8 @@ juce::String SetMidiClipStateCommand::name() const
 bool SetMidiClipStateCommand::perform(Project& project,
                                       juce::String& error)
 {
+    if (!editableTrack(project, trackId, error))
+        return false;
     if (oldClip.id != newClip.id || newClip.id.isEmpty())
     {
         error = "MIDI clip edits must preserve the clip ID.";
@@ -1795,6 +1858,8 @@ juce::String DeleteMidiClipCommand::name() const
 bool DeleteMidiClipCommand::perform(Project& project,
                                     juce::String& error)
 {
+    if (!editableClip(project, clipId, error))
+        return false;
     auto* track = project.findTrackContainingMidiClip(clipId);
     if (track == nullptr)
     {
@@ -2074,6 +2139,8 @@ juce::String SetActiveTakeCommand::name() const
 
 bool SetActiveTakeCommand::perform(Project& project, juce::String& error)
 {
+    if (!editableTrack(project, parentId, error))
+        return false;
     auto* parent = project.findTrack(parentId);
     if (parent == nullptr || parent->parentTrackId.isNotEmpty())
     {
@@ -2121,6 +2188,8 @@ juce::String SetCompRegionsCommand::name() const
 
 bool SetCompRegionsCommand::perform(Project& project, juce::String& error)
 {
+    if (!editableTrack(project, parentId, error))
+        return false;
     if (!validate(project, parentId, newRegions, error))
         return false;
     project.findTrack(parentId)->compRegions = newRegions;
@@ -2500,6 +2569,8 @@ juce::String SetTrackRoutingStateCommand::name() const
 bool SetTrackRoutingStateCommand::perform(Project& project,
                                           juce::String& error)
 {
+    if (!editableTrack(project, trackId, error))
+        return false;
     auto* track = project.findTrack(trackId);
     if (track == nullptr)
     {
@@ -2741,6 +2812,11 @@ juce::String SetTrackAutomationModeCommand::name() const
 bool SetTrackAutomationModeCommand::perform(Project& project,
                                             juce::String& error)
 {
+    if (project.isTrackFrozen(trackId))
+    {
+        error = "Unfreeze the track before arming or recording automation.";
+        return false;
+    }
     auto* track = project.findTrack(trackId);
     if (track == nullptr)
     {
@@ -2789,6 +2865,18 @@ bool SetTrackMixCommand::perform(Project& project, juce::String& error)
         error = "The track to change no longer exists.";
         return false;
     }
+    if (!project.isTrackMixEditable(trackId))
+    {
+        error = "Unfreeze the original before changing its track controls.";
+        return false;
+    }
+    if (track->freezeSourceTrackId.isNotEmpty()
+        && (newState.armed != track->armed || newState.inputChannel != track->inputChannel
+            || newState.stereoInput != track->stereoInput || newState.inputMonitoring != track->inputMonitoring))
+    {
+        error = "Unfreeze the source before changing recording or live input on its render track.";
+        return false;
+    }
 
     apply(*track, newState);
     return true;
@@ -2828,6 +2916,8 @@ juce::String SetTrackOutputCommand::name() const
 
 bool SetTrackOutputCommand::perform(Project& project, juce::String& error)
 {
+    if (!editableTrack(project, trackId, error))
+        return false;
     auto* track = project.findTrack(trackId);
     if (track == nullptr)
     {
@@ -3093,6 +3183,8 @@ juce::String SetPluginChainCommand::name() const
 
 bool SetPluginChainCommand::perform(Project& project, juce::String& error)
 {
+    if (!editableTrack(project, trackId, error))
+        return false;
     auto* track = project.findTrack(trackId);
     if (track == nullptr)
     {
@@ -3140,6 +3232,8 @@ juce::String AddPluginInsertCommand::name() const
 
 bool AddPluginInsertCommand::perform(Project& project, juce::String& error)
 {
+    if (!editableTrack(project, trackId, error))
+        return false;
     auto* track = project.findTrack(trackId);
     if (track == nullptr)
     {
@@ -3199,6 +3293,8 @@ juce::String RemovePluginInsertCommand::name() const
 
 bool RemovePluginInsertCommand::perform(Project& project, juce::String& error)
 {
+    if (!editableTrack(project, trackId, error))
+        return false;
     auto* track = project.findTrack(trackId);
     if (track == nullptr)
     {
@@ -3339,6 +3435,8 @@ juce::String ReplacePluginInsertCommand::name() const
 bool ReplacePluginInsertCommand::perform(Project& project,
                                          juce::String& error)
 {
+    if (!editableTrack(project, trackId, error))
+        return false;
     auto* insert = find(project);
     if (insert == nullptr)
     {
@@ -3421,6 +3519,8 @@ juce::String SetPluginBypassCommand::name() const
 
 bool SetPluginBypassCommand::perform(Project& project, juce::String& error)
 {
+    if (!editableTrack(project, trackId, error))
+        return false;
     auto* insert = find(project);
     if (insert == nullptr)
     {
@@ -3474,6 +3574,8 @@ juce::String SetPluginBridgeModeCommand::name() const
 bool SetPluginBridgeModeCommand::perform(Project& project,
                                          juce::String& error)
 {
+    if (!editableTrack(project, trackId, error))
+        return false;
     auto* insert = find(project);
     if (insert == nullptr)
     {
@@ -3545,6 +3647,15 @@ juce::String RemoveTrackCommand::name() const
 
 bool RemoveTrackCommand::perform(Project& project, juce::String& error)
 {
+    if (const auto* track = project.findTrack(trackId); track != nullptr)
+    {
+        const auto* source = project.findTrack(track->freezeSourceTrackId);
+        if (track->frozenTrackId.isNotEmpty() || (source != nullptr && source->frozenTrackId == trackId))
+        {
+            error = "Unfreeze the track before deleting its original or rendered track.";
+            return false;
+        }
+    }
     if (!capturedOriginal)
     {
         const auto iterator = std::find_if(project.tracks.begin(),
@@ -3884,6 +3995,8 @@ juce::String DuplicateTrackCommand::name() const
 
 bool DuplicateTrackCommand::perform(Project& project, juce::String& error)
 {
+    if (!editableTrack(project, sourceTrackId, error))
+        return false;
     if (!createdDuplicate)
     {
         const auto* source = project.findTrack(sourceTrackId);
@@ -4422,6 +4535,8 @@ juce::String RecallToneSnapshotCommand::name() const
 
 bool RecallToneSnapshotCommand::perform(Project& project, juce::String& error)
 {
+    if (!editableTrack(project, snapshot.returnTrackId, error))
+        return false;
     auto* returnTrack = project.findTrack(snapshot.returnTrackId);
     const auto route = std::find_if(
         project.reampRoutes.begin(),
@@ -4648,6 +4763,9 @@ juce::String RecallMixerSnapshotCommand::name() const
 bool RecallMixerSnapshotCommand::perform(Project& project,
                                          juce::String& error)
 {
+    for (const auto& state : snapshot.tracks)
+        if (!editableTrack(project, state.trackId, error))
+            return false;
     if (!capturedOriginal)
     {
         for (const auto& state : snapshot.tracks)

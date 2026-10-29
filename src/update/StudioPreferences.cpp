@@ -203,6 +203,22 @@ const ControlSurfaceSettings& StudioPreferences::controlSurfaceSettings() const 
     return controlSurface;
 }
 
+const WorkspaceSettings& StudioPreferences::workspaceSettings() const noexcept { return workspace; }
+
+juce::Result StudioPreferences::setWorkspaceSettings(const WorkspaceSettings& settings)
+{
+    if (const auto valid = settings.validate(); valid.failed())
+        return valid;
+    const auto previous = workspace;
+    workspace = settings;
+    const auto result = save();
+    if (result.failed())
+        workspace = previous;
+    else
+        statusMessage = "Shortcuts and workflow macros saved.";
+    return result;
+}
+
 juce::Result StudioPreferences::setControlSurfaceSettings(const ControlSurfaceSettings& settings)
 {
     if (const auto valid = settings.validate(); valid.failed())
@@ -398,6 +414,17 @@ void StudioPreferences::load()
     }
 
     auto hadInvalidOptionalData = false;
+    if (object->hasProperty("workspace"))
+    {
+        juce::String error;
+        if (auto restored = WorkspaceSettings::fromVar(object->getProperty("workspace"), error))
+            workspace = std::move(*restored);
+        else
+        {
+            hadInvalidOptionalData = true;
+            juce::Logger::writeToLog("Workspace settings could not be restored: " + error);
+        }
+    }
     if (object->hasProperty("controlSurface"))
     {
         const auto* surface = object->getProperty("controlSurface").getDynamicObject();
@@ -521,7 +548,8 @@ juce::Result StudioPreferences::save()
 
     auto object =
         std::make_unique<juce::DynamicObject>();
-    object->setProperty("schemaVersion", 3);
+    object->setProperty("schemaVersion", 4);
+    object->setProperty("workspace", workspace.toVar());
     object->setProperty(
         "autosaveEnabled",
         autosave);

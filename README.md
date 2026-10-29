@@ -30,6 +30,9 @@ See [status and limits](#status-and-limits) before relying on a release.
   comping, linked edits, transient tools, elastic audio, fades, and crossfades.
   Tempo/meter maps, count-in, punch, routed click, named markers, and editable
   loops support tracking and arrangement. See the [user guide](docs/user-guide.md).
+  Clip-range FX, multi-clip bounce, reversible track freeze, folder/bus grouping,
+  automation visibility and customizable shortcuts/macros extend those
+  [arrangement workflows](docs/user-guide.md#arrangement-automation-and-clip-tools).
 - **Compose MIDI and drums.** Live, recorded, and retrospective MIDI; piano-roll
   and drum editors with per-note expression, probability, drum maps, seeded
   humanization, and multi-output routing. Twelve performance pads and a
@@ -99,7 +102,8 @@ using CoreAudio. ASIO-compatible interfaces are supported on Windows; ASIO is
 not the macOS audio backend. RAM, storage, and CPU needs depend on media, track
 count, and plugins; fixed performance minima have not been validated. Audio
 preparation currently decodes whole files, so large sessions can require
-substantial memory.
+substantial memory. Projects are capped at 1000 tracks and audio preparation has
+explicit [memory limits](docs/user-guide.md#folders-deactivation-and-track-limits).
 
 **Linux is unsupported.** Covering audio-driver integrations and different
 distributions is beyond the available time of the one-person development team.

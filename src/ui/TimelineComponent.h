@@ -6,6 +6,7 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 
 #include <functional>
+#include <map>
 
 namespace studio
 {
@@ -24,6 +25,15 @@ public:
 
     void setProject(const Project* projectToDisplay);
     void setSelection(juce::String trackId, juce::String clipId);
+    void setMultiSelection(std::vector<juce::String> trackIds, std::vector<juce::String> clipIds);
+    [[nodiscard]] const std::vector<juce::String>& selectedTrackIds() const noexcept { return selectedTracks; }
+    [[nodiscard]] const std::vector<juce::String>& selectedClipIds() const noexcept { return selectedClips; }
+    void setAutomationVisible(bool visible);
+    [[nodiscard]] bool isAutomationVisible() const noexcept { return automationVisible; }
+    void setStretchToolEnabled(bool enabled);
+    [[nodiscard]] bool isStretchToolEnabled() const noexcept { return stretchToolEnabled; }
+    bool dispatchNavigationKey(const juce::KeyPress&);
+    void editSelectedClipProcessing(ClipProcessingEditorComponent::Mode);
     void setPlayheadSeconds(double seconds);
     void setViewportPosition(int horizontalPosition);
     void setRecordingPreviews(std::vector<RecordingPreview> previews);
@@ -44,6 +54,8 @@ public:
         int gridLinesConsidered = 0;
         int tracksPainted = 0;
         int clipsPainted = 0;
+        int automationLanesPainted = 0;
+        int clipAutomationOverlaysPainted = 0;
     };
     [[nodiscard]] PaintStatistics paintStatisticsForTesting() const noexcept
     {
@@ -70,11 +82,24 @@ public:
     std::function<void(const juce::String&)> onToggleTrackVersions;
     std::function<void(const juce::String&)> onDuplicateTrack;
     std::function<void(const juce::String&)> onDeleteTrack;
+    std::function<void(const juce::String&)> onToggleTrackActive;
+    std::function<void(const juce::String&)> onHideTrack;
+    std::function<void()> onShowHiddenTracks;
+    std::function<void(const juce::String&)> onToggleFolderCollapsed;
+    std::function<void(bool)> onGroupTracks;
+    std::function<void(const juce::String&)> onFreezeTrack;
+    std::function<void(const juce::String&)> onUnfreezeTrack;
+    std::function<void()> onLayoutChanged;
+    std::function<void()> onAutomationEditorRequested;
+    std::function<bool(const juce::KeyPress&)> onCommandKey;
+    std::function<juce::String(juce::CommandID)> onShortcutDescription;
     std::function<void()> onAddTrack;
     std::function<void(const juce::String&, const juce::String&)> onClipSelected;
     std::function<void(const juce::String&, double)> onCreateMidiClip;
     std::function<void(const juce::String&, const juce::String&, double)> onClipMoved;
     std::function<void(const juce::String&, double, double, double)> onClipTrimmed;
+    std::function<juce::Result(const juce::String&, double, bool)> onClipSlipped;
+    std::function<juce::Result(const juce::String&, double)> onClipStretched;
     std::function<void(double)> onSeek;
     std::function<void(double, double)> onZoomRequested;
     std::function<void(double)> onAddMarkerRequested;
@@ -109,6 +134,8 @@ public:
     std::function<void(const juce::String&)> onToggleClipPolarity;
     std::function<void(const juce::String&)> onToggleClipReverse;
     std::function<void(const juce::String&)> onConsolidateClip;
+    std::function<void(const juce::String&)> onClipEffects;
+    std::function<void(bool)> onBounceClips;
 
     void paint(juce::Graphics& graphics) override;
     bool keyPressed(const juce::KeyPress& key) override;
@@ -147,7 +174,9 @@ private:
         fadeIn,
         fadeOut,
         fadeInCurve,
-        fadeOutCurve
+        fadeOutCurve,
+        slip,
+        stretch
     };
 
     enum class SectionDragMode
@@ -163,7 +192,12 @@ private:
         std::size_t index,
         double fallback) const noexcept;
     [[nodiscard]] std::vector<Hit> clipHits(juce::Rectangle<float> interest = {}) const;
-    [[nodiscard]] std::vector<const Track*> visibleTracks() const;
+    [[nodiscard]] const std::vector<const Track*>& visibleTracks() const;
+    void rebuildRows();
+    void selectForMouse(const juce::String&, const juce::String&, juce::ModifierKeys);
+    void notifySelection();
+    [[nodiscard]] bool clipIsSelected(const juce::String&) const;
+    [[nodiscard]] int trackRowHeight(const juce::String&) const;
     [[nodiscard]] int trackIndexAt(float y) const noexcept;
     [[nodiscard]] float trackY(const juce::String& trackId) const noexcept;
     [[nodiscard]] double xToSeconds(float x) const noexcept;
@@ -201,6 +235,15 @@ private:
     const Project* project = nullptr;
     juce::String selectedTrackId;
     juce::String selectedClipId;
+    std::vector<juce::String> selectedTracks, selectedClips;
+    std::vector<const Track*> visibleTrackCache;
+    std::vector<int> rowTops;
+    std::map<juce::String, std::size_t> rowIndices;
+    std::map<juce::String, std::vector<const AutomationLane*>> automationRows;
+    int rowsEnd = rulerHeight;
+    bool automationVisible = false;
+    bool stretchToolEnabled = false;
+    bool dispatchingNavigationKey = false;
     juce::String accessibleSelectionValue { "Timeline; no selection" };
     juce::String draggingTrackVolumeId;
     juce::String draggedMarkerId;
@@ -254,6 +297,7 @@ private:
     static constexpr int rulerHeight = 80;
     static constexpr int trackHeaderWidth = 176;
     static constexpr int trackHeight = 88;
+    static constexpr int automationLaneHeight = 48;
     static constexpr int addTrackHeight = 44;
 };
 }

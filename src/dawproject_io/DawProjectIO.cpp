@@ -766,7 +766,7 @@ private:
         const auto types = contentTypes(track);
         if (types.isNotEmpty())
             element->setAttribute("contentType", types);
-        element->setAttribute("loaded", "true");
+        element->setAttribute("loaded", boolText(track.active && track.frozenTrackId.isEmpty()));
 
         if (track.type != TrackType::folder)
             writeChannel(*element, track);
@@ -819,7 +819,7 @@ private:
 
     void writeDevices(juce::XmlElement& channel, const Track& track)
     {
-        if (track.inserts.empty())
+        if (track.inserts.empty() || track.frozenTrackId.isNotEmpty())
             return;
         auto* devices = addElement(channel, "Devices");
         for (std::size_t index = 0; index < track.inserts.size(); ++index)
@@ -1078,6 +1078,11 @@ private:
         }
         for (const auto& lane : project.automationLanes)
         {
+            const auto* owner = project.findTrack(lane.target.trackId);
+            if (owner != nullptr && owner->frozenTrackId.isNotEmpty()
+                && (lane.target.type == AutomationTargetType::pluginParameter
+                    || lane.target.type == AutomationTargetType::deviceParameter))
+                continue;
             auto points = writeAutomation(lane);
             if (points != nullptr)
             {
@@ -1980,8 +1985,17 @@ private:
                     "unsupported.comping",
                     path,
                     "Studio Duo comp-region and active-take semantics are not represented by DAWproject 1.0.");
+            if (track.hidden || track.folderCollapsed)
+                warn("unsupported.track-visibility", path,
+                     "Hidden/collapsed track UI state is retained only in the native project.");
+            if (track.frozenTrackId.isNotEmpty() || track.freezeSourceTrackId.isNotEmpty())
+                warn("unsupported.freeze-link", path,
+                     "Frozen audio and unloaded originals are exported, but unfreeze links and the frozen original's "
+                     "processor chain/parameter automation require the native .studioduo project.");
             for (const auto& insert : track.inserts)
             {
+                if (track.frozenTrackId.isNotEmpty())
+                    break;
                 const auto insertPath = devicePath(track, insert);
                 if (insert.isContainer())
                 {
@@ -3523,13 +3537,7 @@ private:
         track.colour = colourFromText(
             element.getStringAttribute("color"),
             track.colour);
-        if (!boolAttribute(element, "loaded", true))
-        {
-            warn(
-                "unsupported.track-loaded-state",
-                path,
-                "Studio Duo imports available track content and does not preserve an unloaded-track state.");
-        }
+        track.active = boolAttribute(element, "loaded", true);
         if (element.getStringAttribute("comment").isNotEmpty())
         {
             warn(
@@ -3540,7 +3548,8 @@ private:
         if (parentTrackId.isNotEmpty())
         {
             const auto* parent = project.findTrack(parentTrackId);
-            if (parent != nullptr && parent->type == TrackType::folder)
+            if (parent != nullptr && (parent->type == TrackType::folder
+                || parent->type == TrackType::bus || parent->type == TrackType::instrument))
             {
                 track.folderTrackId = parentTrackId;
             }
@@ -3549,7 +3558,7 @@ private:
                 warn(
                     "unsupported.channel-track-hierarchy",
                     path,
-                    "Studio Duo flattened a child of a channel-bearing track because native folder membership requires a folder track.");
+                    "Studio Duo flattened a child whose parent cannot act as a folder, audio bus or instrument bus.");
             }
         }
         const auto* channel = element.getChildByName("Channel");
@@ -3578,6 +3587,11 @@ private:
                     ? TrackType::instrument
                     : TrackType::midi;
             }
+        }
+        if (track.type == TrackType::master && !track.active)
+        {
+            warn("unsupported.master-loaded-state", path, "The master must remain active in Studio Duo.");
+            track.active = true;
         }
         const auto internalId = track.id;
         project.tracks.push_back(std::move(track));

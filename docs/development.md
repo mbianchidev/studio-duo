@@ -316,7 +316,7 @@ input/output connection. Construction, default/disabled preferences and
 pre-probe polling never discover or open MIDI. `MainComponent` permits a saved
 opt-in only after MIDI service readiness; explicit Settings retries retain the
 Windows separate-process discovery gate. Exact input/output identities are
-persisted in preferences schema 3. Legacy preferences default to disabled;
+persisted in preferences schema 4 (introduced in schema 3). Legacy preferences default to disabled;
 invalid/unknown protocols are reported without opening a driver.
 
 Control ports must not be selected for musical input/output. Configuration
@@ -1297,6 +1297,59 @@ changes.
 data directory with defaults merged on missing or invalid data. When enabled,
 ordinary project edits refresh `recovery/latest.json`; disabling it leaves
 manual project saves and explicit safety recovery points unchanged.
+
+### Arrangement commands and bounded rendering
+
+`workflow/WorkspaceCommands` defines stable native command IDs, default bindings
+and the synchronous macro whitelist. `MainComponentCommands` routes live keys
+through JUCE's `ApplicationCommandManager`, keeping text entry, focused native
+controls and MIDI/drum keys outside global shortcut handling. Preferences schema
+4 stores native key-mapping XML, bounded command-sequence macros and the selected
+macro button assignment. Invalid data is reported; failed writes roll back
+in-memory preferences. Macros stop on the first failed or disabled step and
+cannot run nested macros, file dialogs, render jobs or operating-system commands.
+
+`model/ArrangementEditing` shares lifecycle, grouping, visible hierarchy,
+slip and stretch operations. Timeline row positions are rebuilt on project/view
+changes rather than repeatedly reconstructing the hierarchy during hit testing.
+Automation adds named rows and clip overlays only while the automation view is
+enabled. Track IDs remain stable across hiding, deactivation and grouping.
+Slip/stretch also expose native numeric editors with result-returning callbacks;
+linked numeric slips fail atomically outside their common source bounds, while
+mouse gestures clamp to those bounds. Persisted command IDs are append-only.
+
+`render/ArrangementRender` prepares isolated bounce/freeze graphs and uses the
+existing sample-accurate engine. It preserves required upstream routing and
+MIDI dependencies, sends unrelated output to a muted sink, and omits unrelated
+processors. Frozen clips are printed before the source fader/pan/polarity/VCA;
+those controls, their automation and outgoing routes move to the audio proxy.
+The original data stays in the native project with reciprocal freeze links.
+Only the outermost audible proxy is mixer-editable. Frozen automation remains
+read-only, and nested unfreeze resolves the outermost frozen ancestor first.
+AudioSuite first bakes clip processing, processes only the selected source
+window, then combines dry audio and effects tails into a new float WAV.
+Its private rack captures surviving ready effects, permits failed-effect
+removal/reload, and reports when reload uses an initial rather than captured
+setup. State capture is scoped and cancelled after caller timeouts. Main applies
+render placement to a candidate model and prepares its media before publishing
+the real undoable edit; failed preflight leaves the live graph unchanged.
+
+Decoded/render buffers and unique prepared PCM have 512 MiB preflight limits.
+The latter is conservative stereo accounting and still reuses identical
+prepared media. Deactivated tracks skip PCM preparation unless their original
+media is referenced by an active tone path. Recording retains a separate
+64-track capture limit; meters cover the full 1000-track project limit using
+fixed-count heap storage. These bounds do not qualify arbitrary plugin loads
+or replace hardware performance testing.
+
+Clip source intervals are half-open, including the reversed read direction.
+Unity-rate preparation must preserve samples when audio is bounced/reimported;
+endpoint interpolation must not resample an unchanged clip on each print.
+Offline float stems retain headroom while the live hardware callback keeps its
+output clamp. Synthetic arrangement tests cover clip-only region processing,
+native smart-tool gestures, 1000-track rendering, freeze/send/automation parity,
+MIDI-folder printing, inactive raw DI/take references, failed-effect recovery,
+command-based macro execution and native key-map/preferences round trips.
 
 The Tracking Setup installed-VST check is filesystem-only. It combines JUCE's
 native VST3 defaults, explicit macOS (`/Library/Audio/Plug-Ins/VST3` and the

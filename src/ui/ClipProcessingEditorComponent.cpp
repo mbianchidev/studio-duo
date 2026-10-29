@@ -10,7 +10,23 @@ ClipProcessingEditorComponent::ClipProcessingEditorComponent(const AudioClip& cl
 {
     const auto gain = mode == Mode::gain;
     const auto fadeIn = mode == Mode::fadeIn;
-    setName(gain ? "Edit clip gain" : fadeIn ? "Edit fade in" : "Edit fade out");
+    const auto fade = fadeIn || mode == Mode::fadeOut;
+    const auto slip = mode == Mode::slip;
+    const auto stretch = mode == Mode::stretch;
+    minimumValue = gain ? -60.0 : 0.0;
+    maximumValue = gain ? 24.0 : duration;
+    if (slip)
+    {
+        minimumValue = clip.sourceRangeStartSeconds - clip.sourceOffsetSeconds;
+        maximumValue = clip.sourceRangeEnd() - clip.sourceOffsetSeconds - clip.sourceSpanSeconds();
+    }
+    if (stretch)
+    {
+        minimumValue = clip.sourceSpanSeconds() / 4.0;
+        maximumValue = clip.sourceSpanSeconds() / 0.25;
+    }
+    setName(gain ? "Edit clip gain" : slip ? "Slip clip audio" : stretch ? "Stretch clip duration"
+        : fadeIn ? "Edit fade in" : "Edit fade out");
     setTitle(getName() + ": " + clip.name);
     const auto initialise = [this](juce::TextEditor& editor, juce::Label& label,
                                    const char* id, const juce::String& title)
@@ -34,23 +50,26 @@ ClipProcessingEditorComponent::ClipProcessingEditorComponent(const AudioClip& cl
         addAndMakeVisible(label);
         addAndMakeVisible(editor);
     };
-    initialise(value, valueLabel, "clip-edit.value", gain ? "Clip gain (dB)" : "Fade duration (seconds)");
+    initialise(value, valueLabel, "clip-edit.value", gain ? "Clip gain (dB)"
+        : slip ? "Source slip offset (seconds)" : stretch ? "Clip duration (seconds)" : "Fade duration (seconds)");
     value.setText(gain ? formatRoundTripNumber(clip.gainDecibels)
-        : formatRoundTripNumber(fadeIn ? clip.fadeInSeconds : clip.fadeOutSeconds), false);
+        : formatRoundTripNumber(slip ? 0.0 : stretch ? duration : fadeIn ? clip.fadeInSeconds : clip.fadeOutSeconds), false);
     value.setDescription(gain ? "Enter a gain from -60 to +24 decibels."
-        : "Enter a fade duration from zero to " + juce::String(duration, 9) + " seconds.");
+        : "Enter a value from " + formatRoundTripNumber(minimumValue) + " to "
+            + formatRoundTripNumber(maximumValue) + " seconds.");
     initialise(curve, curveLabel, "clip-edit.curve", "Fade curve (-1 to +1; 0 is linear)");
     curve.setText(formatRoundTripNumber(fadeIn ? clip.fadeInCurve : clip.fadeOutCurve), false);
     curve.setDescription("Enter a curve between -1 and +1. Zero is linear.");
-    curve.setVisible(!gain);
-    curveLabel.setVisible(!gain);
+    curve.setVisible(fade);
+    curveLabel.setVisible(fade);
     status.setComponentID("clip-edit.status");
     status.setTitle("Clip edit validation");
     status.setColour(juce::Label::textColourId, juce::Colour(StudioColours::text));
     status.setFont(juce::FontOptions(13.0f));
     status.setBorderSize({});
     addAndMakeVisible(status);
-    applyButton.setTitle(gain ? "Apply clip gain" : fadeIn ? "Apply fade in" : "Apply fade out");
+    applyButton.setTitle(gain ? "Apply clip gain" : slip ? "Apply source slip" : stretch ? "Apply stretch duration"
+        : fadeIn ? "Apply fade in" : "Apply fade out");
     cancelButton.setTitle("Cancel clip edit");
     applyButton.setWantsKeyboardFocus(true);
     cancelButton.setWantsKeyboardFocus(true);
@@ -58,7 +77,7 @@ ClipProcessingEditorComponent::ClipProcessingEditorComponent(const AudioClip& cl
     cancelButton.onClick = [this] { if (onClose) onClose(); };
     addAndMakeVisible(applyButton);
     addAndMakeVisible(cancelButton);
-    setSize(360, gain ? 180 : 244);
+    setSize(360, fade ? 244 : 180);
 }
 
 juce::Result ClipProcessingEditorComponent::showError(juce::String message, juce::TextEditor& field)
@@ -74,13 +93,16 @@ juce::Result ClipProcessingEditorComponent::showError(juce::String message, juce
 juce::Result ClipProcessingEditorComponent::applyChanges()
 {
     const auto gain = mode == Mode::gain;
+    const auto fade = mode == Mode::fadeIn || mode == Mode::fadeOut;
     const auto number = gain ? parseDecibels(value.getText()) : parseFiniteNumber(value.getText());
     if (!number)
         return showError("Enter a complete finite number.", value);
-    if (*number < (gain ? -60.0 : 0.0) || *number > (gain ? 24.0 : duration))
+    if (*number < minimumValue || *number > maximumValue || (mode == Mode::stretch && *number <= 0.0))
         return showError(gain ? "Clip gain must be between -60 and +24 dB."
+            : mode == Mode::slip ? "The slip must fit within recoverable source audio."
+            : mode == Mode::stretch ? "The duration must retain a playback rate between 0.25x and 4x."
             : "Fade duration must fit within this clip.", value);
-    const auto shape = gain ? std::optional<double>(0.0) : parseFiniteNumber(curve.getText());
+    const auto shape = fade ? parseFiniteNumber(curve.getText()) : std::optional<double>(0.0);
     if (!shape || *shape < -1.0 || *shape > 1.0)
         return showError("Fade curve must be a finite number between -1 and +1.", curve);
     if (!onApply)
@@ -133,7 +155,7 @@ void ClipProcessingEditorComponent::resized()
     auto bounds = getLocalBounds().reduced(14);
     valueLabel.setBounds(bounds.removeFromTop(20));
     value.setBounds(bounds.removeFromTop(32));
-    if (mode != Mode::gain)
+    if (mode == Mode::fadeIn || mode == Mode::fadeOut)
     {
         bounds.removeFromTop(10);
         curveLabel.setBounds(bounds.removeFromTop(20));

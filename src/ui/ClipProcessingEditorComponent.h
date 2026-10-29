@@ -11,7 +11,7 @@ namespace studio
 class ClipProcessingEditorComponent final : public juce::Component
 {
 public:
-    enum class Mode { gain, fadeIn, fadeOut };
+    enum class Mode { gain, fadeIn, fadeOut, slip, stretch };
     ClipProcessingEditorComponent(const AudioClip& clip, Mode mode);
     juce::Result applyChanges();
     void focusValue();
@@ -26,6 +26,7 @@ private:
     juce::Result showError(juce::String message, juce::TextEditor& field);
     Mode mode;
     double duration;
+    double minimumValue = 0.0, maximumValue = 0.0;
     juce::Label valueLabel, curveLabel, status;
     juce::TextEditor value, curve;
     juce::TextButton applyButton { "APPLY" }, cancelButton { "CANCEL" };

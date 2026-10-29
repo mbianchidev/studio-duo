@@ -2,6 +2,7 @@
 
 #include "ui/StudioTheme.h"
 #include "midi/ControlSurface.h"
+#include "workflow/WorkspaceCommands.h"
 
 #include <juce_core/juce_core.h>
 
@@ -35,10 +36,12 @@ public:
         const juce::String& activeProjectName = {}) const;
     [[nodiscard]] const juce::String& status() const noexcept;
     [[nodiscard]] const ControlSurfaceSettings& controlSurfaceSettings() const noexcept;
+    [[nodiscard]] const WorkspaceSettings& workspaceSettings() const noexcept;
 
     juce::Result setAutosaveEnabled(bool enabled);
     juce::Result setScanPluginsAtStartup(bool enabled);
     juce::Result setControlSurfaceSettings(const ControlSurfaceSettings& settings);
+    juce::Result setWorkspaceSettings(const WorkspaceSettings&);
     juce::Result setThemePreset(const juce::String& presetId);
     juce::Result setCustomThemePalette(
         const StudioThemePalette& palette);
@@ -59,6 +62,7 @@ private:
     bool autosave = true;
     bool scanAtStartup = true;
     ControlSurfaceSettings controlSurface;
+    WorkspaceSettings workspace;
     juce::String selectedThemePreset { "studio-gray" };
     StudioThemePalette customTheme;
     std::vector<RecentProject> recent;

@@ -54,9 +54,10 @@ bool vcaMuted(const Project& project, const juce::String& trackId)
     return std::any_of(
         project.tracks.cbegin(),
         project.tracks.cend(),
-        [&trackId](const auto& track)
+        [&project, &trackId](const auto& track)
         {
             return track.type == TrackType::vca
+                && project.isTrackActive(track.id)
                 && track.muted
                 && contains(track.controlledTrackIds, trackId);
         });
@@ -114,9 +115,9 @@ std::optional<SoloResolution> SoloResolver::resolve(const Project& project,
     const auto anySolo = std::any_of(
         project.tracks.cbegin(),
         project.tracks.cend(),
-        [](const auto& track)
+        [&project](const auto& track)
         {
-            return track.type != TrackType::master && track.solo;
+            return track.type != TrackType::master && track.solo && project.isTrackActive(track.id);
         });
 
     SoloResolution resolution;
@@ -240,11 +241,16 @@ std::optional<SoloResolution> SoloResolver::resolve(const Project& project,
             {
                 const auto* track = project.findTrack(trackId);
                 return track == nullptr
+                    || !project.isTrackActive(trackId)
                     || track->muted
                     || folderMuted(project, *track)
                     || vcaMuted(project, trackId);
             }),
         resolution.audibleTrackIds.end());
+    std::erase_if(resolution.processingTrackIds, [&project](const auto& trackId)
+    {
+        return !project.isTrackActive(trackId);
+    });
     return resolution;
 }
 }

@@ -27,7 +27,7 @@ float vcaGainFor(const Project& project, const juce::String& trackId)
     auto gain = 1.0f;
     for (const auto& track : project.tracks)
     {
-        if (track.type != TrackType::vca
+        if (track.type != TrackType::vca || !project.isTrackActive(track.id)
             || std::find(track.controlledTrackIds.cbegin(),
                          track.controlledTrackIds.cend(),
                          trackId) == track.controlledTrackIds.cend())

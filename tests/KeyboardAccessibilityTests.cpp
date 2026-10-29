@@ -109,6 +109,51 @@ void clipProcessingControls()
     }
 }
 
+void preciseSlipAndStretchControls()
+{
+    studio::AudioClip clip;
+    clip.name = "Synthetic elastic clip";
+    clip.sourceOffsetSeconds = 2.0;
+    clip.sourceLengthSeconds = clip.sourceRangeEndSeconds = 12.0;
+    clip.durationSeconds = 3.0;
+    clip.playbackRate = 2.0;
+    using Mode = studio::ClipProcessingEditorComponent::Mode;
+    for (const auto mode : { Mode::slip, Mode::stretch })
+    {
+        studio::ClipProcessingEditorComponent editor(clip, mode);
+        auto* value = dynamic_cast<juce::TextEditor*>(editor.findChildWithID("clip-edit.value"));
+        auto* curve = editor.findChildWithID("clip-edit.curve");
+        auto* status = dynamic_cast<juce::Label*>(editor.findChildWithID("clip-edit.status"));
+        expect(value != nullptr && curve != nullptr && !curve->isVisible() && status != nullptr,
+               "Precise slip/stretch use named native number fields without unrelated fade controls.");
+        if (value == nullptr || status == nullptr)
+            continue;
+        int changes = 0, closes = 0;
+        editor.onApply = [&](double, float) { ++changes; return juce::Result::ok(); };
+        editor.onClose = [&] { ++closes; };
+        for (const auto& invalid : { juce::String("nan"), mode == Mode::slip ? juce::String("-2.01") : juce::String("1.49"),
+                                     mode == Mode::slip ? juce::String("4.01") : juce::String("24.01") })
+        {
+            value->setText(invalid, false);
+            expect(editor.applyChanges().failed() && changes == 0 && closes == 0,
+                   "Precise slip/stretch reject non-finite and out-of-source/rate values before dispatch.");
+        }
+        value->setText(mode == Mode::slip ? "1" : "6", false);
+        editor.onApply = [](double, float) { return juce::Result::fail("Synthetic linked clip is out of range."); };
+        expect(editor.applyChanges().failed() && closes == 0 && status->getText().contains("linked clip"),
+               "A linked edit failure remains visible and keeps the precise editor open.");
+        editor.onApply = [&](double number, float)
+        {
+            ++changes;
+            expect(std::abs(number - (mode == Mode::slip ? 1.0 : 6.0)) < 1.0e-9,
+                   "Precise slip/stretch dispatch the requested numeric value.");
+            return juce::Result::ok();
+        };
+        expect(editor.keyPressed(juce::KeyPress(juce::KeyPress::returnKey)) && changes == 1 && closes == 1,
+               "Return applies a successful precise slip/stretch once and closes its editor.");
+    }
+}
+
 void namedProductionControls()
 {
     studio::PluginParameterPanel parameters("Synthetic processor", "synthetic-insert",
@@ -265,6 +310,7 @@ void masteringKeyboardControls()
 void keyboardAccessibilityTests()
 {
     clipProcessingControls();
+    preciseSlipAndStretchControls();
     namedProductionControls();
     isolationConsentPolicy();
     themeContrastContracts();

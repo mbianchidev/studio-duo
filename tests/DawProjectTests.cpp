@@ -1573,8 +1573,10 @@ void unitAndChannelHierarchyImport()
             {
                 return track.name == "Child";
             });
-        expect(child != imported.project->tracks.cend()
-                   && child->folderTrackId.isEmpty()
+        const auto group = std::find_if(imported.project->tracks.cbegin(), imported.project->tracks.cend(),
+            [](const auto& track) { return track.name == "Group"; });
+        expect(child != imported.project->tracks.cend() && group != imported.project->tracks.cend()
+                   && child->folderTrackId == group->id
                    && std::abs(child->pan) < 0.0001f
                    && std::abs(
                           child->volumeDecibels
@@ -1609,11 +1611,11 @@ void unitAndChannelHierarchyImport()
                           - juce::Decibels::gainToDecibels(0.25))
                           < 0.001,
                "Automation point units convert through the target parameter domain.");
-        expect(reportContains(
+        expect(!reportContains(
                    imported.report,
                    "unsupported.channel-track-hierarchy",
                    "/Project/Structure/Track"),
-               "Channel-bearing track groups are flattened with an object-specific report.");
+               "Bus-folder hierarchy imports without flattening or a loss report.");
     }
     root.deleteRecursively();
 }
