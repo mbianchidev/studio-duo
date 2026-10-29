@@ -63,21 +63,25 @@ or silently upgrading their results.
 
 Build Release and the native tests as described in [development](development.md).
 The opt-in command uses no audio/MIDI manager, opens no device, and produces no
-audible output:
+audible output. This bounded example fits the engine's current audio-memory
+limits at both supported rates:
 
 ```sh
 ./build/StudioDuoTests_artefacts/Release/StudioDuoTests \
   --qualify-long-session \
   "--qualification-output=$PWD/build/qualification/long-48k-256" \
-  --tracks=16 --songs=3 --song-seconds=180 --clips-per-song=4 \
-  --sample-rate=48000 --buffer-size=256 --memory-budget-mib=16384
+  --tracks=4 --songs=3 --song-seconds=30 --clips-per-song=4 \
+  --sample-rate=48000 --buffer-size=256 --memory-budget-mib=2048
 ```
 
 Use the `.exe` on Windows and an absolute, **new** output directory for every
 run. Repeat at 96 kHz and 64/128/256/512/1024 samples. Profile arguments are
 validated; unknown/duplicate settings fail. A low-memory dry preflight can be
 obtained by selecting a smaller memory budget; the resulting `blocked` report
-is useful evidence, not a successful playback run.
+is useful evidence, not a successful playback run. Preflight also enforces the
+engine's separate 512 MiB per-buffer and unique-prepared-PCM limits before
+generating media or making portable copies. Increasing `--memory-budget-mib`
+does not override those engine limits.
 
 Add `--buffer-matrix` to run **64, 128, 256, 512, and 1024** samples against the
 same generated fixture at the selected rate. Repeat the command at 96 kHz with
@@ -87,11 +91,18 @@ its own engine and records complete playback, graph edits, callbacks and offline
 null in a separate report/CSV. Any failing or blocked case fails the matrix.
 PCM/packages are removed only after every case finishes; raw results remain.
 
-The default is nine minutes of actual, unique stereo media per track, three
-songs, split edits, one alternate take lane per track, gain inserts, a latent
-master limiter, tempo changes, and 3,072 sample-accurate automation points.
-This is not a long ruler over short repeated media. Native save/reopen, a
-content-validated portable copy, first/middle/late software viewports, complete
+The requested default is 16 tracks with nine minutes of actual, unique stereo
+media per track, three songs, split edits, one alternate take lane per track,
+gain inserts, a latent master limiter, tempo changes, and 3,072 sample-accurate
+automation points. It currently returns **blocked** during preflight: its
+prepared PCM exceeds 512 MiB even at 48 kHz. The thirty-minute, 16-track release
+qualification target is also blocked; a larger process budget cannot make it
+runnable. Smaller profiles exercise the same workflow but cannot satisfy that
+release gate.
+
+Generated media is not a long ruler over short repeated audio. For a bounded
+profile, native save/reopen, a content-validated portable copy, first/middle/late
+software viewports, complete
 callback playback, concurrent graph republication, and a complete offline/live
 null are exercised. Graph edits rename a track and rebuild identical audio so
 the full render remains comparable; destructive/audio-changing edits still need
@@ -117,7 +128,9 @@ to a deadline pass. The opt-in command and manual evidence gate keep the strict
 zero-miss / 0.70 p99 requirements unchanged.
 
 `report.json` records the embedded candidate/build, exact profile, source bytes,
-estimated decoded/prepared exposure, process CPU and peak working set by phase,
+estimated decoded/prepared exposure, exact rounded per-graph unique prepared-PCM
+bytes, largest source and full-session render buffer sizes,
+the engine's audio-memory limit, process CPU and peak working set by phase,
 platform I/O operation counters, decode count, save/load/portable/render timings,
 graph-edit durations, callback p99/max/deadline misses, overlap count, late/drop
 counters, viewport timing, and null error. `callbacks.csv` retains every measured
@@ -129,11 +142,14 @@ reads do not certify cold storage throughput.
 
 The default callback loop is accelerated. `--paced` schedules callbacks against
 a monotonic clock and also counts harness scheduling lateness. Neither mode
-measures a physical interface's driver deadline misses. Run at least three
-ten-minute songs with `--song-seconds=600 --paced` for a thirty-minute sustained
-session, on a dedicated qualification system with adequate capacity. Add longer
-passes/repeated manual edits for a multi-hour soak. Do not increase the memory
-budget beyond the testing system's available headroom.
+measures a physical interface's driver deadline misses. The intended release
+procedure requires at least three ten-minute songs with
+`--tracks=16 --songs=3 --song-seconds=600 --paced` on a dedicated qualification
+system. Under the current engine limits, that request retains a **blocked**
+report without generating the workload, not a thirty-minute measurement.
+Resolve the whole-file preparation and full-render-buffer limits before
+claiming a sustained pass or attempting longer soaks. Do not increase the
+memory budget beyond the testing system's available headroom.
 
 Current playback prepares whole files/clips in memory. Immutable PCM is now
 shared across clips/publication slots; the metadata-only edits in this fixture
@@ -149,12 +165,17 @@ cache, both full stereo render buffers and 512 MiB overhead. It is specific to
 this generated workload's metadata edits; destructive changes to all source
 content can require simultaneous old/new prepared versions and still need the
 manual repeated-edit qualification.
+Exact per-graph unique prepared-PCM accounting rounds each clip's frame count
+like the engine and counts the identical alternate-take clip only once. Retained
+PCM across graph generations is measured separately. The conservative peak
+estimate remains separate from the engine's enforced bounds.
+Latency-extended live capture is checked again against the per-buffer limit
+after the graph declares its output latency.
 Phase checks stop further work after a measured budget
-overrun. This is an estimate/soft guard, not a hard allocator or OS memory limit.
-A thirty-minute or 96 kHz profile needs more memory than the default nine-minute
-48 kHz example; select only headroom actually available on the testing system.
-That result is a resource blocker for
-that configuration, **not** a streaming guarantee. The exact point depends on
+overrun. The process estimate is a soft guard, not an OS memory limit.
+A larger or higher-rate profile can hit an engine bound even when its process
+estimate fits the testing system. That result is a resource blocker for that
+configuration, **not** a streaming guarantee. The exact point depends on
 edits, takes, transient processing allocations, graph generations, and plugins.
 Generated PCM/packages are removed from the owned `synthetic-workload` child
 directory on normal completion/failure; reports and CSV stay. An externally

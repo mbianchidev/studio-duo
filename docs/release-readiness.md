@@ -153,10 +153,14 @@ target/area runs, each initially **not run**. Different-version preservation,
 minimum/current OS records, production trust and independent numerical reference
 coverage are required; historical four-area reports cannot pass the complete gate.
 The opt-in long-media command is driver-free computational characterisation,
-not a physical deadline or vendor pass. Whole-file decoding/prepared storage
-remains a resource risk; the preflight estimate and phase peaks expose it rather
-than advertising streaming. The optional dedicated-port Mackie Control profile
-now has protocol, connection, musical-exclusion, undo/automation and native
+not a physical deadline or vendor pass. Its preflight enforces the same 512 MiB
+per-buffer and unique-prepared-PCM caps as the engine before generating media.
+The default nine-minute, 16-track workload and the thirty-minute release target
+therefore retain **blocked** reports even if a larger process budget is selected.
+The bounded example in the runbook exercises the workflow without qualifying
+long-session capacity. Whole-file decoding/prepared storage remains a resource
+blocker, not a streaming guarantee. The optional dedicated-port Mackie Control
+profile now has protocol, connection, musical-exclusion, undo/automation and native
 settings contracts. Its physical model/firmware mappings and feedback remain
 unqualified. HUI, MIDI learn and extender/layer support are not implemented;
 ordinary musical note/CC routing still cannot substitute for surface testing.
