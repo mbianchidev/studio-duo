@@ -176,7 +176,11 @@ disposition.
 
 Native keyboard contracts include precise gain/fade editing, take/comp menu
 actions, current track/clip state values, track-name validation and a scrollable
-200-message status history with stable selection. MIDI contracts include
+200-message status history with stable selection. Automation contracts include
+exact seconds/beats/value editing, chronological and coincident-point selection,
+undo, stable IDs across refresh/reordering, rejected-command text errors and
+native editable-role restoration after unavailable points return.
+MIDI contracts include
 individual/range note selection, mouse-free cursor entry, mapped drum rows,
 current note/expression values, protected modified shortcuts, and software
 selection rendering across every theme and both piano pitch extremes. They do

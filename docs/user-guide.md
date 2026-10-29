@@ -144,7 +144,8 @@ Mastering metadata/timing fields have distinct accessible names; its add,
 analyze, export, DDP, portable-copy, and repair controls are keyboard-focusable.
 The generic plugin parameter editor names the selected parameter and its
 normalized value; use the selector, arrow keys, or editable value field.
-Automation mode/lane/target/value controls are named too. **Routing > EDIT**
+Automation controls also expose existing point selection, exact position/value
+fields, and **APPLY POINT** / **REMOVE SELECTED** actions. **Routing > EDIT**
 opens every existing route, including routes beyond the painted preview,
 without requiring a mouse. Linear and rotary sliders show a focus outline,
 and mastering song rows expose their sequence number and title.
@@ -917,7 +918,22 @@ Choose **Automation** (curve icon) to open the lane editor for the selected trac
   automatable plugin parameters.
 - Choose seconds or beat time, and linear or step interpolation. Changing an
   existing lane's timebase preserves its timeline positions.
-- Add or remove points at the playhead with a normalized value.
+- **ADD POINT** creates a point with the slider or exact normalized value at
+  the playhead position captured when the editor opened. **REMOVE NEAR**
+  retains its nearest-to-that-position behavior.
+- Select an existing lane and point to edit its exact **Position** in seconds
+  or beats and **Value (0 to 1)**. Use **APPLY POINT** or Return to commit both
+  fields as one undoable edit. Points are listed chronologically with their
+  positions, units and values; moving a point keeps it selected after reordering.
+- **REMOVE SELECTED** deletes that particular point, including when several
+  points share a position, without moving the playhead or deleting a neighbor.
+
+The slider and exact value field edit a draft until an add/apply action.
+Invalid numbers or positions outside the audio sample range stay in the editor
+with a text error and do not change the lane. Existing values retain their full
+stored precision when opened and applied unchanged. Lane and point selections
+survive ordinary refreshes; Tab
+leaves each native control and Escape remains available to dismiss the editor.
 
 Beat lanes follow tempo ramps and abrupt changes. Playback schedules mixer
 changes and plugin events at exact sample offsets. Mixer fader, pan, mute,

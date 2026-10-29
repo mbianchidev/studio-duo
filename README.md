@@ -41,8 +41,9 @@ See [status and limits](#status-and-limits) before relying on a release.
   clips; the synthesized drum instrument includes style presets and kit tuning.
 - **Mix with plugins and automation.** Cycle-safe sends, sidechains, auxes,
   nested buses, folders, VCAs, control room, hardware routing, and delay
-  compensation. Serial/parallel racks and sample-accurate automation work with
-  bundled devices and sandboxed VST3/CLAP plugins, plus Audio Units on macOS.
+  compensation. Serial/parallel racks, precise keyboard point editing, and
+  sample-accurate automation work with bundled devices and sandboxed VST3/CLAP
+  plugins, plus Audio Units on macOS.
   See [plugin setup and isolation modes](docs/user-guide.md#use-plugins).
 - **Build and compare guitar/bass tones.** Thirteen [bundled devices](docs/devices.md)
   cover drums, guitar/bass amp and cabinet DSP, dynamics, EQ, and utilities.
