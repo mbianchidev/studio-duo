@@ -143,6 +143,8 @@ public:
 
     juce::Result updateProject(const Project& project,
                                std::vector<PluginRuntimeRequest> pluginRequests = {});
+    juce::Result validateProjectPreparation(
+        const Project&, std::vector<PluginRuntimeRequest> pluginRequests = {});
     void play() noexcept;
     void pause() noexcept;
     void stop() noexcept;
@@ -227,7 +229,7 @@ public:
     [[nodiscard]] std::vector<PluginRuntimeStatus> pluginRuntimeStatuses();
     [[nodiscard]] std::vector<TrackMeterSnapshot> trackMeterSnapshots() const;
     [[nodiscard]] std::vector<PluginStateCapture> capturePluginStates(
-        int timeoutMilliseconds);
+        int timeoutMilliseconds, const std::vector<juce::String>& trackIds = {});
     bool setPluginParameter(const juce::String& insertId,
                             int parameterIndex,
                             float normalizedValue,
@@ -852,7 +854,8 @@ private:
     void resumePendingPluginRuntime();
     bool beginPluginControlOperation() noexcept;
     std::vector<PluginStateCapture> capturePluginStatesOnRuntimeThread(
-        int timeoutMilliseconds);
+        int timeoutMilliseconds, const std::vector<juce::String>& trackIds,
+        const std::atomic<bool>* cancelled);
     struct AraPreservationResult
     {
         enum class Status

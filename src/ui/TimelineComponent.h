@@ -33,6 +33,7 @@ public:
     void setStretchToolEnabled(bool enabled);
     [[nodiscard]] bool isStretchToolEnabled() const noexcept { return stretchToolEnabled; }
     bool dispatchNavigationKey(const juce::KeyPress&);
+    void editSelectedClipProcessing(ClipProcessingEditorComponent::Mode);
     void setPlayheadSeconds(double seconds);
     void setViewportPosition(int horizontalPosition);
     void setRecordingPreviews(std::vector<RecordingPreview> previews);
@@ -97,8 +98,8 @@ public:
     std::function<void(const juce::String&, double)> onCreateMidiClip;
     std::function<void(const juce::String&, const juce::String&, double)> onClipMoved;
     std::function<void(const juce::String&, double, double, double)> onClipTrimmed;
-    std::function<void(const juce::String&, double)> onClipSlipped;
-    std::function<void(const juce::String&, double)> onClipStretched;
+    std::function<juce::Result(const juce::String&, double, bool)> onClipSlipped;
+    std::function<juce::Result(const juce::String&, double)> onClipStretched;
     std::function<void(double)> onSeek;
     std::function<void(double, double)> onZoomRequested;
     std::function<void(double)> onAddMarkerRequested;

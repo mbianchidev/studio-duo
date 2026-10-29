@@ -219,9 +219,10 @@ bool validateAutomationTarget(const Project& project,
     if (project.isTrackFrozen(target.trackId))
     {
         const auto* frozen = project.findTrack(target.trackId);
-        if (frozen == nullptr || frozen->freezeSourceTrackId.isEmpty())
+        const auto* source = frozen != nullptr ? project.findTrack(frozen->freezeSourceTrackId) : nullptr;
+        if (source == nullptr || source->frozenTrackId.isNotEmpty() || !project.isTrackMixEditable(target.trackId))
         {
-            error = "Unfreeze the source before editing its automation.";
+            error = "Unfreeze the track before editing its automation.";
             return false;
         }
     }
@@ -2138,6 +2139,8 @@ juce::String SetActiveTakeCommand::name() const
 
 bool SetActiveTakeCommand::perform(Project& project, juce::String& error)
 {
+    if (!editableTrack(project, parentId, error))
+        return false;
     auto* parent = project.findTrack(parentId);
     if (parent == nullptr || parent->parentTrackId.isNotEmpty())
     {
@@ -2185,6 +2188,8 @@ juce::String SetCompRegionsCommand::name() const
 
 bool SetCompRegionsCommand::perform(Project& project, juce::String& error)
 {
+    if (!editableTrack(project, parentId, error))
+        return false;
     if (!validate(project, parentId, newRegions, error))
         return false;
     project.findTrack(parentId)->compRegions = newRegions;
@@ -2860,9 +2865,16 @@ bool SetTrackMixCommand::perform(Project& project, juce::String& error)
         error = "The track to change no longer exists.";
         return false;
     }
-    if (project.isTrackFrozen(trackId) && track->freezeSourceTrackId.isEmpty())
+    if (!project.isTrackMixEditable(trackId))
     {
         error = "Unfreeze the original before changing its track controls.";
+        return false;
+    }
+    if (track->freezeSourceTrackId.isNotEmpty()
+        && (newState.armed != track->armed || newState.inputChannel != track->inputChannel
+            || newState.stereoInput != track->stereoInput || newState.inputMonitoring != track->inputMonitoring))
+    {
+        error = "Unfreeze the source before changing recording or live input on its render track.";
         return false;
     }
 
@@ -4523,6 +4535,8 @@ juce::String RecallToneSnapshotCommand::name() const
 
 bool RecallToneSnapshotCommand::perform(Project& project, juce::String& error)
 {
+    if (!editableTrack(project, snapshot.returnTrackId, error))
+        return false;
     auto* returnTrack = project.findTrack(snapshot.returnTrackId);
     const auto route = std::find_if(
         project.reampRoutes.begin(),
@@ -4749,6 +4763,9 @@ juce::String RecallMixerSnapshotCommand::name() const
 bool RecallMixerSnapshotCommand::perform(Project& project,
                                          juce::String& error)
 {
+    for (const auto& state : snapshot.tracks)
+        if (!editableTrack(project, state.trackId, error))
+            return false;
     if (!capturedOriginal)
     {
         for (const auto& state : snapshot.tracks)

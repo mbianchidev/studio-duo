@@ -24,9 +24,9 @@ private:
     void timerCallback() override;
     void choosePlugin(juce::String containerId, juce::String replacementId = {});
     void editParameters(const juce::String&);
-    bool captureStates();
+    bool captureStates(const std::vector<PluginInsert>* retained = nullptr);
     void setChain(std::vector<PluginInsert>);
-    void rebuildRuntime();
+    bool rebuildRuntime();
     std::vector<StudioAudioEngine::PluginRuntimeRequest> requests() const;
     void showStatus(const juce::String&, bool error = false);
 
@@ -36,6 +36,7 @@ private:
     std::unique_ptr<StudioAudioEngine> engine;
     std::map<juce::String, juce::MemoryBlock> states;
     double clipDuration;
+    bool lastEffectsReady = false;
     PluginInsertPanel rack;
     juce::Label title, rangeLabel, tailLabel, status;
     juce::TextEditor start, end, tail;

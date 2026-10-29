@@ -91,10 +91,19 @@ ClipEffectsComponent::ClipEffectsComponent(const Project& context, const AudioCl
     };
     rack.onReload = [this](const auto&, const auto& id)
     {
-        if (!captureStates())
+        const auto statuses = engine->pluginRuntimeStatuses();
+        const auto current = std::find_if(statuses.begin(), statuses.end(),
+                                         [&](const auto& state) { return state.insertId == id; });
+        const auto unavailable = current == statuses.end()
+            || current->state != StudioAudioEngine::PluginRuntimeStatus::State::ready;
+        if (!captureStates(&effectsProject.tracks.front().inserts))
             return;
         if (const auto result = engine->forcePluginRuntimeReload(effectsProject, requests(), id); result.failed())
             showStatus(result.getErrorMessage(), true);
+        else
+            showStatus(!unavailable ? "Reloading clip effect..."
+                : states.contains(id) ? "Reloading unavailable effect from its last captured state."
+                : "Reloading unavailable effect from its initial setup; uncaptured changes cannot be recovered.");
     };
     rack.onModeChange = [this](const auto&, const auto&, PluginBridgeMode)
     {
@@ -121,16 +130,39 @@ void ClipEffectsComponent::showStatus(const juce::String& text, bool error)
         logError("clip-effects", text);
 }
 
-bool ClipEffectsComponent::captureStates()
+bool ClipEffectsComponent::captureStates(const std::vector<PluginInsert>* retained)
 {
+    if (retained != nullptr && std::none_of(retained->begin(), retained->end(), [&](const auto& next)
+        {
+            const auto* old = PluginRack::find(effectsProject.tracks.front().inserts, next.id);
+            return !next.isContainer() && old != nullptr && old->pluginIdentifier == next.pluginIdentifier;
+        }))
+        return true;
     if (engine->pluginRuntimeTransitionPending())
     {
         showStatus("Wait for the clip effects to finish loading.", true);
         return false;
     }
+    const auto statuses = engine->pluginRuntimeStatuses();
     for (const auto& state : engine->capturePluginStates(2000))
     {
-        if (state.result.failed() && (!state.preservePreviousState || !states.contains(state.insertId)))
+        if (state.insertId.isNotEmpty())
+        {
+            const auto& wanted = retained != nullptr ? *retained : effectsProject.tracks.front().inserts;
+            const auto* next = PluginRack::find(wanted, state.insertId);
+            const auto* old = PluginRack::find(effectsProject.tracks.front().inserts, state.insertId);
+            if (next == nullptr || old == nullptr || next->pluginIdentifier != old->pluginIdentifier
+                || (state.result.failed() && PluginRack::isBypassed(wanted, *next)))
+                continue;
+            if (retained != nullptr && state.result.failed())
+            {
+                const auto runtime = std::find_if(statuses.begin(), statuses.end(),
+                    [&](const auto& item) { return item.insertId == state.insertId; });
+                if (runtime == statuses.end() || runtime->state != StudioAudioEngine::PluginRuntimeStatus::State::ready)
+                    continue;
+            }
+        }
+        if (state.result.failed())
         {
             showStatus(state.result.getErrorMessage(), true);
             return false;
@@ -158,22 +190,33 @@ void ClipEffectsComponent::setChain(std::vector<PluginInsert> chain)
         showStatus(error, true);
         return;
     }
-    if (!captureStates())
+    if (!captureStates(&chain))
         return;
     for (const auto& insert : chain)
         if (const auto* old = PluginRack::find(effectsProject.tracks.front().inserts, insert.id);
             old != nullptr && old->pluginIdentifier != insert.pluginIdentifier)
             states.erase(insert.id);
     effectsProject.tracks.front().inserts = std::move(chain);
-    rebuildRuntime();
+    std::erase_if(states, [this](const auto& entry)
+    {
+        return PluginRack::find(effectsProject.tracks.front().inserts, entry.first) == nullptr;
+    });
+    if (rebuildRuntime())
+        showStatus(effectsProject.tracks.front().inserts.empty()
+            ? "Clip effect chain cleared." : "Loading updated clip effects...");
 }
 
-void ClipEffectsComponent::rebuildRuntime()
+bool ClipEffectsComponent::rebuildRuntime()
 {
     apply.setEnabled(false);
+    lastEffectsReady = false;
     rack.setProject(&effectsProject);
     if (const auto result = engine->updateProject(effectsProject, requests()); result.failed())
+    {
         showStatus(result.getErrorMessage(), true);
+        return false;
+    }
+    return true;
 }
 
 void ClipEffectsComponent::choosePlugin(juce::String container, juce::String replacement)
@@ -292,7 +335,11 @@ void ClipEffectsComponent::timerCallback()
 {
     const auto statuses = engine->pluginRuntimeStatuses();
     rack.setRuntimeStatuses(statuses, engine->pluginLateBlockCount());
-    apply.setEnabled(effectsReady());
+    const auto ready = effectsReady();
+    apply.setEnabled(ready);
+    if (ready && !lastEffectsReady)
+        showStatus("Effects ready. Edit parameters or render the selected clip range.");
+    lastEffectsReady = ready;
     for (const auto& state : statuses)
         if (state.state == StudioAudioEngine::PluginRuntimeStatus::State::failed
             || state.state == StudioAudioEngine::PluginRuntimeStatus::State::missing)

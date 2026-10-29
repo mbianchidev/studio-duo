@@ -1314,6 +1314,9 @@ slip and stretch operations. Timeline row positions are rebuilt on project/view
 changes rather than repeatedly reconstructing the hierarchy during hit testing.
 Automation adds named rows and clip overlays only while the automation view is
 enabled. Track IDs remain stable across hiding, deactivation and grouping.
+Slip/stretch also expose native numeric editors with result-returning callbacks;
+linked numeric slips fail atomically outside their common source bounds, while
+mouse gestures clamp to those bounds. Persisted command IDs are append-only.
 
 `render/ArrangementRender` prepares isolated bounce/freeze graphs and uses the
 existing sample-accurate engine. It preserves required upstream routing and
@@ -1321,8 +1324,15 @@ MIDI dependencies, sends unrelated output to a muted sink, and omits unrelated
 processors. Frozen clips are printed before the source fader/pan/polarity/VCA;
 those controls, their automation and outgoing routes move to the audio proxy.
 The original data stays in the native project with reciprocal freeze links.
+Only the outermost audible proxy is mixer-editable. Frozen automation remains
+read-only, and nested unfreeze resolves the outermost frozen ancestor first.
 AudioSuite first bakes clip processing, processes only the selected source
 window, then combines dry audio and effects tails into a new float WAV.
+Its private rack captures surviving ready effects, permits failed-effect
+removal/reload, and reports when reload uses an initial rather than captured
+setup. State capture is scoped and cancelled after caller timeouts. Main applies
+render placement to a candidate model and prepares its media before publishing
+the real undoable edit; failed preflight leaves the live graph unchanged.
 
 Decoded/render buffers and unique prepared PCM have 512 MiB preflight limits.
 The latter is conservative stereo accounting and still reuses identical
@@ -1338,6 +1348,7 @@ endpoint interpolation must not resample an unchanged clip on each print.
 Offline float stems retain headroom while the live hardware callback keeps its
 output clamp. Synthetic arrangement tests cover clip-only region processing,
 native smart-tool gestures, 1000-track rendering, freeze/send/automation parity,
+MIDI-folder printing, inactive raw DI/take references, failed-effect recovery,
 command-based macro execution and native key-map/preferences round trips.
 
 The Tracking Setup installed-VST check is filesystem-only. It combines JUCE's

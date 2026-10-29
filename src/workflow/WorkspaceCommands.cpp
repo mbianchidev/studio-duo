@@ -57,7 +57,8 @@ const std::vector<WorkspaceCommandDescriptor>& workspaceCommands()
         add(Command::hideTrack, "Hide selected tracks", "Tracks", {}, true);
         add(Command::showHiddenTracks, "Show hidden tracks", "Tracks", {}, true);
         add(Command::zoomOut, "Zoom out", "Timeline", { key('-', cmd) }, true);
-        add(Command::zoomIn, "Zoom in", "Timeline", { key('+', cmd), key('=', cmd) }, true);
+        add(Command::zoomIn, "Zoom in", "Timeline",
+            { key('+', cmd), key('=', cmd), key('+', cmd | shift), key('=', cmd | shift) }, true);
         add(Command::zoomReset, "Reset zoom", "Timeline", { key('0', cmd) }, true);
         add(Command::toggleSnap, "Toggle edit snapping", "Timeline", {}, true);
         add(Command::toggleLoop, "Toggle loop", "Transport", {}, true);
@@ -93,6 +94,16 @@ const std::vector<WorkspaceCommandDescriptor>& workspaceCommands()
         result.back().macroSafe = false;
         navigation(Command::contextMenu, "Open selection actions", key(juce::KeyPress::F10Key, shift));
         result.back().macroSafe = false;
+        add(Command::slipEditor, "Edit clip source slip", "Editing");
+        add(Command::stretchEditor, "Edit clip stretch duration", "Editing");
+        add(Command::clipPolarity, "Invert clip polarity", "Editing", {}, true);
+        add(Command::clipReverse, "Reverse clip audio", "Editing", {}, true);
+        add(Command::clipMute, "Mute or unmute clip", "Editing", {}, true);
+        add(Command::crossfade, "Crossfade with next clip", "Editing", {}, true);
+        add(Command::fadeInToPlayhead, "Fade in to playhead", "Editing", {}, true);
+        add(Command::fadeOutFromPlayhead, "Fade out from playhead", "Editing", {}, true);
+        add(Command::consolidateClip, "Consolidate processed clip", "Rendering");
+        add(Command::detectTransients, "Detect clip transients", "Editing");
         return result;
     }();
     return commands;

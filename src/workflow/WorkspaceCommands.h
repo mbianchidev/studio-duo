@@ -20,7 +20,9 @@ enum class WorkspaceCommand : juce::CommandID
     previousTrack, nextTrack, previousClip, nextClip, moveClipLeft, moveClipRight,
     moveClipUp, moveClipDown, seekLeft, seekRight, seekStart, seekEnd,
     toggleMute, toggleSolo, toggleArm, gainUp, gainDown, fineGainUp, fineGainDown,
-    clearSelection, activateSelection, contextMenu
+    clearSelection, activateSelection, contextMenu,
+    slipEditor, stretchEditor, clipPolarity, clipReverse, clipMute, crossfade,
+    fadeInToPlayhead, fadeOutFromPlayhead, consolidateClip, detectTransients
 };
 
 struct WorkspaceCommandDescriptor

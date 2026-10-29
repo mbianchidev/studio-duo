@@ -296,6 +296,7 @@ struct AudioClip
     [[nodiscard]] double recoverableStartSeconds() const noexcept;
     [[nodiscard]] double recoverableEndSeconds() const noexcept;
     [[nodiscard]] double sourceSecondsAt(double timelineOffsetSeconds) const noexcept;
+    [[nodiscard]] double sourceSpanSeconds() const noexcept;
     [[nodiscard]] double timelineOffsetForSourceSeconds(double sourceSeconds) const noexcept;
     [[nodiscard]] float envelopeGainAt(double timelineOffsetSeconds) const noexcept;
     [[nodiscard]] juce::var toVar() const;
@@ -569,6 +570,7 @@ public:
     [[nodiscard]] bool canAddTracks(std::size_t count, juce::String& error) const;
     [[nodiscard]] bool isTrackActive(const juce::String& trackId) const noexcept;
     [[nodiscard]] bool isTrackFrozen(const juce::String& trackId) const noexcept;
+    [[nodiscard]] bool isTrackMixEditable(const juce::String& trackId) const;
     [[nodiscard]] juce::String frozenSourceTrackId(const juce::String& trackId) const;
     [[nodiscard]] bool isTrackVisible(const juce::String& trackId) const noexcept;
     [[nodiscard]] ProjectMarker* findMarker(const juce::String& markerId);

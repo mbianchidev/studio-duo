@@ -773,6 +773,11 @@ double AudioClip::sourceSecondsAt(double timelineOffsetSeconds) const noexcept
     return reversed ? sourceStart + sourceEnd - mapped : mapped;
 }
 
+double AudioClip::sourceSpanSeconds() const noexcept
+{
+    return std::abs(sourceSecondsAt(durationSeconds) - sourceSecondsAt(0.0));
+}
+
 double AudioClip::timelineOffsetForSourceSeconds(double sourceSeconds) const noexcept
 {
     const auto target = juce::jlimit(sourceOffsetSeconds,
@@ -1025,21 +1030,34 @@ bool Project::isTrackFrozen(const juce::String& trackId) const noexcept
     return frozenSourceTrackId(trackId).isNotEmpty();
 }
 
+bool Project::isTrackMixEditable(const juce::String& trackId) const
+{
+    const auto* track = findTrack(trackId);
+    if (track == nullptr)
+        return false;
+    const auto sourceId = frozenSourceTrackId(trackId);
+    return sourceId.isEmpty() || (track->freezeSourceTrackId.isNotEmpty() && sourceId == track->freezeSourceTrackId);
+}
+
 juce::String Project::frozenSourceTrackId(const juce::String& trackId) const
 {
     auto* track = findTrack(trackId);
+    juce::String sourceId;
+    if (track != nullptr && track->freezeSourceTrackId.isNotEmpty())
+    {
+        sourceId = track->freezeSourceTrackId;
+        track = findTrack(sourceId);
+    }
     for (std::size_t depth = 0; track != nullptr && depth <= tracks.size(); ++depth)
     {
         if (track->frozenTrackId.isNotEmpty())
-            return track->id;
-        if (track->freezeSourceTrackId.isNotEmpty())
-            return track->freezeSourceTrackId;
+            sourceId = track->id;
         const auto parentId = track->parentTrackId.isNotEmpty() ? track->parentTrackId : track->folderTrackId;
         if (parentId.isEmpty())
-            return {};
+            break;
         track = findTrack(parentId);
     }
-    return {};
+    return sourceId;
 }
 
 bool Project::isTrackVisible(const juce::String& trackId) const noexcept

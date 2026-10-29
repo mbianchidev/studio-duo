@@ -720,6 +720,15 @@ juce::Result StudioAudioEngine::updateProject(
         false);
 }
 
+juce::Result StudioAudioEngine::validateProjectPreparation(
+    const Project& project, std::vector<PluginRuntimeRequest> requests)
+{
+    prepareRackRequests(project, requests);
+    juce::String error;
+    return buildSnapshot(project, currentSampleRate(), requests, error)
+        ? juce::Result::ok() : juce::Result::fail(error);
+}
+
 juce::Result StudioAudioEngine::updateProjectInternal(
     const Project& project,
     std::vector<PluginRuntimeRequest> pluginRequests,
@@ -1768,7 +1777,7 @@ StudioAudioEngine::trackMeterSnapshots() const
 }
 
 std::vector<StudioAudioEngine::PluginStateCapture>
-StudioAudioEngine::capturePluginStates(int timeoutMilliseconds)
+StudioAudioEngine::capturePluginStates(int timeoutMilliseconds, const std::vector<juce::String>& trackIds)
 {
     const auto timeout = std::max(1, timeoutMilliseconds);
     std::vector<PluginStateCapture> captures;
@@ -1811,6 +1820,7 @@ StudioAudioEngine::capturePluginStates(int timeoutMilliseconds)
         std::condition_variable condition;
         std::vector<PluginStateCapture> captures;
         bool completed = false;
+        std::atomic<bool> cancelled { false };
     };
     const auto state = std::make_shared<CaptureState>();
     {
@@ -1831,10 +1841,10 @@ StudioAudioEngine::capturePluginStates(int timeoutMilliseconds)
         }
         pluginStateCapturePending = true;
         pluginRuntimeBuilder.addJob(
-            [this, state, timeout]
+            [this, state, timeout, selectedTracks = trackIds]
             {
                 auto runtimeCaptures =
-                    capturePluginStatesOnRuntimeThread(timeout);
+                    capturePluginStatesOnRuntimeThread(timeout, selectedTracks, &state->cancelled);
                 auto closePendingEditors = false;
                 {
                     const juce::ScopedLock completionGuard(
@@ -1896,6 +1906,7 @@ StudioAudioEngine::capturePluginStates(int timeoutMilliseconds)
     }
     if (!completed)
     {
+        state->cancelled.store(true, std::memory_order_release);
         PluginStateCapture capture;
         capture.result = juce::Result::fail(
             "Plugin state capture timed out.");
@@ -1907,7 +1918,8 @@ StudioAudioEngine::capturePluginStates(int timeoutMilliseconds)
 
 std::vector<StudioAudioEngine::PluginStateCapture>
 StudioAudioEngine::capturePluginStatesOnRuntimeThread(
-    int timeoutMilliseconds)
+    int timeoutMilliseconds, const std::vector<juce::String>& trackIds,
+    const std::atomic<bool>* cancelled)
 {
     const auto timeout = std::max(1, timeoutMilliseconds);
     pluginStateOperationActive.store(true, std::memory_order_release);
@@ -1935,8 +1947,12 @@ StudioAudioEngine::capturePluginStatesOnRuntimeThread(
         activePluginRuntime.load(std::memory_order_acquire))];
     for (auto& track : graph.tracks)
     {
+        if (!trackIds.empty() && std::find(trackIds.begin(), trackIds.end(), track.trackId) == trackIds.end())
+            continue;
         for (auto& insert : track.inserts)
         {
+            if (cancelled != nullptr && cancelled->load(std::memory_order_acquire))
+                return captures;
             PluginStateCapture capture;
             capture.trackId = track.trackId;
             capture.insertId = insert.insertId;

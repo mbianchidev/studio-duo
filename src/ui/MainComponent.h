@@ -237,8 +237,8 @@ private:
     void groupSelectedTracks(bool busFolder);
     void changeTrackLifecycle(const juce::String&, const std::function<void(TrackLifecycleState&)>&);
     void showHiddenTracks();
-    void slipClip(const juce::String&, double sourceDeltaSeconds);
-    void stretchClip(const juce::String&, double durationSeconds);
+    juce::Result slipClip(const juce::String&, double sourceDeltaSeconds, bool allowClamp);
+    juce::Result stretchClip(const juce::String&, double durationSeconds);
     void bounceSelectedClips(bool inPlace);
     void freezeTrack(const juce::String&);
     void unfreezeTrack(const juce::String&);
@@ -356,6 +356,7 @@ private:
     [[nodiscard]] std::vector<StudioAudioEngine::PluginRuntimeRequest>
         pluginRuntimeRequests(const Project& sourceProject) const;
     bool perform(std::unique_ptr<ProjectCommand> command);
+    bool performPreparedRender(std::unique_ptr<ProjectCommand> command);
     void changeSelectedTrackState(const std::function<void(TrackMixState&)>& change);
     void changeTransportState(const std::function<void(ProjectTransportState&)>& change);
     void changeEditGroups(const std::function<void(std::vector<EditGroup>&)>& change);
@@ -433,6 +434,7 @@ private:
     juce::String copiedClipId;
     juce::String replacementInsertId;
     bool dirty = false;
+    std::uint64_t projectRevision = 0;
     bool appShutdownPrepared = false;
     bool audioEngineInitialised = false;
     bool exportInProgress = false;

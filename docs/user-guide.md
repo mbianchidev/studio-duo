@@ -158,6 +158,10 @@ pitch, within the 0.25x to 4x range. The stretch icon marks that handle.
 **Alt/Option-drag horizontally** inside a clip slips its source audio while
 keeping the clip's timeline position and duration. Slips respect recoverable
 source bounds and existing linked-edit alignment.
+For a keyboard/numeric alternative, choose **Slip source audio...** or
+**Stretch duration...** in the clip actions, or bind those commands in Workflow
+settings. Numeric slips reject out-of-range linked edits rather than silently
+clamping them. Source-limited elastic clips must be consolidated before slipping.
 
 Command/Ctrl-click clips or tracks to select more than one. Shift-click track
 headers to select a contiguous range. Selection is shown on every selected
@@ -212,7 +216,10 @@ in-place bounce consolidates clip processing before its existing track inserts,
 so those inserts are not applied twice. Other prints use the relevant track
 processing and faders, without baking the master chain. Different main outputs
 must be bounced separately; cross-track in-place prints cannot silently replace
-different send paths. Print media is 32-bit floating-point WAV at the current
+different send paths. New-track prints with outgoing sends or hardware outputs
+require same-track in-place consolidation or Freeze instead. Selected MIDI clips
+must reach an active instrument; unrelated MIDI inputs are excluded from the
+print. Print media is 32-bit floating-point WAV at the current
 engine sample rate, without normalization or dither.
 
 For a complete CPU-heavy track, save the project and choose **Freeze track**.
@@ -221,12 +228,18 @@ processor-free audio render track, and leaves the original visible as
 **FROZEN**. The original processing graph is suspended, including descendants
 of a bus/instrument folder. The render retains the source's mixer settings,
 automation, sends, main output and VCA relationships without applying inserts
-or the master chain twice. Original clips and processors are locked against
-edits while frozen. **Unfreeze track** on either track restores the editable
+or the master chain twice. Frozen clips, processors, routing and automation are
+locked against edits; the audible render's basic mixer controls remain available.
+**Unfreeze track** on either track restores the editable
 original and removes the render track; render-track fader/pan/mute/solo changes
 are carried back. Both transitions support Undo/Redo and native project saves.
 Print multi-output or externally MIDI-sending instruments separately before
-freezing. Live inputs must be recorded before an offline print can include them.
+freezing. Folder members must not have crossing sends or active solos, and
+internal VCAs must not control the folder bus or tracks outside it. Use the
+folder bus for crossing sends, clear member solos, or freeze members separately.
+Unfreezing a member of nested frozen folders thaws its outermost frozen owner
+first and preserves earlier inner freezes. Live inputs must be recorded and
+monitoring turned off before an offline print can include them.
 
 Failed renders never replace source clips. Original media remains untouched;
 successful edits can be undone. Native `.studioduo` files preserve unfreeze
@@ -252,7 +265,9 @@ remembered across restarts.
 Macros run Studio Duo commands, not raw keystrokes or operating-system scripts,
 so rebinding a shortcut does not change a macro's meaning. Only synchronous
 commands are offered: file dialogs, renders, recording starts and nested macros
-cannot be inserted. A failure stops at the named step; earlier edits remain
+cannot be inserted. Clip polarity, reverse, mute, fades, crossfade and gain
+commands are available; precise slip/stretch dialogs remain shortcut-only.
+A failure stops at the named step; earlier edits remain
 separately undoable.
 
 ## Start a session

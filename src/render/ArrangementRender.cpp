@@ -61,7 +61,7 @@ bool prepareStemRouting(Project& project, const std::vector<juce::String>& targe
         changed = false;
         for (const auto& track : project.tracks)
         {
-            if (track.parentTrackId.isNotEmpty() && processing.contains(track.parentTrackId))
+            if (track.parentTrackId.isNotEmpty() && !track.muted && processing.contains(track.parentTrackId))
                 changed = processing.insert(track.id).second || changed;
             if (track.parentTrackId.isEmpty() && audioTrack(track) && !track.muted
                 && processing.contains(project.resolvedOutputTrackId(track)))
@@ -70,7 +70,8 @@ bool prepareStemRouting(Project& project, const std::vector<juce::String>& targe
         for (const auto& route : project.routingConnections)
         {
             const auto* source = project.findTrack(route.sourceTrackId);
-            if (route.enabled && source != nullptr && !source->muted
+            if (route.enabled && (route.signalType == SignalType::midi || !route.muted)
+                && source != nullptr && !source->muted
                 && processing.contains(route.destination.trackId))
                 changed = processing.insert(route.sourceTrackId).second || changed;
         }
@@ -83,6 +84,12 @@ bool prepareStemRouting(Project& project, const std::vector<juce::String>& targe
             for (const auto& track : project.tracks)
                 if (track.parentTrackId == route.sourceTrackId)
                     rawSources.insert(track.id);
+        }
+    for (const auto& track : project.tracks)
+        if (processing.contains(track.id) && project.isTrackActive(track.id) && track.inputMonitoring)
+        {
+            error = "Record live inputs or turn off monitoring before offline rendering.";
+            return false;
         }
     auto metadata = processing;
     for (const auto& track : project.tracks)
@@ -111,7 +118,8 @@ bool prepareStemRouting(Project& project, const std::vector<juce::String>& targe
     std::set<juce::String> omittedInserts;
     for (auto& track : project.tracks)
     {
-        track.solo = false;
+        if (!(rawSources.contains(track.id) && track.parentTrackId.isNotEmpty()))
+            track.solo = false;
         if (track.type == TrackType::master)
         {
             track.inserts.clear();
@@ -134,7 +142,8 @@ bool prepareStemRouting(Project& project, const std::vector<juce::String>& targe
             track.outputTrackId = sinkId;
         if (track.id != masterId && track.id != sinkId && !processing.contains(track.id))
         {
-            if (!metadata.contains(track.id))
+            if (!metadata.contains(track.id)
+                && !(rawSources.contains(track.id) && track.parentTrackId.isNotEmpty()))
                 track.active = false;
             for (const auto& insert : track.inserts)
                 omittedInserts.insert(insert.id);
@@ -232,7 +241,7 @@ std::optional<ArrangementRenderPlan> ArrangementRender::prepareBounce(
     plan.replaceSources = inPlace;
     plan.range.startSeconds = std::numeric_limits<double>::infinity();
     std::vector<juce::String> owners;
-    juce::String output;
+    std::set<juce::String> selectedRoots, audioTargets, midiOrigins, midiReachable;
     for (const auto& id : ids)
     {
         const auto* clip = source.findClip(id);
@@ -246,25 +255,33 @@ std::optional<ArrangementRenderPlan> ArrangementRender::prepareBounce(
         }
         if (!contains(owners, track->id))
             owners.push_back(track->id);
+        const auto rootId = source.rootTrackId(track->id);
+        const auto* root = source.findTrack(rootId);
+        if (root == nullptr)
+        {
+            error = "A selected clip's parent track is unavailable.";
+            return std::nullopt;
+        }
+        selectedRoots.insert(rootId);
+        if (clip != nullptr)
+        {
+            if (!clip->sourceFile.existsAsFile() || !audioTrack(*root))
+            {
+                error = "Bounce audio clips on audio/instrument tracks with available media. Relink missing media first.";
+                return std::nullopt;
+            }
+            audioTargets.insert(rootId);
+        }
+        else
+            midiOrigins.insert(rootId);
         const auto start = clip != nullptr ? clip->startSeconds : source.secondsAtBeat(midi->startBeats);
         const auto end = clip != nullptr ? clip->endSeconds() : source.secondsAtBeat(midi->endBeats());
         plan.range.startSeconds = std::min(plan.range.startSeconds, start);
         plan.range.endSeconds = std::max(plan.range.endSeconds, end);
-        const auto destination = source.resolvedOutputTrackId(*track);
-        if (output.isNotEmpty() && output != destination)
-        {
-            error = "Bounce tracks sharing a main output, or bounce differently routed tracks separately.";
-            return std::nullopt;
-        }
-        output = destination;
     }
     const auto* first = source.findTrack(owners.front());
     plan.renderedTrack.name = "Bounce";
     plan.renderedTrack.colour = first->colour;
-    plan.renderedTrack.outputTrackId = output;
-    if (std::all_of(owners.begin(), owners.end(), [&](const auto& id)
-        { return source.findTrack(id)->folderTrackId == first->folderTrackId; }))
-        plan.renderedTrack.folderTrackId = first->folderTrackId;
     if (inPlace && owners.size() == 1 && first->type == TrackType::audio)
     {
         auto track = *first;
@@ -279,23 +296,88 @@ std::optional<ArrangementRenderPlan> ArrangementRender::prepareBounce(
     }
     if (!source.canAddTracks(1, error))
         return std::nullopt;
-    if (inPlace && std::any_of(source.routingConnections.begin(), source.routingConnections.end(),
+    for (const auto& origin : midiOrigins)
+    {
+        std::vector<juce::String> pending { origin };
+        std::set<juce::String> visited;
+        auto instrumentFound = false;
+        while (!pending.empty())
+        {
+            const auto id = pending.back();
+            pending.pop_back();
+            if (!visited.insert(id).second)
+                continue;
+            const auto* track = source.findTrack(id);
+            if (track == nullptr || !source.isTrackActive(id))
+                continue;
+            midiReachable.insert(id);
+            if (track->type == TrackType::instrument)
+            {
+                audioTargets.insert(id);
+                instrumentFound = true;
+            }
+            for (const auto& route : source.routingConnections)
+                if (route.enabled && route.signalType == SignalType::midi && route.sourceTrackId == id)
+                    pending.push_back(route.destination.trackId);
+        }
+        if (!instrumentFound)
+        {
+            error = "Route selected MIDI tracks to an active instrument before bouncing them to audio.";
+            return std::nullopt;
+        }
+    }
+    std::vector<juce::String> targets;
+    juce::String output;
+    const Track* firstTarget = nullptr;
+    for (const auto& track : source.tracks)
+        if (audioTargets.contains(track.id))
+        {
+            targets.push_back(track.id);
+            if (firstTarget == nullptr)
+                firstTarget = &track;
+            const auto destination = source.resolvedOutputTrackId(track);
+            if (output.isNotEmpty() && output != destination)
+            {
+                error = "Bounce tracks sharing a main output, or bounce differently routed tracks separately.";
+                return std::nullopt;
+            }
+            output = destination;
+        }
+    if (targets.empty())
+    {
+        error = "The selected clips have no audio-producing track or instrument route.";
+        return std::nullopt;
+    }
+    plan.renderedTrack.outputTrackId = output;
+    if (std::all_of(targets.begin(), targets.end(), [&](const auto& id)
+        { return source.findTrack(id)->folderTrackId == firstTarget->folderTrackId; }))
+        plan.renderedTrack.folderTrackId = firstTarget->folderTrackId;
+    if (std::any_of(source.routingConnections.begin(), source.routingConnections.end(),
         [&](const auto& route)
         {
-            return route.enabled && contains(owners, route.sourceTrackId)
-                && route.kind != RouteKind::mainOutput;
+            return route.enabled && contains(targets, route.sourceTrackId)
+                && route.signalType == SignalType::audio && route.kind != RouteKind::mainOutput;
         }))
     {
-        error = "Bounce routed sends separately, or freeze the track to preserve its sends.";
+        error = "Use same-track in-place consolidation or Freeze to preserve routed sends and hardware outputs.";
         return std::nullopt;
     }
     for (auto& track : plan.project.tracks)
-        if (contains(owners, track.id))
+        if (selectedRoots.contains(source.rootTrackId(track.id)) || midiReachable.contains(track.id))
         {
             std::erase_if(track.clips, [&](const auto& clip) { return !contains(ids, clip.id); });
             std::erase_if(track.midiClips, [&](const auto& clip) { return !contains(ids, clip.id); });
+            track.versionsCollapsed = false;
+            track.activeTakeTrackId.clear();
+            track.compRegions.clear();
+            if (track.parentTrackId.isNotEmpty() && track.clips.empty())
+                track.active = false;
         }
-    if (!prepareStemRouting(plan.project, owners, false, error))
+    for (auto& route : plan.project.routingConnections)
+        if (route.signalType == SignalType::midi && midiReachable.contains(route.destination.trackId)
+            && !midiReachable.contains(route.sourceTrackId))
+            route.enabled = false;
+    if (!prepareStemRouting(plan.project, targets, false, error))
         return std::nullopt;
     return plan;
 }
@@ -309,6 +391,39 @@ std::optional<ArrangementRenderPlan> ArrangementRender::prepareFreeze(
         || !source.isTrackActive(id) || track->freezeSourceTrackId.isNotEmpty())
     {
         error = "Freeze an active root audio, instrument, aux or bus track; unfreeze existing renders first.";
+        return std::nullopt;
+    }
+    const auto members = ArrangementEditing::trackSubtreeIds(source, { id });
+    const std::set<juce::String> subtree(members.begin(), members.end());
+    for (const auto& memberId : members)
+    {
+        const auto* member = source.findTrack(memberId);
+        if (member == nullptr || !source.isTrackActive(memberId))
+            continue;
+        if (memberId != id && member->solo)
+        {
+            error = "Clear take/folder-member solos before freezing the complete track or folder.";
+            return std::nullopt;
+        }
+        if (member->type == TrackType::vca && std::any_of(member->controlledTrackIds.begin(), member->controlledTrackIds.end(),
+            [&](const auto& controlled) { return controlled == id || !subtree.contains(controlled); }))
+        {
+            error = "Move VCAs controlling the folder bus or outside tracks out of that folder before freezing.";
+            return std::nullopt;
+        }
+    }
+    for (const auto& route : source.routingConnections)
+        if (route.enabled && route.sourceTrackId != id && subtree.contains(route.sourceTrackId)
+            && source.isTrackActive(route.sourceTrackId)
+            && (route.destination.type != RouteEndpointType::track || !subtree.contains(route.destination.trackId)))
+        {
+            error = "Freeze member tracks separately or route crossing sends from the folder bus before freezing the folder.";
+            return std::nullopt;
+        }
+    if (std::any_of(source.reampRoutes.begin(), source.reampRoutes.end(), [&](const auto& route)
+        { return route.enabled && route.type == TonePathType::hardware && subtree.contains(route.sourceTrackId); }))
+    {
+        error = "Record hardware returns and disable the hardware tone path before freezing its source.";
         return std::nullopt;
     }
     if (std::any_of(source.routingConnections.begin(), source.routingConnections.end(), [&](const auto& route)
@@ -500,6 +615,8 @@ juce::Result ArrangementRender::applyClipEffects(
     const Project& context, const AudioClip& clip, const ClipEffectsSettings& settings,
     const juce::File& destination, double rate, AudioClip& result)
 {
+    if (!clip.sourceFile.existsAsFile())
+        return juce::Result::fail("Relink the clip's missing source media before applying effects.");
     if (!std::isfinite(settings.startSeconds) || !std::isfinite(settings.endSeconds)
         || !std::isfinite(settings.tailSeconds) || settings.startSeconds < 0.0
         || settings.endSeconds <= settings.startSeconds || settings.endSeconds > clip.durationSeconds

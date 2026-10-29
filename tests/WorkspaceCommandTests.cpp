@@ -147,6 +147,12 @@ void workspaceCommandTests()
     expect(recursive.validate().failed(), "Macros cannot recursively call themselves or other macros.");
     recursive.steps = { static_cast<juce::CommandID>(Command::open) };
     expect(recursive.validate().failed(), "Macros cannot continue through asynchronous file dialogs or external applications.");
+    recursive.steps = { static_cast<juce::CommandID>(Command::slipEditor) };
+    expect(recursive.validate().failed(), "Precise clip dialogs are customizable commands but cannot stall a macro.");
+    recursive.steps = { static_cast<juce::CommandID>(Command::clipReverse),
+                        static_cast<juce::CommandID>(Command::clipPolarity),
+                        static_cast<juce::CommandID>(Command::clipMute) };
+    expect(recursive.validate().wasOk(), "Synchronous clip processing commands are available to workflow macros.");
     studio::WorkspaceSettings settings;
     settings.macros = { macro };
     settings.keyMappingsXml = "<KEYMAPPINGS basedOnDefaults=\"1\"/>";

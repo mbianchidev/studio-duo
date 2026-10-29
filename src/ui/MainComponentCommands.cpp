@@ -53,7 +53,11 @@ bool MainComponent::workspaceCommandEnabled(juce::CommandID id) const
     if (startupHub.isVisible())
         return command == Command::newProject || command == Command::open || command == Command::settings;
     if (hasActiveRecordingTargets() || audioEngine.isRecording())
-        return command == Command::stop || command == Command::record || command == Command::playPause;
+        return command == Command::stop || command == Command::record || command == Command::playPause
+            || command == Command::toggleAutomation || command == Command::focusTimeline
+            || command == Command::zoomOut || command == Command::zoomIn || command == Command::zoomReset
+            || command == Command::previousTrack || command == Command::nextTrack
+            || command == Command::previousClip || command == Command::nextClip;
     const auto* track = project.findTrack(selectedTrackId);
     const auto* clip = project.findClip(selectedClipId);
     const auto* midi = project.findMidiClip(selectedClipId);
@@ -71,7 +75,17 @@ bool MainComponent::workspaceCommandEnabled(juce::CommandID id) const
         case Command::gainUp:
         case Command::gainDown:
         case Command::fineGainUp:
-        case Command::fineGainDown: return audio;
+        case Command::fineGainDown:
+        case Command::slipEditor:
+        case Command::stretchEditor:
+        case Command::clipPolarity:
+        case Command::clipReverse:
+        case Command::clipMute:
+        case Command::crossfade:
+        case Command::fadeInToPlayhead:
+        case Command::fadeOutFromPlayhead:
+        case Command::consolidateClip:
+        case Command::detectTransients: return audio;
         case Command::copy:
         case Command::duplicateClip:
         case Command::bounce:
@@ -91,7 +105,8 @@ bool MainComponent::workspaceCommandEnabled(juce::CommandID id) const
         case Command::toggleTrackActive: return editable && track->type != TrackType::master;
         case Command::hideTrack: return track != nullptr && track->type != TrackType::master;
         case Command::toggleMute:
-        case Command::toggleSolo: return track != nullptr && track->type != TrackType::master;
+        case Command::toggleSolo: return track != nullptr && track->type != TrackType::master
+            && project.isTrackMixEditable(track->id);
         case Command::toggleArm: return editable && project.isTrackActive(track->id)
             && (track->type == TrackType::audio || track->type == TrackType::midi || track->type == TrackType::instrument);
         case Command::addAudioTrack: return project.tracks.size() < Project::maximumTracks;
@@ -238,6 +253,16 @@ bool MainComponent::executeWorkspaceCommand(juce::CommandID id)
         case Command::toggleMetronome: changeTransportState([](auto& state) { state.metronomeEnabled = !state.metronomeEnabled; }); break;
         case Command::settings: showSettings(); break;
         case Command::automationPanel: showAutomationPanel(); break;
+        case Command::slipEditor: timeline.editSelectedClipProcessing(ClipProcessingEditorComponent::Mode::slip); break;
+        case Command::stretchEditor: timeline.editSelectedClipProcessing(ClipProcessingEditorComponent::Mode::stretch); break;
+        case Command::clipPolarity: toggleClipPolarity(selectedClipId); break;
+        case Command::clipReverse: toggleClipReverse(selectedClipId); break;
+        case Command::clipMute: toggleClipMute(selectedClipId); break;
+        case Command::crossfade: createClipCrossfade(selectedClipId); break;
+        case Command::fadeInToPlayhead: setClipFade(selectedClipId, audioEngine.positionSeconds(), true); break;
+        case Command::fadeOutFromPlayhead: setClipFade(selectedClipId, audioEngine.positionSeconds(), false); break;
+        case Command::consolidateClip: consolidateClip(selectedClipId); break;
+        case Command::detectTransients: analyseClipTransients(selectedClipId); break;
         case Command::previousTrack:
         case Command::nextTrack:
         case Command::previousClip:
@@ -445,10 +470,8 @@ void MainComponent::changeWorkspaceTrackAvailability(bool hide)
     });
     if (deactivate)
     {
-        std::vector<juce::String> active;
-        for (const auto& track : project.tracks)
-            if (project.isTrackActive(track.id))
-                active.push_back(track.id);
+        auto active = ArrangementEditing::trackSubtreeIds(project, ids);
+        std::erase_if(active, [this](const auto& id) { return !project.isTrackActive(id); });
         juce::String error;
         if (!captureCurrentPluginStates(active, error))
         {

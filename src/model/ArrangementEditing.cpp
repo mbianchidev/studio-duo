@@ -158,7 +158,12 @@ std::optional<AudioClip> ArrangementEditing::slipClip(
         error = "The slip offset must be finite.";
         return std::nullopt;
     }
-    const auto span = std::abs(clip.sourceSecondsAt(clip.durationSeconds) - clip.sourceSecondsAt(0.0));
+    const auto span = clip.sourceSpanSeconds();
+    if (clip.durationSeconds * clip.playbackRate > span + 1.0e-9)
+    {
+        error = "Consolidate this source-limited elastic clip before slipping its audio.";
+        return std::nullopt;
+    }
     const auto minimum = clip.sourceRangeStartSeconds - clip.sourceOffsetSeconds;
     const auto maximum = clip.sourceRangeEnd() - clip.sourceOffsetSeconds - span;
     if (maximum < minimum)
@@ -177,7 +182,7 @@ std::optional<AudioClip> ArrangementEditing::slipClip(
 std::optional<AudioClip> ArrangementEditing::stretchClip(
     const AudioClip& clip, double duration, juce::String& error)
 {
-    const auto rate = clip.playbackRate * clip.durationSeconds / duration;
+    const auto rate = clip.sourceSpanSeconds() / duration;
     if (!std::isfinite(duration) || duration <= 0.0 || !std::isfinite(rate)
         || rate < 0.25 || rate > 4.0)
     {

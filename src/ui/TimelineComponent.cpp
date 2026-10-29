@@ -202,6 +202,12 @@ bool TimelineComponent::dispatchNavigationKey(const juce::KeyPress& key)
     return keyPressed(key);
 }
 
+void TimelineComponent::editSelectedClipProcessing(ClipProcessingEditorComponent::Mode mode)
+{
+    ensureSelectionVisible();
+    showClipProcessingEditor(selectedClipId, mode, keyboardContextPosition());
+}
+
 void TimelineComponent::setPlayheadSeconds(double seconds)
 {
     const auto oldX = static_cast<int>(secondsToX(playheadSeconds));
@@ -2500,7 +2506,7 @@ void TimelineComponent::mouseDrag(const juce::MouseEvent& event)
     {
         if (const auto* clip = project != nullptr ? project->findClip(draggedClipId) : nullptr)
         {
-            const auto sourceDuration = clip->durationSeconds * clip->playbackRate;
+            const auto sourceDuration = clip->sourceSpanSeconds();
             dragPreviewDuration = juce::jlimit(sourceDuration / 4.0, sourceDuration / 0.25,
                 snappedSeconds(dragOriginalStart + dragOriginalDuration + deltaSeconds) - dragOriginalStart);
         }
@@ -2612,7 +2618,7 @@ void TimelineComponent::mouseUp(const juce::MouseEvent&)
     {
         if (dragMode == DragMode::slip && onClipSlipped
             && std::abs(dragPreviewSourceOffset - dragOriginalSourceOffset) > 0.000001)
-            onClipSlipped(draggedClipId, dragPreviewSourceOffset - dragOriginalSourceOffset);
+            onClipSlipped(draggedClipId, dragPreviewSourceOffset - dragOriginalSourceOffset, true);
         else if (dragMode == DragMode::stretch && onClipStretched
                  && std::abs(dragPreviewDuration - dragOriginalDuration) > 0.000001)
             onClipStretched(draggedClipId, dragPreviewDuration);
@@ -3147,6 +3153,8 @@ juce::PopupMenu TimelineComponent::createContextMenu(juce::Point<float> position
             const auto safeThis = juce::Component::SafePointer<TimelineComponent>(this);
             for (const auto& [label, mode] : {
                      std::pair { "Edit clip gain...", ClipProcessingEditorComponent::Mode::gain },
+                     std::pair { "Slip source audio...", ClipProcessingEditorComponent::Mode::slip },
+                     std::pair { "Stretch duration...", ClipProcessingEditorComponent::Mode::stretch },
                      std::pair { "Edit fade in...", ClipProcessingEditorComponent::Mode::fadeIn },
                      std::pair { "Edit fade out...", ClipProcessingEditorComponent::Mode::fadeOut } })
                 menu.addItem(label, [safeThis, clipId = selectedClipId, mode, position]
@@ -3325,9 +3333,14 @@ void TimelineComponent::showClipProcessingEditor(const juce::String& clipId,
             ? safeThis->project->findClip(clipId) : nullptr;
         if (current == nullptr)
             return juce::Result::fail("This clip is no longer available. Close the editor and select it again.");
+        if (mode == ClipProcessingEditorComponent::Mode::slip && safeThis->onClipSlipped)
+            return safeThis->onClipSlipped(clipId, number, false);
+        if (mode == ClipProcessingEditorComponent::Mode::stretch && safeThis->onClipStretched)
+            return safeThis->onClipStretched(clipId, number);
         if (mode == ClipProcessingEditorComponent::Mode::gain && safeThis->onClipGainChanged)
             safeThis->onClipGainChanged(clipId, static_cast<float>(number));
-        else if (mode != ClipProcessingEditorComponent::Mode::gain && safeThis->onClipFadeChanged)
+        else if ((mode == ClipProcessingEditorComponent::Mode::fadeIn
+                  || mode == ClipProcessingEditorComponent::Mode::fadeOut) && safeThis->onClipFadeChanged)
         {
             if (number > current->durationSeconds)
                 return juce::Result::fail("The clip duration changed. Reopen the editor before setting this fade.");

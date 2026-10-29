@@ -29,6 +29,7 @@
 #include <cmath>
 #include <map>
 #include <numeric>
+#include <set>
 #include <system_error>
 
 namespace studio
@@ -1378,8 +1379,8 @@ MainComponent::MainComponent(
     timeline.onCommandKey = [this](const auto& key) { return handleWorkspaceKey(key); };
     timeline.onShortcutDescription = [this](auto id) { return workspaceShortcutDescription(id); };
     timeline.onAutomationEditorRequested = [this] { showAutomationPanel(); };
-    timeline.onClipSlipped = [this](const auto& clipId, double delta) { slipClip(clipId, delta); };
-    timeline.onClipStretched = [this](const auto& clipId, double duration) { stretchClip(clipId, duration); };
+    timeline.onClipSlipped = [this](const auto& clipId, double delta, bool clamp) { return slipClip(clipId, delta, clamp); };
+    timeline.onClipStretched = [this](const auto& clipId, double duration) { return stretchClip(clipId, duration); };
     timeline.onClipSelected = [this](const auto& trackId, const auto& clipId)
     {
         selectClip(trackId, clipId);
@@ -5108,13 +5109,15 @@ bool MainComponent::captureCurrentPluginStates(
     }
     const auto capturedProjectId = project.id;
     const auto capturedPackage = projectPackage;
+    const auto capturedRevision = projectRevision;
+    const auto previousStatuses = audioEngine.pluginRuntimeStatuses();
     std::map<juce::String, juce::String> capturedIdentifiers;
     for (const auto& trackId : trackIds)
         if (const auto* track = project.findTrack(trackId))
             for (const auto& insert : track->inserts)
                 capturedIdentifiers.emplace(insert.id, insert.pluginIdentifier);
-    auto captures = audioEngine.capturePluginStates(2000);
-    if (project.id != capturedProjectId || projectPackage != capturedPackage)
+    auto captures = audioEngine.capturePluginStates(2000, trackIds);
+    if (project.id != capturedProjectId || projectPackage != capturedPackage || projectRevision != capturedRevision)
     {
         error = "The project changed during processor state capture. Retry the operation.";
         return false;
@@ -5151,6 +5154,16 @@ bool MainComponent::captureCurrentPluginStates(
             continue;
         if (capture.result.failed())
         {
+            const auto prior = std::find_if(previousStatuses.begin(), previousStatuses.end(),
+                [&](const auto& state) { return state.insertId == capture.insertId; });
+            if (capture.preservePreviousState && prior != previousStatuses.end()
+                && prior->state != StudioAudioEngine::PluginRuntimeStatus::State::ready)
+            {
+                logError("plugin-state.capture", capture.name + ": " + capture.result.getErrorMessage()
+                    + " Retaining the previously stored processor state.");
+                setStatus("Retained saved state for unavailable processor: " + capture.name);
+                continue;
+            }
             error = capture.name
                 + ": "
                 + capture.result.getErrorMessage();
@@ -6330,22 +6343,8 @@ void MainComponent::changeTrackLifecycle(const juce::String& id,
     change(after);
     if (!after.active && before.active)
     {
-        std::vector<juce::String> affected;
-        for (const auto& candidate : project.tracks)
-        {
-            const auto* parent = &candidate;
-            for (std::size_t depth = 0; parent != nullptr && depth <= project.tracks.size(); ++depth)
-            {
-                if (parent->id == id)
-                {
-                    if (project.isTrackActive(candidate.id))
-                        affected.push_back(candidate.id);
-                    break;
-                }
-                parent = project.findTrack(parent->parentTrackId.isNotEmpty()
-                    ? parent->parentTrackId : parent->folderTrackId);
-            }
-        }
+        auto affected = ArrangementEditing::trackSubtreeIds(project, { id });
+        std::erase_if(affected, [this](const auto& candidate) { return !project.isTrackActive(candidate); });
         juce::String error;
         if (!captureCurrentPluginStates(affected, error))
         {
@@ -6373,11 +6372,19 @@ void MainComponent::showHiddenTracks()
         perform(std::make_unique<BatchProjectCommand>("Show hidden tracks", std::move(commands)));
 }
 
-void MainComponent::slipClip(const juce::String& id, double delta)
+juce::Result MainComponent::slipClip(const juce::String& id, double delta, bool allowClamp)
 {
+    if (hasActiveRecordingTargets() || audioEngine.isRecording() || recordingFinalizationInProgress || exportInProgress)
+    {
+        setStatus("Stop recording or rendering before slipping clips.", true);
+        return juce::Result::fail(statusPanel.latestMessage());
+    }
     const auto* clip = project.findClip(id);
     if (clip == nullptr)
-        return;
+    {
+        setStatus("The audio clip to slip is unavailable.", true);
+        return juce::Result::fail(statusPanel.latestMessage());
+    }
     const auto linked = linkedClipsAt(id, clip->startSeconds + clip->durationSeconds * 0.5);
     auto minimum = -std::numeric_limits<double>::infinity();
     auto maximum = std::numeric_limits<double>::infinity();
@@ -6386,38 +6393,49 @@ void MainComponent::slipClip(const juce::String& id, double delta)
         {
             minimum = std::max(minimum, member->sourceRangeStartSeconds - member->sourceOffsetSeconds);
             maximum = std::min(maximum, member->sourceRangeEnd() - member->sourceOffsetSeconds
-                - std::abs(member->sourceSecondsAt(member->durationSeconds) - member->sourceSecondsAt(0.0)));
+                - member->sourceSpanSeconds());
         }
-    if (minimum > maximum || !std::isfinite(delta))
+    if (minimum > maximum || !std::isfinite(delta)
+        || (!allowClamp && (delta < minimum || delta > maximum)))
     {
-        setStatus("Linked clips have no common slip range.", true);
-        return;
+        setStatus("The requested slip exceeds the common recoverable source range of the linked clips.", true);
+        return juce::Result::fail(statusPanel.latestMessage());
     }
     delta = juce::jlimit(minimum, maximum, delta);
-    updateLinkedClips(id, "Slip clip audio", [delta](auto& after, const auto& before, auto& error)
+    const auto changed = updateLinkedClips(id, "Slip clip audio", [delta](auto& after, const auto& before, auto& error)
     {
-        const auto changed = ArrangementEditing::slipClip(before, delta, error);
-        if (!changed)
+        const auto slipped = ArrangementEditing::slipClip(before, delta, error);
+        if (!slipped)
             return false;
-        after = *changed;
+        after = *slipped;
         return true;
     });
+    return changed ? juce::Result::ok() : juce::Result::fail(statusPanel.latestMessage());
 }
 
-void MainComponent::stretchClip(const juce::String& id, double duration)
+juce::Result MainComponent::stretchClip(const juce::String& id, double duration)
 {
+    if (hasActiveRecordingTargets() || audioEngine.isRecording() || recordingFinalizationInProgress || exportInProgress)
+    {
+        setStatus("Stop recording or rendering before stretching clips.", true);
+        return juce::Result::fail(statusPanel.latestMessage());
+    }
     const auto* clip = project.findClip(id);
     if (clip == nullptr)
-        return;
-    const auto scale = duration / clip->durationSeconds;
-    updateLinkedClips(id, "Stretch clip", [scale](auto& after, const auto& before, auto& error)
     {
-        const auto changed = ArrangementEditing::stretchClip(before, before.durationSeconds * scale, error);
-        if (!changed)
+        setStatus("The audio clip to stretch is unavailable.", true);
+        return juce::Result::fail(statusPanel.latestMessage());
+    }
+    const auto scale = duration / clip->durationSeconds;
+    const auto changed = updateLinkedClips(id, "Stretch clip", [scale](auto& after, const auto& before, auto& error)
+    {
+        const auto stretched = ArrangementEditing::stretchClip(before, before.durationSeconds * scale, error);
+        if (!stretched)
             return false;
-        after = *changed;
+        after = *stretched;
         return true;
     });
+    return changed ? juce::Result::ok() : juce::Result::fail(statusPanel.latestMessage());
 }
 
 void MainComponent::deleteSelectedTrack()
@@ -8037,9 +8055,17 @@ void MainComponent::setClipPlaybackRate(const juce::String& clipId, double rate)
     updateLinkedClips(
         clipId,
         "Change playback rate",
-        [rate](AudioClip& after, const AudioClip&, juce::String&)
+        [rate](AudioClip& after, const AudioClip& before, juce::String& error)
         {
-            after.playbackRate = juce::jlimit(0.25, 4.0, rate);
+            if (!std::isfinite(rate) || rate < 0.25 || rate > 4.0)
+            {
+                error = "Choose a playback rate between 0.25x and 4x.";
+                return false;
+            }
+            const auto stretched = ArrangementEditing::stretchClip(before, before.sourceSpanSeconds() / rate, error);
+            if (!stretched)
+                return false;
+            after = *stretched;
             return true;
         });
 }
@@ -8305,10 +8331,16 @@ juce::Result MainComponent::runClipRender(
     exportInProgress = true;
     shutdownRequestedDuringExport = false;
     audioEngine.pause();
+    if (!audioEngine.resetPluginProcessing())
+    {
+        exportInProgress = false;
+        return juce::Result::fail("Could not reset live plugin pipelines before rendering.");
+    }
     stopTimer();
     exportInputBlocker.setVisible(true);
     exportInputBlocker.toFront(false);
     exportInputBlocker.grabKeyboardFocus();
+    exportInputBlocker.enterModalState(true);
     setStatus(label + "...");
     const auto safe = juce::Component::SafePointer<MainComponent>(this);
     exportWorker.addJob([safe, label, destination, renderJob = std::move(render), commitJob = std::move(commit)]() mutable
@@ -8328,6 +8360,7 @@ juce::Result MainComponent::runClipRender(
                 cleanup();
                 return;
             }
+            safe->exportInputBlocker.exitModalState(0);
             safe->exportInputBlocker.setVisible(false);
             safe->startTimerHz(30);
             safe->exportInProgress = false;
@@ -8374,8 +8407,13 @@ void MainComponent::bounceSelectedClips(bool inPlace)
     if (!requests.empty())
     {
         const auto projectId = project.id;
-        const auto captures = audioEngine.capturePluginStates(2000);
-        if (project.id != projectId)
+        const auto revision = projectRevision;
+        std::vector<juce::String> captureTracks;
+        for (const auto& request : requests)
+            if (std::find(captureTracks.begin(), captureTracks.end(), request.trackId) == captureTracks.end())
+                captureTracks.push_back(request.trackId);
+        const auto captures = audioEngine.capturePluginStates(2000, captureTracks);
+        if (project.id != projectId || projectRevision != revision)
         {
             setStatus("The project changed during processor state capture. Retry the bounce.", true);
             return;
@@ -8417,7 +8455,7 @@ void MainComponent::bounceSelectedClips(bool inPlace)
                 setStatus(commitError, true);
                 return false;
             }
-            if (!perform(std::move(command)))
+            if (!performPreparedRender(std::move(command)))
                 return false;
             selectClip(sharedPlan->destinationTrackId.isNotEmpty() ? sharedPlan->destinationTrackId
                                                                  : sharedPlan->renderedTrack.id, clip.id);
@@ -8446,10 +8484,16 @@ void MainComponent::freezeTrack(const juce::String& id)
         setStatus(error, true);
         return;
     }
-    std::vector<juce::String> activeTracks;
-    for (const auto& track : project.tracks)
-        if (project.isTrackActive(track.id))
-            activeTracks.push_back(track.id);
+    std::set<juce::String> captureIds;
+    for (const auto& track : plan->project.tracks)
+        if (plan->project.isTrackActive(track.id) && !track.inserts.empty())
+            captureIds.insert(track.id);
+    const auto subtree = ArrangementEditing::trackSubtreeIds(project, { id });
+    for (const auto& status : audioEngine.pluginRuntimeStatuses())
+        if (status.state == StudioAudioEngine::PluginRuntimeStatus::State::ready
+            && std::find(subtree.begin(), subtree.end(), status.trackId) != subtree.end())
+            captureIds.insert(status.trackId);
+    const std::vector<juce::String> activeTracks(captureIds.begin(), captureIds.end());
     if (!captureCurrentPluginStates(activeTracks, error))
     {
         setStatus(error, true);
@@ -8478,7 +8522,7 @@ void MainComponent::freezeTrack(const juce::String& id)
                 setStatus(commitError, true);
                 return false;
             }
-            if (!perform(std::move(command)))
+            if (!performPreparedRender(std::move(command)))
                 return false;
             selectTrack(sharedPlan->renderedTrack.id);
             return true;
@@ -8500,7 +8544,10 @@ void MainComponent::unfreezeTrack(const juce::String& id)
     if (!command)
         setStatus(error, true);
     else if (perform(std::move(command)))
+    {
         selectTrack(sourceId);
+        setStatus("Unfroze " + project.findTrack(sourceId)->name + ".");
+    }
 }
 
 void MainComponent::showClipEffects(const juce::String& id)
@@ -8542,7 +8589,7 @@ void MainComponent::showClipEffects(const juce::String& id)
                         safe->setStatus("The clip changed during rendering. The effect was not applied.", true);
                     return false;
                 }
-                return safe->perform(std::make_unique<SetClipStateCommand>(
+                return safe->performPreparedRender(std::make_unique<SetClipStateCommand>(
                     trackId, original, processed, "Apply clip FX"));
             });
     };
@@ -8681,12 +8728,17 @@ void MainComponent::toggleExclusiveSolo(const juce::String& trackId)
     const auto* selected = project.findTrack(trackId);
     if (selected == nullptr || selected->type == TrackType::master)
         return;
+    if (!project.isTrackMixEditable(trackId))
+    {
+        setStatus("Unfreeze the original before changing its solo controls.", true);
+        return;
+    }
 
     const auto shouldSolo = !selected->solo;
     std::vector<std::unique_ptr<ProjectCommand>> commands;
     for (const auto& track : project.tracks)
     {
-        if (track.type == TrackType::master)
+        if (track.type == TrackType::master || !project.isTrackMixEditable(track.id))
             continue;
         const auto nextSolo = shouldSolo && track.id == trackId;
         if (track.solo == nextSolo)
@@ -8830,7 +8882,7 @@ void MainComponent::updateInspector()
     else if (!project.isTrackActive(track->id))
         inspectorDetails.setText(details + " | DEACTIVATED", juce::dontSendNotification);
     const auto frozen = project.isTrackFrozen(track->id);
-    const auto mixEditable = !frozen || track->freezeSourceTrackId.isNotEmpty();
+    const auto mixEditable = project.isTrackMixEditable(track->id);
     insertPanel->setEnabled(!frozen && project.isTrackActive(track->id));
     routingPanel->setEnabled(!frozen);
     midiEditor.setEnabled(!frozen);
@@ -11232,6 +11284,7 @@ void MainComponent::setMasteringWorkspaceVisible(bool visible)
 
 void MainComponent::projectChanged(bool writeRecovery, bool markDirty)
 {
+    ++projectRevision;
     commandManager.commandStatusChanged();
     if (markDirty)
         dirty = true;
@@ -11411,6 +11464,24 @@ MainComponent::pluginRuntimeRequests(const Project& sourceProject) const
         }
     }
     return requests;
+}
+
+bool MainComponent::performPreparedRender(std::unique_ptr<ProjectCommand> command)
+{
+    auto candidate = project;
+    juce::String error;
+    if (command == nullptr || !command->perform(candidate, error))
+    {
+        showError("Render placement failed", error.isNotEmpty() ? error : "The render edit is unavailable.");
+        return false;
+    }
+    if (const auto prepared = audioEngine.validateProjectPreparation(candidate, pluginRuntimeRequests(candidate));
+        prepared.failed())
+    {
+        showError("Render placement failed", prepared.getErrorMessage());
+        return false;
+    }
+    return perform(std::move(command));
 }
 
 bool MainComponent::perform(std::unique_ptr<ProjectCommand> command)
