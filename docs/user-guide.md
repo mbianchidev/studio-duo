@@ -726,8 +726,9 @@ the mixer:
   **Expression** in the lower lane. Drag lane values, or use `Alt+Up/Down` for
   a keyboard-only adjustment. Expression supports poly pressure, channel
   pressure, timbre, pitch bend, and a saved per-note controller. Keyboard
-  expression adjustments use the point nearest the note cursor; repeated
-  adjustments update that point rather than restarting from a later point.
+  expression adjustments read the value nearest the note cursor and write a
+  point at that cursor. Repeated adjustments advance that point rather than
+  restarting from a later point.
 - Choose a grid from quarter notes through 32nd notes or 16th-note triplets.
 
 Use **PIANO/DRUMS** to switch the same ordinary MIDI clip between editors. The

@@ -917,8 +917,9 @@ defer reveal until release so scrolling cannot transpose a stationary drag.
 The custom grid has a native list role and read-only text value for its clip,
 selection count, active note values, cursor, grid and lane. Value-change events
 reflect edits even when the selection name is unchanged; stale note IDs are
-pruned after project changes. Expression edits and announcements share the
-point nearest the cursor. Native selectors are named, child controls retain
+pruned after project changes. Expression edits read the same nearest-cursor
+point as announcements and write at the cursor, so repeated adjustments advance
+that point. Native selectors are named, child controls retain
 their keys, and unrelated Command/Control/Alt chords are not converted into
 note edits. These operations remain on the UI thread and retain the existing
 typed-command path, with no audio-callback changes.
