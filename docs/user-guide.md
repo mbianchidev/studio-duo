@@ -94,9 +94,12 @@ DAWproject exchange, and Phase 5 mastering and release workflows.
 | Trim selected clip end to playhead | `]` |
 | Delete selected clip | `Delete` or `Backspace` |
 | Piano-roll note create | `Enter` |
-| Piano-roll note move | Arrow keys |
+| Select previous / next MIDI note | `Alt+Left/Right` |
+| Extend or contract the MIDI note selection | `Alt+Shift+Left/Right` |
+| Move selected MIDI notes, or position the entry cursor with no selection | Arrow keys |
 | Piano-roll note resize | `Shift+Left/Right` |
 | Edit selected MIDI lane | `Alt+Up/Down` |
+| Clear MIDI note selection and return to entry-cursor navigation | `Escape` in the MIDI grid |
 | Play drum pads, with Keyboard enabled | `Q W E R`, `A S D F`, `Z X C V` by default |
 | Accent a drum-pad hit | Hold `Shift` with a pad key |
 | Leave drum keyboard/binding mode | `Escape` |
@@ -113,6 +116,17 @@ into view. Shift+F10 uses the existing context actions without changing the
 playhead; fade/warp actions use its current position. Musical nudges respect the
 chosen edit grid, tempo map, and existing linked-edit protections. Tab always
 leaves the timeline. The lower MIDI editor retains its own note-editing keys.
+With MIDI grid focus, `Alt+Left/Right` browses notes by their actual played beat,
+then pitch and stable ID, without moving them. Add Shift to select a range;
+reversing direction contracts it back toward its anchor. Escape clears that
+selection, so the arrows position the next note's beat/pitch before Enter.
+Selected notes and the entry cursor scroll into view across the full piano
+pitch range and mapped drum rows. MIDI toolbar selectors have distinct native
+names; the grid exposes its clip, selection count, note values, cursor, grid,
+and active lane to accessibility clients. Changed note/expression values update
+that native value without requiring a new selection name. Unrelated modified
+shortcuts, including Control+Alt assistive-technology chords, are not treated
+as grid edits; toolbar controls keep their own keys and Tab leaves the grid.
 The native timeline selection value includes mute/solo/arm, track level,
 take/comp and linked-edit state, plus selected clip timing, gain and fades.
 State changes do not rely on color or an unchanged selection name.
@@ -700,15 +714,20 @@ Create an empty one-bar clip with **NEW MIDI CLIP**,
 or instrument track. Selecting a MIDI clip opens the lower editor in place of
 the mixer:
 
-- Click empty grid space or press `Enter` to create a note.
+- Click empty grid space or press `Enter` to create a note. With no note
+  selected, the arrows position the entry cursor without changing the clip.
 - Click a note to select it; `Command/Ctrl`-click toggles selection.
+  `Alt+Left/Right` selects individual notes without a mouse, and adding Shift
+  extends/contracts a chronological range. `Escape` clears the note selection.
 - Drag notes to move them and drag the right edge to resize.
 - Use arrow keys to move, `Shift+Left/Right` to resize, and
   `Delete`/`Backspace` to remove selected notes.
 - Choose **Velocity**, **Timing**, **Duration**, **Probability**, or
   **Expression** in the lower lane. Drag lane values, or use `Alt+Up/Down` for
   a keyboard-only adjustment. Expression supports poly pressure, channel
-  pressure, timbre, pitch bend, and a saved per-note controller.
+  pressure, timbre, pitch bend, and a saved per-note controller. Keyboard
+  expression adjustments use the point nearest the note cursor; repeated
+  adjustments update that point rather than restarting from a later point.
 - Choose a grid from quarter notes through 32nd notes or 16th-note triplets.
 
 Use **PIANO/DRUMS** to switch the same ordinary MIDI clip between editors. The

@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <set>
 
 namespace studio
 {
@@ -14,6 +15,16 @@ bool containsId(const std::vector<juce::String>& ids,
                 const juce::String& id)
 {
     return std::find(ids.cbegin(), ids.cend(), id) != ids.cend();
+}
+
+auto findDrumRow(const std::vector<const DrumMapEntry*>& rows, int pitch)
+{
+    return std::find_if(rows.cbegin(), rows.cend(), [pitch](const auto* entry)
+    {
+        return entry->noteNumber == pitch
+            || std::find(entry->roundRobinNotes.cbegin(), entry->roundRobinNotes.cend(), pitch)
+                != entry->roundRobinNotes.cend();
+    });
 }
 
 juce::String laneName(MidiEditorLane lane)
@@ -35,6 +46,10 @@ MidiEditorComponent::MidiEditorComponent()
     setOpaque(true);
     setWantsKeyboardFocus(true);
     setFocusContainerType(FocusContainerType::focusContainer);
+    setTitle("MIDI editor");
+    setDescription("Alt+Left/Right selects notes; add Shift to extend selection. "
+                   "Arrows move selected notes, Shift+Left/Right resizes, "
+                   "Alt+Up/Down edits the selected lane, and Escape clears selection.");
 
     const auto addButton = [this](juce::Button& button,
                                   const juce::String& tooltip)
@@ -60,13 +75,17 @@ MidiEditorComponent::MidiEditorComponent()
     addButton(expandPatternButton, "Expand the selected alias into ordinary notes");
     addButton(applyRoutingButton, "Create and route the selected multi-output MIDI template");
 
-    for (auto* box : {
-             &laneSelector,
-             &expressionSelector,
-             &gridSelector,
-             &patternSelector,
-             &routingTemplateSelector })
+    for (const auto& [box, title] : std::initializer_list<std::pair<juce::ComboBox*, const char*>> {
+             { &laneSelector, "MIDI note property lane" },
+             { &expressionSelector, "MIDI expression type" },
+             { &gridSelector, "MIDI note entry and nudge grid" },
+             { &patternSelector, "MIDI pattern alias" },
+             { &routingTemplateSelector, "MIDI multi-output routing template" } })
+    {
         addAndMakeVisible(*box);
+        box->setTitle(title);
+        box->setWantsKeyboardFocus(true);
+    }
 
     laneSelector.addItem("Velocity", 1);
     laneSelector.addItem("Timing", 2);
@@ -81,6 +100,7 @@ MidiEditorComponent::MidiEditorComponent()
         expressionSelector.setVisible(
             selectedLane() == MidiEditorLane::expression);
         resized();
+        updateAccessibleSelection();
         repaint();
     };
 
@@ -91,6 +111,7 @@ MidiEditorComponent::MidiEditorComponent()
     expressionSelector.addItem("Channel pressure", 5);
     expressionSelector.setSelectedId(1, juce::dontSendNotification);
     expressionSelector.setTooltip("Select per-note expression data");
+    expressionSelector.onChange = [this] { updateAccessibleSelection(); repaint(); };
 
     gridSelector.addItem("1/4", 1);
     gridSelector.addItem("1/8", 2);
@@ -99,6 +120,7 @@ MidiEditorComponent::MidiEditorComponent()
     gridSelector.addItem("1/16T", 5);
     gridSelector.setSelectedId(3, juce::dontSendNotification);
     gridSelector.setTooltip("Set note-entry and keyboard nudge grid");
+    gridSelector.onChange = [this] { updateAccessibleSelection(); repaint(); };
 
     patternSelector.setTooltip("Select a saved pattern alias");
     routingTemplateSelector.setTooltip("Select a multi-output MIDI routing template");
@@ -203,13 +225,14 @@ void MidiEditorComponent::setSelection(juce::String trackId,
 {
     if (trackId != selectedTrackId)
         view = View::grid;
-    const auto changedClip = clipId != selectedClipId;
+    const auto changedClip = clipId != selectedClipId || trackId != selectedTrackId;
     if (changedClip)
     {
         selectedNoteIds.clear();
         dragBefore.reset();
         dragPreview.reset();
         cursorBeat = 0.0;
+        cursorPitch = 60;
         rowOffset = 0;
     }
     selectedTrackId = std::move(trackId);
@@ -217,43 +240,10 @@ void MidiEditorComponent::setSelection(juce::String trackId,
     if (const auto* clip = currentClip();
         clip == nullptr || (isShowingDrumPads() && clip->editorMode != MidiEditorMode::drums))
         view = View::grid;
-    if (const auto* clip = currentClip(); clip != nullptr && !clip->notes.empty())
+    if (const auto* clip = currentClip(); changedClip && clip != nullptr && !clip->notes.empty())
     {
         cursorPitch = clip->notes.front().pitch;
         cursorBeat = clip->notes.front().startBeats;
-        if (changedClip)
-        {
-            if (clip->editorMode == MidiEditorMode::drums)
-            {
-                const auto rows = drumRows();
-                const auto row = std::find_if(
-                    rows.cbegin(),
-                    rows.cend(),
-                    [this](const auto* entry)
-                    {
-                        return entry != nullptr
-                            && (entry->noteNumber == cursorPitch
-                                || std::find(
-                                       entry->roundRobinNotes.cbegin(),
-                                       entry->roundRobinNotes.cend(),
-                                       cursorPitch)
-                                    != entry->roundRobinNotes.cend());
-                    });
-                if (row != rows.cend())
-                    rowOffset = std::max(
-                        0,
-                        static_cast<int>(
-                            std::distance(rows.cbegin(), row))
-                            - 4);
-            }
-            else
-            {
-                rowOffset = juce::jlimit(
-                    0,
-                    128 - pianoRows,
-                    83 - cursorPitch - pianoRows / 2);
-            }
-        }
     }
     refreshControls();
     repaint();
@@ -456,7 +446,7 @@ void MidiEditorComponent::paint(juce::Graphics& graphics)
             const auto pitch = juce::jlimit(
                 0,
                 127,
-                83 - rowOffset - row);
+                initialPianoTopPitch - rowOffset - row);
             const auto y = static_cast<float>(notes.getY())
                 + static_cast<float>(row) * rowHeight;
             const auto pitchClass = pitch % 12;
@@ -670,6 +660,7 @@ void MidiEditorComponent::resized()
     auto& routingRow = narrow ? fourth : patternRow;
     routingTemplateSelector.setBounds(routingRow.removeFromLeft(154).reduced(2));
     applyRoutingButton.setBounds(routingRow.removeFromLeft(112).reduced(2));
+    ensureCursorVisible();
 }
 
 void MidiEditorComponent::mouseDown(const juce::MouseEvent& event)
@@ -697,6 +688,13 @@ void MidiEditorComponent::mouseDown(const juce::MouseEvent& event)
     cursorPitch = pitchForY(event.position.y);
     if (const auto* note = noteAt(event.position))
     {
+        dragBefore = *currentClip();
+        dragPreview = *dragBefore;
+        dragStart = event.position;
+        dragStartBeat = note->actualStartBeats();
+        dragStartPitch = note->pitch;
+        dragMode = std::abs(event.position.x - noteBounds(*note).getRight()) <= 7.0f
+            ? DragMode::resize : DragMode::move;
         if (event.mods.isCommandDown())
         {
             if (containsId(selectedNoteIds, note->id))
@@ -717,22 +715,12 @@ void MidiEditorComponent::mouseDown(const juce::MouseEvent& event)
         {
             selectOnly(note->id);
         }
-        dragBefore = *currentClip();
-        dragPreview = *dragBefore;
-        dragStart = event.position;
-        dragStartBeat = note->actualStartBeats();
-        dragStartPitch = note->pitch;
-        dragMode = std::abs(
-                       event.position.x - noteBounds(*note).getRight())
-                <= 7.0f
-            ? DragMode::resize
-            : DragMode::move;
     }
     else
     {
         addNoteAt(cursorBeat, cursorPitch);
     }
-    repaint();
+    selectionChanged();
 }
 
 void MidiEditorComponent::mouseDrag(const juce::MouseEvent& event)
@@ -795,7 +783,7 @@ void MidiEditorComponent::mouseUp(const juce::MouseEvent&)
     dragBefore.reset();
     dragPreview.reset();
     dragMode = DragMode::none;
-    repaint();
+    selectionChanged();
 }
 
 void MidiEditorComponent::mouseWheelMove(
@@ -807,7 +795,7 @@ void MidiEditorComponent::mouseWheelMove(
     {
         const auto direction = wheel.deltaY > 0.0f ? -1 : 1;
         rowOffset = juce::jlimit(
-            0,
+            minimumRowOffset(),
             maximumRowOffset(),
             rowOffset + direction * (wheel.isSmooth ? 1 : 3));
         repaint();
@@ -822,27 +810,40 @@ bool MidiEditorComponent::keyPressed(const juce::KeyPress& key)
         return drumPerformancePanel.keyPressed(key);
     if (isShowingDrumGeometry())
         return drumGeometryPanel.keyPressed(key);
+    if (const auto* focused = juce::Component::getCurrentlyFocusedComponent();
+        focused != nullptr && focused != this && isParentOf(focused))
+        return false;
     const auto command = key.getModifiers().isCommandDown();
     const auto shift = key.getModifiers().isShiftDown();
-    if (command && shift && key.getKeyCode() == 'M')
+    const auto alt = key.getModifiers().isAltDown();
+    const auto code = key.getKeyCode();
+    const auto horizontal = code == juce::KeyPress::leftKey || code == juce::KeyPress::rightKey;
+    const auto vertical = code == juce::KeyPress::upKey || code == juce::KeyPress::downKey;
+    if (key == juce::KeyPress('M', juce::ModifierKeys::commandModifier | juce::ModifierKeys::shiftModifier, 0))
     {
         if (onCaptureRetrospective)
             onCaptureRetrospective();
         return true;
     }
-    if (command && key.getKeyCode() == 'A')
+    const auto* clip = currentClip();
+    if (clip == nullptr)
+        return false;
+    if (key == juce::KeyPress('A', juce::ModifierKeys::commandModifier, 0))
     {
         selectedNoteIds.clear();
-        if (const auto* clip = currentClip())
-            for (const auto& note : clip->notes)
-                selectedNoteIds.push_back(note.id);
-        repaint();
+        for (const auto& note : clip->notes)
+            selectedNoteIds.push_back(note.id);
+        selectionChanged();
         return true;
     }
+    if (command || key.getModifiers().isCtrlDown() || (alt && !horizontal && !vertical)
+        || (shift && (code == juce::KeyPress::returnKey || code == juce::KeyPress::deleteKey
+                      || code == juce::KeyPress::backspaceKey || code == juce::KeyPress::escapeKey)))
+        return false;
     if (key.getKeyCode() == juce::KeyPress::escapeKey)
     {
         selectedNoteIds.clear();
-        repaint();
+        selectionChanged();
         return true;
     }
     if (key.getKeyCode() == juce::KeyPress::deleteKey
@@ -857,19 +858,28 @@ bool MidiEditorComponent::keyPressed(const juce::KeyPress& key)
         return true;
     }
 
-    const auto* clip = currentClip();
-    if (clip == nullptr || selectedNoteIds.empty())
-        return false;
-    if (key.getModifiers().isAltDown()
-        && (key.getKeyCode() == juce::KeyPress::upKey
-            || key.getKeyCode() == juce::KeyPress::downKey))
+    if (alt && horizontal)
+        return selectAdjacentNote(code == juce::KeyPress::leftKey ? -1 : 1, shift);
+    if (selectedNoteIds.empty())
+    {
+        if (alt || shift || (!horizontal && !vertical))
+            return false;
+        if (horizontal)
+            cursorBeat = juce::jlimit(0.0, std::max(0.0, clip->durationBeats - gridBeats()),
+                cursorBeat + (code == juce::KeyPress::rightKey ? gridBeats() : -gridBeats()));
+        else
+            cursorPitch = adjacentPitch(cursorPitch, code == juce::KeyPress::upKey ? 1 : -1);
+        selectionChanged();
+        return true;
+    }
+    if (alt && vertical)
     {
         const auto selected = std::find_if(
             clip->notes.cbegin(),
             clip->notes.cend(),
             [this](const auto& note)
             {
-                return containsId(selectedNoteIds, note.id);
+                return note.id == selectedNoteIds.back();
             });
         if (selected == clip->notes.cend())
             return true;
@@ -891,15 +901,7 @@ bool MidiEditorComponent::keyPressed(const juce::KeyPress& key)
                 break;
             case MidiEditorLane::expression:
             {
-                const auto expression = std::find_if(
-                    selected->expressions.crbegin(),
-                    selected->expressions.crend(),
-                    [this](const auto& point)
-                    {
-                        return point.type
-                            == selectedExpressionType();
-                    });
-                if (expression != selected->expressions.crend())
+                if (const auto* expression = expressionAtCursor(*selected))
                     normalized = expression->type
                             == MidiExpressionType::pitchBend
                         ? (expression->value + 1.0) * 0.5
@@ -950,81 +952,14 @@ bool MidiEditorComponent::keyPressed(const juce::KeyPress& key)
             : moveMidiNotes(after, selectedNoteIds, gridBeats(), 0);
         commandName = shift ? "Resize MIDI notes" : "Move MIDI notes";
     }
-    else if (key.getKeyCode() == juce::KeyPress::upKey)
+    else if (vertical)
     {
-        auto deltaPitch = 1;
-        if (after.editorMode == MidiEditorMode::drums)
-        {
-            const auto selected = std::find_if(
-                after.notes.cbegin(),
-                after.notes.cend(),
-                [this](const auto& note)
-                {
-                    return containsId(selectedNoteIds, note.id);
-                });
-            const auto rows = drumRows();
-            const auto row = selected != after.notes.cend()
-                ? std::find_if(
-                      rows.cbegin(),
-                      rows.cend(),
-                      [&selected](const auto* entry)
-                      {
-                          return entry != nullptr
-                              && (entry->noteNumber == selected->pitch
-                                  || std::find(
-                                         entry->roundRobinNotes.cbegin(),
-                                         entry->roundRobinNotes.cend(),
-                                         selected->pitch)
-                                      != entry->roundRobinNotes.cend());
-                      })
-                : rows.cend();
-            if (row != rows.cend() && row != rows.cbegin())
-                deltaPitch = (*(row - 1))->noteNumber - selected->pitch;
-        }
-        changed = moveMidiNotes(
-            after,
-            selectedNoteIds,
-            0.0,
-            deltaPitch,
-            currentDrumMap());
-    }
-    else if (key.getKeyCode() == juce::KeyPress::downKey)
-    {
-        auto deltaPitch = -1;
-        if (after.editorMode == MidiEditorMode::drums)
-        {
-            const auto selected = std::find_if(
-                after.notes.cbegin(),
-                after.notes.cend(),
-                [this](const auto& note)
-                {
-                    return containsId(selectedNoteIds, note.id);
-                });
-            const auto rows = drumRows();
-            const auto row = selected != after.notes.cend()
-                ? std::find_if(
-                      rows.cbegin(),
-                      rows.cend(),
-                      [&selected](const auto* entry)
-                      {
-                          return entry != nullptr
-                              && (entry->noteNumber == selected->pitch
-                                  || std::find(
-                                         entry->roundRobinNotes.cbegin(),
-                                         entry->roundRobinNotes.cend(),
-                                         selected->pitch)
-                                      != entry->roundRobinNotes.cend());
-                      })
-                : rows.cend();
-            if (row != rows.cend() && row + 1 != rows.cend())
-                deltaPitch = (*(row + 1))->noteNumber - selected->pitch;
-        }
-        changed = moveMidiNotes(
-            after,
-            selectedNoteIds,
-            0.0,
-            deltaPitch,
-            currentDrumMap());
+        const auto selected = std::find_if(after.notes.cbegin(), after.notes.cend(),
+            [this](const auto& note) { return containsId(selectedNoteIds, note.id); });
+        if (selected != after.notes.cend())
+            changed = moveMidiNotes(after, selectedNoteIds, 0.0,
+                adjacentPitch(selected->pitch, code == juce::KeyPress::upKey ? 1 : -1) - selected->pitch,
+                currentDrumMap());
     }
     else
     {
@@ -1037,7 +972,7 @@ bool MidiEditorComponent::keyPressed(const juce::KeyPress& key)
 
 void MidiEditorComponent::focusGained(FocusChangeType)
 {
-    repaint();
+    selectionChanged();
 }
 
 void MidiEditorComponent::focusLost(FocusChangeType)
@@ -1160,7 +1095,7 @@ int MidiEditorComponent::pitchForY(float y) const
         / static_cast<float>(pianoRows);
     const auto row = static_cast<int>(
         std::floor((y - static_cast<float>(notes.getY())) / rowHeight));
-    return juce::jlimit(0, 127, 83 - rowOffset - row);
+    return juce::jlimit(0, 127, initialPianoTopPitch - rowOffset - row);
 }
 
 float MidiEditorComponent::yForPitch(int pitch) const
@@ -1170,19 +1105,7 @@ float MidiEditorComponent::yForPitch(int pitch) const
     if (clip != nullptr && clip->editorMode == MidiEditorMode::drums)
     {
         const auto rows = drumRows();
-        const auto row = std::find_if(
-            rows.cbegin(),
-            rows.cend(),
-            [pitch](const auto* entry)
-            {
-                return entry != nullptr
-                    && (entry->noteNumber == pitch
-                        || std::find(
-                               entry->roundRobinNotes.cbegin(),
-                               entry->roundRobinNotes.cend(),
-                               pitch)
-                            != entry->roundRobinNotes.cend());
-            });
+        const auto row = findDrumRow(rows, pitch);
         if (row == rows.cend())
             return -1000.0f;
         const auto rowHeight = std::max(
@@ -1198,7 +1121,7 @@ float MidiEditorComponent::yForPitch(int pitch) const
     const auto rowHeight = static_cast<float>(notes.getHeight())
         / static_cast<float>(pianoRows);
     return static_cast<float>(notes.getY())
-        + static_cast<float>(83 - rowOffset - pitch) * rowHeight;
+        + static_cast<float>(initialPianoTopPitch - rowOffset - pitch) * rowHeight;
 }
 
 juce::Rectangle<float> MidiEditorComponent::noteBounds(
@@ -1255,20 +1178,41 @@ std::vector<const DrumMapEntry*> MidiEditorComponent::drumRows() const
     return rows;
 }
 
+int MidiEditorComponent::adjacentPitch(int pitch, int direction) const
+{
+    const auto rows = drumRows();
+    if (rows.empty())
+        return juce::jlimit(0, 127, pitch + direction);
+    const auto row = findDrumRow(rows, pitch);
+    if (row == rows.cend())
+        return (*std::min_element(rows.cbegin(), rows.cend(), [pitch](const auto* left, const auto* right)
+        {
+            return std::abs(left->noteNumber - pitch) < std::abs(right->noteNumber - pitch);
+        }))->noteNumber;
+    const auto next = juce::jlimit(0, static_cast<int>(rows.size()) - 1,
+        static_cast<int>(std::distance(rows.cbegin(), row)) - direction);
+    return rows[static_cast<std::size_t>(next)]->noteNumber;
+}
+
+int MidiEditorComponent::visibleDrumRowCount() const
+{
+    const auto height = static_cast<float>(std::max(0, noteArea().getHeight()));
+    const auto rowHeight = std::max(minimumDrumRowHeight, height / static_cast<float>(pianoRows));
+    return std::max(1, static_cast<int>(std::floor(height / rowHeight)));
+}
+
+int MidiEditorComponent::minimumRowOffset() const
+{
+    const auto* clip = currentClip();
+    return clip != nullptr && clip->editorMode == MidiEditorMode::drums ? 0 : initialPianoTopPitch - 127;
+}
+
 int MidiEditorComponent::maximumRowOffset() const
 {
     const auto* clip = currentClip();
     if (clip != nullptr && clip->editorMode == MidiEditorMode::drums)
-    {
-        const auto visible = static_cast<int>(
-            std::floor(
-                static_cast<float>(noteArea().getHeight())
-                / minimumDrumRowHeight));
-        return std::max(
-            0,
-            static_cast<int>(drumRows().size()) - visible);
-    }
-    return 128 - pianoRows;
+        return std::max(0, static_cast<int>(drumRows().size()) - visibleDrumRowCount());
+    return initialPianoTopPitch - pianoRows + 1;
 }
 
 MidiEditorLane MidiEditorComponent::selectedLane() const noexcept
@@ -1296,6 +1240,17 @@ MidiEditorComponent::selectedExpressionType() const noexcept
         case 1:
         default: return MidiExpressionType::pressure;
     }
+}
+
+const MidiExpressionPoint* MidiEditorComponent::expressionAtCursor(const MidiNote& note) const
+{
+    const auto offset = juce::jlimit(0.0, note.durationBeats, cursorBeat - note.actualStartBeats());
+    const MidiExpressionPoint* nearest = nullptr;
+    for (const auto& point : note.expressions)
+        if (point.type == selectedExpressionType()
+            && (nearest == nullptr || std::abs(point.offsetBeats - offset) < std::abs(nearest->offsetBeats - offset)))
+            nearest = &point;
+    return nearest;
 }
 
 void MidiEditorComponent::refreshControls()
@@ -1339,6 +1294,7 @@ void MidiEditorComponent::refreshControls()
         clip != nullptr && clip->editorMode == MidiEditorMode::drums
             ? "DRUMS"
             : "PIANO");
+    modeButton.setTitle("MIDI editor mode: " + modeButton.getButtonText());
     editMapButton.setVisible(
         showingGrid && clip != nullptr && clip->editorMode == MidiEditorMode::drums);
     importMapButton.setVisible(
@@ -1379,8 +1335,9 @@ void MidiEditorComponent::refreshControls()
         patternSelector.setSelectedId(1, juce::dontSendNotification);
     if (routingTemplateSelector.getNumItems() > 0)
         routingTemplateSelector.setSelectedId(1, juce::dontSendNotification);
-    rowOffset = juce::jlimit(0, maximumRowOffset(), rowOffset);
+    rowOffset = juce::jlimit(minimumRowOffset(), maximumRowOffset(), rowOffset);
     resized();
+    selectionChanged();
 }
 
 void MidiEditorComponent::commitEdit(const MidiClip& before,
@@ -1516,6 +1473,170 @@ void MidiEditorComponent::applyLaneAt(juce::Point<float> position)
 void MidiEditorComponent::selectOnly(const juce::String& noteId)
 {
     selectedNoteIds = { noteId };
+    selectionChanged();
+}
+
+bool MidiEditorComponent::selectAdjacentNote(int direction, bool extend)
+{
+    const auto* clip = currentClip();
+    if (clip == nullptr || clip->notes.empty())
+        return false;
+    std::vector<const MidiNote*> notes;
+    notes.reserve(clip->notes.size());
+    for (const auto& note : clip->notes)
+        notes.push_back(&note);
+    std::sort(notes.begin(), notes.end(), [](const auto* left, const auto* right)
+    {
+        if (left->actualStartBeats() < right->actualStartBeats())
+            return true;
+        if (right->actualStartBeats() < left->actualStartBeats())
+            return false;
+        if (left->pitch != right->pitch)
+            return left->pitch < right->pitch;
+        return left->id < right->id;
+    });
+    const auto selected = std::find_if(notes.cbegin(), notes.cend(), [this](const auto* note)
+    {
+        return !selectedNoteIds.empty() && note->id == selectedNoteIds.back();
+    });
+    const auto next = selected == notes.cend()
+        ? (direction > 0 ? 0 : static_cast<int>(notes.size()) - 1)
+        : juce::jlimit(0, static_cast<int>(notes.size()) - 1,
+                      static_cast<int>(std::distance(notes.cbegin(), selected)) + direction);
+    const auto anchor = std::find_if(notes.cbegin(), notes.cend(), [this](const auto* note)
+    {
+        return !selectedNoteIds.empty() && note->id == selectedNoteIds.front();
+    });
+    if (extend && selected != notes.cend() && anchor != notes.cend())
+    {
+        const auto start = static_cast<int>(std::distance(notes.cbegin(), anchor));
+        const auto step = next >= start ? 1 : -1;
+        selectedNoteIds.clear();
+        for (auto index = start; ; index += step)
+        {
+            selectedNoteIds.push_back(notes[static_cast<std::size_t>(index)]->id);
+            if (index == next)
+                break;
+        }
+        selectionChanged();
+    }
+    else
+        selectOnly(notes[static_cast<std::size_t>(next)]->id);
+    return true;
+}
+
+void MidiEditorComponent::selectionChanged()
+{
+    const auto* clip = currentClip();
+    if (!selectedNoteIds.empty())
+    {
+        std::set<juce::String> available;
+        if (clip != nullptr)
+            for (const auto& note : clip->notes)
+                available.insert(note.id);
+        selectedNoteIds.erase(std::remove_if(selectedNoteIds.begin(), selectedNoteIds.end(),
+            [&](const auto& id) { return !available.contains(id); }), selectedNoteIds.end());
+    }
+    if (clip != nullptr && !selectedNoteIds.empty())
+        for (const auto& note : clip->notes)
+            if (note.id == selectedNoteIds.back())
+            {
+                cursorBeat = note.actualStartBeats();
+                cursorPitch = note.pitch;
+                break;
+            }
+    ensureCursorVisible();
+    updateAccessibleSelection();
+    repaint();
+}
+
+void MidiEditorComponent::ensureCursorVisible()
+{
+    const auto* clip = currentClip();
+    if (clip == nullptr || view != View::grid || dragMode != DragMode::none)
+        return;
+    if (clip->editorMode == MidiEditorMode::drums)
+    {
+        const auto rows = drumRows();
+        const auto row = findDrumRow(rows, cursorPitch);
+        if (row == rows.cend())
+            return;
+        const auto index = static_cast<int>(std::distance(rows.cbegin(), row));
+        const auto visible = visibleDrumRowCount();
+        if (index < rowOffset)
+            rowOffset = index;
+        else if (index >= rowOffset + visible)
+            rowOffset = index - visible + 1;
+        rowOffset = juce::jlimit(0, std::max(0, static_cast<int>(rows.size()) - visible), rowOffset);
+    }
+    else
+    {
+        const auto row = initialPianoTopPitch - cursorPitch;
+        if (row < rowOffset)
+            rowOffset = row;
+        else if (row >= rowOffset + pianoRows)
+            rowOffset = row - pianoRows + 1;
+        rowOffset = juce::jlimit(minimumRowOffset(), maximumRowOffset(), rowOffset);
+    }
+}
+
+void MidiEditorComponent::updateAccessibleSelection()
+{
+    auto title = juce::String(isShowingDrumPads() ? "Drum pads" : isShowingDrumGeometry() ? "Drum geometry" : "MIDI editor");
+    auto value = juce::String("No MIDI clip selected");
+    if (const auto* clip = currentClip())
+    {
+        title += ": " + clip->name;
+        value = selectedNoteIds.empty() ? "No notes selected"
+            : juce::String(static_cast<int>(selectedNoteIds.size()))
+                + (selectedNoteIds.size() == 1 ? " note selected" : " notes selected");
+        for (const auto& note : clip->notes)
+            if (!selectedNoteIds.empty() && note.id == selectedNoteIds.back())
+            {
+                value += "; " + juce::MidiMessage::getMidiNoteName(note.pitch, true, true, 3)
+                    + " (MIDI note " + juce::String(note.pitch) + "); beat " + juce::String(note.actualStartBeats(), 3)
+                    + "; duration " + juce::String(note.durationBeats, 3) + " beats; velocity " + juce::String(note.velocity)
+                    + "; channel " + juce::String(note.channel) + "; probability " + juce::String(note.probability * 100.0, 1)
+                    + "%; timing offset " + juce::String(note.timingOffsetBeats, 3) + " beats";
+                if (const auto* map = currentDrumMap())
+                    if (const auto* entry = map->entryForPitch(note.pitch))
+                        value += "; " + entry->name + "; " + entry->articulation;
+                if (selectedLane() == MidiEditorLane::expression)
+                {
+                    const auto* expression = expressionAtCursor(note);
+                    value += "; " + expressionSelector.getText() + (expression != nullptr
+                        ? " " + juce::String(expression->value, 3) + " at note beat " + juce::String(expression->offsetBeats, 3)
+                        : "; no expression points");
+                }
+                break;
+            }
+        value += "; cursor beat " + juce::String(cursorBeat, 3) + ", MIDI note " + juce::String(cursorPitch)
+            + "; grid " + gridSelector.getText() + "; lane " + laneSelector.getText();
+    }
+    if (getTitle() == title && accessibleSelectionValue == value)
+        return;
+    setTitle(title);
+    accessibleSelectionValue = std::move(value);
+    if (auto* handler = getAccessibilityHandler())
+        handler->notifyAccessibilityEvent(juce::AccessibilityEvent::valueChanged);
+}
+
+std::unique_ptr<juce::AccessibilityHandler> MidiEditorComponent::createAccessibilityHandler()
+{
+    class SelectionValue final : public juce::AccessibilityTextValueInterface
+    {
+    public:
+        explicit SelectionValue(MidiEditorComponent& component) : owner(component) {}
+        bool isReadOnly() const override { return true; }
+        juce::String getCurrentValueAsString() const override { return owner.accessibleSelectionValue; }
+        void setValueAsString(const juce::String&) override {}
+    private:
+        MidiEditorComponent& owner;
+    };
+    return std::make_unique<juce::AccessibilityHandler>(
+        *this, juce::AccessibilityRole::list,
+        juce::AccessibilityActions().addAction(juce::AccessibilityActionType::focus, [this] { grabKeyboardFocus(); }),
+        juce::AccessibilityHandler::Interfaces(std::make_unique<SelectionValue>(*this)));
 }
 
 void MidiEditorComponent::removeSelectedNotes()
@@ -1528,6 +1649,7 @@ void MidiEditorComponent::removeSelectedNotes()
         return;
     commitEdit(*clip, std::move(after), "Delete MIDI notes");
     selectedNoteIds.clear();
+    selectionChanged();
     grabKeyboardFocus();
 }
 }

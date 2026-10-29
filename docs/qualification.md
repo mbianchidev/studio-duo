@@ -460,6 +460,15 @@ retained messages, preserves selection by message ID when updates arrive, and
 supports Delete or the selected-message/all-message controls. Painted rows beyond
 the old popup bounds are no longer the only route to older errors.
 
+MIDI grid contracts also cover individual note browsing and range selection
+with Alt/Alt+Shift arrows, entry-cursor movement with no selection, mapped drum
+entry, named selectors, native note/expression values, and rejection of unrelated
+modified chords. Offscreen software renders verify selected piano pitches 0/127
+and distant drum rows at compact/tall grid sizes in every supported theme.
+Pointer regression cases ensure cursor reveal cannot move a note beneath a
+stationary drag. These are native source/software-render contracts, not actual
+VoiceOver/NVDA runs, magnification checks, or accelerated focus-rendering evidence.
+
 No source-only review can certify modal focus restoration, native accelerated
 focus rendering, assistive announcements, magnification, or third-party dialogs.
 Record each reproducible blocker with severity, exact workflow/control,
