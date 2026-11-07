@@ -185,7 +185,9 @@ Settings persist across launches. Use the gear icon to configure:
 | General | Autosave recovery after edits, enabled by default for already-saved projects. Manual Save still publishes the durable project generation. |
 | Appearance | Four dark themes and custom surface/text/accent colors with contrast validation. |
 | VST Plug-ins | Default/custom VST3 folders, startup folder discovery, manual rescan, and explicit advanced validation. |
+| Audio / MIDI | Audio device, input/output channels, sample rate, buffer size, and musical MIDI ports. |
 | Controls | Optional eight-strip Mackie Control profile, disabled by default. Select dedicated MIDI ports, separate from musical MIDI routing. |
+| Workflow | [Custom shortcuts and command macros](docs/user-guide.md#custom-shortcuts-and-workflow-macros), including the edit-toolbar macro assignment. |
 | Updates | Manual checks and automatic-download preferences. Updates are installed only after choosing Restart and Update. |
 
 In the processor catalog, choose **SCAN** to probe installed VST3, CLAP, and

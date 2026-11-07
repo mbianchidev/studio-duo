@@ -18,6 +18,13 @@ DAWproject exchange, and Phase 5 mastering and release workflows.
 - Clip move, split, trim, delete, fades, crossfades, and consolidation
 - Deterministic transient detection and pitch-preserving stretch and warp
 - Take lanes, playlists, comping, and linked multitrack editing
+- Keyboard timeline/note navigation and exact numeric clip gain, fade,
+  slip/stretch and automation point editing
+- Track folders, audio/instrument bus grouping, hiding and processing
+  deactivation without deleting the original arrangement
+- AudioSuite clip-range FX and multi-clip bounce, with reversible track freeze
+- [Custom shortcuts and workflow macros](#custom-shortcuts-and-workflow-macros)
+  built from bounded, synchronous Studio Duo command sequences
 - Hardware reamp routing, calibration, polarity, and fine alignment
 - Plugin tone paths that reference the original DI media
 - Sandboxed VST3, Audio Unit, and CLAP discovery and processing
@@ -39,8 +46,11 @@ DAWproject exchange, and Phase 5 mastering and release workflows.
 - Cycle-safe MIDI routes through in-process and sandboxed instrument and
   MIDI-effect plugins
 - Sample-accurate mixer, send, bundled-device, and plugin automation
+- Optional [Mackie Control](#mackie-control-surfaces) profile for eight channel
+  strips and master, with dedicated MIDI ports and host feedback
 - Parametric EQ, compressor, true-peak limiter, reverb, gate, gain, polarity,
   delay, tuner, and signal generator devices
+  ([utility controls and limits](devices.md#utility-processors))
 - Bundled metal drum composition instrument with velocity, deterministic round
   robin, mapped cymbal/hi-hat behavior, and separate kit-piece outputs
 - Bundled guitar and bass amps with real nonlinear/tone DSP, embedded cabinets,
@@ -50,6 +60,8 @@ DAWproject exchange, and Phase 5 mastering and release workflows.
 - Versioned `.studioduo` packages, generation saves, and recovery points
 - DAWproject 1.0 import/export with embedded media and plug-in state,
   official schema validation, scene preservation, and compatibility reports
+- Guided [Studio One `.song` import](#import-from-studio-one) and DAWproject
+  migration, with explicit supported-data and compatibility boundaries
 - Dedicated album mastering with alternate mixes, sequencing, gaps, overlaps,
   fades, ISRC/release metadata, BS.1770/R128 loudness analysis, true peak,
   correlation, WAV/AIFF/FLAC/Ogg/MP3 exports, deterministic dither, and signed reports
@@ -61,6 +73,10 @@ DAWproject exchange, and Phase 5 mastering and release workflows.
   formats, mono/stereo, bitrate/quality, normalization, and dither
 - [Spectrum GIF export](#spectrum-gif-export) from a track or the whole mix,
   with transparent frequency bars for vocal and guitar cover-video overlays
+- Autosave recovery for already-saved projects, plus manual durable saves
+- Four dark themes, custom colors and contrast validation
+- Embedded, searchable offline help and startup diagnostics with redacted
+  reports and driver-free safe-start options
 - In-app update checks, verified background downloads, and user-controlled
   restart installation on macOS and Windows
 

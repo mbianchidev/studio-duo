@@ -94,6 +94,16 @@ transparency for vocal and guitar cover-video overlays. GIFs contain no audio;
 users combine them with audio in a video editor, not upload them directly to
 YouTube. Do not describe it as AI video generation or a built-in video editor.
 
+Feature coverage also includes clip-range AudioSuite FX, bounce/freeze,
+folders and deactivation, customizable shortcuts/macros, expressive MIDI and
+retrospective capture, the optional Mackie Control profile, saved-project
+recovery, offline help and verified updates. Keep the workflow-guide links
+aligned with the [docs index](README.md#workflow-guides).
+Use the [device reference](devices.md#utility-processors) for utility controls:
+the EQ is a single bell band, Delay is sample alignment rather than a
+tempo-synced echo, and the current Tuner has a frequency-meter API but no
+dedicated pitch display. Do not imply broader controls or hardware qualification.
+
 State Windows support as best effort only, with the one-person team's lack of
 a Windows testing device and limited testing time. Keep Windows ASIO separate
 from macOS CoreAudio: the reported physical-interface test is Focusrite Scarlett

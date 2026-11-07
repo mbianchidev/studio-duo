@@ -122,6 +122,7 @@ figcaption { display: flex; justify-content: space-between; gap: 16px; padding-t
 .feature-row { display: grid; grid-template-columns: 0.8fr 1.4fr; align-items: center; gap: 68px; padding-bottom: 88px; }
 .feature-copy h3, .drum-intro h3 { margin-block: 18px 24px; font-size: clamp(38px, 4vw, 56px); }
 .feature-copy > p:not(.eyebrow):not(.small-note) { font-size: 14px; color: var(--muted); }
+.feature-copy > p + p:not(.small-note) { margin-top: 16px; }
 .feature-details { list-style: none; padding: 0; margin: 24px 0 12px; }
 .feature-details li { padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 12px; line-height: 1.5; }
 .feature-details li::before { content: '+'; margin-right: 12px; color: var(--signal); font-family: var(--utility); }
