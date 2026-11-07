@@ -88,6 +88,11 @@ Keep claims aligned with the current [user guide](user-guide.md) and
 hard-coding a version or platform asset filename. Mark native previews as
 previews, and retain explicit limits such as ARA compatibility mode,
 DAWproject compatibility reports, and the external licensed DDP encoder.
+The spectrum GIF feature card links to [its user-guide section](user-guide.md#spectrum-gif-export).
+Describe it as native frequency-bar export from a track or whole mix, with
+transparency for vocal and guitar cover-video overlays. GIFs contain no audio;
+users combine them with audio in a video editor, not upload them directly to
+YouTube. Do not describe it as AI video generation or a built-in video editor.
 
 State Windows support as best effort only, with the one-person team's lack of
 a Windows testing device and limited testing time. Keep Windows ASIO separate

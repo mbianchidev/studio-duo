@@ -93,6 +93,9 @@ test('content and the screenshot fallback work without JavaScript', async ({ bro
     await page.goto(baseURL);
     await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Download Studio Duo.' })).toBeAttached();
+    await expect(page.locator('#spectrum-export')).toContainText('GIFs contain no audio');
+    await expect(page.getByRole('link', { name: 'Export a spectrum GIF' })).toHaveAttribute(
+      'href', 'https://github.com/mbianchidev/studio-duo/blob/main/docs/user-guide.md#spectrum-gif-export');
     const help = page.locator('#macos-first-launch');
     await help.locator('summary').click();
     await expect(help.locator('pre code')).toBeVisible();
@@ -158,6 +161,23 @@ test('platform expectations, built-in features, and partner tools are explicit',
   await expect(page.getByRole('link', { name: 'Explore Track2Stem' })).toHaveAttribute(
     'href', 'https://github.com/mbianchidev/track2stem');
   await expect(page.locator('.partner-tools')).toContainText('not inside Studio Duo');
+});
+
+test('spectrum GIF export explains cover-video overlays and links to its guide', async ({ page }, testInfo) => {
+  await page.goto('./');
+  const spectrum = page.locator('#spectrum-export');
+  await expect(spectrum.getByRole('heading', { name: 'Export frequency bars for cover videos.' })).toBeVisible();
+  await expect(spectrum).toContainText('single track or the whole song mix');
+  await expect(spectrum).toContainText('transparent background');
+  await expect(spectrum).toContainText('vocal and guitar cover videos');
+  await expect(spectrum).toContainText('GIFs contain no audio');
+  await expect(spectrum).toContainText('video editor');
+  await expect(spectrum.getByRole('link', { name: 'Export a spectrum GIF' })).toHaveAttribute(
+    'href', 'https://github.com/mbianchidev/studio-duo/blob/main/docs/user-guide.md#spectrum-gif-export');
+  await spectrum.scrollIntoViewIfNeeded();
+  await page.evaluate(() => document.fonts.ready);
+  expect(await spectrum.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await spectrum.screenshot({ path: testInfo.outputPath('spectrum-gif-feature.png') });
 });
 
 test('the headline preserves DAWn case, the tagline sits below it, and copyright remains visible', async ({ page }) => {

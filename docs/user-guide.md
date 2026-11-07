@@ -59,6 +59,8 @@ DAWproject exchange, and Phase 5 mastering and release workflows.
   validation, and hash-based missing-media repair
 - Configurable mix export with named-marker ranges, lossless and compressed
   formats, mono/stereo, bitrate/quality, normalization, and dither
+- [Spectrum GIF export](#spectrum-gif-export) from a track or the whole mix,
+  with transparent frequency bars for vocal and guitar cover-video overlays
 - In-app update checks, verified background downloads, and user-controlled
   restart installation on macOS and Windows
 

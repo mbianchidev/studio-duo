@@ -135,7 +135,7 @@ figcaption { display: flex; justify-content: space-between; gap: 16px; padding-t
 .feature-row-reverse { grid-template-columns: 1.4fr 0.8fr; padding-top: 88px; }
 .feature-row-reverse .feature-copy { grid-column: 2; grid-row: 1; }
 .feature-row-reverse .feature-shot { grid-column: 1; grid-row: 1; }
-.more-features { display: grid; grid-template-columns: repeat(3, 1fr); gap: 48px; padding-bottom: 96px; }
+.more-features { display: grid; grid-template-columns: repeat(2, 1fr); gap: 48px; padding-bottom: 96px; }
 .more-features article { border-top: 1px solid var(--line); padding-top: 28px; }
 .more-features h3 { font-size: 38px; margin-block: 20px; }
 .more-features p:not(.eyebrow):not(.small-note) { font-size: 13px; color: var(--muted); }

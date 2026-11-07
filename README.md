@@ -60,6 +60,8 @@ See [status and limits](#status-and-limits) before relying on a release.
   export WAV, AIFF, FLAC, Ogg Vorbis, or MP3 with encoding, normalization, and
   dither controls. [Mastering](docs/mastering.md) includes signed reports and
   integration with an external licensed DDP encoder.
+- **Create cover-video overlays.** Export transparent [spectrum GIFs](docs/user-guide.md#spectrum-gif-export)
+  from a track or the whole mix, then combine them with your audio in a video editor.
 
 ## Status and limits
 

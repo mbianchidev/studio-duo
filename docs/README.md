@@ -2,6 +2,8 @@
 
 - [User guide](user-guide.md): current features, controls, recording, editing,
   mixing, routing, plugins, reamping, projects, and export
+- [Spectrum GIF export](user-guide.md#spectrum-gif-export): track or whole-mix
+  animations, transparent cover-video overlays, and GIF limitations
 - [Product and technical design](design.md): accepted product direction,
   version 1.0 scope, architecture, roadmap, and exit criteria
 - [Development](development.md): prerequisites, builds, tests, architecture,
