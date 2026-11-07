@@ -136,7 +136,7 @@ ctest --test-dir "$build_dir" --build-config Release --output-on-failure
 
 if [[ "$pending_release" == false ]]; then
     if [[ "$version_changed" == true ]]; then
-        git diff --check -- "$version_file"
+        git --no-pager diff --check -- "$version_file"
         git add -- "$version_file"
         git commit --no-gpg-sign -m "chore: release $tag"
         version_committed=true

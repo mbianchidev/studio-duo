@@ -38,9 +38,10 @@ publishing unsigned Windows binaries when either secret is unavailable.
 
 The script fast-forwards the local checkout to the latest `origin/main`, runs a
 release build and the complete test suite, creates any required version commit
-and the annotated tag, then pushes both atomically. If branch protection rejects
-direct release commits, a repository administrator must grant the release
-maintainer the required bypass before running it.
+and the annotated tag, then pushes both atomically. The version-file whitespace
+check bypasses Git's configured pager, so no `q` or `:q` is needed to continue.
+If branch protection rejects direct release commits, a repository administrator
+must grant the release maintainer the required bypass before running it.
 
 ## Mint a release
 

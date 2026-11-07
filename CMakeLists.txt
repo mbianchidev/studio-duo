@@ -1376,6 +1376,12 @@ if(STUDIO_DUO_BUILD_TESTS)
         )
     endif()
     find_package(Python3 3.9 REQUIRED COMPONENTS Interpreter)
+    if(UNIX)
+        add_test(NAME StudioDuoReleaseScript
+            COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/ReleaseScriptTests.py")
+        set_tests_properties(StudioDuoReleaseScript PROPERTIES
+            LABELS "release" TIMEOUT 90)
+    endif()
     add_test(NAME StudioDuoQualificationEvidence
         COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/QualificationTests.py")
     set_tests_properties(StudioDuoQualificationEvidence PROPERTIES
