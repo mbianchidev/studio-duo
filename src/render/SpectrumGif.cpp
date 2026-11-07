@@ -119,7 +119,7 @@ std::vector<std::uint8_t> rasterize(
     {
         const auto level = levels[static_cast<std::size_t>(bar)];
         const auto height = static_cast<int>(std::lround(
-            juce::jlimit(0.0f, 1.0f, level) * (settings.height - 2 * insetY)));
+            juce::jlimit(0.0f, 1.0f, level) * static_cast<float>(settings.height - 2 * insetY)));
         const auto left = insetX + static_cast<int>(std::floor(
             bar * cellWidth + (cellWidth - barWidth) * 0.5));
         for (int y = baseline - height; y < baseline; ++y)

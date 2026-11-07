@@ -33,7 +33,7 @@ std::optional<Gif> decodeGif(const juce::File& file)
         return std::nullopt;
     juce::MemoryInputStream stream(bytes, false);
     std::array<std::uint8_t, 13> header {};
-    if (stream.read(header.data(), header.size()) != static_cast<int>(header.size())
+    if (stream.read(header.data(), static_cast<int>(header.size())) != static_cast<int>(header.size())
         || std::memcmp(header.data(), "GIF89a", 6) != 0 || (header[10] & 0x80) == 0)
         return std::nullopt;
     const auto prefixSize = 13 + 3 * (1 << ((header[10] & 7) + 1));
@@ -90,7 +90,7 @@ std::optional<Gif> decodeGif(const juce::File& file)
         if (kind != 0x2c)
             return std::nullopt;
         std::array<std::uint8_t, 9> descriptor {};
-        if (stream.read(descriptor.data(), descriptor.size()) != static_cast<int>(descriptor.size())
+        if (stream.read(descriptor.data(), static_cast<int>(descriptor.size())) != static_cast<int>(descriptor.size())
             || descriptor[8] != 0 || control[0] == 0)
             return std::nullopt;
         juce::MemoryOutputStream single;
