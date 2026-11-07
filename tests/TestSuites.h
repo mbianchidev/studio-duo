@@ -9,6 +9,7 @@ std::optional<int> runProjectExchangeFixture(const juce::StringArray& arguments)
 std::optional<int> runLongSessionQualification(const juce::StringArray& arguments);
 std::optional<int> runVendorPluginQualification(const juce::StringArray& arguments);
 std::optional<int> runMasteringMeasurement(const juce::StringArray& arguments);
+std::optional<int> runMasteringDeliveryFixture(const juce::StringArray& arguments);
 void projectHardeningTests();
 void saveInterruptionTests();
 void projectExchangeTests();

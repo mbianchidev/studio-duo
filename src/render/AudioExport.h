@@ -3,7 +3,10 @@
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <juce_core/juce_core.h>
 
+#include <memory>
 #include <vector>
+
+namespace juce { class AudioFormatReader; }
 
 namespace studio
 {
@@ -40,12 +43,16 @@ public:
     static juce::Result validate(const AudioExportSettings&);
     // Input is already at settings.sampleRate; the input buffer is never modified.
     // Canonical metadata keys: title, artist, album, date, genre, copyright,
-    // comment, trackNumber (JUCE's Ogg writer cannot store copyright).
+    // comment, trackNumber.
     // JUCE-native WAV/AIFF/Ogg keys also pass through.
     static juce::Result write(
         const juce::AudioBuffer<float>& audio,
         const juce::File& destination,
         const AudioExportSettings& settings,
         const juce::StringPairArray& metadata = {});
+    // Completed exports only: MP3 verification uses the tagged programme,
+    // excluding encoder/decoder priming and trailing padding on every platform.
+    static std::unique_ptr<juce::AudioFormatReader> createVerificationReader(
+        const juce::File& file, AudioExportFormat format, juce::String& error);
 };
 }

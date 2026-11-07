@@ -12,6 +12,7 @@
 #include <memory>
 #include <mutex>
 #include <new>
+#include <optional>
 
 namespace studio
 {
@@ -36,6 +37,75 @@ std::unique_ptr<juce::AudioFormat> nativeFormat(AudioExportFormat format)
 bool isLossy(AudioExportFormat format)
 {
     return format == AudioExportFormat::mp3 || format == AudioExportFormat::oggVorbis;
+}
+
+struct Mp3Programme
+{
+    juce::int64 rawFrames = 0;
+    juce::int64 programmeFrames = 0;
+    int start = 0;
+    int sampleRate = 0;
+    unsigned int channels = 0;
+};
+
+std::optional<Mp3Programme> readMp3Programme(const juce::File& file)
+{
+    juce::FileInputStream input(file);
+    std::array<unsigned char, 10> id3 {};
+    if (input.getStatus().failed() || input.read(id3.data(), static_cast<int>(id3.size())) != 10)
+        return std::nullopt;
+    juce::int64 start = 0;
+    if (std::memcmp(id3.data(), "ID3", 3) == 0)
+    {
+        if ((id3[3] != 3 && id3[3] != 4)
+            || std::any_of(id3.begin() + 6, id3.end(), [](auto byte) { return (byte & 0x80) != 0; }))
+            return std::nullopt;
+        start = 10 + (static_cast<juce::int64>(id3[6]) << 21)
+            + (static_cast<juce::int64>(id3[7]) << 14) + (static_cast<juce::int64>(id3[8]) << 7) + id3[9];
+        if (id3[3] == 4 && (id3[5] & 0x10) != 0)
+            start += 10;
+    }
+    if (start > 16 * 1024 * 1024 || !input.setPosition(start))
+        return std::nullopt;
+    std::array<unsigned char, 256> data {};
+    const auto count = input.read(data.data(), static_cast<int>(data.size()));
+    if (count < 4)
+        return std::nullopt;
+    const auto header = juce::ByteOrder::bigEndianInt(data.data());
+    const auto rateIndex = (header >> 10) & 3U, bitrateIndex = (header >> 12) & 15U;
+    if ((header >> 21) != 0x7ffU || ((header >> 19) & 3U) != 3U || ((header >> 17) & 3U) != 1U
+        || rateIndex == 3 || bitrateIndex == 0 || bitrateIndex == 15)
+        return std::nullopt;
+    constexpr std::array rates { 44100, 48000, 32000 };
+    constexpr std::array bitrates { 0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320 };
+    const auto mono = ((header >> 6) & 3U) == 3U;
+    const auto tag = 4 + (mono ? 17 : 32) + ((header & 0x10000U) == 0 ? 2 : 0);
+    const auto frameBytes = 144000 * bitrates[bitrateIndex] / rates[rateIndex]
+        + static_cast<int>((header >> 9) & 1U);
+    if (tag + 16 > count || (std::memcmp(data.data() + tag, "Xing", 4) != 0
+                            && std::memcmp(data.data() + tag, "Info", 4) != 0))
+        return std::nullopt;
+    const auto flags = juce::ByteOrder::bigEndianInt(data.data() + tag + 4);
+    const auto frames = juce::ByteOrder::bigEndianInt(data.data() + tag + 8);
+    const auto bytes = juce::ByteOrder::bigEndianInt(data.data() + tag + 12);
+    if ((flags & 3U) != 3U || (flags & ~15U) != 0 || frames == 0
+        || frames > static_cast<unsigned int>(std::numeric_limits<int>::max() / 1152)
+        || static_cast<juce::int64>(bytes) != file.getSize() - start)
+        return std::nullopt;
+    const auto lame = tag + 16 + ((flags & 4U) != 0 ? 100 : 0) + ((flags & 8U) != 0 ? 4 : 0);
+    if (lame + 36 > std::min(count, frameBytes) || std::memcmp(data.data() + lame, "LAME", 4) != 0)
+        return std::nullopt;
+    const auto delay = (static_cast<int>(data[static_cast<std::size_t>(lame + 21)]) << 4)
+        | (data[static_cast<std::size_t>(lame + 22)] >> 4);
+    const auto padding = ((data[static_cast<std::size_t>(lame + 22)] & 15) << 8)
+        | data[static_cast<std::size_t>(lame + 23)];
+    // JUCE's MPEG-1 synthesis adds 528 + 1 samples after the encoded delay.
+    constexpr auto decoderDelay = 529;
+    const auto rawFrames = static_cast<juce::int64>(frames) * 1152;
+    if (delay <= 0 || padding < decoderDelay || rawFrames <= delay + padding)
+        return std::nullopt;
+    return Mp3Programme { rawFrames, rawFrames - delay - padding, delay + decoderDelay,
+                          rates[rateIndex], mono ? 1U : 2U };
 }
 
 std::uint64_t splitMix64(std::uint64_t value) noexcept
@@ -138,6 +208,7 @@ juce::StringPairArray nativeMetadata(AudioExportFormat format,
         map("comment", juce::WavAudioFormat::riffInfoComments);
         map("date", juce::WavAudioFormat::riffInfoDateCreated);
         map("genre", juce::WavAudioFormat::riffInfoGenre);
+        map("genre", "IGNR");
         map("copyright", juce::WavAudioFormat::riffInfoCopyright);
         map("trackNumber", juce::WavAudioFormat::riffInfoTrackNumber);
     }
@@ -687,5 +758,39 @@ juce::Result AudioExport::write(const juce::AudioBuffer<float>& audio,
     {
         return juce::Result::fail("There is not enough memory to prepare the audio export.");
     }
+}
+
+std::unique_ptr<juce::AudioFormatReader> AudioExport::createVerificationReader(
+    const juce::File& file, AudioExportFormat format, juce::String& error)
+{
+    auto codec = nativeFormat(format);
+    if (format == AudioExportFormat::mp3)
+        codec = std::make_unique<juce::MP3AudioFormat>();
+    auto input = file.createInputStream();
+    if (codec == nullptr || input == nullptr)
+    {
+        error = "Could not open the completed export with its declared audio format.";
+        return {};
+    }
+    std::unique_ptr<juce::AudioFormatReader> reader(codec->createReaderFor(input.release(), true));
+    if (reader == nullptr)
+    {
+        error = "Could not decode the completed export with its declared audio format.";
+        return {};
+    }
+    if (format == AudioExportFormat::mp3)
+    {
+        const auto programme = readMp3Programme(file);
+        if (!programme || reader->lengthInSamples != programme->rawFrames
+            || !std::isfinite(reader->sampleRate) || std::abs(reader->sampleRate - programme->sampleRate) > 0.001
+            || reader->numChannels != programme->channels)
+        {
+            error = "The completed MP3 has an incomplete or inconsistent MPEG-1 Xing/LAME gapless tag.";
+            return {};
+        }
+        return std::make_unique<juce::AudioSubsectionReader>(
+            reader.release(), programme->start, programme->programmeFrames, true);
+    }
+    return reader;
 }
 }

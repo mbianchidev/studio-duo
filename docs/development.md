@@ -38,9 +38,13 @@ FIFOs in an owned private directory instead of granting vendor code writes to
 global `/tmp` pipe patterns. A checked catalog-restore patch also replaces
 quadratic per-descriptor insertion with indexed bulk restoration, retaining JUCE's
 file/current-ID/legacy-ID duplicate identity, last duplicate metadata, reverse
-first-insertion order, and blacklist entries. An installed JUCE package is not
-modified; its private-probe compatibility and large-catalog startup performance
-must be verified separately.
+first-insertion order, and blacklist entries. Two small audio-format patches
+also retain the legacy WAV `GENR` genre while accepting/writing standard RIFF
+`IGNR`, and forward Ogg Vorbis `COPYRIGHT` comments. These preserve release
+metadata in independent readers. An installed JUCE package is not modified;
+it must provide those metadata changes to pass delivery qualification, and its
+private-probe compatibility and large-catalog startup performance must be
+verified separately.
 Phase 4 MIDI/editor workflows and bundled drum/guitar/bass devices are
 implemented. The dedicated DAWproject 1.0 translation, schema-validation, ZIP,
 scene, and compatibility-report layer is also implemented without runtime
@@ -230,26 +234,38 @@ development-signature target depends on copying/signing it before sealing the
 whole bundle. These fixtures are not clean-machine or actual released-app
 upgrade qualification.
 
-For independent FFmpeg original-rate R128/true-peak comparisons, install FFmpeg
-with its `ebur128` filter and configure a **clean, committed** candidate:
+For independent original-rate R128/true-peak and encoded-delivery comparisons,
+install FFmpeg with its `ebur128` filter and FFprobe, then configure a
+**clean, committed** candidate:
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
   -DSTUDIO_DUO_BUILD_TESTS=ON -DSTUDIO_DUO_MASTERING_REFERENCE_TESTS=ON
 cmake --build build --config Release --parallel
-ctest --test-dir build --build-config Release -R 'MasteringReference|MasteringQualification' \
+ctest --test-dir build --build-config Release -R 'Mastering.*Reference|MasteringQualification' \
   --output-on-failure --no-tests=error
 ```
 
-`STUDIO_DUO_FFMPEG_EXECUTABLE` can select an actual meter binary explicitly;
+`STUDIO_DUO_FFMPEG_EXECUTABLE` and `STUDIO_DUO_FFPROBE_EXECUTABLE` select actual
+tool binaries explicitly;
 `STUDIO_DUO_FFMPEG_DIRECTORY` is a discovery hint used by Windows CI to avoid
 hashing a launcher shim. FFmpeg is test tooling only, never linked into or
 required by the application. Every run gets a fresh owned directory under
 `build/Testing/mastering-references`, with exact binary/tool/source hashes,
-all 36 native measurements, original PCM and independent raw logs. CI and
-tagged releases enable this option on their native test architectures and
-retain those directories with the other regression evidence. A passing matrix
-remains `qualificationStatus: not-qualified` for the complete release.
+all 36 native metrology measurements, original PCM and independent raw logs.
+The same option registers `StudioDuoMasteringDeliveryReferences`: 29 real
+multi-song WAV/AIFF/FLAC/Ogg/MP3 exports, each repeated, independently decoded
+and compared with a separate FFmpeg SRC/Python sequencing oracle. Its source,
+encoded files, native/independent PCM, container metadata, measurements and
+SHA-256 inventory are retained under `mastering-references/delivery`.
+The contracts also exercise the real driver-free export CLI's fail-closed
+argument/source validation and destination preservation. CI and tagged releases
+enable this option on their native test architectures and retain those
+directories with the other regression evidence. See the
+[delivery runbook](qualification.md#independent-encoded-mastering-delivery)
+for the fixed waveform/dither budgets and signature redaction.
+A passing matrix remains `qualificationStatus: not-qualified` for the complete
+release.
 
 Multi-engine test fixtures keep `StudioAudioEngine` instances on the heap:
 their fixed MIDI trace arrays can exceed Windows's default 1 MiB stack when
@@ -427,6 +443,12 @@ ctest --test-dir build --build-config Release --output-on-failure \
 `render/AudioExport` owns codec capabilities, strict settings validation, channel
 conversion, optional sample-peak normalization, integer-only TPDF dither,
 metadata, and atomic publication. Mix and mastering exports share this path.
+`AudioExport::createVerificationReader` opens the declared codec explicitly.
+For completed MPEG-1 MP3 exports it validates the Xing/Info frame count,
+byte span and LAME delay/padding, then uses JUCE's built-in decoder over only
+the actual programme. The decoder's 529-sample synthesis delay is removed
+separately from encoder priming. This avoids platform-dependent CBR duration
+estimates and never substitutes pre-encode samples for final-file measurement.
 `ui/AudioExportOptionsComponent` exposes only compatible sample rates, bit depths,
 and quality controls and validates numeric text before opening the save chooser.
 

@@ -1,0 +1,11 @@
+diff --git a/modules/juce_audio_formats/codecs/juce_WavAudioFormat.cpp b/modules/juce_audio_formats/codecs/juce_WavAudioFormat.cpp
+--- a/modules/juce_audio_formats/codecs/juce_WavAudioFormat.cpp
++++ b/modules/juce_audio_formats/codecs/juce_WavAudioFormat.cpp
+@@ -704,6 +704,7 @@
+             WavAudioFormat::riffInfoFirstLanguage,
+             WavAudioFormat::riffInfoFourthLanguage,
+             WavAudioFormat::riffInfoGenre,
++            "IGNR",
+             WavAudioFormat::riffInfoKeywords,
+             WavAudioFormat::riffInfoLanguage,
+             WavAudioFormat::riffInfoLength,

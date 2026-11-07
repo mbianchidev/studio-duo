@@ -1176,7 +1176,8 @@ MP3 offers 64-320 kbps CBR or VBR quality 0-9 at 32, 44.1, or 48 kHz.
 Ogg offers quality 0-10; FLAC offers compression levels 1-8 (JUCE's level 0
 does not actually select its advertised compression level). MP3 files carry
 encoder-delay/padding metadata; players that ignore gapless tags may expose
-additional codec padding.
+additional codec padding. Signed mastering reports measure the tagged gapless
+programme and exclude that padding.
 
 Optional peak normalization sets the sample peak to the chosen dBFS target.
 It is not LUFS normalization or a true-peak limiter; lossy encoding can introduce
