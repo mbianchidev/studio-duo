@@ -26,6 +26,7 @@ const std::vector<WorkspaceCommandDescriptor>& workspaceCommands()
         add(Command::saveAs, "Save project as", "File", { key('S', cmd | shift) });
         add(Command::importAudio, "Import audio", "File", { key('I', cmd) });
         add(Command::exportMix, "Export mix", "File");
+        add(Command::exportSpectrumGif, "Export spectrum GIF", "File");
         add(Command::undo, "Undo", "Editing", { key('Z', cmd) }, true);
         add(Command::redo, "Redo", "Editing", { key('Z', cmd | shift) }, true);
         add(Command::playPause, "Play or pause", "Transport", { key(juce::KeyPress::spaceKey) }, true);

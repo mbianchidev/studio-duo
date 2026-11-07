@@ -6,6 +6,8 @@
 #include "ui/WorkflowSettingsComponent.h"
 #include "ReleaseFixtures.h"
 
+#include <algorithm>
+
 namespace
 {
 class CommandTarget final : public juce::ApplicationCommandTarget
@@ -122,6 +124,13 @@ void nativeMappingsAndMacroEditor(const studio::WorkflowMacro& macro)
 void workspaceCommandTests()
 {
     using Command = studio::WorkspaceCommand;
+    const auto& commands = studio::workspaceCommands();
+    const auto spectrum = std::find_if(commands.begin(), commands.end(), [](const auto& command)
+    {
+        return juce::String(command.name) == "Export spectrum GIF";
+    });
+    expect(spectrum != commands.end() && !spectrum->macroSafe,
+           "Spectrum GIF export is discoverable and rebindable, but cannot run inside a workflow macro.");
     const auto* automation = studio::workspaceCommand(static_cast<juce::CommandID>(Command::toggleAutomation));
     expect(automation != nullptr && automation->defaults.size() == 1
                && automation->defaults.front() == juce::KeyPress('A'),

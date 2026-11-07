@@ -451,6 +451,51 @@ Manual export coverage:
 5. Compare mono, normalized, dithered integer, and 32-bit float WAV exports;
    invalid or reversed ranges must report errors without replacing a file.
 
+### Spectrum video overlays
+
+`RenderEngine::renderMix` shares the existing range, latency, plugin and fade
+path between audio exports and spectrum analysis. Track spectra reuse
+`ArrangementRender::prepareTrackExport` and its dependency-aware stem routing:
+retain the selected track's post-fader signal and incoming dependencies while
+excluding outgoing sends and downstream/master processing. Resolve the range
+against the live project before isolating tracks so the GIF retains song
+alignment even when the selected track is shorter. Plugin states are captured
+only for the selected stem's processor dependencies; the live project is never
+soloed, rerouted or edited.
+
+`render/SpectrumGif` uses a 4096-sample Hann-windowed FFT, combines stereo power
+without phase cancellation, and groups 20 Hz to 20 kHz (or Nyquist) into
+logarithmic bands. Fast attack and 180 ms release smooth the bars; negligible
+levels settle to transparency during silence. The native two-color GIF89a/LZW
+encoder streams one indexed frame at a time, with disposal-to-background,
+optional binary transparency and looping metadata. Absolute centisecond frame
+boundaries prevent cumulative 30 fps timing drift. Canvas sizes are bounded at
+1920 x 1080; audio preparation retains the engine's existing memory limits.
+Encoding, FFT work and file I/O run on the export worker, never the audio
+callback. Progress and Escape cancellation are delivered on the message thread;
+an already-running audio render finishes before cancellation is checked.
+Publication uses a staged file and preserves an existing destination on error
+or cancellation. No new runtime dependencies are needed.
+
+Focused coverage:
+
+```sh
+ctest --test-dir build --build-config Release --output-on-failure \
+  -R 'StudioDuoTests.(spectrumGifTests|spectrumExportTests|renderEngineTests|audioExportOptionsTests|arrangementWorkflowTests|workspaceCommandTests)$'
+```
+
+For independent decoder/video-editor checks, the following optional fixture
+mode writes only synthetic audio, a real animated overlay and an offscreen
+native-dialog PNG to the chosen directory, without controlling the desktop:
+
+```sh
+STUDIO_DUO_SPECTRUM_FIXTURE_DIRECTORY="$PWD/build/spectrum-fixture" \
+  ./build/StudioDuoTests_artefacts/Release/StudioDuoTests --suite=spectrumExportTests
+```
+
+On Windows, set `$env:STUDIO_DUO_SPECTRUM_FIXTURE_DIRECTORY` in PowerShell and
+run `StudioDuoTests.exe --suite=spectrumExportTests` from its Release directory.
+
 ## Loop and section transport
 
 `model/TransportEditing` validates sample-aligned loop ranges, resolves marker

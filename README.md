@@ -166,6 +166,8 @@ Portable Windows ZIP builds must be replaced manually.
 5. Choose **Export > Export audio** for a mix file, or
    **Export > Open mastering and release workspace** for album delivery.
    MP3 encoding is built in and needs no separate encoder installation.
+   **Export > Export spectrum GIF** creates a transparent track or whole-mix
+   animation for cover-video overlays. See [spectrum export](docs/user-guide.md#spectrum-gif-export).
 
 Input monitoring is off by default to prevent accidental feedback; enable it
 only when intended. For MIDI, drum pads, routing, and editing shortcuts, open

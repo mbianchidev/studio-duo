@@ -1729,6 +1729,8 @@ int main(int argc, char* argv[])
     RUN_SUITE(renderEngineTests);
     RUN_SUITE(audioExportTests);
     RUN_SUITE(audioExportOptionsTests);
+    RUN_SUITE(spectrumGifTests);
+    RUN_SUITE(spectrumExportTests);
     RUN_SUITE(pluginCompatibilityTests);
     RUN_SUITE(projectMigrationTests);
     RUN_SUITE(projectHardeningTests);

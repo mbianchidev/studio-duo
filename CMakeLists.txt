@@ -542,6 +542,8 @@ target_sources(
         src/plugin_host/PluginScanWorker.h
         src/render/RenderEngine.cpp
         src/render/RenderEngine.h
+        src/render/SpectrumGif.cpp
+        src/render/SpectrumGif.h
         src/update/UpdateInstaller.h
         src/update/UpdateDownload.cpp
         src/update/UpdateDownload.h
@@ -570,6 +572,8 @@ target_sources(
         src/ui/InfoPanelComponent.h
         src/ui/AudioExportOptionsComponent.cpp
         src/ui/AudioExportOptionsComponent.h
+        src/ui/SpectrumExportOptionsComponent.cpp
+        src/ui/SpectrumExportOptionsComponent.h
         src/ui/TransportSettingsComponent.cpp
         src/ui/TransportSettingsComponent.h
         src/ui/UserGuideComponent.cpp
@@ -1054,6 +1058,8 @@ if(STUDIO_DUO_BUILD_TESTS)
             tests/ReampSnapshotTests.cpp
             tests/RenderEngineTests.cpp
             tests/AudioExportOptionsTests.cpp
+            tests/SpectrumGifTests.cpp
+            tests/SpectrumExportTests.cpp
             tests/AudioExportTests.cpp
             tests/MasteringTests.cpp
             tests/MasteringQualification.cpp
@@ -1098,6 +1104,8 @@ if(STUDIO_DUO_BUILD_TESTS)
             src/ui/NumericInput.h
             src/ui/AudioExportOptionsComponent.cpp
             src/ui/AudioExportOptionsComponent.h
+            src/ui/SpectrumExportOptionsComponent.cpp
+            src/ui/SpectrumExportOptionsComponent.h
             src/ui/RoutingUiModel.cpp
             src/ui/RoutingUiModel.h
             src/ui/StudioIconButton.cpp
@@ -1181,6 +1189,8 @@ if(STUDIO_DUO_BUILD_TESTS)
             src/devices/UtilityDeviceProcessor.h
             src/render/RenderEngine.cpp
             src/render/RenderEngine.h
+            src/render/SpectrumGif.cpp
+            src/render/SpectrumGif.h
             src/update/UpdateManifest.cpp
             src/update/UpdateManifest.h
             src/update/UpdateDownload.cpp

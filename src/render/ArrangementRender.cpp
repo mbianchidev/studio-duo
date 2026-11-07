@@ -382,6 +382,27 @@ std::optional<ArrangementRenderPlan> ArrangementRender::prepareBounce(
     return plan;
 }
 
+std::optional<Project> ArrangementRender::prepareTrackExport(
+    const Project& source, const juce::String& id, juce::String& error)
+{
+    error.clear();
+    const auto* track = source.findTrack(id);
+    if (track == nullptr || !audioTrack(*track) || track->parentTrackId.isNotEmpty()
+        || !source.isTrackActive(id))
+    {
+        error = "Choose an active audio, instrument, aux or bus track, not a take lane.";
+        return std::nullopt;
+    }
+    auto result = source;
+    if (!prepareStemRouting(result, { id }, false, error))
+        return std::nullopt;
+    for (auto& member : result.tracks)
+        if (member.parentTrackId == id)
+            if (const auto* original = source.findTrack(member.id))
+                member.solo = original->solo;
+    return result;
+}
+
 std::optional<ArrangementRenderPlan> ArrangementRender::prepareFreeze(
     const Project& source, const juce::String& id, juce::String& error)
 {

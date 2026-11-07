@@ -2,6 +2,7 @@
 
 #include "audio/StudioAudioEngine.h"
 #include "AudioExport.h"
+#include "SpectrumGif.h"
 
 #include <functional>
 
@@ -28,6 +29,15 @@ struct MixExportSettings
     double fadeOutSeconds = 0.0;
 };
 
+struct SpectrumExportSettings
+{
+    MixExportSettings render;
+    SpectrumGifSettings gif;
+    juce::String trackId;
+
+    SpectrumExportSettings() { render.tailSeconds = 0.0; }
+};
+
 class RenderEngine
 {
 public:
@@ -42,6 +52,12 @@ public:
         StudioAudioEngine& engine,
         const Project& project,
         const juce::File& destination,
+        const MixExportSettings& settings,
+        std::vector<StudioAudioEngine::PluginRuntimeRequest> pluginRequests = {});
+    static juce::Result renderMix(
+        StudioAudioEngine& engine,
+        const Project& project,
+        juce::AudioBuffer<float>& audio,
         const MixExportSettings& settings,
         std::vector<StudioAudioEngine::PluginRuntimeRequest> pluginRequests = {});
     static double levelMatchGainDecibels(
