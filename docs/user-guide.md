@@ -18,6 +18,13 @@ DAWproject exchange, and Phase 5 mastering and release workflows.
 - Clip move, split, trim, delete, fades, crossfades, and consolidation
 - Deterministic transient detection and pitch-preserving stretch and warp
 - Take lanes, playlists, comping, and linked multitrack editing
+- Keyboard timeline/note navigation and exact numeric clip gain, fade,
+  slip/stretch and automation point editing
+- Track folders, audio/instrument bus grouping, hiding and processing
+  deactivation without deleting the original arrangement
+- AudioSuite clip-range FX and multi-clip bounce, with reversible track freeze
+- [Custom shortcuts and workflow macros](#custom-shortcuts-and-workflow-macros)
+  built from bounded, synchronous Studio Duo command sequences
 - Hardware reamp routing, calibration, polarity, and fine alignment
 - Plugin tone paths that reference the original DI media
 - Sandboxed VST3, Audio Unit, and CLAP discovery and processing
@@ -39,8 +46,11 @@ DAWproject exchange, and Phase 5 mastering and release workflows.
 - Cycle-safe MIDI routes through in-process and sandboxed instrument and
   MIDI-effect plugins
 - Sample-accurate mixer, send, bundled-device, and plugin automation
+- Optional [Mackie Control](#mackie-control-surfaces) profile for eight channel
+  strips and master, with dedicated MIDI ports and host feedback
 - Parametric EQ, compressor, true-peak limiter, reverb, gate, gain, polarity,
   delay, tuner, and signal generator devices
+  ([utility controls and limits](devices.md#utility-processors))
 - Bundled metal drum composition instrument with velocity, deterministic round
   robin, mapped cymbal/hi-hat behavior, and separate kit-piece outputs
 - Bundled guitar and bass amps with real nonlinear/tone DSP, embedded cabinets,
@@ -50,6 +60,8 @@ DAWproject exchange, and Phase 5 mastering and release workflows.
 - Versioned `.studioduo` packages, generation saves, and recovery points
 - DAWproject 1.0 import/export with embedded media and plug-in state,
   official schema validation, scene preservation, and compatibility reports
+- Guided [Studio One `.song` import](#import-from-studio-one) and DAWproject
+  migration, with explicit supported-data and compatibility boundaries
 - Dedicated album mastering with alternate mixes, sequencing, gaps, overlaps,
   fades, ISRC/release metadata, BS.1770/R128 loudness analysis, true peak,
   correlation, WAV/AIFF/FLAC/Ogg/MP3 exports, deterministic dither, and signed reports
@@ -59,6 +71,12 @@ DAWproject exchange, and Phase 5 mastering and release workflows.
   validation, and hash-based missing-media repair
 - Configurable mix export with named-marker ranges, lossless and compressed
   formats, mono/stereo, bitrate/quality, normalization, and dither
+- [Spectrum GIF export](#spectrum-gif-export) from a track or the whole mix,
+  with transparent frequency bars for vocal and guitar cover-video overlays
+- Autosave recovery for already-saved projects, plus manual durable saves
+- Four dark themes, custom colors and contrast validation
+- Embedded, searchable offline help and startup diagnostics with redacted
+  reports and driver-free safe-start options
 - In-app update checks, verified background downloads, and user-controlled
   restart installation on macOS and Windows
 
@@ -1210,6 +1228,45 @@ compensate processing latency. Tails stop new source audio/MIDI at the selected
 end instead of including the next section. Completed files replace their
 destination only after successful encoding; a failed export preserves the
 previous file.
+
+### Spectrum GIF export
+
+Choose **Export > Export spectrum GIF** to create animated frequency bars for a
+vocal, guitar, or other cover video. Select **Whole song mix** or an active audio,
+instrument, bus, or aux track, then choose the whole song, loop boundaries, or
+custom start/end times in seconds. A track export includes its clip processing,
+inserts, input routing, and mixer gain/pan, but excludes its outgoing sends,
+downstream bus processing, and master processing. The whole mix retains the
+current mute/solo state, routing, automation, and master processing. The
+metronome and live inputs are not part of offline exports.
+Single-track exports need one spare slot below the existing 1000-track limit
+for temporary offline routing; the live project is not modified.
+
+The default is a transparent 1280 x 720 canvas with 64 logarithmically spaced
+frequency bars at 25 frames per second. Choose a smaller 640 x 360 canvas or
+1920 x 1080, 10/20/25/30 fps, a bar color, and either transparency or a solid
+dark background. The style preview illustrates the appearance, not the current
+audio. Smaller canvases and lower frame rates reduce encoding time and file
+size. GIF transparency is binary, so bar edges are crisp rather than
+semitransparent.
+
+The animation spans the selected audio range, including silent gaps; no
+additional effects tail is appended. Its timing is rounded to GIF's
+one-centisecond clock, with alternating frame delays at 30 fps to prevent
+song-length drift. Stereo channels are analyzed separately, so opposite-phase
+audio does not disappear from the spectrum.
+
+Import the GIF as an overlay in a video editor that supports animated GIFs and
+place it at the same start position as the exported audio. For matching
+durations, use the same audio export range and set **Effect tail > None**.
+A custom range starts
+the GIF at time zero; align it with that range's audio. **GIFs contain no audio
+and are not directly uploadable as YouTube videos.** Add the cover audio and
+footage in your editor, then export a supported video format for YouTube. No
+external GIF encoder is needed. Encoding progress appears in the status bar.
+Press **Escape** to request cancellation; an in-progress audio-render step
+finishes before cancellation takes effect. Failed or canceled exports preserve
+any previous destination file.
 
 ### Import from Studio One
 

@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
+import { readFileSync } from 'node:fs';
 
 test('the production site loads all local assets under the Pages subpath', async ({ page }, testInfo) => {
   const errors = [];
@@ -93,6 +94,11 @@ test('content and the screenshot fallback work without JavaScript', async ({ bro
     await page.goto(baseURL);
     await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Download Studio Duo.' })).toBeAttached();
+    await expect(page.locator('#spectrum-export')).toContainText('GIFs contain no audio');
+    await expect(page.getByRole('link', { name: 'Export a spectrum GIF' })).toHaveAttribute(
+      'href', 'https://github.com/mbianchidev/studio-duo/blob/main/docs/user-guide.md#spectrum-gif-export');
+    await expect(page.getByRole('link', { name: 'Customize shortcuts and macros' })).toBeAttached();
+    await expect(page.locator('#support-tools')).toContainText('offline');
     const help = page.locator('#macos-first-launch');
     await help.locator('summary').click();
     await expect(help.locator('pre code')).toBeVisible();
@@ -158,6 +164,90 @@ test('platform expectations, built-in features, and partner tools are explicit',
   await expect(page.getByRole('link', { name: 'Explore Track2Stem' })).toHaveAttribute(
     'href', 'https://github.com/mbianchidev/track2stem');
   await expect(page.locator('.partner-tools')).toContainText('not inside Studio Duo');
+});
+
+test('spectrum GIF export explains cover-video overlays and links to its guide', async ({ page }, testInfo) => {
+  await page.goto('./');
+  const spectrum = page.locator('#spectrum-export');
+  await expect(spectrum.getByRole('heading', { name: 'Export frequency bars for cover videos.' })).toBeVisible();
+  await expect(spectrum).toContainText('single track or the whole song mix');
+  await expect(spectrum).toContainText('transparent background');
+  await expect(spectrum).toContainText('vocal and guitar cover videos');
+  await expect(spectrum).toContainText('GIFs contain no audio');
+  await expect(spectrum).toContainText('video editor');
+  await expect(spectrum.getByRole('link', { name: 'Export a spectrum GIF' })).toHaveAttribute(
+    'href', 'https://github.com/mbianchidev/studio-duo/blob/main/docs/user-guide.md#spectrum-gif-export');
+  await spectrum.scrollIntoViewIfNeeded();
+  await page.evaluate(() => document.fonts.ready);
+  expect(await spectrum.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await spectrum.screenshot({ path: testInfo.outputPath('spectrum-gif-feature.png') });
+});
+
+test('implemented workflow features are discoverable with their limits', async ({ page }, testInfo) => {
+  await page.goto('./');
+  const printing = page.locator('#clip-processing');
+  await expect(printing).toContainText('AudioSuite');
+  await expect(printing).toContainText('Bounce');
+  await expect(printing).toContainText('Unfreeze');
+  await expect(printing.getByRole('link', { name: 'Print clips and freeze tracks' })).toHaveAttribute(
+    'href', 'https://github.com/mbianchidev/studio-duo/blob/main/docs/user-guide.md#clip-fx-bounce-and-freeze');
+  const workflow = page.locator('#workflow-tools');
+  await expect(workflow).toContainText('shortcuts');
+  await expect(workflow).toContainText('macros');
+  await expect(workflow).toContainText('four dark themes');
+  await expect(workflow).toContainText('not operating-system scripts');
+  await expect(workflow.getByRole('link', { name: 'Customize shortcuts and macros' })).toHaveAttribute(
+    'href', 'https://github.com/mbianchidev/studio-duo/blob/main/docs/user-guide.md#custom-shortcuts-and-workflow-macros');
+  await expect(page.locator('#record')).toContainText('folders');
+  await expect(page.locator('#record')).toContainText('deactivate');
+  await expect(page.locator('#drums')).toContainText('recent MIDI performance');
+  await expect(page.locator('#drums')).toContainText('probability');
+  await expect(page.locator('#drums')).toContainText('per-note expression');
+  await expect(page.locator('#mix')).toContainText('exact automation point');
+  await expect(page.locator('#mix')).toContainText('Mackie Control');
+  await expect(page.getByRole('link', { name: 'Set up a control surface' })).toHaveAttribute(
+    'href', 'https://github.com/mbianchidev/studio-duo/blob/main/docs/user-guide.md#mackie-control-surfaces');
+  await expect(page.locator('#project-exchange')).toContainText('.song');
+  await expect(page.locator('#project-exchange')).toContainText('recovery points');
+  await expect(page.locator('#project-exchange')).toContainText('compatibility reports');
+  const support = page.locator('#support-tools');
+  await expect(support).toContainText('saved projects');
+  await expect(support).toContainText('offline');
+  await expect(support).toContainText('redacted startup reports');
+  await expect(support).toContainText('Restart and Update');
+  await page.evaluate(() => document.fonts.ready);
+  await page.locator('.more-features').screenshot({ path: testInfo.outputPath('implemented-workflows.png') });
+});
+
+test('bundled-device documentation covers every registered processor', () => {
+  const registry = readFileSync(new URL('../../src/devices/DeviceRegistry.cpp', import.meta.url), 'utf8');
+  const devices = readFileSync(new URL('../../docs/devices.md', import.meta.url), 'utf8');
+  const identifiers = new Set([...registry.matchAll(/"(studio\.device\.[a-z-]+)"/g)].map((match) => match[1]));
+  expect(identifiers.size).toBeGreaterThan(0);
+  for (const identifier of identifiers) expect(devices).toContain(identifier);
+  expect(devices).not.toContain('DAWproject interchange is not implemented yet');
+  expect(devices).toContain('single bell band');
+  expect(devices).toContain('no dedicated pitch display');
+});
+
+test('feature indexes expose implemented workflows and settings', () => {
+  const guide = readFileSync(new URL('../../docs/user-guide.md', import.meta.url), 'utf8');
+  const index = readFileSync(new URL('../../docs/README.md', import.meta.url), 'utf8');
+  const readme = readFileSync(new URL('../../README.md', import.meta.url), 'utf8');
+  const capabilities = guide.split('## Current capabilities')[1].split('## Essential controls')[0].toLowerCase();
+  const headings = new Set([...guide.matchAll(/^#{1,6}\s+(.+)$/gm)].map((match) =>
+    match[1].toLowerCase().replace(/[^\w\s-]/g, '').trim().replace(/\s+/g, '-')));
+  for (const feature of ['clip-range', 'bounce', 'workflow macros', 'Mackie Control', 'Autosave', 'dark themes', 'offline', 'diagnostic']) {
+    expect(capabilities).toContain(feature.toLowerCase());
+  }
+  for (const anchor of ['clip-fx-bounce-and-freeze', 'folders-deactivation-and-track-limits',
+    'custom-shortcuts-and-workflow-macros', 'midi-recording-and-editing',
+    'automate-controls-and-plugin-parameters', 'mackie-control-surfaces', 'logs-and-diagnostics']) {
+    expect(index).toContain(`user-guide.md#${anchor}`);
+    expect(headings.has(anchor)).toBe(true);
+  }
+  expect(readme).toContain('| Workflow |');
+  expect(readme).toContain('| Audio / MIDI |');
 });
 
 test('the headline preserves DAWn case, the tagline sits below it, and copyright remains visible', async ({ page }) => {

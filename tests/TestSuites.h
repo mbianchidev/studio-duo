@@ -39,6 +39,8 @@ void reampSnapshotTests();
 void renderEngineTests();
 void audioExportTests();
 void audioExportOptionsTests();
+void spectrumGifTests();
+void spectrumExportTests();
 void pluginCompatibilityTests();
 void projectMigrationTests();
 void projectTemplateTests();

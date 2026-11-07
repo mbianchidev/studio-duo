@@ -60,6 +60,8 @@ See [status and limits](#status-and-limits) before relying on a release.
   export WAV, AIFF, FLAC, Ogg Vorbis, or MP3 with encoding, normalization, and
   dither controls. [Mastering](docs/mastering.md) includes signed reports and
   integration with an external licensed DDP encoder.
+- **Create cover-video overlays.** Export transparent [spectrum GIFs](docs/user-guide.md#spectrum-gif-export)
+  from a track or the whole mix, then combine them with your audio in a video editor.
 
 ## Status and limits
 
@@ -168,6 +170,8 @@ Portable Windows ZIP builds must be replaced manually.
 5. Choose **Export > Export audio** for a mix file, or
    **Export > Open mastering and release workspace** for album delivery.
    MP3 encoding is built in and needs no separate encoder installation.
+   **Export > Export spectrum GIF** creates a transparent track or whole-mix
+   animation for cover-video overlays. See [spectrum export](docs/user-guide.md#spectrum-gif-export).
 
 Input monitoring is off by default to prevent accidental feedback; enable it
 only when intended. For MIDI, drum pads, routing, and editing shortcuts, open
@@ -183,7 +187,9 @@ Settings persist across launches. Use the gear icon to configure:
 | General | Autosave recovery after edits, enabled by default for already-saved projects. Manual Save still publishes the durable project generation. |
 | Appearance | Four dark themes and custom surface/text/accent colors with contrast validation. |
 | VST Plug-ins | Default/custom VST3 folders, startup folder discovery, manual rescan, and explicit advanced validation. |
+| Audio / MIDI | Audio device, input/output channels, sample rate, buffer size, and musical MIDI ports. |
 | Controls | Optional eight-strip Mackie Control profile, disabled by default. Select dedicated MIDI ports, separate from musical MIDI routing. |
+| Workflow | [Custom shortcuts and command macros](docs/user-guide.md#custom-shortcuts-and-workflow-macros), including the edit-toolbar macro assignment. |
 | Updates | Manual checks and automatic-download preferences. Updates are installed only after choosing Restart and Update. |
 
 In the processor catalog, choose **SCAN** to probe installed VST3, CLAP, and

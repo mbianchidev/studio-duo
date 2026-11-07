@@ -122,6 +122,7 @@ bool MainComponent::workspaceCommandEnabled(juce::CommandID id) const
         case Command::saveAs:
         case Command::importAudio:
         case Command::exportMix:
+        case Command::exportSpectrumGif:
         case Command::playPause:
         case Command::stop:
         case Command::record:
@@ -195,6 +196,7 @@ bool MainComponent::executeWorkspaceCommand(juce::CommandID id)
         case Command::saveAs: beginSaveProject(true); break;
         case Command::importAudio: beginImportAudio(); break;
         case Command::exportMix: beginExportMix(); break;
+        case Command::exportSpectrumGif: beginExportSpectrumGif(); break;
         case Command::undo: undo(); break;
         case Command::redo: redo(); break;
         case Command::playPause: togglePlayback(); break;

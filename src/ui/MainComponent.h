@@ -106,8 +106,11 @@ private:
     class ExportInputBlocker final : public juce::Component
     {
     public:
-        bool keyPressed(const juce::KeyPress&) override
+        std::function<void()> onCancel;
+        bool keyPressed(const juce::KeyPress& key) override
         {
+            if (key == juce::KeyPress::escapeKey && onCancel)
+                onCancel();
             return true;
         }
     };
@@ -168,10 +171,14 @@ private:
     void beginSaveProject(bool saveAs = false);
     void beginImportAudio();
     void beginExportMix();
+    void beginExportSpectrumGif();
     void chooseMixExportDestination(MixExportSettings settings);
-    void finishMixExport(const juce::File& destination,
-                         const juce::Result& result,
-                         const MixExportSettings& settings);
+    void chooseSpectrumExportDestination(SpectrumExportSettings settings);
+    void chooseExportDestination(const juce::File& initial, const juce::String& extension,
+                                 const juce::String& title, std::function<void(juce::File)>);
+    void finishExport(const juce::File& destination,
+                      const juce::Result& result,
+                      const juce::String& description);
     void setMasteringWorkspaceVisible(bool visible);
     void showExportMenu();
     void beginImportDawProject();
@@ -216,6 +223,9 @@ private:
     void importAudioFile(const juce::File& source);
     void exportMixTo(const juce::File& destination,
                      MixExportSettings settings);
+    void startOfflineExport(const juce::File& destination, MixExportSettings settings,
+                            std::optional<SpectrumGifSettings> spectrum = std::nullopt,
+                            const juce::String& trackId = {});
     void togglePlayback();
     void toggleRecording();
     void stopTransportAndRecording();
@@ -442,6 +452,7 @@ private:
     bool returnToStartupHubAfterSave = false;
     std::function<void()> actionAfterSuccessfulSave;
     MixExportSettings lastMixExportSettings;
+    SpectrumExportSettings lastSpectrumExportSettings;
     ExportInputBlocker exportInputBlocker;
     bool statusIsError = false;
     bool recordingFinalizationInProgress = false;

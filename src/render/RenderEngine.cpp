@@ -137,10 +137,10 @@ std::optional<StudioAudioEngine::RenderRange> RenderEngine::resolveRange(
     return range;
 }
 
-juce::Result RenderEngine::exportMix(
+juce::Result RenderEngine::renderMix(
     StudioAudioEngine& engine,
     const Project& project,
-    const juce::File& destination,
+    juce::AudioBuffer<float>& audio,
     const MixExportSettings& settings,
     std::vector<StudioAudioEngine::PluginRuntimeRequest> pluginRequests)
 {
@@ -148,7 +148,6 @@ juce::Result RenderEngine::exportMix(
     const auto range = resolveRange(project, settings, error);
     if (!range.has_value())
         return juce::Result::fail(error);
-    juce::AudioBuffer<float> audio;
     if (const auto result = engine.renderRangeToBuffer(
             project, audio, settings.audio.sampleRate, *range, std::move(pluginRequests));
         result.failed())
@@ -173,6 +172,20 @@ juce::Result RenderEngine::exportMix(
                 audio.setSample(channel, sample, audio.getSample(channel, sample) * fadeIn * fadeOut);
         }
     }
+    return juce::Result::ok();
+}
+
+juce::Result RenderEngine::exportMix(
+    StudioAudioEngine& engine,
+    const Project& project,
+    const juce::File& destination,
+    const MixExportSettings& settings,
+    std::vector<StudioAudioEngine::PluginRuntimeRequest> pluginRequests)
+{
+    juce::AudioBuffer<float> audio;
+    if (const auto result = renderMix(engine, project, audio, settings, std::move(pluginRequests));
+        result.failed())
+        return result;
     juce::StringPairArray metadata;
     metadata.set("title", project.name);
     metadata.set("artist", project.metadata.artist);

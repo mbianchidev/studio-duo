@@ -95,7 +95,7 @@
         <div class="wrap feature-heading">
           <p class="eyebrow">Inside the studio</p>
           <h2 id="features-title">Tools for<br>metal sessions.</h2>
-          <p>Linked multitrack edits, live MIDI drums, reamp paths, and parallel racks. These are the workflows Studio Duo focuses on.</p>
+          <p>Linked multitrack edits, live MIDI drums, reamp paths, parallel racks, and spectrum GIFs for cover videos. These are the workflows Studio Duo focuses on.</p>
         </div>
 
         <article class="feature-row wrap" id="record">
@@ -107,6 +107,8 @@
               <li>Punch, loop recording, and count-in</li>
               <li>Tempo maps and a routable metronome</li>
               <li>Transient tools, elastic audio, and crossfades</li>
+              <li>Folders and bus folders for audio or MIDI tracks</li>
+              <li>Hide tracks or deactivate processing without deleting media</li>
               <li>CoreAudio on macOS; ASIO-compatible interfaces on Windows</li>
             </ul>
             <p class="small-note hardware-note">Tested with a Focusrite Scarlett Duo on macOS ARM using CoreAudio. Windows ASIO support is best effort only.</p>
@@ -131,6 +133,8 @@
               <div class="feature-copy">
                 <p>Play and record native MIDI drums with the kit of twelve performance pads visible. Click the pads or use your keyboard. Edit the recorded hits in the drum grid or piano roll.</p>
                 <p>The built-in drum instrument has genre presets and kit tuning. Use blast-beat and double-kick entry tools, seeded humanization, and the song's metronome and count-in. Geometry is an alternate view of the same notes, drawn as rhythm rings.</p>
+                <p>Recover a recent MIDI performance with retrospective capture. Edit velocity, timing, duration, probability and per-note expression with the mouse or keyboard. Imported drum maps and channel-filtered multi-output routing connect separate instruments and kit pieces.</p>
+                <a class="text-link" href="https://github.com/mbianchidev/studio-duo/blob/main/docs/user-guide.md#midi-recording-and-editing">Explore MIDI recording and editing <span aria-hidden="true">&#8599;</span></a>
               </div>
             </div>
             <figure class="geometry-shot">
@@ -148,14 +152,18 @@
             <p class="eyebrow">Mixing &amp; plug-ins</p>
             <h3>Mix with buses<br>and parallel racks.</h3>
             <p>Route tracks through sends, sidechains, auxes, and nested buses. Automate mixer and plug-in parameters. Parallel racks compensate for branch latency, so different processing chains stay aligned.</p>
+            <p>Edit exact automation point positions and values. Read, touch, latch, write, trim and preview modes control how mixer and plug-in gestures interact with existing lanes.</p>
             <ul class="feature-details">
               <li>VST3, CLAP, and Audio Units on macOS</li>
               <li>Sandboxed standard plug-in processing</li>
-              <li>Native parametric EQ, compressor, and true-peak limiter</li>
+              <li>Native single-band parametric EQ, sidechain compressor, and true-peak limiter</li>
               <li>Built-in gate, reverb, delay, tuner, and signal generator</li>
               <li>Gain/polarity tools, drum instrument, and guitar/bass amps</li>
+              <li>Optional Mackie Control profile for eight strips plus master</li>
             </ul>
-            <p class="small-note">ARA 2 uses an explicit compatibility mode.</p>
+            <a class="text-link" href="https://github.com/mbianchidev/studio-duo/blob/main/docs/devices.md#utility-processors">See processor controls and limits <span aria-hidden="true">&#8599;</span></a>
+            <p class="small-note">The current Tuner has no dedicated pitch display. ARA 2 uses an explicit compatibility mode. Control surfaces require dedicated MIDI ports and physical-device qualification.</p>
+            <a class="text-link" href="https://github.com/mbianchidev/studio-duo/blob/main/docs/user-guide.md#mackie-control-surfaces">Set up a control surface <span aria-hidden="true">&#8599;</span></a>
           </div>
           <figure class="feature-shot mixer-shot">
             <a class="screenshot-link" href="./images/mixer.webp" data-title="The mixer channel strips." data-caption="Mixer detail from the Metal Tracking template, showing channel strips, inserts, sends, faders, and pan controls." aria-label="Enlarge the mixer screenshot">
@@ -173,11 +181,26 @@
             <p>Keep the DI and compare amp chains at matched levels. Freeze or print a tone without replacing the source track. The bundled guitar and bass amps include cabinets and accept your own cabinet IRs.</p>
             <a class="text-link" href="https://github.com/mbianchidev/studio-duo/blob/main/docs/devices.md">Explore bundled devices <span aria-hidden="true">&#8599;</span></a>
           </article>
-          <article>
+          <article id="project-exchange">
             <p class="eyebrow">Project exchange</p>
             <h3>Transfer projects<br>with their media.</h3>
-            <p>Portable copies include hash-verified media. DAWproject import and export transfer supported session data and plug-in state. Some structures cannot transfer, including native rack topology. Studio One migration also reports its limits.</p>
+            <p>Versioned .studioduo packages retain recovery points and portable, hash-verified media. Transfer supported audio, MIDI, automation and plug-in state through DAWproject, or import supported Studio One .song audio and mixer data. Review compatibility reports: native rack topology and private Studio One data have explicit limits.</p>
             <a class="text-link" href="https://github.com/mbianchidev/studio-duo/blob/main/docs/dawproject.md">Check interchange support <span aria-hidden="true">&#8599;</span></a>
+            <p class="small-note"><a class="inline-link" href="https://github.com/mbianchidev/studio-duo/blob/main/docs/studio-one.md">Read the direct Studio One import limits.</a></p>
+          </article>
+          <article id="clip-processing">
+            <p class="eyebrow">Clip FX &amp; track printing</p>
+            <h3>Print clips and<br>freeze tracks.</h3>
+            <p>Apply AudioSuite effects to a clip range without changing the track's insert chain. Bounce selected audio or MIDI clips in place or to a new track. Freeze a complete processor-heavy track, then Unfreeze to restore the editable original.</p>
+            <a class="text-link" href="https://github.com/mbianchidev/studio-duo/blob/main/docs/user-guide.md#clip-fx-bounce-and-freeze">Print clips and freeze tracks <span aria-hidden="true">&#8599;</span></a>
+            <p class="small-note">Original media is retained. Live inputs must be recorded before offline printing; MIDI clips need an active instrument.</p>
+          </article>
+          <article id="workflow-tools">
+            <p class="eyebrow">Your controls &amp; workspace</p>
+            <h3>Set up your<br>own workflow.</h3>
+            <p>Customize shortcuts, resolve binding collisions and run saved workflow macros from the edit toolbar. Choose from four dark themes or adjust colors with contrast checks.</p>
+            <a class="text-link" href="https://github.com/mbianchidev/studio-duo/blob/main/docs/user-guide.md#custom-shortcuts-and-workflow-macros">Customize shortcuts and macros <span aria-hidden="true">&#8599;</span></a>
+            <p class="small-note">Macros run Studio Duo commands, not operating-system scripts. Dialogs, renders and nested macros are excluded.</p>
           </article>
           <article id="master">
             <p class="eyebrow">Mastering &amp; delivery</p>
@@ -185,6 +208,13 @@
             <p>Sequence songs, set gaps and fades, and add release metadata in the mastering workspace. Measure loudness and true peak. Export mixes and masters as WAV, AIFF, FLAC, Ogg Vorbis, or MP3. Mastering exports include signed render reports.</p>
             <a class="text-link" href="https://github.com/mbianchidev/studio-duo/blob/main/docs/mastering.md">Explore mastering <span aria-hidden="true">&#8599;</span></a>
             <p class="small-note">DDP delivery requires an external licensed encoder.</p>
+          </article>
+          <article id="spectrum-export">
+            <p class="eyebrow">Spectrum GIF export</p>
+            <h3>Export frequency bars<br>for cover videos.</h3>
+            <p>Export animated frequency bars from a single track or the whole song mix. Choose a transparent background for vocal and guitar cover videos, or a solid dark background. Set the bar color, canvas size, and frame rate before exporting.</p>
+            <a class="text-link" href="https://github.com/mbianchidev/studio-duo/blob/main/docs/user-guide.md#spectrum-gif-export">Export a spectrum GIF <span aria-hidden="true">&#8599;</span></a>
+            <p class="small-note">GIFs contain no audio. Combine the animation with your cover audio in a video editor, then export a finished video for YouTube.</p>
           </article>
         </div>
         <section class="partner-tools wrap" aria-labelledby="partner-title">
@@ -345,6 +375,12 @@
             <a class="button button-outline" href="https://github.com/mbianchidev/studio-duo">Explore the source <span aria-hidden="true">&#8599;</span></a>
           </div>
           <div class="open-notes">
+            <article id="support-tools">
+              <h3>Recover work and diagnose startup.</h3>
+              <p>Autosave recovery covers already-saved projects. The embedded guide works offline; safe-start options and redacted startup reports help troubleshoot driver or plug-in loading. Verified background downloads wait for Restart and Update before installation.</p>
+              <a class="text-link" href="https://github.com/mbianchidev/studio-duo/blob/main/docs/user-guide.md#logs-and-diagnostics">Read startup and recovery help <span aria-hidden="true">&#8599;</span></a>
+              <p class="small-note"><a class="inline-link" href="https://github.com/mbianchidev/studio-duo/blob/main/docs/user-guide.md#update-studio-duo">Manage recovery preferences and updates.</a></p>
+            </article>
             <article>
               <h3>Read the product decisions.</h3>
               <p>The design document explains the roadmap, project formats, plug-in isolation, and audio-thread rules. Real-time audio safety takes priority over appearance.</p>

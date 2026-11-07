@@ -28,6 +28,8 @@ struct ClipEffectsSettings
 class ArrangementRender
 {
 public:
+    static std::optional<Project> prepareTrackExport(
+        const Project&, const juce::String& trackId, juce::String& error);
     static std::optional<ArrangementRenderPlan> prepareBounce(
         const Project&, const std::vector<juce::String>& clipIds, bool inPlace, juce::String& error);
     static std::optional<ArrangementRenderPlan> prepareFreeze(

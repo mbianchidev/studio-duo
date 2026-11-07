@@ -5,6 +5,7 @@
 #include "DrumKitTuningComponent.h"
 #include "NumericInput.h"
 #include "ReentrancySafeTimer.h"
+#include "SpectrumExportOptionsComponent.h"
 #include "TransportSettingsComponent.h"
 #include "automation/AutomationRecorder.h"
 #include "audio/AudioDeviceProbe.h"
@@ -3708,7 +3709,64 @@ void MainComponent::chooseMixExportDestination(MixExportSettings settings)
     const auto extension = AudioExport::extension(settings.audio.format);
     const auto initial = juce::File::getSpecialLocation(juce::File::userMusicDirectory)
         .getChildFile(juce::File::createLegalFileName(project.name + "-mix") + "." + extension);
-    fileChooser = std::make_unique<juce::FileChooser>("Export audio mix",
+    chooseExportDestination(initial, extension, "Export audio mix",
+        [safe = juce::Component::SafePointer<MainComponent>(this), settings](const juce::File& file)
+        {
+            if (safe != nullptr)
+                safe->exportMixTo(file, settings);
+        });
+}
+
+void MainComponent::beginExportSpectrumGif()
+{
+    if (exportInProgress)
+    {
+        setStatus("A render is already in progress.", true);
+        return;
+    }
+    if (hasActiveRecordingTargets() || audioEngine.isRecording() || recordingFinalizationInProgress)
+    {
+        showError("Export unavailable", "Stop and finalize recording before exporting a spectrum.");
+        return;
+    }
+    SpectrumExportOptionsComponent::show(project, lastSpectrumExportSettings, *this,
+        [safe = juce::Component::SafePointer<MainComponent>(this), projectId = project.id](SpectrumExportSettings settings)
+        {
+            if (safe == nullptr)
+                return;
+            if (safe->project.id != projectId)
+            {
+                safe->showError("Export unavailable", "The project changed while choosing spectrum settings.");
+                return;
+            }
+            safe->chooseSpectrumExportDestination(std::move(settings));
+        });
+}
+
+void MainComponent::chooseSpectrumExportDestination(SpectrumExportSettings settings)
+{
+    const auto* track = project.findTrack(settings.trackId);
+    if (settings.trackId.isNotEmpty() && (track == nullptr || !project.isTrackActive(settings.trackId)))
+    {
+        showError("Export unavailable", "The selected spectrum track is no longer available.");
+        return;
+    }
+    const auto name = project.name + "-" + (track != nullptr ? track->name : juce::String("mix")) + "-spectrum";
+    const auto initial = juce::File::getSpecialLocation(juce::File::userMusicDirectory)
+        .getChildFile(juce::File::createLegalFileName(name) + ".gif");
+    chooseExportDestination(initial, "gif", "Export spectrum GIF",
+        [safe = juce::Component::SafePointer<MainComponent>(this), settings](const juce::File& file)
+        {
+            if (safe != nullptr)
+                safe->startOfflineExport(file, settings.render, settings.gif, settings.trackId);
+        });
+}
+
+void MainComponent::chooseExportDestination(
+    const juce::File& initial, const juce::String& extension, const juce::String& title,
+    std::function<void(juce::File)> completed)
+{
+    fileChooser = std::make_unique<juce::FileChooser>(title,
                                                       initial,
                                                       "*." + extension,
                                                       true,
@@ -3719,7 +3777,7 @@ void MainComponent::chooseMixExportDestination(MixExportSettings settings)
         | juce::FileBrowserComponent::warnAboutOverwriting;
     fileChooser->launchAsync(chooserFlags,
         [safe = juce::Component::SafePointer<MainComponent>(this),
-         settings,
+         exportToFile = std::move(completed),
          projectId = project.id,
          extension](const auto& chooser)
     {
@@ -3747,7 +3805,7 @@ void MainComponent::chooseMixExportDestination(MixExportSettings settings)
                                  + ". Replace this file?")
                     .withButton("Replace")
                     .withButton("Cancel"),
-                [safe, destination, settings, projectId](int choice)
+                [safe, destination, exportToFile, projectId](int choice)
                 {
                     if (choice != 1 || safe == nullptr)
                         return;
@@ -3756,11 +3814,11 @@ void MainComponent::chooseMixExportDestination(MixExportSettings settings)
                         safe->showError("Export unavailable", "The project changed before export.");
                         return;
                     }
-                    safe->exportMixTo(destination, settings);
+                    exportToFile(destination);
                 });
             return;
         }
-        safe->exportMixTo(destination, settings);
+        exportToFile(destination);
     });
 }
 
@@ -3773,6 +3831,8 @@ void MainComponent::showExportMenu()
         !exportInProgress,
         false,
         [this] { beginExportMix(); });
+    menu.addItem("Export spectrum GIF...", !exportInProgress, false,
+                 [this] { beginExportSpectrumGif(); });
     menu.addItem(
         masteringWorkspaceVisible
             ? "Close mastering and release workspace"
@@ -5398,6 +5458,13 @@ void MainComponent::importAudioFile(const juce::File& source)
 void MainComponent::exportMixTo(const juce::File& destination,
                                MixExportSettings settings)
 {
+    startOfflineExport(destination, std::move(settings));
+}
+
+void MainComponent::startOfflineExport(
+    const juce::File& destination, MixExportSettings settings,
+    std::optional<SpectrumGifSettings> spectrum, const juce::String& trackId)
+{
     if (exportInProgress)
     {
         setStatus("A render is already in progress.", true);
@@ -5412,14 +5479,51 @@ void MainComponent::exportMixTo(const juce::File& destination,
     }
     juce::String rangeError;
     const auto validation = AudioExport::validate(settings.audio);
-    if (validation.failed()
-        || !RenderEngine::resolveRange(project, settings, rangeError).has_value())
+    const auto range = RenderEngine::resolveRange(project, settings, rangeError);
+    if (validation.failed() || !range)
     {
         showError("Export unavailable",
                   validation.failed() ? validation.getErrorMessage() : rangeError);
         return;
     }
-    lastMixExportSettings = settings;
+    auto exportProject = project;
+    auto renderSettings = settings;
+    if (spectrum)
+    {
+        if (const auto valid = SpectrumGif::validate(*spectrum); valid.failed())
+        {
+            showError("Export unavailable", valid.getErrorMessage());
+            return;
+        }
+        if (trackId.isNotEmpty())
+        {
+            const auto isolated = ArrangementRender::prepareTrackExport(project, trackId, rangeError);
+            if (!isolated)
+            {
+                showError("Export unavailable", rangeError);
+                return;
+            }
+            exportProject = *isolated;
+        }
+        renderSettings.range = MixExportRange::custom;
+        renderSettings.startSeconds = range->startSeconds;
+        renderSettings.endSeconds = range->endSeconds;
+        lastSpectrumExportSettings.render = settings;
+        lastSpectrumExportSettings.gif = *spectrum;
+        lastSpectrumExportSettings.trackId = trackId;
+    }
+    else
+        lastMixExportSettings = settings;
+    const auto description = spectrum
+        ? "spectrum GIF (" + juce::String(spectrum->width) + " x " + juce::String(spectrum->height)
+            + ", " + juce::String(spectrum->framesPerSecond) + " fps)"
+        : AudioExport::description(settings.audio);
+    const auto canceled = std::make_shared<std::atomic<bool>>(false);
+    exportInputBlocker.onCancel = spectrum ? std::function<void()>([this, canceled]
+    {
+        canceled->store(true, std::memory_order_release);
+        setStatus("Canceling spectrum export after the current render step...");
+    }) : std::function<void()> {};
     exportInProgress = true;
     shutdownRequestedDuringExport = false;
     stopTimer();
@@ -5427,7 +5531,6 @@ void MainComponent::exportMixTo(const juce::File& destination,
     exportInputBlocker.toFront(false);
     exportInputBlocker.grabKeyboardFocus();
     setStatus("Rendering " + destination.getFileName() + "...");
-    auto exportProject = project;
     for (auto& track : exportProject.tracks)
         for (auto& insert : track.inserts)
         {
@@ -5463,16 +5566,24 @@ void MainComponent::exportMixTo(const juce::File& destination,
             audioEngine.seekSeconds(resumePosition);
             audioEngine.play();
         };
-    for (const auto& capture : audioEngine.capturePluginStates(2000))
+    std::vector<juce::String> captureTracks;
+    if (spectrum && trackId.isNotEmpty())
+        for (const auto& request : renderRequests)
+            if (std::find(captureTracks.begin(), captureTracks.end(), request.trackId) == captureTracks.end())
+                captureTracks.push_back(request.trackId);
+    std::vector<StudioAudioEngine::PluginStateCapture> captures;
+    if (!spectrum || !renderRequests.empty())
+        captures = audioEngine.capturePluginStates(2000, captureTracks);
+    for (const auto& capture : captures)
     {
         if (capture.insertId.isEmpty())
         {
             restoreLiveTransport();
-            finishMixExport(
+            finishExport(
                 destination,
                 juce::Result::fail(
                     capture.result.getErrorMessage()),
-                settings);
+                description);
             return;
         }
         const auto request = std::find_if(
@@ -5489,13 +5600,13 @@ void MainComponent::exportMixTo(const juce::File& destination,
             if (capture.preservePreviousState)
                 continue;
             restoreLiveTransport();
-            finishMixExport(
+            finishExport(
                 destination,
                 juce::Result::fail(
                     capture.name
                     + ": "
                     + capture.result.getErrorMessage()),
-                settings);
+                description);
             return;
         }
         request->state = capture.state;
@@ -5512,31 +5623,59 @@ void MainComponent::exportMixTo(const juce::File& destination,
          renderEngine,
          projectForExport = std::move(exportProject),
          destination,
-         settings,
+         settingsForExport = renderSettings,
+         spectrum,
+         description,
+         canceled,
          requestsForExport = std::move(renderRequests)]() mutable
         {
-            const auto result = RenderEngine::exportMix(
-                *renderEngine,
-                projectForExport,
-                destination,
-                settings,
-                std::move(requestsForExport));
+            const auto result = [&]
+            {
+                if (!spectrum)
+                    return RenderEngine::exportMix(*renderEngine, projectForExport, destination,
+                                                   settingsForExport, std::move(requestsForExport));
+                if (canceled->load(std::memory_order_acquire))
+                    return juce::Result::fail("Spectrum GIF export was canceled.");
+                juce::AudioBuffer<float> audio;
+                if (const auto rendered = RenderEngine::renderMix(*renderEngine, projectForExport, audio,
+                        settingsForExport, std::move(requestsForExport)); rendered.failed())
+                    return rendered;
+                int lastPercent = -1;
+                return SpectrumGif::write(audio, settingsForExport.audio.sampleRate, destination, *spectrum,
+                    [safe, canceled, &lastPercent](double progress)
+                    {
+                        if (canceled->load(std::memory_order_acquire))
+                            return false;
+                        const auto percent = static_cast<int>(progress * 100.0);
+                        if (percent != lastPercent)
+                        {
+                            lastPercent = percent;
+                            juce::MessageManager::callAsync([safe, percent]
+                            {
+                                if (safe != nullptr && safe->exportInProgress)
+                                    safe->setStatus("Encoding spectrum GIF: " + juce::String(percent) + "% (Esc to cancel)");
+                            });
+                        }
+                        return true;
+                    });
+            }();
             juce::MessageManager::callAsync(
-                [safe, renderEngine, destination, result, settings]
+                [safe, renderEngine, destination, result, description]
                 {
                     renderEngine->shutdown();
                     if (safe == nullptr)
                         return;
-                    safe->finishMixExport(destination, result, settings);
+                    safe->finishExport(destination, result, description);
                 });
         });
 }
 
-void MainComponent::finishMixExport(
+void MainComponent::finishExport(
     const juce::File& destination,
     const juce::Result& result,
-    const MixExportSettings& settings)
+    const juce::String& description)
 {
+    exportInputBlocker.onCancel = {};
     exportInputBlocker.setVisible(false);
     startTimerHz(30);
     exportInProgress = false;
@@ -5549,7 +5688,7 @@ void MainComponent::finishMixExport(
     else
     {
         setStatus(
-            "Exported " + AudioExport::description(settings.audio) + " to "
+            "Exported " + description + " to "
             + destination.getFullPathName());
     }
     if (quitAfterExport)

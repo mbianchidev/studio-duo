@@ -4,6 +4,35 @@ Studio Duo lists thirteen built-in processors in the normal processor catalog.
 They use the same insert, state, automation, latency compensation, editor, live
 processing, and offline render paths as hosted plugins.
 
+## Utility processors
+
+Add these devices from **Plugin Manager** or a track's insert `+`, then open
+their editor from the insert row. The device editor exposes the controls below;
+the generic parameter panel and automation lanes use normalized values from
+0 to 1.
+
+| Device | Purpose and controls |
+| --- | --- |
+| Parametric EQ (`studio.device.eq`) | A single bell band, not a multiband EQ. Frequency 20 Hz to 20 kHz, gain -18 to +18 dB, and Q 0.2 to 10; the usable frequency is bounded by the sample rate. |
+| Compressor (`studio.device.compressor`) | Threshold, ratio, attack, release, makeup gain and dry/wet mix. An enabled external sidechain can drive its detector. |
+| True-Peak Limiter (`studio.device.limiter`) | Ceiling -12 to 0 dBFS, release and a true-peak switch, enabled by default. Its reported processing latency participates in delay compensation. |
+| Algorithmic Reverb (`studio.device.reverb`) | Room size, damping, stereo width and dry/wet mix. It reports a four-second effects tail for offline exports. |
+| Noise Gate (`studio.device.gate`) | Threshold, attack, release and attenuation range; supports an external sidechain detector. |
+| Gain (`studio.device.gain`) | Insert gain from -24 to +24 dB, separate from the track fader. |
+| Polarity (`studio.device.polarity`) | Invert both audio channels without changing their timing. |
+| Delay (`studio.device.delay`) | Sample-offset alignment delay, with a 0 to 96,000-sample control bounded by a two-second buffer. It is not a tempo-synced feedback echo. |
+| Tuner (`studio.device.tuner`) | Pass-through monophonic pitch analysis. Detected frequency is available through the processor metering API; there are no parameter controls and no dedicated pitch display in the current editor. |
+| Signal Generator (`studio.device.generator`) | Replaces input with a sine wave, white noise or pink noise. Waveform values are 0, 1 and 2 respectively; sine frequency and output level are adjustable. |
+
+Start with a low monitor level before using the Signal Generator; its default
+output level is -18 dBFS. Compressor and gate sidechains use the ordinary
+[routing controls](user-guide.md#mix-and-route-tracks). The same devices can be
+placed in [serial or parallel racks](user-guide.md#plugin-racks-and-parallel-effects)
+or used for [clip-range FX](user-guide.md#clip-fx-bounce-and-freeze).
+
+The standalone VST3, Audio Unit and CLAP targets below cover the drum instrument
+and two amps, not all ten utility processors.
+
 ## Metal Drum Composer
 
 `studio.device.drum-composer` is a deterministic MIDI instrument intended for
@@ -87,4 +116,8 @@ The in-app processors and plugin builds compile the same DSP sources:
 - `StudioDuoBundledDevices.clap`, which exports all three CLAP plugins.
 
 The plugin targets keep the same parameters, buses, state, latency, tail, MIDI,
-and embedded cabinet behavior. DAWproject interchange is not implemented yet.
+and embedded cabinet behavior. Studio Duo's host implements
+[DAWproject interchange](dawproject.md), including insert descriptors, supported
+state payloads and device automation. Review its compatibility report:
+native rack topology and vendor preset-container portability have explicit
+limits; exchange does not guarantee that another DAW can load every device.
