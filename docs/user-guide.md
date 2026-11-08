@@ -1120,8 +1120,10 @@ the mouse wheel over the timeline canvas to zoom around the pointer.
 The minimum zoom remains **25%**. Even an empty arrangement offers at least
 30 minutes of timeline space, and scrolling right extends it further without
 requiring clips first. This navigation space does not lengthen audio exports.
-The arrangement follows the playhead during playback and recording while track
-headers remain pinned, extending the timeline as needed.
+Track headers and the add-track button stay pinned during horizontal scrolling.
+Their column keeps a plain background below the tracks. Vertical scrolling
+moves headers together with their lanes. The arrangement follows the playhead
+during playback and recording, extending the timeline as needed.
 
 Right-click the timeline to place the playhead and open the context menu.
 **Play** starts from the current playhead position, including positions beyond

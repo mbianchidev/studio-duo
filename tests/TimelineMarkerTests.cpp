@@ -1,6 +1,7 @@
 #include "TestHarness.h"
 #include "TestSuites.h"
 
+#include "ui/StudioTheme.h"
 #include "ui/TimelineComponent.h"
 
 #include <cmath>
@@ -32,6 +33,90 @@ juce::MouseEvent mouseEvent(
         clicks,
         dragged
     };
+}
+
+juce::Image paintTimelineViewport(studio::TimelineComponent& timeline,
+                                  const juce::Viewport& viewport)
+{
+    juce::Image image(juce::Image::ARGB,
+                      viewport.getViewWidth(),
+                      viewport.getViewHeight(),
+                      true,
+                      juce::SoftwareImageType {});
+    juce::Graphics graphics(image);
+    graphics.addTransform(juce::AffineTransform::translation(
+        -static_cast<float>(viewport.getViewPositionX()),
+        -static_cast<float>(viewport.getViewPositionY())));
+    timeline.paint(graphics);
+    return image;
+}
+
+void timelineTrackHeaderScrolling()
+{
+    const auto project = studio::Project::createDefault();
+    studio::TimelineComponent timeline;
+    juce::Viewport viewport;
+    viewport.setBounds(0, 0, 640, 480);
+    viewport.setViewedComponent(&timeline, false);
+    timeline.setProject(&project);
+    timeline.setSize(timeline.preferredWidth(viewport.getWidth()),
+                     timeline.preferredHeight(viewport.getHeight()));
+    viewport.setViewPosition(240, 0);
+    timeline.setViewportPosition(viewport.getViewPositionX());
+
+    const auto image = paintTimelineViewport(timeline, viewport);
+    const auto headerWidth = static_cast<int>(timeline.xForSeconds(0.0));
+    const auto blankY = timeline.preferredHeight(0) + 24;
+    auto blankHeader = true;
+    for (auto x = 0; x < headerWidth; ++x)
+        blankHeader = blankHeader
+            && image.getPixelAt(x, blankY).getARGB() == studio::StudioColours::panel;
+    expect(blankHeader,
+           "The scrolled track column stays plain beneath Add Audio Track, without timeline grid lines.");
+
+    auto gridVisible = false;
+    for (auto x = headerWidth; x < image.getWidth(); ++x)
+        gridVisible = gridVisible
+            || image.getPixelAt(x, blankY).getARGB() == studio::StudioColours::border;
+    expect(gridVisible,
+           "The timeline grid remains visible to the right of the track column.");
+
+    for (const auto viewX : { 0, 72, 960, 86000, 172000, 240 })
+    {
+        viewport.setViewPosition(viewX, 0);
+        const auto scrolled = paintTimelineViewport(timeline, viewport);
+        auto differingPixels = 0;
+        for (auto y = 0; y < image.getHeight(); ++y)
+            for (auto x = 0; x < headerWidth; ++x)
+                if (scrolled.getPixelAt(x, y) != image.getPixelAt(x, y))
+                    ++differingPixels;
+        expect(differingPixels == 0,
+               ("Track headers remain fixed immediately after scrolling to "
+                + juce::String(viewX) + "; differing pixels "
+                + juce::String(differingPixels) + ".").toRawUTF8());
+    }
+
+    viewport.setViewPosition(360, 0);
+    juce::String mutedTrack;
+    timeline.onTrackMute = [&mutedTrack](const juce::String& id)
+    {
+        mutedTrack = id;
+    };
+    const juce::Point<float> mutePosition(
+        static_cast<float>(viewport.getViewPositionX() + 35), 139.0f);
+    timeline.mouseDown(mouseEvent(timeline, mutePosition, mutePosition, 1, false));
+    expect(mutedTrack == project.tracks.front().id,
+           "Pinned track controls respond at their visible positions immediately after scrolling.");
+
+    auto tracksAdded = 0;
+    timeline.onAddTrack = [&tracksAdded] { ++tracksAdded; };
+    const juce::Point<float> addPosition(
+        static_cast<float>(viewport.getViewPositionX() + headerWidth / 2),
+        static_cast<float>(timeline.preferredHeight(0) - 22));
+    timeline.mouseDown(mouseEvent(timeline, addPosition, addPosition, 1, false));
+    expect(tracksAdded == 1,
+           "Add Audio Track responds at its pinned position immediately after scrolling.");
+    viewport.setViewedComponent(nullptr, false);
 }
 
 void timelineNavigationRange()
@@ -94,6 +179,7 @@ void timelineNavigationRange()
 
 void timelineMarkerTests()
 {
+    timelineTrackHeaderScrolling();
     timelineNavigationRange();
 
     auto project = studio::Project::createDefault();
