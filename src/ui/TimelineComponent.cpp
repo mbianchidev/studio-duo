@@ -235,6 +235,15 @@ void TimelineComponent::setViewportPosition(int horizontalPosition)
     repaint();
 }
 
+void TimelineComponent::moved()
+{
+    if (findParentComponentOfClass<juce::Viewport>() != nullptr)
+    {
+        // JUCE updates the viewport's cached position after this notification.
+        setViewportPosition(-getX());
+    }
+}
+
 void TimelineComponent::setRecordingPreviews(std::vector<RecordingPreview> previews)
 {
     for (auto& preview : previews)
@@ -877,25 +886,29 @@ void TimelineComponent::paint(juce::Graphics& graphics)
                          juce::Colour(StudioColours::orange));
     }
 
+    // Local header coordinates avoid scroll-dependent path rounding.
+    graphics.saveState();
+    graphics.addTransform(juce::AffineTransform::translation(
+        static_cast<float>(viewportPositionX), 0.0f));
     graphics.setColour(juce::Colour(StudioColours::panel));
-    graphics.fillRect(viewportPositionX, 0, trackHeaderWidth, rulerHeight);
+    graphics.fillRect(0, 0, trackHeaderWidth, getHeight());
     graphics.setColour(juce::Colour(StudioColours::secondaryText));
     graphics.setFont(juce::Font(juce::FontOptions(9.0f,
                                                   juce::Font::bold)));
     graphics.drawText("MARKERS",
-                      viewportPositionX + 12,
+                      12,
                       0,
                       trackHeaderWidth - 24,
                       markerLaneHeight,
                       juce::Justification::centredLeft);
     graphics.drawText("SECTIONS",
-                      viewportPositionX + 12,
+                      12,
                       markerLaneHeight,
                       trackHeaderWidth - 24,
                       sectionLaneHeight,
                       juce::Justification::centredLeft);
     graphics.drawText("TIMELINE",
-                      viewportPositionX + 12,
+                      12,
                       timelineRulerTop,
                       trackHeaderWidth - 24,
                       rulerHeight - timelineRulerTop,
@@ -916,15 +929,15 @@ void TimelineComponent::paint(juce::Graphics& graphics)
             || std::find(selectedTracks.begin(), selectedTracks.end(), track.id) != selectedTracks.end();
 
         graphics.setColour(juce::Colour(selected ? 0xff22272b : 0xff15181b));
-        graphics.fillRect(viewportPositionX, y, trackHeaderWidth, rowHeight);
+        graphics.fillRect(0, y, trackHeaderWidth, rowHeight);
         if (selected && hasKeyboardFocus(false))
         {
             graphics.setColour(juce::Colour(StudioColours::orange));
-            graphics.drawRect(viewportPositionX + 2, y + 2, trackHeaderWidth - 4, rowHeight - 4, 2);
+            graphics.drawRect(2, y + 2, trackHeaderWidth - 4, rowHeight - 4, 2);
         }
         graphics.setColour(juce::Colour(StudioColours::border));
         graphics.drawHorizontalLine(y + rowHeight - 1, 0.0f, static_cast<float>(getWidth()));
-        graphics.drawVerticalLine(viewportPositionX + trackHeaderWidth - 1,
+        graphics.drawVerticalLine(trackHeaderWidth - 1,
                                   static_cast<float>(y),
                                   static_cast<float>(y + rowHeight));
 
@@ -946,18 +959,18 @@ void TimelineComponent::paint(juce::Graphics& graphics)
         {
             juce::Path disclosure;
             if (groupChildren ? track.folderCollapsed : track.versionsCollapsed)
-                disclosure.addTriangle(static_cast<float>(viewportPositionX + 7),
+                disclosure.addTriangle(7.0f,
                                        static_cast<float>(y + 21),
-                                       static_cast<float>(viewportPositionX + 7),
+                                       7.0f,
                                        static_cast<float>(y + 31),
-                                       static_cast<float>(viewportPositionX + 14),
+                                       14.0f,
                                        static_cast<float>(y + 26));
             else
-                disclosure.addTriangle(static_cast<float>(viewportPositionX + 5),
+                disclosure.addTriangle(5.0f,
                                        static_cast<float>(y + 22),
-                                       static_cast<float>(viewportPositionX + 15),
+                                       15.0f,
                                        static_cast<float>(y + 22),
-                                       static_cast<float>(viewportPositionX + 10),
+                                       10.0f,
                                        static_cast<float>(y + 30));
             graphics.setColour(juce::Colour(StudioColours::secondaryText));
             graphics.fillPath(disclosure);
@@ -984,9 +997,7 @@ void TimelineComponent::paint(juce::Graphics& graphics)
                 : 0;
         graphics.setColour(track.colour);
         graphics.fillRect(
-            viewportPositionX
-                + 12
-                + colourBandIndent,
+            12 + colourBandIndent,
             y + 12,
             4,
             trackHeight - 24);
@@ -1003,21 +1014,15 @@ void TimelineComponent::paint(juce::Graphics& graphics)
                 : 0;
         const auto badgeBounds =
             juce::Rectangle<int>(
-                viewportPositionX
-                    + trackHeaderWidth
-                    - badgeWidth
-                    - 8,
+                trackHeaderWidth - badgeWidth - 8,
                 y + 11,
                 badgeWidth,
                 18);
-        const auto nameX =
-            viewportPositionX + 26 + indent;
+        const auto nameX = 26 + indent;
         const auto nameRight =
             badgeText.isNotEmpty()
                 ? badgeBounds.getX() - 6
-                : viewportPositionX
-                    + trackHeaderWidth
-                    - 8;
+                : trackHeaderWidth - 8;
         graphics.setColour(juce::Colour(StudioColours::text));
         graphics.setFont(14.0f);
         graphics.drawText(track.name + (track.frozenTrackId.isNotEmpty() ? " [FROZEN]"
@@ -1072,14 +1077,14 @@ void TimelineComponent::paint(juce::Graphics& graphics)
                 0.75f);
         }
 
-        const auto drawControl = [&graphics, y, this](
+        const auto drawControl = [&graphics, y](
                                      int x,
                                      StudioIcon icon,
                                      bool active,
                                      juce::Colour activeColour)
         {
             const juce::Rectangle<float> bounds(
-                static_cast<float>(viewportPositionX + x),
+                static_cast<float>(x),
                 static_cast<float>(y + trackControlY),
                 static_cast<float>(trackControlSize),
                 static_cast<float>(trackControlSize));
@@ -1134,7 +1139,7 @@ void TimelineComponent::paint(juce::Graphics& graphics)
         if (track.type == TrackType::audio)
         {
             const juce::Rectangle<float> inputBounds(
-                static_cast<float>(viewportPositionX + 104),
+                104.0f,
                 static_cast<float>(y + 29),
                 64.0f,
                 18.0f);
@@ -1175,7 +1180,7 @@ void TimelineComponent::paint(juce::Graphics& graphics)
         else
         {
             graphics.drawText(routingLabel,
-                              viewportPositionX + 104,
+                              104,
                               y + 30,
                               64,
                               16,
@@ -1195,8 +1200,7 @@ void TimelineComponent::paint(juce::Graphics& graphics)
                 graphics,
                 StudioIcon::volume,
                 {
-                    static_cast<float>(
-                        viewportPositionX + trackVolumeIconX),
+                    static_cast<float>(trackVolumeIconX),
                     static_cast<float>(y + trackControlY + 3),
                     12.0f,
                     12.0f
@@ -1206,11 +1210,9 @@ void TimelineComponent::paint(juce::Graphics& graphics)
             graphics.setColour(
                 juce::Colour(StudioColours::border));
             graphics.drawLine(
-                static_cast<float>(
-                    viewportPositionX + trackVolumeStartX),
+                static_cast<float>(trackVolumeStartX),
                 faderY,
-                static_cast<float>(
-                    viewportPositionX + trackVolumeEndX),
+                static_cast<float>(trackVolumeEndX),
                 faderY,
                 2.0f);
             const auto normalized = juce::jmap(
@@ -1223,10 +1225,8 @@ void TimelineComponent::paint(juce::Graphics& graphics)
                 normalized,
                 0.0f,
                 1.0f,
-                static_cast<float>(
-                    viewportPositionX + trackVolumeStartX),
-                static_cast<float>(
-                    viewportPositionX + trackVolumeEndX));
+                static_cast<float>(trackVolumeStartX),
+                static_cast<float>(trackVolumeEndX));
             graphics.setColour(
                 juce::Colour(StudioColours::text));
             graphics.fillEllipse(
@@ -1240,7 +1240,7 @@ void TimelineComponent::paint(juce::Graphics& graphics)
                 juce::Font(juce::FontOptions(8.0f)));
             graphics.drawText(
                 formatDecibels(volume),
-                viewportPositionX + trackVolumeIconX,
+                trackVolumeIconX,
                 y + 68,
                 trackVolumeEndX - trackVolumeIconX,
                 14,
@@ -1259,7 +1259,7 @@ void TimelineComponent::paint(juce::Graphics& graphics)
                 graphics.drawText(group->timingReferenceTrackId == track.id
                                       ? "LINK REF"
                                       : "LINK",
-                                  viewportPositionX + 104,
+                                  104,
                                   y + 51,
                                   60,
                                   18,
@@ -1271,7 +1271,7 @@ void TimelineComponent::paint(juce::Graphics& graphics)
                 graphics.setFont(juce::Font(juce::FontOptions(8.0f,
                                                               juce::Font::bold)));
                 graphics.drawText("TONE RETURN",
-                                  viewportPositionX + 88,
+                                  88,
                                   y + 67,
                                   76,
                                   15,
@@ -1288,7 +1288,7 @@ void TimelineComponent::paint(juce::Graphics& graphics)
                 graphics.setFont(juce::Font(juce::FontOptions(8.0f,
                                                               juce::Font::bold)));
                 graphics.drawText("DI SOURCE",
-                                  viewportPositionX + 96,
+                                  96,
                                   y + 67,
                                   68,
                                   15,
@@ -1299,9 +1299,9 @@ void TimelineComponent::paint(juce::Graphics& graphics)
 
     const auto addTrackY = rowsEnd;
     graphics.setColour(juce::Colour(StudioColours::panel));
-    graphics.fillRect(viewportPositionX, addTrackY, trackHeaderWidth, addTrackHeight);
+    graphics.fillRect(0, addTrackY, trackHeaderWidth, addTrackHeight);
     graphics.setColour(juce::Colour(StudioColours::border));
-    graphics.drawRect(viewportPositionX + 10,
+    graphics.drawRect(10,
                       addTrackY + 7,
                       trackHeaderWidth - 20,
                       addTrackHeight - 14,
@@ -1309,12 +1309,13 @@ void TimelineComponent::paint(juce::Graphics& graphics)
     graphics.setColour(juce::Colour(StudioColours::text));
     graphics.setFont(juce::Font(juce::FontOptions(11.0f, juce::Font::bold)));
     graphics.drawText("+ ADD AUDIO TRACK",
-                      viewportPositionX + 14,
+                      14,
                       addTrackY + 7,
                       trackHeaderWidth - 28,
                       addTrackHeight - 14,
                       juce::Justification::centred);
 
+    graphics.restoreState();
     graphics.saveState();
     graphics.excludeClipRegion({
         viewportPositionX,

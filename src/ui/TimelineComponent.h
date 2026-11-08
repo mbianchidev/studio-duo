@@ -137,6 +137,7 @@ public:
     std::function<void(const juce::String&)> onClipEffects;
     std::function<void(bool)> onBounceClips;
 
+    void moved() override;
     void paint(juce::Graphics& graphics) override;
     bool keyPressed(const juce::KeyPress& key) override;
     void focusGained(FocusChangeType cause) override;
