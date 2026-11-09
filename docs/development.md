@@ -399,6 +399,18 @@ and conservatively treat corrupt/stale markers as recovery candidates. Only clea
 shutdown clears the current marker; acknowledgment removes only inspected stale
 markers. Startup self-tests and worker modes use separate lifecycle paths.
 
+On macOS, audio/MIDI preflight, plugin scans, plugin bridges and compatibility
+validation launch from the embedded `Contents/Helpers/Studio Duo Worker.app`,
+not the foreground app bundle.
+Its separate bundle identifier and `LSUIElement` flag keep it out of the Dock
+before JUCE initializes; hiding a worker after initialization is too late to
+prevent a duplicate Recent Apps entry. The helper checks its native accessory
+role and rejects workspace launches. Standalone test workers and Windows keep
+their existing executable paths. Missing packaged helpers fail explicitly instead
+of falling back to a foreground worker or in-process probing.
+The development-signature target signs both helpers before sealing the parent
+without recursively overwriting their individual signing identifiers.
+
 Folder discovery remains filesystem-only and sandboxed. Catalog metadata records
 schema, app version and architecture changes; ordinary scans reuse unchanged
 descriptions. Corrupt catalog/preferences/search-path/compatibility files are

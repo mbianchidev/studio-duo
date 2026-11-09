@@ -1,4 +1,5 @@
 #include "PluginBridgeClient.h"
+#include "platform/WorkerExecutable.h"
 
 #include <limits>
 #include <new>
@@ -58,15 +59,20 @@ juce::Result PluginBridgeClient::startInternal(const juce::PluginDescription* de
         || blockSize > PluginBridgeSharedState::maxBlockSize || lastOutputBus < 0 || lastOutputBus >= 128)
         return juce::Result::fail("Plugin bridge received invalid audio settings.");
 
+    const auto applicationExecutable = workerExecutable != juce::File()
+        ? workerExecutable
+        : juce::File::getSpecialLocation(
+              juce::File::currentExecutableFile);
+    const auto executable = backgroundWorkerExecutable(applicationExecutable);
+    if (!executable.existsAsFile())
+        return juce::Result::fail(
+            "The plugin bridge worker is missing. Reinstall Studio Duo: " + executable.getFullPathName());
+
     if (const auto result = createSharedFile(); result.failed())
         return result;
 
     connectionLost.store(false, std::memory_order_release);
     startupStage.store(0, std::memory_order_release);
-    const auto executable = workerExecutable.existsAsFile()
-        ? workerExecutable
-        : juce::File::getSpecialLocation(
-              juce::File::currentExecutableFile);
     if (!launchWorkerProcess(executable,
                              pluginBridgeProcessId,
                              5000,

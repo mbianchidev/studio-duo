@@ -24,6 +24,15 @@ executable="$app/Contents/MacOS/Studio Duo"
 [[ -x "$executable" ]] || fail "The application executable is missing."
 swap_helper="$app/Contents/Helpers/studio-duo-update-swap"
 [[ -x "$swap_helper" ]] || fail "The atomic application-exchange helper is missing."
+worker_app="$app/Contents/Helpers/Studio Duo Worker.app"
+worker_executable="$worker_app/Contents/MacOS/Studio Duo Worker"
+[[ -x "$worker_executable" ]] || fail "The Dock-hidden background worker is missing."
+bundle_identifier="$(plutil -extract CFBundleIdentifier raw -o - "$app/Contents/Info.plist")"
+worker_identifier="$(plutil -extract CFBundleIdentifier raw -o - "$worker_app/Contents/Info.plist")"
+[[ "$worker_identifier" == "$bundle_identifier.worker" ]] || fail "The background worker bundle identity is incorrect."
+[[ "$(plutil -extract LSUIElement raw -o - "$worker_app/Contents/Info.plist")" == true ]] \
+    || fail "The background worker must be hidden from the Dock before launch."
+codesign --verify --strict --test-requirement "=identifier \"$worker_identifier\"" "$worker_app"
 bundle_version="$(plutil -extract CFBundleShortVersionString raw -o - "$app/Contents/Info.plist")"
 [[ "$bundle_version" == "$version" ]] || fail "The application version does not match the package version."
 codesign --verify --deep --strict "$app"
@@ -31,12 +40,14 @@ if [[ "$require_universal" == --universal ]]; then
     for architecture in arm64 x86_64; do
         lipo "$executable" -verify_arch "$architecture"
         lipo "$swap_helper" -verify_arch "$architecture"
+        lipo "$worker_executable" -verify_arch "$architecture"
     done
     architecture_label=universal
 else
     architecture_label="$(lipo -archs "$executable")"
     [[ "$architecture_label" == arm64 || "$architecture_label" == x86_64 ]] \
         || fail "Native smoke packages must contain exactly one supported architecture."
+    lipo "$worker_executable" -verify_arch "$architecture_label"
 fi
 if pgrep -x 'Studio Duo' >/dev/null; then
     fail "Close the running Studio Duo application before installed-startup validation."
@@ -105,6 +116,13 @@ for bundle in "$installed" "$unzipped"; do
     [[ -x "$bundle/Contents/Helpers/studio-duo-update-swap" ]] \
         && cmp -s "$swap_helper" "$bundle/Contents/Helpers/studio-duo-update-swap" \
         || fail "A packaged application-exchange helper is missing or changed."
+    packaged_worker="$bundle/Contents/Helpers/Studio Duo Worker.app"
+    [[ -x "$packaged_worker/Contents/MacOS/Studio Duo Worker" ]] \
+        && cmp -s "$worker_executable" "$packaged_worker/Contents/MacOS/Studio Duo Worker" \
+        || fail "A packaged background worker is missing or changed."
+    cmp -s "$worker_app/Contents/Info.plist" "$packaged_worker/Contents/Info.plist" \
+        || fail "The packaged worker identity or Dock visibility changed."
+    codesign --verify --strict --test-requirement "=identifier \"$worker_identifier\"" "$packaged_worker"
     for license in \
         lame-COPYING.txt lame-NOTICE.txt lame-config.h \
         lame-4.0-source.tar.gz studio-duo-source.tar.gz \
@@ -115,6 +133,12 @@ for bundle in "$installed" "$unzipped"; do
 done
 
 printf '{"syntheticUserData":true}\n' > "$work/user-data/preserved.json"
+if ! /usr/bin/perl -e 'alarm 30; exec @ARGV or die "Could not launch worker smoke test: $!\n";' \
+    "$installed/Contents/Helpers/Studio Duo Worker.app/Contents/MacOS/Studio Duo Worker" \
+    --bridge-self-test > "$work/worker.log" 2>&1; then
+    cat "$work/worker.log" >&2
+    fail "The installed Dock-hidden worker failed its native-role and bridge check."
+fi
 if ! /usr/bin/perl -e 'alarm 30; exec @ARGV or die "Could not launch installed smoke test: $!\n";' \
     "$installed/Contents/MacOS/Studio Duo" --startup-self-test > "$work/startup.log" 2>&1; then
     cat "$work/startup.log" >&2
@@ -125,4 +149,4 @@ cp "$work/startup.log" "$output_directory/$name-install.log"
 rm -rf -- "$installed"
 [[ ! -e "$installed" ]] || fail "The smoke installation was not removed."
 [[ -s "$work/user-data/preserved.json" ]] || fail "Removing the application removed unrelated user data."
-printf 'Validated DMG, updater ZIP, installed startup, and isolated app removal: %s\n' "$name"
+printf 'Validated DMG, updater ZIP, Dock-hidden worker, installed startup, and isolated app removal: %s\n' "$name"

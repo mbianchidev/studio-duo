@@ -7,6 +7,7 @@
 #include "plugin_host/PluginCompatibilityValidator.h"
 #include "plugin_host/ScreamForgeValidation.h"
 #include "platform/ApplicationIcon.h"
+#include "platform/WorkerExecutable.h"
 #include "logging/StudioLogger.h"
 #include "audio/AudioDeviceProbe.h"
 #include "audio/StudioAudioDeviceManager.h"
@@ -75,6 +76,17 @@ public:
         }
 #endif
         const auto arguments = getCommandLineParameterArray();
+#if JUCE_MAC
+        if (isBackgroundWorkerExecutable(juce::File::getSpecialLocation(
+                juce::File::currentExecutableFile))
+            && !isPlatformAccessoryApplication())
+        {
+            logError("app.worker", "The background worker must launch without a Dock icon. Reinstall Studio Duo.");
+            setApplicationReturnValue(2);
+            quit();
+            return;
+        }
+#endif
 #if JUCE_WINDOWS
         if (!arguments.isEmpty()
             && arguments[0] == audioDeviceProbeArgument)
@@ -170,6 +182,14 @@ public:
         }
 
 #if JUCE_MAC
+        if (isBackgroundWorkerExecutable(juce::File::getSpecialLocation(
+                juce::File::currentExecutableFile)))
+        {
+            logError("app.worker", "The background helper requires a worker command; it cannot open a workspace.");
+            setApplicationReturnValue(2);
+            quit();
+            return;
+        }
         applyPlatformApplicationIcon();
 #endif
         const auto startupSelfTest = arguments.contains("--startup-self-test");

@@ -421,6 +421,7 @@ set(STUDIO_DUO_STARTUP_SOURCES
     src/startup/StartupRecovery.h
 )
 
+set(STUDIO_DUO_MICROPHONE_PERMISSION_TEXT "Studio Duo needs microphone access to record audio.")
 juce_add_gui_app(
     StudioDuo
     PRODUCT_NAME "Studio Duo"
@@ -430,7 +431,7 @@ juce_add_gui_app(
     ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/assets/branding/studio-duo-icon-512.png"
     ICON_SMALL "${CMAKE_CURRENT_SOURCE_DIR}/assets/branding/studio-duo-icon-32.png"
     MICROPHONE_PERMISSION_ENABLED TRUE
-    MICROPHONE_PERMISSION_TEXT "Studio Duo needs microphone access to record audio."
+    MICROPHONE_PERMISSION_TEXT "${STUDIO_DUO_MICROPHONE_PERMISSION_TEXT}"
 )
 
 juce_generate_juce_header(StudioDuo)
@@ -730,6 +731,42 @@ set_target_properties(StudioDuo PROPERTIES
 
 if(APPLE)
     target_link_libraries(StudioDuo PRIVATE StudioDuoUpdateData)
+    file(CONFIGURE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/studio-duo-worker-Info.plist" CONTENT [=[
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key><string>Studio Duo Worker</string>
+    <key>CFBundleIdentifier</key><string>@STUDIO_DUO_BUNDLE_ID@.worker</string>
+    <key>CFBundleName</key><string>Studio Duo Worker</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleShortVersionString</key><string>@PROJECT_VERSION@</string>
+    <key>CFBundleVersion</key><string>@PROJECT_VERSION@</string>
+    <key>LSUIElement</key><true/>
+    <key>NSPrincipalClass</key><string>NSApplication</string>
+    <key>NSHighResolutionCapable</key><true/>
+    <key>NSMicrophoneUsageDescription</key><string>@STUDIO_DUO_MICROPHONE_PERMISSION_TEXT@</string>
+</dict>
+</plist>
+]=] @ONLY)
+    set(STUDIO_DUO_WORKER_BUNDLE
+        "$<TARGET_BUNDLE_DIR:StudioDuo>/Contents/Helpers/Studio Duo Worker.app")
+    add_custom_target(
+        StudioDuoBackgroundWorkerBundle
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${STUDIO_DUO_WORKER_BUNDLE}/Contents/MacOS"
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "$<TARGET_FILE:StudioDuo>"
+            "${STUDIO_DUO_WORKER_BUNDLE}/Contents/MacOS/Studio Duo Worker"
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${CMAKE_CURRENT_BINARY_DIR}/studio-duo-worker-Info.plist"
+            "${STUDIO_DUO_WORKER_BUNDLE}/Contents/Info.plist"
+        COMMAND /usr/bin/codesign --force --sign -
+            --identifier "${STUDIO_DUO_BUNDLE_ID}.worker"
+            --requirements "=designated => identifier \"${STUDIO_DUO_BUNDLE_ID}.worker\""
+            "${STUDIO_DUO_WORKER_BUNDLE}"
+        DEPENDS StudioDuo
+        VERBATIM
+    )
     add_custom_target(
         StudioDuoUpdateHelperBundle
         COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_BUNDLE_DIR:StudioDuo>/Contents/Helpers"
@@ -745,12 +782,11 @@ if(APPLE)
         StudioDuoDevelopmentSignature ALL
         COMMAND /usr/bin/codesign
             --force
-            --deep
             --sign -
             --identifier "${STUDIO_DUO_BUNDLE_ID}"
             --requirements "=designated => identifier \"${STUDIO_DUO_BUNDLE_ID}\""
             "$<TARGET_BUNDLE_DIR:StudioDuo>"
-        DEPENDS StudioDuo StudioDuoUpdateHelperBundle
+        DEPENDS StudioDuo StudioDuoUpdateHelperBundle StudioDuoBackgroundWorkerBundle
         COMMENT "Applying stable development signature to Studio Duo"
         VERBATIM
     )

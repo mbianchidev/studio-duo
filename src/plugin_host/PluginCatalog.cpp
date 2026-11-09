@@ -2,6 +2,7 @@
 
 #include "logging/StudioLogger.h"
 #include "platform/Architecture.h"
+#include "platform/WorkerExecutable.h"
 #include "PluginFormats.h"
 #include "PluginScanWorker.h"
 #include "devices/DeviceRegistry.h"
@@ -62,7 +63,15 @@ public:
 
     ScanCoordinator()
     {
-        launched = launchWorkerProcess(juce::File::getSpecialLocation(juce::File::currentExecutableFile),
+        const auto executable = backgroundWorkerExecutable(
+            juce::File::getSpecialLocation(juce::File::currentExecutableFile));
+        if (!executable.existsAsFile())
+        {
+            logError("plugin.scan", "The plugin scan worker is missing. Reinstall Studio Duo: "
+                + executable.getFullPathName());
+            return;
+        }
+        launched = launchWorkerProcess(executable,
                                        pluginScanProcessId,
                                        5000,
                                        0);

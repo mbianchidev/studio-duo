@@ -27,4 +27,12 @@ void setPlatformAccessoryApplication()
         [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
     }
 }
+
+bool isPlatformAccessoryApplication()
+{
+    @autoreleasepool
+    {
+        return [NSApp activationPolicy] == NSApplicationActivationPolicyAccessory;
+    }
+}
 }

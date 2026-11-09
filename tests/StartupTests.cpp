@@ -8,6 +8,8 @@
 #include "ui/StartupProgressComponent.h"
 #include "update/StudioPreferences.h"
 #include "platform/Architecture.h"
+#include "platform/WorkerExecutable.h"
+#include "plugin_host/PluginBridgeClient.h"
 
 #include <cmath>
 #include <algorithm>
@@ -17,6 +19,83 @@
 
 namespace
 {
+void backgroundWorkerBundleTests()
+{
+    const auto standalone = juce::File::getSpecialLocation(juce::File::currentExecutableFile);
+    expect(studio::backgroundWorkerExecutable(standalone) == standalone
+               && !studio::isBackgroundWorkerExecutable(standalone),
+           "Standalone test executables keep their existing worker launch behavior.");
+    auto missingBridge = std::make_unique<studio::PluginBridgeClient>(
+        standalone.getSiblingFile("synthetic-missing-bridge-worker"));
+    expect(missingBridge->start().failed(),
+           "An explicitly missing bridge executable never falls back to the current process.");
+#if JUCE_MAC && defined(STUDIO_DUO_BRIDGE_WORKER_PATH)
+    const juce::File application(STUDIO_DUO_BRIDGE_WORKER_PATH);
+    const auto worker = studio::backgroundWorkerExecutable(application);
+    expect(worker == application.getParentDirectory().getParentDirectory()
+               .getChildFile("Helpers/Studio Duo Worker.app/Contents/MacOS/Studio Duo Worker")
+               && studio::isBackgroundWorkerExecutable(worker)
+               && studio::backgroundWorkerExecutable(worker) == worker,
+           "App helpers resolve to the embedded worker and nested helper launches reuse it.");
+    expect(worker.existsAsFile(),
+           "macOS background workers have a separate Dock-hidden application bundle.");
+    const auto workerInfo = juce::parseXML(
+        worker.getParentDirectory().getParentDirectory().getChildFile("Info.plist"));
+    const auto applicationInfo = juce::parseXML(
+        application.getParentDirectory().getParentDirectory().getChildFile("Info.plist"));
+    const auto plistValue = [](const juce::XmlElement* plist, const juce::String& name)
+        -> const juce::XmlElement*
+    {
+        const auto* dictionary = plist != nullptr ? plist->getChildByName("dict") : nullptr;
+        if (dictionary != nullptr)
+            for (auto* key = dictionary->getFirstChildElement(); key != nullptr; key = key->getNextElement())
+                if (key->hasTagName("key") && key->getAllSubText() == name)
+                    return key->getNextElement();
+        return nullptr;
+    };
+    const auto* accessory = plistValue(workerInfo.get(), "LSUIElement");
+    const auto* applicationAccessory = plistValue(applicationInfo.get(), "LSUIElement");
+    const auto* workerIdentifier = plistValue(workerInfo.get(), "CFBundleIdentifier");
+    const auto* applicationIdentifier = plistValue(applicationInfo.get(), "CFBundleIdentifier");
+    const auto* workerMicrophone = plistValue(workerInfo.get(), "NSMicrophoneUsageDescription");
+    const auto* applicationMicrophone = plistValue(applicationInfo.get(), "NSMicrophoneUsageDescription");
+    expect(accessory != nullptr && accessory->hasTagName("true")
+               && (applicationAccessory == nullptr || !applicationAccessory->hasTagName("true")),
+           "The worker is Dock-hidden before JUCE initializes while the main app remains a Dock application.");
+    expect(workerIdentifier != nullptr && applicationIdentifier != nullptr
+               && workerIdentifier->getAllSubText() == applicationIdentifier->getAllSubText() + ".worker",
+           "Worker and main app use distinct bundle identities.");
+    expect(workerMicrophone != nullptr && applicationMicrophone != nullptr
+               && workerMicrophone->getAllSubText() == applicationMicrophone->getAllSubText(),
+           "The audio helper preserves the application's microphone usage description.");
+    if (!worker.existsAsFile() || accessory == nullptr || !accessory->hasTagName("true"))
+        return;
+
+    for (const auto& arguments : { juce::StringArray { worker.getFullPathName(), "--bridge-self-test" },
+                                   juce::StringArray { worker.getFullPathName() } })
+    {
+        juce::ChildProcess process;
+        const auto started = process.start(arguments);
+        expect(started, "The packaged background helper can launch without opening a workspace.");
+        if (!started)
+            continue;
+        const auto finished = process.waitForProcessToFinish(20000);
+        expect(finished, "The helper self-test or invalid invocation completes within its deadline.");
+        if (!finished)
+        {
+            expect(process.kill() && process.waitForProcessToFinish(2000),
+                   "A timed-out synthetic helper can be stopped.");
+            continue;
+        }
+        const auto exitCode = process.getExitCode();
+        const auto output = process.readAllProcessOutput();
+        expect(exitCode == (arguments.size() == 2 ? 0u : 2u),
+               ("The helper validates its native accessory role, supports bridge IPC, and rejects workspace launches: "
+                + output).toRawUTF8());
+    }
+#endif
+}
+
 bool dispatchQueuedMessages()
 {
     const auto dispatched = std::make_shared<bool>(false);
@@ -36,6 +115,7 @@ bool dispatchQueuedMessages()
 void startupTests()
 {
     using namespace studio;
+    backgroundWorkerBundleTests();
     StartupCoordinator startup({
         { StartupTaskId::preferences, "Preferences", {}, true },
         { StartupTaskId::pluginCatalog, "Plug-in catalog", {}, true },
