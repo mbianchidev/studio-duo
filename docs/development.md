@@ -95,6 +95,11 @@ this finalization too. To build just the signed app, use
 signing inside the executable's `POST_BUILD` command runs too early for a clean
 Makefiles build and leaves later-copied resources outside the seal.
 
+Windows CI and release builds both pass `-A x64` and share the `native-x64`
+dependency-cache namespace. It excludes older caches created without an explicit
+generator platform: CMake's cached FetchContent subbuilds distinguish an implicit
+x64 default from an explicit `-A x64`, even when both select the same architecture.
+
 ### Universal macOS builds and compilation caching
 
 Primary macOS CI and releases use Ninja, two build workers, and the same universal
