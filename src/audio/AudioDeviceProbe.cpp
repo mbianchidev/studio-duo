@@ -1,6 +1,7 @@
 #include "AudioDeviceProbe.h"
 
 #include "logging/StudioLogger.h"
+#include "platform/WorkerExecutable.h"
 
 #include <chrono>
 #if JUCE_WINDOWS
@@ -64,6 +65,10 @@ AudioDeviceProbeResult probeAudioDeviceSetupDetailed(
         return fail(AudioDeviceProbeFailure::invalidRequest, "The audio startup check received an invalid setup.");
     if (options.cancelled != nullptr && options.cancelled->load(std::memory_order_acquire))
         return fail(AudioDeviceProbeFailure::cancelled, "The audio startup check was cancelled before driver launch.");
+    const auto executable = backgroundWorkerExecutable(options.executable);
+    if (!executable.existsAsFile())
+        return fail(AudioDeviceProbeFailure::launch,
+            "The audio startup worker is missing. Reinstall Studio Duo: " + executable.getFullPathName());
 
     ProbeFiles files;
     if (!files.request.replaceWithText(setup.toString(), false, false, "\n"))
@@ -79,7 +84,7 @@ AudioDeviceProbeResult probeAudioDeviceSetupDetailed(
 
     juce::ChildProcess worker;
     if (!worker.start(
-            { options.executable.getFullPathName(),
+            { executable.getFullPathName(),
               audioDeviceProbeArgument,
               files.request.getFullPathName(),
               files.response.getFullPathName() },

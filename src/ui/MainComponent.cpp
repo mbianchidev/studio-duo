@@ -11,6 +11,7 @@
 #include "audio/AudioDeviceProbe.h"
 #include "devices/DrumDeviceProcessor.h"
 #include "logging/StudioLogger.h"
+#include "platform/WorkerExecutable.h"
 #include "update/UpdateSettingsComponent.h"
 #include "plugin_host/PluginStateStore.h"
 #include "plugin_host/PluginIsolationPolicy.h"
@@ -6772,16 +6773,19 @@ void MainComponent::validatePlugin(const PluginCatalogEntry& entry)
     compatibilityValidator.addJob([safe, entry]
     {
         juce::ChildProcess process;
+        const auto executable = backgroundWorkerExecutable(
+            juce::File::getSpecialLocation(juce::File::currentExecutableFile));
         juce::StringArray arguments;
-        arguments.add(
-            juce::File::getSpecialLocation(
-                juce::File::currentExecutableFile)
-                .getFullPathName());
+        arguments.add(executable.getFullPathName());
         arguments.add("--validate-plugin");
         arguments.add(entry.identifier);
         auto output = juce::String();
         auto result = 1;
-        if (!process.start(arguments))
+        if (!executable.existsAsFile())
+        {
+            output = "The compatibility worker is missing. Reinstall Studio Duo: " + executable.getFullPathName();
+        }
+        else if (!process.start(arguments))
         {
             output = "Could not launch the compatibility validator.";
         }

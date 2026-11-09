@@ -141,6 +141,23 @@ void audioDeviceProbeTests()
         studio::probeAudioDeviceSetup(setup, options).failed(),
         "A missing worker executable never falls back to unsafe in-process probing.");
 
+#if JUCE_MAC
+    const auto fixture = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getChildFile("studio-duo-missing-worker-" + juce::Uuid().toString());
+    const auto application = fixture.getChildFile("Studio Duo.app/Contents/MacOS/Studio Duo");
+    expect(application.getParentDirectory().createDirectory().wasOk()
+               && application.replaceWithText("synthetic application fixture"),
+           "A synthetic application without its packaged worker can be created.");
+    studio::AudioDeviceProbeOptions incompleteApplication;
+    incompleteApplication.executable = application;
+    const auto missingHelper = studio::probeAudioDeviceSetupDetailed(setup, incompleteApplication);
+    expect(missingHelper.failure == studio::AudioDeviceProbeFailure::launch
+               && missingHelper.result.failed()
+               && missingHelper.result.getErrorMessage().contains("worker is missing"),
+           "A missing packaged helper fails explicitly rather than launching the foreground app.");
+    expect(fixture.deleteRecursively(), "The synthetic missing-helper fixture is removed.");
+#endif
+
 #if defined(STUDIO_DUO_BRIDGE_WORKER_PATH)
     studio::AudioDeviceProbeOptions applicationOptions;
     applicationOptions.executable = juce::File(STUDIO_DUO_BRIDGE_WORKER_PATH);
