@@ -100,12 +100,15 @@ Both platform release builds request only the app and complete test targets,
 including their fixture dependencies. The macOS build also requests the
 development-signature target. Standalone VST3/AU exports are not in the release
 archives and remain covered by CI's full build instead.
-The Windows build retains its four-worker MSBuild budget and shares CI's
-OS/architecture-scoped dependency-cache key, including CMake configuration and
-dependency patches. Tags can reuse the default branch's dependency cache instead
-of requiring a separate release-only cache. A cache miss still fetches the pinned
-dependencies and builds and tests the same targets; cached dependencies do not
-replace application compilation or regression checks.
+The Windows build retains its four-worker MSBuild budget. CI and releases both
+configure with `-A x64` and share the `native-x64` OS/architecture-scoped
+dependency-cache key, including CMake configuration and dependency patches.
+The namespace excludes older caches whose FetchContent subbuilds used an implicit
+generator platform, which CMake cannot reuse with explicit `-A x64`. Tags can
+reuse the default branch's compatible dependency cache instead of requiring a
+separate release-only cache. A cache miss still fetches the pinned dependencies
+and builds and tests the same targets; cached dependencies do not replace
+application compilation or regression checks.
 An isolated compiler-cache check verifies independent Intel/ARM header changes
 before cached universal objects can be used.
 Windows publication also requires successful Authenticode signing,
